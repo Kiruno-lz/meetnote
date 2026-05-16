@@ -1,0 +1,71 @@
+# OS
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+*.local
+*.secret
+*.token
+*.key
+*.pem
+*.p12
+
+# Dependencies and package manager state
+node_modules/
+frontend/node_modules/
+src-tauri/node_modules/
+
+# Build outputs
+dist/
+build/
+coverage/
+target/
+release/
+debug/
+out/
+
+# Tauri / Rust
+src-tauri/target/
+src-tauri/gen/
+src-tauri/Cargo.lock
+
+# TypeScript / frontend caches
+.turbo/
+.cache/
+.vite/
+.next/
+.svelte-kit/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Models, audio, and local data
+models/
+model-cache/
+cache/
+tmp/
+temp/
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.aac
+*.ogg
+*.wma
+*.opus
+*.mp4
+*.mov
+*.mkv
+*.avi
+
+# Logs
+*.log
