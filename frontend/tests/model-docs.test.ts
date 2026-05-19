@@ -17,4 +17,15 @@ describe("model documentation", () => {
     expect(modelsDoc).toContain("bun test model-manifest");
     expect(modelsDoc).toContain("bun test model-download.contract.test.ts");
   });
+
+  test("documents the PLAN section 6 ASR CLI boundary", () => {
+    const asrDoc = readFileSync(join(repoRoot, "docs", "asr-cli.md"), "utf8");
+
+    expect(asrDoc).toContain("ASR CLI 契约");
+    expect(asrDoc).toContain("meetnote.asr.v1");
+    expect(asrDoc).toContain("ASR_USER_CANCELLED");
+    expect(asrDoc).toContain("confidence");
+    expect(asrDoc).toContain("bun test asr-schema");
+    expect(asrDoc).toContain("bun test asr.contract.test.ts");
+  });
 });
