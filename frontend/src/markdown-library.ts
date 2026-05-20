@@ -1,4 +1,4 @@
-import type { MeetingProject } from "./audio-project";
+import { createMeetingProjectManifest, type MeetingProject } from "./audio-project";
 
 export interface LibraryFile {
   readonly path: string;
@@ -14,13 +14,7 @@ export interface MarkdownLibraryRecord {
 export function createMarkdownLibraryRecord(project: MeetingProject): MarkdownLibraryRecord {
   const root = `meetings/${project.createdAt.slice(0, 4)}/${project.createdAt.slice(5, 7)}/${slugify(project.title)}`;
   const manifest = {
-    id: project.id,
-    title: project.title,
-    audioHash: project.audioHash,
-    format: project.format,
-    createdAt: project.createdAt,
-    speakers: project.speakers,
-    corrections: project.corrections
+    ...createMeetingProjectManifest(project)
   };
 
   return {

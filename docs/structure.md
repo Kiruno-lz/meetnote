@@ -7,14 +7,19 @@
 - `python/`：后续 ASR、diarization 或模型工具链预留目录
 - `tests/`：测试与契约验证预留目录
 - `script/`：仓库脚本入口，当前包含 `dev.sh`
-- `docs/`：决策、结构说明和后续设计文档
+- `docs/`：决策、结构说明、模型下载、模型矩阵和音频项目管理等设计文档
+- `docs/audio-projects.md`：音频项目存储边界、项目目录和重复导入规则
+- `docs/asr-cli.md`：ASR CLI JSON 契约、进度事件、结果 schema 和错误码
 - `examples/`：示例数据或示例文档预留目录，当前不放真实音频
 
 ## 当前未实现内容
 
-- 未创建真实 ASR、speaker diarization、LLM provider 或 Markdown 文件 IO
+- 未创建真实 ASR subprocess、speaker diarization、LLM provider 或 Markdown 文件 IO
 - 未创建 release 构建流程
 - 未安装依赖
 - 未下载模型
-- 未接入真实 ASR、speaker diarization 或 LLM provider
+- 未实现真实模型下载器或 pyannote 外部配置 UI
+- 未实现真实音频项目存储后端
+- 未接入真实 ASR、speaker diarization 或 LLM provider；当前只有 ASR TypeScript schema 与 contract test
 - 未添加 submodule
+- 未实现真实音频项目文件 IO；当前仅有纯 TypeScript 项目存储契约

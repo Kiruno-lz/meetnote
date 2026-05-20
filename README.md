@@ -10,6 +10,13 @@ meetnote 是一个面向本地桌面的会议纪要工作台，核心目标是�
 - speaker 标注与人工修正是核心能力，不是后置增强
 - 去口语化由本地 LLM 或云端 custom provider 完成，输出必须受严格 schema 约束
 - Markdown 纯文件历史库是核心数据资产，原始转录和修正记录必须可追溯
+- 音频项目以纯 TS manifest 契约管理，数据目录和重复导入规则见 `docs/audio-projects.md`
+
+模型矩阵、下载流程、缓存策略和 pyannote 外部配置见 `docs/models.md`。当前仓库只包含文档契约与 mock 骨架，尚未实现真实模型下载器，也不会自动下载模型。
+
+音频项目管理、项目 manifest 和重复导入策略见 `docs/audio-projects.md`。音频项目对象会保留原始转录、speaker 修正、去口语化文本和编辑历史，避免不可逆覆盖原文。
+
+ASR CLI JSON 边界、转录结果 schema、进度事件和稳定错误码见 `docs/asr-cli.md`。当前仓库已提供 TypeScript schema 与 L2 contract test，尚未接入真实 Whisper subprocess。
 
 ## MVP
 
