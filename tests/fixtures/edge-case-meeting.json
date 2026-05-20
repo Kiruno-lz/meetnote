@@ -1,0 +1,306 @@
+{
+  "audioMetadata": {
+    "filename": "meeting-2024-05-19-edge-case.wav",
+    "durationMs": 1800000,
+    "audioHash": "e5f6a7b8c9d0e1f2",
+    "uploadedAt": "2024-05-19T15:00:00.000Z"
+  },
+  "asrResult": {
+    "requestId": "asr-req-20240519-edge",
+    "model": {
+      "id": "whisper-small",
+      "version": "1.0"
+    },
+    "segments": [
+      {
+        "id": "asr-seg-0001",
+        "startMs": 0,
+        "endMs": 3500,
+        "text": "大家好，今天我们讨论项目的技术方案。",
+        "language": "zh",
+        "confidence": 0.94
+      },
+      {
+        "id": "asr-seg-0002",
+        "startMs": 3600,
+        "endMs": 7200,
+        "text": "嗯，我们先看看这个文档：https://example.com/docs/api?param=value&other=test",
+        "language": "mixed",
+        "confidence": 0.91
+      },
+      {
+        "id": "asr-seg-0003",
+        "startMs": 7300,
+        "endMs": 11000,
+        "text": "好的，核心步骤是：首先检查数据库连接，然后执行查询优化，最后输出结果。",
+        "language": "zh",
+        "confidence": 0.93
+      },
+      {
+        "id": "asr-seg-0004",
+        "startMs": 11100,
+        "endMs": 14800,
+        "text": "其实这个问题……比较复杂，需要用到一些……高级的技术，比如说……distributed caching",
+        "language": "mixed",
+        "confidence": 0.89
+      },
+      {
+        "id": "asr-seg-0005",
+        "startMs": 14900,
+        "endMs": 18600,
+        "text": "我们可以使用JSON格式来存储配置：{\"key\": \"value\", \"array\": [1, 2, 3]}",
+        "language": "mixed",
+        "confidence": 0.92
+      },
+      {
+        "id": "asr-seg-0006",
+        "startMs": 18700,
+        "endMs": 22400,
+        "text": "对的，这样更加灵活。我们还可以支持特殊字符：！@#$%^&*()[]{}。",
+        "language": "zh",
+        "confidence": 0.91
+      },
+      {
+        "id": "asr-seg-0007",
+        "startMs": 22500,
+        "endMs": 26200,
+        "text": "呃……还有一个问题，就是关于markdown的转义。我们需要处理*星号*、_下划线_、[链接]这样的内容。",
+        "language": "zh",
+        "confidence": 0.9
+      },
+      {
+        "id": "asr-seg-0008",
+        "startMs": 26300,
+        "endMs": 30000,
+        "text": "是的，而且还要处理unicode字符：中文、日本語、한글、العربية等。",
+        "language": "mixed",
+        "confidence": 0.93
+      },
+      {
+        "id": "asr-seg-0009",
+        "startMs": 30100,
+        "endMs": 33700,
+        "text": "我们需要一个comprehensive的测试plan来覆盖所有这些edge cases。",
+        "language": "mixed",
+        "confidence": 0.92
+      },
+      {
+        "id": "asr-seg-0010",
+        "startMs": 33800,
+        "endMs": 37500,
+        "text": "好的，我们列一个清单：\\n1. 特殊字符测试\\n2. 长文本测试\\n3. 性能测试",
+        "language": "mixed",
+        "confidence": 0.91
+      }
+    ]
+  },
+  "diarizationResult": {
+    "requestId": "dia-req-20240519-edge",
+    "model": {
+      "id": "pyannote-speaker-diarization",
+      "version": "2.1"
+    },
+    "speakers": [
+      {
+        "id": "speaker-edge-1",
+        "label": "Alice"
+      },
+      {
+        "id": "speaker-edge-2",
+        "label": "Bob"
+      },
+      {
+        "id": "speaker-edge-3",
+        "label": "Charlie\" with \"quotes"
+      }
+    ],
+    "segments": [
+      {
+        "id": "dia-seg-0001",
+        "speakerId": "speaker-edge-1",
+        "startMs": 0,
+        "endMs": 3500,
+        "confidence": 0.93,
+        "overlap": false
+      },
+      {
+        "id": "dia-seg-0002",
+        "speakerId": "speaker-edge-2",
+        "startMs": 3600,
+        "endMs": 7200,
+        "confidence": 0.91,
+        "overlap": false
+      },
+      {
+        "id": "dia-seg-0003",
+        "speakerId": "speaker-edge-3",
+        "startMs": 7300,
+        "endMs": 11000,
+        "confidence": 0.92,
+        "overlap": false
+      },
+      {
+        "id": "dia-seg-0004",
+        "speakerId": "speaker-edge-1",
+        "startMs": 11100,
+        "endMs": 14800,
+        "confidence": 0.89,
+        "overlap": false
+      },
+      {
+        "id": "dia-seg-0005",
+        "speakerId": "speaker-edge-2",
+        "startMs": 14900,
+        "endMs": 18600,
+        "confidence": 0.92,
+        "overlap": false
+      },
+      {
+        "id": "dia-seg-0006",
+        "speakerId": "speaker-edge-3",
+        "startMs": 18700,
+        "endMs": 22400,
+        "confidence": 0.9,
+        "overlap": false
+      },
+      {
+        "id": "dia-seg-0007",
+        "speakerId": "speaker-edge-1",
+        "startMs": 22500,
+        "endMs": 26200,
+        "confidence": 0.89,
+        "overlap": false
+      },
+      {
+        "id": "dia-seg-0008",
+        "speakerId": "speaker-edge-2",
+        "startMs": 26300,
+        "endMs": 30000,
+        "confidence": 0.93,
+        "overlap": false
+      },
+      {
+        "id": "dia-seg-0009",
+        "speakerId": "speaker-edge-3",
+        "startMs": 30100,
+        "endMs": 33700,
+        "confidence": 0.91,
+        "overlap": false
+      },
+      {
+        "id": "dia-seg-0010",
+        "speakerId": "speaker-edge-1",
+        "startMs": 33800,
+        "endMs": 37500,
+        "confidence": 0.91,
+        "overlap": false
+      }
+    ]
+  },
+  "deverbalizationOutput": {
+    "requestId": "llm-req-20240519-edge",
+    "provider": "ollama",
+    "model": {
+      "id": "qwen-7b",
+      "version": "1.0",
+      "parameters": {
+        "temperature": 0.7,
+        "maxOutputTokens": 2048
+      }
+    },
+    "paragraphs": [
+      {
+        "id": "para-0001",
+        "sourceSegmentIds": [
+          "asr-seg-0001"
+        ],
+        "speakerId": "speaker-edge-1",
+        "text": "今天我们讨论项目的技术方案。"
+      },
+      {
+        "id": "para-0002",
+        "sourceSegmentIds": [
+          "asr-seg-0002"
+        ],
+        "speakerId": "speaker-edge-2",
+        "text": "我们先看看这个文档：https://example.com/docs/api?param=value&other=test"
+      },
+      {
+        "id": "para-0003",
+        "sourceSegmentIds": [
+          "asr-seg-0003"
+        ],
+        "speakerId": "speaker-edge-3",
+        "text": "核心步骤是：首先检查数据库连接，然后执行查询优化，最后输出结果。"
+      },
+      {
+        "id": "para-0004",
+        "sourceSegmentIds": [
+          "asr-seg-0004"
+        ],
+        "speakerId": "speaker-edge-1",
+        "text": "这个问题比较复杂，需要用到高级技术，比如分布式缓存。"
+      },
+      {
+        "id": "para-0005",
+        "sourceSegmentIds": [
+          "asr-seg-0005"
+        ],
+        "speakerId": "speaker-edge-2",
+        "text": "我们可以使用JSON格式来存储配置：{\"key\": \"value\", \"array\": [1, 2, 3]}"
+      },
+      {
+        "id": "para-0006",
+        "sourceSegmentIds": [
+          "asr-seg-0006"
+        ],
+        "speakerId": "speaker-edge-3",
+        "text": "这样更加灵活。我们还可以支持特殊字符：！@#$%^&*()[]{}。"
+      },
+      {
+        "id": "para-0007",
+        "sourceSegmentIds": [
+          "asr-seg-0007"
+        ],
+        "speakerId": "speaker-edge-1",
+        "text": "还有一个问题是关于markdown的转义。我们需要处理*星号*、_下划线_、[链接]这样的内容。"
+      },
+      {
+        "id": "para-0008",
+        "sourceSegmentIds": [
+          "asr-seg-0008"
+        ],
+        "speakerId": "speaker-edge-2",
+        "text": "而且还要处理unicode字符：中文、日本語、한글、العربية等。"
+      },
+      {
+        "id": "para-0009",
+        "sourceSegmentIds": [
+          "asr-seg-0009"
+        ],
+        "speakerId": "speaker-edge-3",
+        "text": "我们需要一个全面的测试计划来覆盖所有这些边界情况。"
+      },
+      {
+        "id": "para-0010",
+        "sourceSegmentIds": [
+          "asr-seg-0010"
+        ],
+        "speakerId": "speaker-edge-1",
+        "text": "好的，我们列一个清单：1. 特殊字符测试 2. 长文本测试 3. 性能测试"
+      }
+    ]
+  },
+  "expectedMarkdownFrontmatter": {
+    "title": "技术方案讨论与Edge Case处理",
+    "date": "2024-05-19",
+    "audioHash": "e5f6a7b8c9d0e1f2",
+    "speakers": [
+      "Alice",
+      "Bob",
+      "Charlie\" with \"quotes"
+    ],
+    "modelVersion": "1.0",
+    "llmProvider": "ollama"
+  }
+}
