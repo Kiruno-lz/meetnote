@@ -4,6 +4,7 @@ import {
   attachDeverbalizedState,
   attachEditedMarkdown,
   attachSpeakerState,
+  attachSpeakerStateFromDiarizationRerun,
   attachTranscript,
   createMeetingProject,
   createMeetingProjectManifest,
@@ -13,6 +14,7 @@ import {
   restoreMeetingProjectManifest,
   validateMeetingProjectManifest
 } from "../src/audio-project";
+import { applySpeakerCorrectionCommands } from "../src/speaker";
 
 describe("audio project model", () => {
   test("accepts only the supported MVP audio formats", () => {
@@ -61,6 +63,54 @@ describe("audio project model", () => {
 
     expect(updated.corrections).toHaveLength(1);
     expect(updated.speakers[0]?.label).toBe("主持人");
+  });
+
+  test("persists structured manual speaker correction records through manifest restore", () => {
+    const project = attachSpeakerState(
+      attachTranscript(
+        createMeetingProject({
+          path: "/meetings/manual-speakers.wav",
+          hash: "manual-speakers-hash",
+          durationSeconds: 120,
+          createdAt: "2026-05-20T09:00:00.000Z"
+        }),
+        [
+          { id: "asr-1", startMs: 0, endMs: 1000, text: "今天看计划", language: "zh" },
+          { id: "asr-2", startMs: 1000, endMs: 2000, text: "我来补充", language: "zh" }
+        ]
+      ),
+      [
+        { id: "speaker-a", label: "主持人" },
+        { id: "speaker-b", label: "研发" }
+      ],
+      [
+        { id: "spk-1", speakerId: "speaker-a", startMs: 0, endMs: 1000 },
+        { id: "spk-2", speakerId: "speaker-b", startMs: 1000, endMs: 2000 }
+      ],
+      [
+        {
+          id: "cmd-assign-1",
+          commandId: "cmd-assign-1",
+          kind: "assign-range",
+          targetSpeakerId: "speaker-b",
+          replacementSpeakerId: "speaker-b",
+          reason: "manual-range-assign",
+          createdAt: "2026-05-20T09:01:00.000Z",
+          beforeSegments: [{ id: "spk-2", speakerId: "speaker-a", startMs: 1000, endMs: 2000 }],
+          afterSegments: [{ id: "spk-2", speakerId: "speaker-b", startMs: 1000, endMs: 2000 }]
+        }
+      ]
+    );
+
+    const manifest = createMeetingProjectManifest(project);
+    const restored = restoreMeetingProjectManifest(JSON.parse(JSON.stringify(manifest)) as unknown);
+
+    expect(validateMeetingProjectManifest(manifest)).toEqual({ ok: true, errors: [] });
+    expect(restored).toEqual(project);
+    expect(restored.corrections[0]?.beforeSegments).toEqual([
+      { id: "spk-2", speakerId: "speaker-a", startMs: 1000, endMs: 2000 }
+    ]);
+    expect(restored.corrections[0]?.beforeSegments).not.toBe(project.corrections[0]?.beforeSegments);
   });
 
   test("rejects unsupported or invalid import inputs before project creation", () => {
@@ -427,6 +477,140 @@ describe("audio project model", () => {
         "editedMarkdown must be a string or null"
       ]
     });
+  });
+
+  test("validates structured correction record shapes and speaker references", () => {
+    const project = attachSpeakerState(
+      createMeetingProject({
+        path: "/meetings/structured-invalid.wav",
+        hash: "structured-invalid-hash",
+        durationSeconds: 90,
+        createdAt: "2026-05-20T09:00:00.000Z"
+      }),
+      [{ id: "speaker-a", label: "主持人" }],
+      [{ id: "spk-1", speakerId: "speaker-a", startMs: 0, endMs: 1000 }],
+      [
+        {
+          id: "cmd-invalid",
+          commandId: "",
+          kind: "",
+          targetSpeakerId: "speaker-a",
+          replacementSpeakerId: "speaker-a",
+          reason: "manual-range-assign",
+          createdAt: "2026-05-20T09:01:00.000Z",
+          beforeSegments: [
+            { id: "before-1", speakerId: "speaker-missing", startMs: 0, endMs: 1000, confidence: 2 }
+          ],
+          afterSegments: [{ id: "after-1", speakerId: "speaker-missing", startMs: 1000, endMs: 1000 }]
+        }
+      ]
+    );
+
+    expect(validateMeetingProjectManifest(project).errors).toEqual([
+      "corrections[0].commandId must be a non-empty string",
+      "corrections[0].kind must be a non-empty string",
+      "corrections[0].beforeSegments[0].confidence must be between 0 and 1",
+      "corrections[0].afterSegments[0].endMs must be greater than startMs",
+      "corrections[0].afterSegments[0].speakerId must reference a known speaker"
+    ]);
+  });
+
+  test("requires callers to resolve rerun diarization conflicts before overwriting manual corrections", () => {
+    const project = attachSpeakerState(
+      createMeetingProject({
+        path: "/meetings/rerun-guard.wav",
+        hash: "rerun-guard-hash",
+        durationSeconds: 90,
+        createdAt: "2026-05-20T09:00:00.000Z"
+      }),
+      [
+        { id: "s1", label: "Speaker 1" },
+        { id: "s2", label: "Speaker 2" }
+      ],
+      [{ id: "spk-1", speakerId: "s2", startMs: 0, endMs: 1000 }],
+      [
+        {
+          id: "cmd-range",
+          commandId: "cmd-range",
+          kind: "assign-range",
+          targetSpeakerId: "s2",
+          replacementSpeakerId: "s2",
+          reason: "manual-range-assign",
+          createdAt: "2026-05-20T09:01:00.000Z",
+          beforeSegments: [{ id: "spk-1", speakerId: "s1", startMs: 0, endMs: 1000 }],
+          afterSegments: [{ id: "spk-1", speakerId: "s2", startMs: 0, endMs: 1000 }]
+        }
+      ]
+    );
+
+    const resolution = attachSpeakerStateFromDiarizationRerun(
+      project,
+      project.speakers,
+      [{ id: "spk-1", speakerId: "s1", startMs: 0, endMs: 1000 }]
+    );
+
+    expect(resolution.status).toBe("conflict");
+    expect(resolution.project).toEqual(project);
+    if (resolution.status === "conflict") {
+      expect(resolution.conflicts).toEqual([
+        {
+          segmentId: "spk-1",
+          startMs: 0,
+          endMs: 1000,
+          currentSpeakerId: "s2",
+          generatedSpeakerId: "s1",
+          reason: "manual-edit-would-change"
+        }
+      ]);
+    }
+  });
+
+  test("preserves manual speaker rename labels when rerun diarization regenerates speaker profiles", () => {
+    const project = attachSpeakerState(
+      createMeetingProject({
+        path: "/meetings/rerun-rename-guard.wav",
+        hash: "rerun-rename-guard-hash",
+        durationSeconds: 90,
+        createdAt: "2026-05-20T09:00:00.000Z"
+      }),
+      [{ id: "speaker-1", label: "Speaker 1" }],
+      [{ id: "spk-1", speakerId: "speaker-1", startMs: 0, endMs: 1000 }],
+      []
+    );
+    const manualState = applySpeakerCorrectionCommands(project, [
+      {
+        id: "cmd-rename-speaker-1",
+        kind: "rename-speaker",
+        speakerId: "speaker-1",
+        label: "主持人",
+        createdAt: "2026-05-20T09:01:00.000Z"
+      }
+    ]);
+    const renamedProject = attachSpeakerState(
+      project,
+      manualState.speakers,
+      manualState.speakerSegments,
+      manualState.corrections
+    );
+
+    const resolution = attachSpeakerStateFromDiarizationRerun(
+      renamedProject,
+      [{ id: "speaker-1", label: "Speaker 1" }],
+      [{ id: "spk-1", speakerId: "speaker-1", startMs: 0, endMs: 1000 }]
+    );
+
+    expect(resolution.status).toBe("conflict");
+    expect(resolution.project).toEqual(renamedProject);
+    if (resolution.status === "conflict") {
+      expect(resolution.conflicts).toEqual([
+        {
+          speakerId: "speaker-1",
+          currentLabel: "主持人",
+          generatedLabel: "Speaker 1",
+          reason: "manual-rename-would-change"
+        }
+      ]);
+    }
   });
 
   test("validates nested non-object entries and timing bounds", () => {

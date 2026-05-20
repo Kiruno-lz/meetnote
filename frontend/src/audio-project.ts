@@ -38,6 +38,10 @@ export interface SpeakerCorrection {
   readonly replacementSpeakerId: string;
   readonly reason: string;
   readonly createdAt: string;
+  readonly commandId?: string;
+  readonly kind?: string;
+  readonly beforeSegments?: readonly SpeakerSegment[];
+  readonly afterSegments?: readonly SpeakerSegment[];
 }
 
 export interface DeverbalizedSegment {
@@ -94,6 +98,34 @@ export interface ManifestValidationResult {
   readonly ok: boolean;
   readonly errors: readonly string[];
 }
+
+export type SpeakerDiarizationConflict =
+  | {
+      readonly segmentId: string;
+      readonly startMs: number;
+      readonly endMs: number;
+      readonly currentSpeakerId: string;
+      readonly generatedSpeakerId: string | null;
+      readonly reason: "manual-edit-would-change";
+    }
+  | {
+      readonly speakerId: string;
+      readonly currentLabel: string;
+      readonly generatedLabel: string | null;
+      readonly reason: "manual-rename-would-change";
+    };
+
+export type AttachSpeakerStateFromDiarizationRerunResult =
+  | {
+      readonly status: "applied";
+      readonly project: MeetingProject;
+    }
+  | {
+      readonly status: "conflict";
+      readonly project: MeetingProject;
+      readonly generatedSegments: SpeakerSegment[];
+      readonly conflicts: SpeakerDiarizationConflict[];
+    };
 
 export function getSupportedAudioExtension(path: string): SupportedAudioExtension | null {
   const normalized = path.trim().toLowerCase();
@@ -163,7 +195,7 @@ export function restoreMeetingProjectManifest(input: unknown): MeetingProject {
     transcript: cloneTranscript(manifest.transcript),
     speakerSegments: manifest.speakerSegments.map((segment) => ({ ...segment })),
     speakers: manifest.speakers.map((speaker) => ({ ...speaker })),
-    corrections: manifest.corrections.map((correction) => ({ ...correction })),
+    corrections: manifest.corrections.map((correction) => cloneCorrection(correction)),
     deverbalizedSegments: manifest.deverbalizedSegments.map((segment) => ({
       ...segment,
       sourceSegmentIds: [...segment.sourceSegmentIds]
@@ -204,6 +236,23 @@ export function attachSpeakerState(
     speakers: [...speakers],
     speakerSegments: [...speakerSegments],
     corrections: [...corrections]
+  };
+}
+
+export function attachSpeakerStateFromDiarizationRerun(
+  project: MeetingProject,
+  speakers: readonly SpeakerProfile[],
+  generatedSegments: readonly SpeakerSegment[]
+): AttachSpeakerStateFromDiarizationRerunResult {
+  const resolution = resolveDiarizationRerunForProject(project, speakers, generatedSegments);
+
+  if (resolution.status === "conflict") {
+    return resolution;
+  }
+
+  return {
+    status: "applied",
+    project: attachSpeakerState(project, speakers, resolution.speakerSegments, project.corrections)
   };
 }
 
@@ -388,33 +437,37 @@ function isPositiveNumber(input: unknown): input is number {
 }
 
 function validateSpeakerSegments(input: unknown, errors: string[]): void {
+  validateSpeakerSegmentsInternal(input, errors, "speakerSegments");
+}
+
+function validateSpeakerSegmentsInternal(input: unknown, errors: string[], fieldName: string): void {
   if (!Array.isArray(input)) {
-    errors.push("speakerSegments must be an array");
+    errors.push(`${fieldName} must be an array`);
     return;
   }
 
   input.forEach((segment, index) => {
     if (!isRecord(segment)) {
-      errors.push(`speakerSegments[${index}] must be an object`);
+      errors.push(`${fieldName}[${index}] must be an object`);
       return;
     }
     if (!isNonEmptyString(segment.id)) {
-      errors.push(`speakerSegments[${index}].id is required`);
+      errors.push(`${fieldName}[${index}].id is required`);
     }
     if (!isNonEmptyString(segment.speakerId)) {
-      errors.push(`speakerSegments[${index}].speakerId is required`);
+      errors.push(`${fieldName}[${index}].speakerId is required`);
     }
     const startMs = segment.startMs;
     const endMs = segment.endMs;
     const hasValidStartMs = isPositiveOrZeroNumber(startMs);
     if (!hasValidStartMs) {
-      errors.push(`speakerSegments[${index}].startMs must be non-negative`);
+      errors.push(`${fieldName}[${index}].startMs must be non-negative`);
     }
     if (hasValidStartMs && typeof startMs === "number" && (!isPositiveNumber(endMs) || endMs <= startMs)) {
-      errors.push(`speakerSegments[${index}].endMs must be greater than startMs`);
+      errors.push(`${fieldName}[${index}].endMs must be greater than startMs`);
     }
     if (segment.confidence !== undefined && !isConfidenceValue(segment.confidence)) {
-      errors.push(`speakerSegments[${index}].confidence must be between 0 and 1`);
+      errors.push(`${fieldName}[${index}].confidence must be between 0 and 1`);
     }
   });
 }
@@ -465,6 +518,19 @@ function validateCorrections(input: unknown, errors: string[]): void {
     if (!isNonEmptyString(correction.createdAt)) {
       errors.push(`corrections[${index}].createdAt is required`);
     }
+
+    if ("commandId" in correction && !isNonEmptyString(correction.commandId)) {
+      errors.push(`corrections[${index}].commandId must be a non-empty string`);
+    }
+    if ("kind" in correction && !isNonEmptyString(correction.kind)) {
+      errors.push(`corrections[${index}].kind must be a non-empty string`);
+    }
+    if ("beforeSegments" in correction) {
+      validateSpeakerSegmentsInternal(correction.beforeSegments, errors, `corrections[${index}].beforeSegments`);
+    }
+    if ("afterSegments" in correction) {
+      validateSpeakerSegmentsInternal(correction.afterSegments, errors, `corrections[${index}].afterSegments`);
+    }
   });
 }
 
@@ -507,21 +573,21 @@ function validateDeverbalizedSegments(input: unknown, errors: string[]): void {
 }
 
 function validateProjectReferences(input: Record<string, unknown>, errors: string[]): void {
-  if (!Array.isArray(input.speakers) || !Array.isArray(input.transcript)) {
-    return;
-  }
-
   const speakerIds = new Set(
-    input.speakers
-      .filter(isRecord)
-      .map((speaker) => speaker.id)
-      .filter(isNonEmptyString)
+    Array.isArray(input.speakers)
+      ? input.speakers
+          .filter(isRecord)
+          .map((speaker) => speaker.id)
+          .filter(isNonEmptyString)
+      : []
   );
   const transcriptIds = new Set(
-    input.transcript
-      .filter(isRecord)
-      .map((segment) => segment.id)
-      .filter(isNonEmptyString)
+    Array.isArray(input.transcript)
+      ? input.transcript
+          .filter(isRecord)
+          .map((segment) => segment.id)
+          .filter(isNonEmptyString)
+      : []
   );
 
   if (Array.isArray(input.speakerSegments)) {
@@ -551,6 +617,131 @@ function validateProjectReferences(input: Record<string, unknown>, errors: strin
       }
     });
   }
+
+  if (!Array.isArray(input.corrections)) {
+    return;
+  }
+
+  input.corrections.forEach((correction, index) => {
+    if (!isRecord(correction)) {
+      return;
+    }
+
+    if (Array.isArray(correction.afterSegments)) {
+      correction.afterSegments.forEach((segment, segmentIndex) => {
+        if (isRecord(segment) && isNonEmptyString(segment.speakerId) && !speakerIds.has(segment.speakerId)) {
+          errors.push(
+            `corrections[${index}].afterSegments[${segmentIndex}].speakerId must reference a known speaker`
+          );
+        }
+      });
+    }
+  });
+}
+
+function resolveDiarizationRerunForProject(
+  project: MeetingProject,
+  generatedSpeakers: readonly SpeakerProfile[],
+  generatedSegments: readonly SpeakerSegment[]
+):
+  | { readonly status: "applied"; readonly speakerSegments: SpeakerSegment[] }
+  | {
+      readonly status: "conflict";
+      readonly project: MeetingProject;
+      readonly generatedSegments: SpeakerSegment[];
+      readonly conflicts: SpeakerDiarizationConflict[];
+    } {
+  const manuallyEditedSegmentIds = new Set(
+    project.corrections.flatMap((correction) =>
+      Array.isArray(correction.afterSegments)
+        ? correction.afterSegments
+            .filter(isRecord)
+            .map((segment) => segment.id)
+            .filter(isNonEmptyString)
+        : []
+    )
+  );
+  const generatedById = new Map(generatedSegments.map((segment) => [segment.id, segment]));
+  const generatedSpeakerById = new Map(generatedSpeakers.map((speaker) => [speaker.id, speaker]));
+  const manuallyRenamedSpeakerIds = getManuallyRenamedSpeakerIds(project.corrections);
+  const conflicts: SpeakerDiarizationConflict[] = [];
+
+  for (const currentSpeaker of project.speakers) {
+    if (!manuallyRenamedSpeakerIds.has(currentSpeaker.id)) {
+      continue;
+    }
+
+    const generatedSpeaker = generatedSpeakerById.get(currentSpeaker.id);
+    if (generatedSpeaker !== undefined && generatedSpeaker.label === currentSpeaker.label) {
+      continue;
+    }
+
+    conflicts.push({
+      speakerId: currentSpeaker.id,
+      currentLabel: currentSpeaker.label,
+      generatedLabel: generatedSpeaker?.label ?? null,
+      reason: "manual-rename-would-change"
+    });
+  }
+
+  for (const currentSegment of project.speakerSegments) {
+    if (!manuallyEditedSegmentIds.has(currentSegment.id)) {
+      continue;
+    }
+
+    const generatedSegment = generatedById.get(currentSegment.id);
+    if (generatedSegment !== undefined && speakerSegmentsAreEquivalent(currentSegment, generatedSegment)) {
+      continue;
+    }
+
+    conflicts.push({
+      segmentId: currentSegment.id,
+      startMs: currentSegment.startMs,
+      endMs: currentSegment.endMs,
+      currentSpeakerId: currentSegment.speakerId,
+      generatedSpeakerId: generatedSegment?.speakerId ?? null,
+      reason: "manual-edit-would-change"
+    });
+  }
+
+  if (conflicts.length > 0) {
+    return {
+      status: "conflict",
+      project,
+      generatedSegments: generatedSegments.map((segment) => ({ ...segment })),
+      conflicts
+    };
+  }
+
+  return {
+    status: "applied",
+    speakerSegments: generatedSegments.map((segment) => ({ ...segment }))
+  };
+}
+
+function speakerSegmentsAreEquivalent(left: SpeakerSegment, right: SpeakerSegment): boolean {
+  return left.speakerId === right.speakerId && left.startMs === right.startMs && left.endMs === right.endMs;
+}
+
+function getManuallyRenamedSpeakerIds(corrections: readonly SpeakerCorrection[]): Set<string> {
+  const speakerIds = new Set<string>();
+
+  for (const correction of corrections) {
+    if (correction.kind !== "rename-speaker" && correction.reason !== "manual-rename") {
+      continue;
+    }
+
+    if (isNonEmptyString(correction.replacementSpeakerId)) {
+      speakerIds.add(correction.replacementSpeakerId);
+      continue;
+    }
+
+    if (isNonEmptyString(correction.targetSpeakerId)) {
+      speakerIds.add(correction.targetSpeakerId);
+    }
+  }
+
+  return speakerIds;
 }
 
 function validateEditHistory(input: unknown, errors: string[]): void {
@@ -588,4 +779,16 @@ function isPositiveOrZeroNumber(input: unknown): input is number {
 
 function isConfidenceValue(input: unknown): input is number {
   return typeof input === "number" && Number.isFinite(input) && input >= 0 && input <= 1;
+}
+
+function cloneCorrection(correction: SpeakerCorrection): SpeakerCorrection {
+  return {
+    ...correction,
+    ...(Array.isArray(correction.beforeSegments)
+      ? { beforeSegments: correction.beforeSegments.map((segment) => ({ ...segment })) }
+      : {}),
+    ...(Array.isArray(correction.afterSegments)
+      ? { afterSegments: correction.afterSegments.map((segment) => ({ ...segment })) }
+      : {})
+  };
 }
