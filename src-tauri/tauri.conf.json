@@ -2,10 +2,10 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "meetnote",
   "version": "0.1.0",
-  "identifier": "dev.meetnote.app",
+  "identifier": "dev.meetnote",
   "build": {
-    "beforeDevCommand": "cd frontend && bun run dev",
-    "beforeBuildCommand": "cd frontend && bun run build",
+    "beforeDevCommand": "cd ../frontend && bun run dev",
+    "beforeBuildCommand": "cd ../frontend && bun run build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../frontend/dist"
   },
