@@ -4,6 +4,21 @@ use std::sync::{Arc, Mutex};
 use tauri::Emitter;
 use tokio::task::AbortHandle;
 
+// ── Path utilities ────────────────────────────────────────────────────────────
+
+fn expand_tilde(path: &str) -> String {
+    if path.starts_with("~/") || path == "~" {
+        if let Ok(home) = std::env::var("HOME") {
+            return if path == "~" {
+                home
+            } else {
+                format!("{}/{}", home, &path[2..])
+            };
+        }
+    }
+    path.to_string()
+}
+
 // ── Domain types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

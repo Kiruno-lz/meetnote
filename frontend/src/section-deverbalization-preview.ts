@@ -111,7 +111,7 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
         <div class="deverb-divider"></div>
         <div class="deverb-right">
           <h3 style="margin-bottom:12px;color:#aaa;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">去口语化 Markdown（可编辑）</h3>
-          <div class="deverb-right-content"></div>
+          <div class="deverb-right-content" style="flex:1;display:flex;flex-direction:column;min-height:0;"></div>
         </div>
       </div>
       <div class="action-bar">

@@ -44,10 +44,37 @@ function injectStyles(): void {
   const style = document.createElement("style");
   style.id = "meeting-list-styles";
   style.textContent = `
-    .meeting-item { display: flex; align-items: center; }
-    .meeting-item:hover .meeting-item-actions { opacity: 1 !important; }
-    .btn-danger { background: #c62828; color: #fff; border: none; }
-    .btn-danger:hover { background: #b71c1c; }
+    .meeting-item { display: flex; align-items: center; gap: 0; }
+    .meeting-item-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      opacity: 0;
+      transition: opacity 200ms ease-out;
+      flex-shrink: 0;
+    }
+    .meeting-item:hover .meeting-item-actions { opacity: 1; }
+    .meeting-item.editing .meeting-item-actions { opacity: 1; }
+    .icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      border: 1px solid transparent;
+      background: transparent;
+      cursor: pointer;
+      color: #888;
+      transition: background 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+      flex-shrink: 0;
+    }
+    .icon-btn:hover { background: #2a2a2a; border-color: #3a3a3a; color: #e0e0e0; }
+    .icon-btn:active { background: #333; }
+    .icon-btn:focus-visible { outline: 2px solid #4a9eff; outline-offset: 1px; }
+    .icon-btn.danger:hover { background: rgba(198, 40, 40, 0.15); border-color: rgba(198, 40, 40, 0.3); color: #ef5350; }
+    .icon-btn.confirm { color: #66bb6a; }
+    .icon-btn.confirm:hover { background: rgba(102, 187, 106, 0.15); border-color: rgba(102, 187, 106, 0.3); color: #66bb6a; }
     @keyframes shake {
       0%, 100% { transform: translateX(0); }
       20%, 60% { transform: translateX(-4px); }
@@ -72,9 +99,17 @@ export function renderProjectList(root: HTMLElement, state: AppState): void {
           <div class="meeting-title">${escapeHtml(m.title)}</div>
           <div class="meeting-date">${escapeHtml(formatDate(m.createdAt))}</div>
         </div>
-        <div class="meeting-item-actions" style="opacity:0; transition: opacity 0.15s; display:flex; gap:6px; align-items:center;">
-          <button class="btn btn-sm btn-secondary btn-edit" data-id="${escapeHtml(m.id)}">✏️</button>
-          <button class="btn btn-sm btn-danger btn-delete" data-id="${escapeHtml(m.id)}">🗑️</button>
+        <div class="meeting-item-actions">
+          <button class="icon-btn btn-edit" data-id="${escapeHtml(m.id)}" title="重命名" aria-label="重命名">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M10 2l2 2-7 7H3V9l7-7z"/>
+            </svg>
+          </button>
+          <button class="icon-btn danger btn-delete" data-id="${escapeHtml(m.id)}" title="删除" aria-label="删除">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 4h10M5 4V2h4v2M3 4l1 8h6l1-8"/>
+            </svg>
+          </button>
         </div>
       </div>`
         )
@@ -92,7 +127,7 @@ export function renderProjectList(root: HTMLElement, state: AppState): void {
         <button class="btn btn-primary" id="btn-import-audio">导入音频文件</button>
         <button class="btn btn-secondary" id="btn-import-mock">导入 Mock 音频</button>
       </div>
-      <input type="file" id="audio-file-input" accept=".wav,.mp3,.m4a" style="display:none;" />
+      <input type="file" id="audio-file-input" accept="audio/wav,audio/mpeg,audio/mp4,audio/x-m4a,.wav,.mp3,.m4a" style="display:none;" />
     </div>
   `;
 
@@ -122,19 +157,39 @@ export function renderProjectList(root: HTMLElement, state: AppState): void {
       if (!card) return;
       const body = card.querySelector<HTMLElement>(".meeting-item-body");
       if (!body) return;
+      const actionsDiv = card.querySelector<HTMLElement>(".meeting-item-actions");
+      const editBtn = actionsDiv?.querySelector<HTMLButtonElement>(".btn-edit");
+
+      // Switch to editing state
+      card.classList.add("editing");
+      if (editBtn) {
+        editBtn.className = "icon-btn confirm btn-confirm-edit";
+        editBtn.title = "确认";
+        editBtn.setAttribute("aria-label", "确认");
+        editBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 7l4 4 6-6"/></svg>`;
+      }
 
       // Replace body content with inline editor
       body.innerHTML = `
         <input type="text" class="edit-title-input" value="${escapeHtml(meeting.title)}" style="flex:1; padding:4px 8px; font-size:14px; border:1px solid #aaa; border-radius:4px; width:100%;" />
-        <button class="btn btn-sm btn-primary btn-confirm-edit" style="margin-top:6px;">确认</button>
       `;
 
       const input = body.querySelector<HTMLInputElement>(".edit-title-input");
-      const confirmBtn = body.querySelector<HTMLButtonElement>(".btn-confirm-edit");
-
       if (input) {
         input.focus();
         input.select();
+      }
+
+      function restoreEditBtn(): void {
+        card!.classList.remove("editing");
+        const confirmBtn = actionsDiv?.querySelector<HTMLButtonElement>(".btn-confirm-edit");
+        if (confirmBtn) {
+          confirmBtn.className = "icon-btn btn-edit";
+          confirmBtn.title = "重命名";
+          confirmBtn.setAttribute("aria-label", "重命名");
+          confirmBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2l2 2-7 7H3V9l7-7z"/></svg>`;
+          confirmBtn.dataset["id"] = id;
+        }
       }
 
       function submitEdit(): void {
@@ -154,12 +209,22 @@ export function renderProjectList(root: HTMLElement, state: AppState): void {
 
       input?.addEventListener("keydown", (e) => {
         if (e.key === "Enter") submitEdit();
+        if (e.key === "Escape") {
+          restoreEditBtn();
+          if (body) body.innerHTML = `
+            <div class="meeting-title">${escapeHtml(meeting.title)}</div>
+            <div class="meeting-date">${escapeHtml(formatDate(meeting.createdAt))}</div>
+          `;
+        }
       });
 
-      confirmBtn?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        submitEdit();
-      });
+      // Attach confirm click on the swapped button
+      if (editBtn) {
+        editBtn.onclick = (e) => {
+          e.stopPropagation();
+          submitEdit();
+        };
+      }
     });
   });
 

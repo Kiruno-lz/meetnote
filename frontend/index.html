@@ -298,17 +298,44 @@
         display: grid;
         grid-template-columns: 1fr 1px 1fr;
         gap: 0;
-        min-height: 300px;
+        align-items: stretch;
       }
 
       .deverb-left, .deverb-right {
         padding: 0 16px;
         overflow-y: auto;
-        max-height: 60vh;
+        max-height: calc(100vh - 240px);
+        min-height: 300px;
       }
 
       .deverb-left { padding-left: 0; }
-      .deverb-right { padding-right: 0; }
+      .deverb-right {
+        padding-right: 0;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .markdown-editor-textarea {
+        flex: 1;
+        width: 100%;
+        min-height: 0;
+        height: 100%;
+        background: #1a1a1a;
+        color: #e0e0e0;
+        border: 1px solid #3a3a3a;
+        border-radius: 6px;
+        padding: 12px;
+        font-size: 13px;
+        font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+        resize: none;
+        outline: none;
+        line-height: 1.6;
+        transition: border-color 150ms ease-out;
+      }
+
+      .markdown-editor-textarea:focus {
+        border-color: #4a9eff;
+      }
 
       .deverb-divider {
         background: #2a2a2a;

@@ -125,19 +125,6 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): HTMLElemen
   const textarea = document.createElement("textarea");
   textarea.className = "markdown-editor-textarea";
   textarea.value = initialContent;
-  textarea.style.cssText = [
-    "width:100%",
-    "min-height:300px",
-    "background:#1a1a1a",
-    "color:#e0e0e0",
-    "border:1px solid #3a3a3a",
-    "border-radius:6px",
-    "padding:12px",
-    "font-size:13px",
-    "font-family:monospace",
-    "resize:vertical",
-    "outline:none",
-  ].join(";");
 
   if (onchange) {
     textarea.addEventListener("input", () => {
