@@ -19,6 +19,7 @@ export interface AppState {
   activeSection: AppSection;
   pipelineRunning: boolean;
   pipelineStage: string;
+  deverPreviewBackTo?: AppSection;
 }
 
 export function createInitialState(): AppState {
@@ -36,13 +37,17 @@ export function loadState(): AppState {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return createInitialState();
     const parsed = JSON.parse(raw) as Partial<AppState>;
-    return {
+    const base: AppState = {
       meetings: Array.isArray(parsed.meetings) ? parsed.meetings : [],
       activeMeetingId: parsed.activeMeetingId ?? null,
       activeSection: (parsed.activeSection as AppSection) ?? "project-list",
       pipelineRunning: false,
-      pipelineStage: ""
+      pipelineStage: "",
     };
+    if (parsed.deverPreviewBackTo) {
+      base.deverPreviewBackTo = parsed.deverPreviewBackTo as AppSection;
+    }
+    return base;
   } catch {
     return createInitialState();
   }

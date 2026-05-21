@@ -2,6 +2,10 @@ import type { AppState, MeetingRecord } from "./ui-state.ts";
 import { saveState } from "./ui-state.ts";
 import type { MeetingProject } from "./audio-project.ts";
 import { navigate } from "./main.ts";
+import {
+  createMarkdownEditor,
+  isMarkdownBodyChanged,
+} from "./markdown-editor-component.ts";
 
 function escapeHtml(s: string): string {
   return s
@@ -42,6 +46,9 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
     return;
   }
 
+  // Track current markdown content for edits
+  let currentMarkdown = meeting.markdownContent;
+
   const profiles = meeting.speakerProfiles;
   const speakerMap = new Map(profiles.map((p) => [p.id, p.label]));
 
@@ -72,7 +79,7 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
   }
 
   const leftHtml = blocks
-    .map((b, idx) => {
+    .map((b) => {
       const label = speakerMap.get(b.speakerId) ?? b.speakerId;
       const color = SPEAKER_COLORS[profiles.findIndex((p) => p.id === b.speakerId) % SPEAKER_COLORS.length] ?? "#4a9eff";
       return `
@@ -88,11 +95,7 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
     })
     .join("");
 
-  // Display markdown content with simple formatting
-  const markdownLines = meeting.markdownContent
-    .split("\n")
-    .map((line) => `<div class="md-line">${escapeHtml(line) || "&nbsp;"}</div>`)
-    .join("");
+  const backTarget = state.deverPreviewBackTo ?? "recording-detail";
 
   root.innerHTML = `
     <div class="section">
@@ -107,8 +110,8 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
         </div>
         <div class="deverb-divider"></div>
         <div class="deverb-right">
-          <h3 style="margin-bottom:12px;color:#aaa;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">去口语化 Markdown</h3>
-          <div class="markdown-preview">${markdownLines}</div>
+          <h3 style="margin-bottom:12px;color:#aaa;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;">去口语化 Markdown（可编辑）</h3>
+          <div class="deverb-right-content"></div>
         </div>
       </div>
       <div class="action-bar">
@@ -117,10 +120,28 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
     </div>
   `;
 
-  root.querySelector("#btn-back")?.addEventListener("click", () => navigate("recording-detail"));
+  // Inject the markdown editor into the right-side container
+  const rightContent = root.querySelector<HTMLElement>(".deverb-right-content");
+  if (rightContent) {
+    const editor = createMarkdownEditor({
+      initialContent: meeting.markdownContent,
+      readonly: false,
+      onchange: (content) => {
+        currentMarkdown = content;
+      },
+    });
+    rightContent.appendChild(editor);
+  }
+
+  root.querySelector("#btn-back")?.addEventListener("click", () => navigate(backTarget));
 
   root.querySelector("#btn-save-markdown")?.addEventListener("click", () => {
-    // Mark markdown as saved in state (already saved, just navigate to library)
+    if (isMarkdownBodyChanged(meeting.markdownContent, currentMarkdown)) {
+      const idx = state.meetings.findIndex((m: MeetingRecord) => m.id === meeting.id);
+      if (idx !== -1) {
+        state.meetings[idx] = { ...state.meetings[idx]!, markdownContent: currentMarkdown };
+      }
+    }
     saveState(state);
     navigate("markdown-library");
   });

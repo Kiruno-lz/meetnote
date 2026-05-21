@@ -9,7 +9,8 @@ describe("app shell skeleton", () => {
       "transcription-progress",
       "speaker-editor",
       "deverbalization-preview",
-      "markdown-library"
+      "markdown-library",
+      "model-management"
     ]);
   });
 

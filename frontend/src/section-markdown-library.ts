@@ -1,4 +1,5 @@
 import type { AppState } from "./ui-state.ts";
+import { saveState } from "./ui-state.ts";
 import { navigate } from "./main.ts";
 
 function escapeHtml(s: string): string {
@@ -25,17 +26,9 @@ export function renderMarkdownLibrary(root: HTMLElement, state: AppState): void 
     ? state.meetings
         .map(
           (m) => `
-      <div class="card meeting-library-item" style="margin-bottom:12px;">
-        <div class="library-item-header" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" data-id="${escapeHtml(m.id)}">
-          <div>
-            <div class="meeting-title">${escapeHtml(m.title)}</div>
-            <div class="meeting-date">${escapeHtml(formatDate(m.createdAt))}</div>
-          </div>
-          <span class="expand-icon" data-id="${escapeHtml(m.id)}" style="font-size:18px;color:#888;">▼</span>
-        </div>
-        <div class="library-markdown-content" id="md-${escapeHtml(m.id)}" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #333;">
-          <pre style="white-space:pre-wrap;font-size:12px;color:#bbb;font-family:'JetBrains Mono','Fira Code',monospace;overflow-x:auto;">${escapeHtml(m.markdownContent)}</pre>
-        </div>
+      <div class="card meeting-library-item" style="margin-bottom:12px;cursor:pointer;" data-id="${escapeHtml(m.id)}">
+        <div class="meeting-title">${escapeHtml(m.title)}</div>
+        <div class="meeting-date">${escapeHtml(formatDate(m.createdAt))}</div>
       </div>`
         )
         .join("")
@@ -53,18 +46,16 @@ export function renderMarkdownLibrary(root: HTMLElement, state: AppState): void 
     </div>
   `;
 
-  // Toggle expand/collapse
-  root.querySelectorAll<HTMLElement>(".library-item-header").forEach((header) => {
-    header.addEventListener("click", () => {
-      const id = header.dataset["id"];
+  // Click card → navigate to deverbalization-preview
+  root.querySelectorAll<HTMLElement>(".meeting-library-item").forEach((card) => {
+    card.addEventListener("click", () => {
+      const id = card.dataset["id"];
       if (!id) return;
-      const content = root.querySelector<HTMLElement>(`#md-${CSS.escape(id)}`);
-      const icon = root.querySelector<HTMLElement>(`.expand-icon[data-id="${CSS.escape(id)}"]`);
-      if (content) {
-        const isHidden = content.style.display === "none";
-        content.style.display = isHidden ? "block" : "none";
-        if (icon) icon.textContent = isHidden ? "▲" : "▼";
-      }
+      state.activeMeetingId = id;
+      state.activeSection = "deverbalization-preview";
+      state.deverPreviewBackTo = "markdown-library";
+      saveState(state);
+      navigate("deverbalization-preview");
     });
   });
 

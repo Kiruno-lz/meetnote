@@ -6,6 +6,7 @@ import { renderRecordingDetail } from "./section-recording-detail.ts";
 import { renderSpeakerEditor } from "./section-speaker-editor.ts";
 import { renderDeverbalizationPreview } from "./section-deverbalization-preview.ts";
 import { renderMarkdownLibrary } from "./section-markdown-library.ts";
+import { renderModelManagement } from "./section-model-management.ts";
 
 // Global state
 let appState: AppState = loadState();
@@ -25,7 +26,8 @@ function render(): void {
   // Build nav
   const navItems: { id: AppSection; label: string }[] = [
     { id: "project-list", label: "会议项目" },
-    { id: "markdown-library", label: "Markdown 库" }
+    { id: "markdown-library", label: "Markdown 库" },
+    { id: "model-management", label: "模型管理" }
   ];
 
   const navHtml = navItems
@@ -74,6 +76,9 @@ function render(): void {
       break;
     case "markdown-library":
       renderMarkdownLibrary(sectionRoot, appState);
+      break;
+    case "model-management":
+      renderModelManagement(sectionRoot, appState);
       break;
     default:
       renderProjectList(sectionRoot, appState);
