@@ -1,4 +1,5 @@
 import { createMeetingProjectManifest, type MeetingProject } from "./audio-project";
+import { projectMeetingCorrectedSpeakerOutput, renderCorrectedSpeakerMarkdown } from "./speaker-output";
 
 export interface LibraryFile {
   readonly path: string;
@@ -40,6 +41,7 @@ export function rebuildLibraryIndex(records: readonly MarkdownLibraryRecord[]): 
 }
 
 function renderMeetingMarkdown(project: MeetingProject): string {
+  const correctedSpeakerText = renderCorrectedSpeakerMarkdown(projectMeetingCorrectedSpeakerOutput(project));
   return [
     "---",
     `title: ${escapeYaml(project.title)}`,
@@ -51,7 +53,7 @@ function renderMeetingMarkdown(project: MeetingProject): string {
     "",
     `# ${project.title}`,
     "",
-    project.editedMarkdown ?? "_No edited meeting text yet._",
+    project.editedMarkdown ?? (correctedSpeakerText || "_No edited meeting text yet._"),
     ""
   ].join("\n");
 }

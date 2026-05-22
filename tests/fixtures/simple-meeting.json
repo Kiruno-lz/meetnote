@@ -1,0 +1,245 @@
+{
+  "audioMetadata": {
+    "filename": "meeting-2024-05-15-simple.wav",
+    "durationMs": 480000,
+    "audioHash": "a1b2c3d4e5f6a7b8",
+    "uploadedAt": "2024-05-15T10:00:00.000Z"
+  },
+  "asrResult": {
+    "requestId": "asr-req-20240515-simple",
+    "model": {
+      "id": "whisper-small",
+      "version": "1.0"
+    },
+    "segments": [
+      {
+        "id": "asr-seg-0001",
+        "startMs": 0,
+        "endMs": 2500,
+        "text": "嗯，今天我们先看一下Q2产品规划。",
+        "language": "zh",
+        "confidence": 0.96
+      },
+      {
+        "id": "asr-seg-0002",
+        "startMs": 2600,
+        "endMs": 5200,
+        "text": "然后呢，我们需要完成三个核心功能。",
+        "language": "zh",
+        "confidence": 0.94
+      },
+      {
+        "id": "asr-seg-0003",
+        "startMs": 5300,
+        "endMs": 8100,
+        "text": "其实这些功能已经在backlog里面了。",
+        "language": "zh",
+        "confidence": 0.92
+      },
+      {
+        "id": "asr-seg-0004",
+        "startMs": 8200,
+        "endMs": 11500,
+        "text": "第一个，我们需要优化一下用户登录流程。",
+        "language": "zh",
+        "confidence": 0.95
+      },
+      {
+        "id": "asr-seg-0005",
+        "startMs": 11600,
+        "endMs": 15200,
+        "text": "就是说，我们要支持更多的社交登录方式。",
+        "language": "zh",
+        "confidence": 0.91
+      },
+      {
+        "id": "asr-seg-0006",
+        "startMs": 15300,
+        "endMs": 18500,
+        "text": "嗯，这个应该不会太复杂。",
+        "language": "zh",
+        "confidence": 0.93
+      },
+      {
+        "id": "asr-seg-0007",
+        "startMs": 18600,
+        "endMs": 22100,
+        "text": "第二个功能是数据导出功能。",
+        "language": "zh",
+        "confidence": 0.94
+      },
+      {
+        "id": "asr-seg-0008",
+        "startMs": 22200,
+        "endMs": 25800,
+        "text": "用户可以导出他们的所有数据到CSV或Excel。",
+        "language": "zh",
+        "confidence": 0.92
+      },
+      {
+        "id": "asr-seg-0009",
+        "startMs": 25900,
+        "endMs": 28500,
+        "text": "这个需要和后端团队配合。",
+        "language": "zh",
+        "confidence": 0.95
+      },
+      {
+        "id": "asr-seg-0010",
+        "startMs": 28600,
+        "endMs": 32200,
+        "text": "第三个就是改进一下搜索功能。",
+        "language": "zh",
+        "confidence": 0.93
+      },
+      {
+        "id": "asr-seg-0011",
+        "startMs": 32300,
+        "endMs": 36100,
+        "text": "我们要支持模糊搜索和高级过滤。",
+        "language": "zh",
+        "confidence": 0.91
+      },
+      {
+        "id": "asr-seg-0012",
+        "startMs": 36200,
+        "endMs": 39800,
+        "text": "好的，这些就是Q2的主要目标。",
+        "language": "zh",
+        "confidence": 0.94
+      },
+      {
+        "id": "asr-seg-0013",
+        "startMs": 39900,
+        "endMs": 43300,
+        "text": "我们预期在月底之前完成所有工作。",
+        "language": "zh",
+        "confidence": 0.92
+      },
+      {
+        "id": "asr-seg-0014",
+        "startMs": 43400,
+        "endMs": 46500,
+        "text": "嗯，各位有什么问题吗？",
+        "language": "zh",
+        "confidence": 0.93
+      }
+    ]
+  },
+  "diarizationResult": {
+    "requestId": "dia-req-20240515-simple",
+    "model": {
+      "id": "pyannote-speaker-diarization",
+      "version": "2.1"
+    },
+    "speakers": [
+      {
+        "id": "speaker-alice",
+        "label": "Alice"
+      }
+    ],
+    "segments": [
+      {
+        "id": "dia-seg-0001",
+        "speakerId": "speaker-alice",
+        "startMs": 0,
+        "endMs": 46500,
+        "confidence": 0.98,
+        "overlap": false
+      }
+    ]
+  },
+  "deverbalizationOutput": {
+    "requestId": "llm-req-20240515-simple",
+    "provider": "ollama",
+    "model": {
+      "id": "qwen-7b",
+      "version": "1.0",
+      "parameters": {
+        "temperature": 0.7,
+        "maxOutputTokens": 2048
+      }
+    },
+    "paragraphs": [
+      {
+        "id": "para-0001",
+        "sourceSegmentIds": [
+          "asr-seg-0001",
+          "asr-seg-0002"
+        ],
+        "speakerId": "speaker-alice",
+        "text": "今天我们讨论Q2产品规划，需要完成三个核心功能。"
+      },
+      {
+        "id": "para-0002",
+        "sourceSegmentIds": [
+          "asr-seg-0003"
+        ],
+        "speakerId": "speaker-alice",
+        "text": "这些功能已经在产品backlog中。"
+      },
+      {
+        "id": "para-0003",
+        "sourceSegmentIds": [
+          "asr-seg-0004",
+          "asr-seg-0005"
+        ],
+        "speakerId": "speaker-alice",
+        "text": "首先，我们需要优化用户登录流程，支持更多的社交登录方式。"
+      },
+      {
+        "id": "para-0004",
+        "sourceSegmentIds": [
+          "asr-seg-0006"
+        ],
+        "speakerId": "speaker-alice",
+        "text": "这个功能实现起来不会太复杂。"
+      },
+      {
+        "id": "para-0005",
+        "sourceSegmentIds": [
+          "asr-seg-0007",
+          "asr-seg-0008"
+        ],
+        "speakerId": "speaker-alice",
+        "text": "第二个功能是数据导出功能，用户可以将他们的所有数据导出为CSV或Excel格式。"
+      },
+      {
+        "id": "para-0006",
+        "sourceSegmentIds": [
+          "asr-seg-0009"
+        ],
+        "speakerId": "speaker-alice",
+        "text": "这个功能需要与后端团队配合完成。"
+      },
+      {
+        "id": "para-0007",
+        "sourceSegmentIds": [
+          "asr-seg-0010",
+          "asr-seg-0011"
+        ],
+        "speakerId": "speaker-alice",
+        "text": "第三个功能是改进搜索功能，支持模糊搜索和高级过滤。"
+      },
+      {
+        "id": "para-0008",
+        "sourceSegmentIds": [
+          "asr-seg-0012",
+          "asr-seg-0013"
+        ],
+        "speakerId": "speaker-alice",
+        "text": "这些是Q2的主要目标，我们预期在月底之前完成所有工作。"
+      }
+    ]
+  },
+  "expectedMarkdownFrontmatter": {
+    "title": "Q2产品规划讨论",
+    "date": "2024-05-15",
+    "audioHash": "a1b2c3d4e5f6a7b8",
+    "speakers": [
+      "Alice"
+    ],
+    "modelVersion": "1.0",
+    "llmProvider": "ollama"
+  }
+}

@@ -17,7 +17,7 @@ describe("model matrix", () => {
       defaultUseCase: "quality-first",
       languageProfile: "zh-primary-en-mixed",
       format: "external",
-      source: "openai/whisper-large-v3",
+      source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
       license: "apache-2.0"
     });
     expect(whisper?.hardware.minimumMemoryGb).toBeGreaterThanOrEqual(10);

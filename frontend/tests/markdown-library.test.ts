@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { attachEditedMarkdown, attachSpeakerState, attachTranscript, createMeetingProject, restoreMeetingProjectManifest } from "../src/audio-project";
+import {
+  attachEditedMarkdown,
+  attachSpeakerState,
+  attachTranscript,
+  createMeetingProject,
+  restoreMeetingProjectManifest
+} from "../src/audio-project";
 import { createMarkdownLibraryRecord, rebuildLibraryIndex } from "../src/markdown-library";
 
 describe("markdown file library", () => {
@@ -33,6 +39,51 @@ describe("markdown file library", () => {
     ]);
     expect(restoreMeetingProjectManifest(JSON.parse(manifestFile?.contents ?? "") as unknown)).toEqual(project);
     expect(record.files[1]?.contents).toContain("schema: meetnote.markdown.v1");
+  });
+
+  test("projects corrected speaker text into markdown when no edited markdown exists", () => {
+    const project = attachSpeakerState(
+      attachTranscript(
+        createMeetingProject({
+          title: "Speaker history",
+          path: "/audio/speaker-history.wav",
+          hash: "speaker-history-hash",
+          durationSeconds: 180,
+          createdAt: "2026-05-20T09:00:00.000Z"
+        }),
+        [
+          { id: "asr-1", startMs: 0, endMs: 1000, text: "今天先确认目标", language: "zh" },
+          { id: "asr-2", startMs: 1200, endMs: 2200, text: "我来补充进度", language: "zh" }
+        ]
+      ),
+      [
+        { id: "speaker-a", label: "主持人" },
+        { id: "speaker-b", label: "研发" }
+      ],
+      [
+        { id: "spk-1", speakerId: "speaker-a", startMs: 0, endMs: 1100 },
+        { id: "spk-2", speakerId: "speaker-b", startMs: 1200, endMs: 2200 }
+      ],
+      [
+        {
+          id: "cmd-1",
+          commandId: "cmd-1",
+          kind: "assign-range",
+          targetSpeakerId: "speaker-b",
+          replacementSpeakerId: "speaker-b",
+          reason: "manual-range-assign",
+          createdAt: "2026-05-20T09:01:00.000Z",
+          beforeSegments: [{ id: "spk-2", speakerId: "speaker-a", startMs: 1200, endMs: 2200 }],
+          afterSegments: [{ id: "spk-2", speakerId: "speaker-b", startMs: 1200, endMs: 2200 }]
+        }
+      ]
+    );
+
+    const record = createMarkdownLibraryRecord(project);
+
+    expect(record.files[1]?.contents).toContain("**主持人:** 今天先确认目标");
+    expect(record.files[1]?.contents).toContain("**研发:** 我来补充进度");
+    expect(record.files[1]?.contents).not.toContain("_No edited meeting text yet._");
   });
 
   test("rebuilds an index from file records", () => {
