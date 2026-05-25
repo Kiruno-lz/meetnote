@@ -1,4 +1,4 @@
-import type { MeetingProject, SpeakerCorrection, SpeakerProfile, SpeakerSegment, TranscriptSegment } from "./audio-project";
+import type { MeetingProject, SpeakerCorrection, SpeakerProfile, SpeakerSegment, TranscriptSegment } from "../types/audio-project";
 
 export interface SpeakerMergedTranscriptSegment {
   readonly id: string;

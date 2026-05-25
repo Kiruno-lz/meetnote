@@ -7,13 +7,13 @@ import {
   type SpeakerProfile,
   type SpeakerSegment,
   type TranscriptSegment
-} from "./audio-project";
+} from "../types/audio-project";
 import { mergeTranscriptWithDiarization, applySpeakerCorrectionCommands, type SpeakerCorrectionCommand } from "./speaker";
 import { projectMeetingCorrectedSpeakerOutput, createCorrectedSpeakerLlmInput, renderCorrectedSpeakerLlmInput } from "./speaker-output";
 import { createLlmRequestFromCorrectedSpeakerInput, runDeterministicMockLlmProvider } from "./llm-provider";
 import { generateMarkdownContent, type GenerateMarkdownOptions } from "./markdown-library-generator";
-import { createMarkdownFrontmatter, MARKDOWN_LIBRARY_SCHEMA_VERSION } from "./markdown-library-schema";
-import type { DeverbalizationOutput } from "./llm-schema";
+import { createMarkdownFrontmatter, MARKDOWN_LIBRARY_SCHEMA_VERSION } from "../types/markdown-library-schema";
+import type { DeverbalizationOutput } from "../types/llm-schema";
 
 export interface MockPipelineInput {
   audioPath: string;

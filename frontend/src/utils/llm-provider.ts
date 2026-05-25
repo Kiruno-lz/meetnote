@@ -6,7 +6,7 @@ import {
   type LlmDeverbalizationRequest,
   type LlmProviderEnvelope,
   type LlmProvider
-} from "./llm-schema";
+} from "../types/llm-schema";
 import type { CorrectedSpeakerLlmInput } from "./speaker-output";
 
 export interface LlmRequestSegmentTiming {

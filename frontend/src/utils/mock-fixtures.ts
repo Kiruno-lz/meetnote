@@ -1,4 +1,4 @@
-import type { TranscriptSegment, SpeakerSegment, SpeakerProfile } from "./audio-project.ts";
+import type { TranscriptSegment, SpeakerSegment, SpeakerProfile } from "../types/audio-project.ts";
 
 export const DEMO_TRANSCRIPT_SEGMENTS: TranscriptSegment[] = [
   {

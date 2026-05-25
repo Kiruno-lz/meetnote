@@ -1,11 +1,13 @@
-import type { AppState, MeetingRecord } from "./ui-state.ts";
-import { saveState } from "./ui-state.ts";
-import type { MeetingProject } from "./audio-project.ts";
-import { navigate } from "./main.ts";
+import type { AppState, MeetingRecord } from "../stores/ui-state.ts";
+import { saveState } from "../stores/ui-state.ts";
+import type { MeetingProject } from "../types/audio-project.ts";
+import { navigate } from "../main.ts";
 import {
   createMarkdownEditor,
   isMarkdownBodyChanged,
 } from "./markdown-editor-component.ts";
+import { updateMeetingTitle, deleteMeeting, isTitleValid } from "../utils/meeting-management.ts";
+import { injectMeetingItemStyles } from "./meeting-record-item.ts";
 
 function escapeHtml(s: string): string {
   return s
@@ -25,9 +27,9 @@ function msToTime(ms: number): string {
 const SPEAKER_COLORS = ["#4a9eff", "#ff7043", "#66bb6a", "#ab47bc"];
 
 export function renderDeverbalizationPreview(root: HTMLElement, state: AppState): void {
-  const meeting = state.meetings.find((m) => m.id === state.activeMeetingId);
+  const meetingOrUndef = state.meetings.find((m) => m.id === state.activeMeetingId);
 
-  if (!meeting) {
+  if (!meetingOrUndef) {
     root.innerHTML = `
       <div class="section">
         <div class="empty-state">未找到会议记录</div>
@@ -37,6 +39,8 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
     root.querySelector("#btn-back")?.addEventListener("click", () => navigate("recording-detail"));
     return;
   }
+
+  const meeting: MeetingRecord = meetingOrUndef;
 
   let project: MeetingProject;
   try {
@@ -97,11 +101,21 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
 
   const backTarget = state.deverPreviewBackTo ?? "recording-detail";
 
+  injectMeetingItemStyles();
+
   root.innerHTML = `
     <div class="section">
       <div class="section-header">
         <button class="btn btn-secondary btn-sm" id="btn-back">← 返回</button>
-        <h2>去口语化预览</h2>
+        <h2 id="deverb-title">${escapeHtml(meeting.title)}</h2>
+        <div class="title-actions" style="position:relative;margin-left:auto;">
+          <button class="icon-btn" id="btn-title-menu" title="更多操作" aria-label="更多操作"
+                  style="color:#666;font-size:18px;letter-spacing:1px;font-weight:700;">···</button>
+          <div id="title-dropdown" class="dropdown-menu" style="display:none;">
+            <button class="dropdown-item" id="menu-rename">重命名</button>
+            <button class="dropdown-item danger" id="menu-delete">删除</button>
+          </div>
+        </div>
       </div>
       <div class="deverb-split">
         <div class="deverb-left">
@@ -134,6 +148,64 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
   }
 
   root.querySelector("#btn-back")?.addEventListener("click", () => navigate(backTarget));
+
+  // ··· dropdown toggle
+  const menuBtn = root.querySelector<HTMLButtonElement>("#btn-title-menu");
+  const dropdown = root.querySelector<HTMLElement>("#title-dropdown");
+  menuBtn?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (dropdown) dropdown.style.display = dropdown.style.display === "none" ? "block" : "none";
+  });
+  const closeDropdown = (): void => { if (dropdown) dropdown.style.display = "none"; };
+  document.addEventListener("click", closeDropdown);
+
+  // Rename inline-edit
+  function enterRenameMode(): void {
+    const titleEl = root.querySelector<HTMLElement>("#deverb-title");
+    if (!titleEl) return;
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = meeting.title;
+    input.style.cssText = "font-size:inherit;font-weight:inherit;background:#1a1a1a;border:1px solid #4a9eff;border-radius:4px;color:#fff;padding:2px 6px;outline:none;width:100%;max-width:400px;";
+    titleEl.replaceWith(input);
+    input.focus(); input.select();
+
+    let saved = false;
+    function saveTitle(): void {
+      if (saved) return; saved = true;
+      const newTitle = input.value.trim();
+      const h2 = document.createElement("h2"); h2.id = "deverb-title";
+      if (newTitle && isTitleValid(newTitle) && newTitle !== meeting.title) {
+        meeting.title = newTitle;
+        state.meetings = updateMeetingTitle(state.meetings, meeting.id, newTitle);
+        saveState(state);
+      }
+      h2.textContent = meeting.title;
+      input.replaceWith(h2);
+    }
+    input.addEventListener("blur", saveTitle);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") input.blur();
+      if (e.key === "Escape") {
+        saved = true;
+        const h2 = document.createElement("h2"); h2.id = "deverb-title";
+        h2.textContent = meeting.title; input.replaceWith(h2);
+      }
+    });
+  }
+
+  // Delete action
+  function handleDelete(): void {
+    if (confirm(`确认删除「${meeting.title}」吗？`)) {
+      state.meetings = deleteMeeting(state.meetings, meeting.id);
+      state.activeMeetingId = null;
+      saveState(state);
+      navigate(backTarget);
+    }
+  }
+
+  root.querySelector("#menu-rename")?.addEventListener("click", (e) => { e.stopPropagation(); closeDropdown(); enterRenameMode(); });
+  root.querySelector("#menu-delete")?.addEventListener("click", (e) => { e.stopPropagation(); closeDropdown(); handleDelete(); });
 
   root.querySelector("#btn-save-markdown")?.addEventListener("click", () => {
     if (isMarkdownBodyChanged(meeting.markdownContent, currentMarkdown)) {

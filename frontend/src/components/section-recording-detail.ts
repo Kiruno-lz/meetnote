@@ -1,8 +1,8 @@
-import type { AppState } from "./ui-state.ts";
-import { saveState } from "./ui-state.ts";
-import type { MeetingProject } from "./audio-project.ts";
-import { navigate } from "./main.ts";
-import { updateMeetingTitle, deleteMeeting, isTitleValid } from "./meeting-management.ts";
+import type { AppState } from "../stores/ui-state.ts";
+import { saveState } from "../stores/ui-state.ts";
+import type { MeetingProject } from "../types/audio-project.ts";
+import { navigate } from "../main.ts";
+import { updateMeetingTitle, deleteMeeting, isTitleValid } from "../utils/meeting-management.ts";
 
 function escapeHtml(s: string): string {
   return s

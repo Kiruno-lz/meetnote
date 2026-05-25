@@ -1,7 +1,7 @@
 import { promises as fs } from "fs";
 import { join, resolve } from "path";
-import type { MarkdownFrontmatter } from "./markdown-library-schema";
-import { parseMarkdownFrontmatter, MARKDOWN_LIBRARY_SCHEMA_VERSION } from "./markdown-library-schema";
+import type { MarkdownFrontmatter } from "../types/markdown-library-schema";
+import { parseMarkdownFrontmatter, MARKDOWN_LIBRARY_SCHEMA_VERSION } from "../types/markdown-library-schema";
 
 export interface SaveMeetingMarkdownOptions {
   readonly basePath: string;

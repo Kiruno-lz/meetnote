@@ -1,4 +1,4 @@
-import { MODEL_MATRIX } from "./model-manifest.ts";
+import { MODEL_MATRIX } from "../types/model-manifest.ts";
 
 // Download status (frontend-managed)
 export type DownloadStatus =

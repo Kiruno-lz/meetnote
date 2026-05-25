@@ -1,6 +1,6 @@
-import type { DeverbalizationOutput, DeverbalizedParagraph } from "./llm-schema";
-import type { MarkdownFrontmatter } from "./markdown-library-schema";
-import { serializeMarkdownFrontmatter } from "./markdown-library-schema";
+import type { DeverbalizationOutput, DeverbalizedParagraph } from "../types/llm-schema";
+import type { MarkdownFrontmatter } from "../types/markdown-library-schema";
+import { serializeMarkdownFrontmatter } from "../types/markdown-library-schema";
 
 export interface SpeakerCorrection {
   readonly paragraphId: string;

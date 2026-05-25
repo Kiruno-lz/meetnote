@@ -5,7 +5,8 @@ export const APP_SECTIONS = [
   "speaker-editor",
   "deverbalization-preview",
   "markdown-library",
-  "model-management"
+  "model-management",
+  "settings"
 ] as const;
 
 export type AppSection = (typeof APP_SECTIONS)[number];

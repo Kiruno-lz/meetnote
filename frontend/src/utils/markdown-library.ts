@@ -1,4 +1,4 @@
-import { createMeetingProjectManifest, type MeetingProject } from "./audio-project";
+import { createMeetingProjectManifest, type MeetingProject } from "../types/audio-project";
 import { projectMeetingCorrectedSpeakerOutput, renderCorrectedSpeakerMarkdown } from "./speaker-output";
 
 export interface LibraryFile {
@@ -62,7 +62,7 @@ function slugify(value: string): string {
   const slug = value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
+    .replace(/[^a-z0-9一-龥]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "untitled-meeting";
 }

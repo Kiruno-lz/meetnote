@@ -1,5 +1,5 @@
-import { getSupportedAudioExtension } from "./audio-project";
-import type { AudioImportInput, SupportedAudioExtension } from "./audio-project";
+import { getSupportedAudioExtension } from "../types/audio-project";
+import type { AudioImportInput, SupportedAudioExtension } from "../types/audio-project";
 
 export interface AudioFileValidationResult {
   ok: boolean;
@@ -9,7 +9,7 @@ export interface AudioFileValidationResult {
 
 const MIN_FILE_SIZE_BYTES = 100;
 
-export function validateAudioFile(filename: string, sizeBytes: number): AudioFileValidationResult {
+export function validateAudioFile(filename: string, sizeBytes?: number): AudioFileValidationResult {
   const errors: string[] = [];
   const extension = getSupportedAudioExtension(filename);
 
@@ -17,10 +17,12 @@ export function validateAudioFile(filename: string, sizeBytes: number): AudioFil
     errors.push(`Unsupported audio format: ${filename}`);
   }
 
-  if (sizeBytes <= 0) {
-    errors.push("File is empty");
-  } else if (sizeBytes < MIN_FILE_SIZE_BYTES) {
-    errors.push(`File is too small (${sizeBytes} bytes, minimum ${MIN_FILE_SIZE_BYTES})`);
+  if (sizeBytes !== undefined) {
+    if (sizeBytes <= 0) {
+      errors.push("File is empty");
+    } else if (sizeBytes < MIN_FILE_SIZE_BYTES) {
+      errors.push(`File is too small (${sizeBytes} bytes, minimum ${MIN_FILE_SIZE_BYTES})`);
+    }
   }
 
   return {

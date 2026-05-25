@@ -1,4 +1,4 @@
-import type { MeetingRecord } from "./ui-state.ts";
+import type { MeetingRecord } from "../stores/ui-state.ts";
 
 /**
  * Validates a meeting title.
