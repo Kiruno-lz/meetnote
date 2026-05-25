@@ -42,6 +42,7 @@ pub struct DownloadState {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DownloadProgressEvent {
     pub model_id: String,
     pub downloaded_bytes: u64,
@@ -51,6 +52,7 @@ pub struct DownloadProgressEvent {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelFileInfo {
     pub model_id: String,
     pub path: String,
@@ -83,6 +85,7 @@ pub async fn list_cached_models(
     cache_dir: String,
     state: tauri::State<'_, Arc<DownloadManager>>,
 ) -> Result<Vec<ModelFileInfo>, String> {
+    let cache_dir = expand_tilde(&cache_dir);
     let active_id = state.active_model_id.lock().unwrap().clone();
     let mut results = Vec::new();
 
@@ -114,6 +117,7 @@ pub async fn list_cached_models(
 
 #[tauri::command]
 pub async fn delete_model_file(path: String) -> Result<(), String> {
+    let path = expand_tilde(&path);
     std::fs::remove_file(&path).map_err(|e| format!("Failed to delete {}: {}", path, e))
 }
 
@@ -140,6 +144,8 @@ pub async fn start_model_download(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<DownloadManager>>,
 ) -> Result<(), String> {
+    let dest_path = expand_tilde(&dest_path);
+
     // 1. Check existing state
     let resume_from = {
         let states = state.states.lock().unwrap();
@@ -393,6 +399,14 @@ pub fn pause_model_download(
 }
 
 #[tauri::command]
+pub async fn get_file_size(path: String) -> Result<u64, String> {
+    let expanded = expand_tilde(&path);
+    std::fs::metadata(&expanded)
+        .map(|m| m.len())
+        .map_err(|e| format!("Cannot stat {}: {}", expanded, e))
+}
+
+#[tauri::command]
 pub fn cancel_model_download(
     model_id: String,
     state: tauri::State<'_, Arc<DownloadManager>>,
@@ -423,4 +437,43 @@ pub fn cancel_model_download(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn download_progress_event_serializes_camel_case() {
+        let event = DownloadProgressEvent {
+            model_id: "whisper-base".into(),
+            downloaded_bytes: 1024,
+            total_bytes: 2048,
+            speed_bps: 512.0,
+            status: "downloading".into(),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["modelId"], "whisper-base");
+        assert_eq!(json["downloadedBytes"], 1024);
+        assert_eq!(json["totalBytes"], 2048);
+        assert_eq!(json["speedBps"], 512.0);
+        assert!(json.get("model_id").is_none(), "snake_case keys must not appear");
+    }
+
+    #[test]
+    fn model_file_info_serializes_camel_case() {
+        let info = ModelFileInfo {
+            model_id: "whisper-base".into(),
+            path: "/tmp/whisper-base.bin".into(),
+            size_bytes: 148_000_000,
+            is_active: true,
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["modelId"], "whisper-base");
+        assert_eq!(json["sizeBytes"], 148_000_000u64);
+        assert_eq!(json["isActive"], true);
+        assert!(json.get("model_id").is_none(), "snake_case keys must not appear");
+        assert!(json.get("size_bytes").is_none(), "snake_case keys must not appear");
+        assert!(json.get("is_active").is_none(), "snake_case keys must not appear");
+    }
 }
