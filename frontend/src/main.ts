@@ -1,12 +1,13 @@
-import type { AppSection } from "./app-shell.ts";
-import { loadState, saveState, type AppState } from "./ui-state.ts";
-import { renderProjectList } from "./section-project-list.ts";
-import { renderTranscriptionProgress } from "./section-transcription-progress.ts";
-import { renderRecordingDetail } from "./section-recording-detail.ts";
-import { renderSpeakerEditor } from "./section-speaker-editor.ts";
-import { renderDeverbalizationPreview } from "./section-deverbalization-preview.ts";
-import { renderMarkdownLibrary } from "./section-markdown-library.ts";
-import { renderModelManagement } from "./section-model-management.ts";
+import type { AppSection } from "./components/app-shell.ts";
+import { loadState, saveState, type AppState } from "./stores/ui-state.ts";
+import { renderProjectList } from "./components/section-project-list.ts";
+import { renderTranscriptionProgress } from "./components/section-transcription-progress.ts";
+import { renderRecordingDetail } from "./components/section-recording-detail.ts";
+import { renderSpeakerEditor } from "./components/section-speaker-editor.ts";
+import { renderDeverbalizationPreview } from "./components/section-deverbalization-preview.ts";
+import { renderMarkdownLibrary } from "./components/section-markdown-library.ts";
+import { renderModelManagement } from "./components/section-model-management.ts";
+import { renderSettings } from "./components/section-settings.ts";
 
 // Global state
 let appState: AppState = loadState();
@@ -37,11 +38,19 @@ function render(): void {
     )
     .join("");
 
+  const settingsBtnHtml = `
+    <button class="nav-btn nav-settings-btn${appState.activeSection === "settings" ? " active" : ""}"
+            data-section="settings"
+            title="设置 (⌘,)"
+            aria-label="设置"
+            style="font-size:16px;">⚙️</button>`;
+
   root.innerHTML = `
     <div class="app-layout">
       <nav class="nav">
         <span class="nav-brand">meetnote</span>
         <div class="nav-links">${navHtml}</div>
+        ${settingsBtnHtml}
       </nav>
       <div class="content" id="section-root"></div>
     </div>
@@ -80,10 +89,28 @@ function render(): void {
     case "model-management":
       renderModelManagement(sectionRoot, appState);
       break;
+    case "settings":
+      renderSettings(sectionRoot, appState);
+      break;
     default:
       renderProjectList(sectionRoot, appState);
   }
 }
 
+// Keyboard shortcut: ⌘, opens settings
+let settingsShortcutBound = false;
+
+function bindSettingsShortcut(): void {
+  if (settingsShortcutBound) return;
+  settingsShortcutBound = true;
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+      e.preventDefault();
+      navigate("settings");
+    }
+  });
+}
+
 // Initial render
 render();
+bindSettingsShortcut();

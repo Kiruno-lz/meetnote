@@ -4,6 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>meetnote</title>
+    <script type="importmap">
+    {
+      "imports": {
+        "@tauri-apps/plugin-dialog": "/node_modules/@tauri-apps/plugin-dialog/dist-js/index.js",
+        "@tauri-apps/api": "/node_modules/@tauri-apps/api/index.js",
+        "@tauri-apps/api/core": "/node_modules/@tauri-apps/api/core.js",
+        "@tauri-apps/api/event": "/node_modules/@tauri-apps/api/event.js"
+      }
+    }
+    </script>
     <style>
       *, *::before, *::after { box-sizing: border-box; }
 
@@ -63,6 +73,7 @@
 
       .nav-btn:hover { background: #222; color: #e0e0e0; }
       .nav-btn.active { background: #2a2a2a; color: #fff; }
+      .nav-settings-btn { margin-left: auto; padding: 6px 8px; }
 
       /* Content */
       .content {
