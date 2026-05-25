@@ -8,6 +8,19 @@ const server = Bun.serve({
   async fetch(request: Request) {
     const url = new URL(request.url);
     const path = url.pathname === "/" ? "/index.html" : url.pathname;
+
+    // Serve node_modules for importmap-resolved bare specifiers
+    if (path.startsWith("/node_modules/")) {
+      const nmFile = Bun.file(new URL(`..${path}`, import.meta.url));
+      if (await nmFile.exists()) {
+        const ct = path.endsWith(".mjs") || path.endsWith(".js") || path.endsWith(".cjs")
+          ? "application/javascript; charset=utf-8"
+          : contentTypeFor(path);
+        return new Response(nmFile, { headers: { "content-type": ct } });
+      }
+      return new Response("Not found", { status: 404 });
+    }
+
     const resolvedPath = path.endsWith(".ts") ? path : `${path}.ts`;
     const sourceFile = Bun.file(new URL(`..${resolvedPath}`, import.meta.url));
 
