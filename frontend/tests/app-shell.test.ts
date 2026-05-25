@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { APP_SECTIONS, createAppShellState } from "../src/app-shell";
+import { APP_SECTIONS, createAppShellState } from "../src/components/app-shell";
 
 describe("app shell skeleton", () => {
   test("defines the MVP workflow sections", () => {
@@ -10,7 +10,8 @@ describe("app shell skeleton", () => {
       "speaker-editor",
       "deverbalization-preview",
       "markdown-library",
-      "model-management"
+      "model-management",
+      "settings"
     ]);
   });
 

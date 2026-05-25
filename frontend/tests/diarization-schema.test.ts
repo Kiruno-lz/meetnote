@@ -5,7 +5,7 @@ import {
   createDiarizationRunRequest,
   createMockDiarizationResult,
   validateDiarizationCliEnvelope
-} from "../src/diarization-schema";
+} from "../src/types/diarization-schema";
 
 const SHA256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

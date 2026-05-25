@@ -3,14 +3,14 @@ import {
   generateMarkdownContent,
   type GenerateMarkdownOptions,
   type SpeakerCorrection
-} from "../src/markdown-library-generator";
+} from "../src/utils/markdown-library-generator";
 import {
   MARKDOWN_LIBRARY_SCHEMA_VERSION,
   createMarkdownFrontmatter,
   parseMarkdownFrontmatter,
   type MarkdownFrontmatter
-} from "../src/markdown-library-schema";
-import { createDeverbalizationOutput, type DeverbalizationOutput } from "../src/llm-schema";
+} from "../src/types/markdown-library-schema";
+import { createDeverbalizationOutput, type DeverbalizationOutput } from "../src/types/llm-schema";
 
 describe("markdown-library-generator", () => {
   describe("generateMarkdownContent", () => {

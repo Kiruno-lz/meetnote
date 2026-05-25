@@ -5,7 +5,7 @@ import {
   createAsrRunRequest,
   createMockAsrResult,
   validateAsrCliEnvelope
-} from "../src/asr-schema";
+} from "../src/types/asr-schema";
 
 const SHA256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

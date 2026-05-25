@@ -8,49 +8,31 @@ import {
   formatSpeed,
   formatEta,
   getWhisperModelList,
-} from "../src/model-manager.ts";
+} from "../src/utils/model-manager.ts";
 
 // ── createActiveDownload ──────────────────────────────────────────────────────
 
 describe("createActiveDownload", () => {
-  it("returns an object with status idle", () => {
+  it("initializes with expected default values", () => {
     const d = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
-    expect(d.status).toBe("idle");
+    expect(d).toEqual({
+      modelId: "whisper-large-v3",
+      destPath: "/tmp/model.bin",
+      status: "idle",
+      downloadedBytes: 0,
+      totalBytes: 0,
+      speedBps: 0,
+      eta: Infinity,
+      error: null
+    });
   });
 
-  it("sets downloadedBytes to 0", () => {
-    const d = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
-    expect(d.downloadedBytes).toBe(0);
-  });
-
-  it("sets totalBytes to 0", () => {
-    const d = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
-    expect(d.totalBytes).toBe(0);
-  });
-
-  it("sets speedBps to 0", () => {
-    const d = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
-    expect(d.speedBps).toBe(0);
-  });
-
-  it("sets eta to Infinity", () => {
-    const d = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
-    expect(d.eta).toBe(Infinity);
-  });
-
-  it("sets error to null", () => {
-    const d = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
-    expect(d.error).toBeNull();
-  });
-
-  it("stores modelId", () => {
-    const d = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
-    expect(d.modelId).toBe("whisper-large-v3");
-  });
-
-  it("stores destPath", () => {
-    const d = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
-    expect(d.destPath).toBe("/tmp/model.bin");
+  it("does not share state between two independent instances", () => {
+    const a = createActiveDownload("whisper-small", "/tmp/small.bin");
+    const b = createActiveDownload("whisper-large-v3", "/tmp/large.bin");
+    expect(a).not.toBe(b);
+    expect(a.modelId).not.toBe(b.modelId);
+    expect(a.destPath).not.toBe(b.destPath);
   });
 });
 
@@ -59,24 +41,14 @@ describe("createActiveDownload", () => {
 describe("applyProgressUpdate", () => {
   const base = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
 
-  it("updates downloadedBytes", () => {
+  it("applies all progress fields and transitions status to downloading", () => {
     const updated = applyProgressUpdate(base, 512_000, 1_000_000, 100_000);
-    expect(updated.downloadedBytes).toBe(512_000);
-  });
-
-  it("updates totalBytes", () => {
-    const updated = applyProgressUpdate(base, 512_000, 1_000_000, 100_000);
-    expect(updated.totalBytes).toBe(1_000_000);
-  });
-
-  it("updates speedBps", () => {
-    const updated = applyProgressUpdate(base, 512_000, 1_000_000, 100_000);
-    expect(updated.speedBps).toBe(100_000);
-  });
-
-  it("sets status to downloading", () => {
-    const updated = applyProgressUpdate(base, 512_000, 1_000_000, 100_000);
-    expect(updated.status).toBe("downloading");
+    expect(updated).toMatchObject({
+      downloadedBytes: 512_000,
+      totalBytes: 1_000_000,
+      speedBps: 100_000,
+      status: "downloading"
+    });
   });
 
   it("does not mutate the original object", () => {
@@ -92,6 +64,16 @@ describe("applyProgressUpdate", () => {
     // 500_000 remaining at 100_000 bps = 5 seconds
     const updated = applyProgressUpdate(base, 500_000, 1_000_000, 100_000);
     expect(updated.eta).toBe(5);
+  });
+
+  it("sets eta to Infinity when speedBps is 0", () => {
+    const updated = applyProgressUpdate(base, 0, 1_000_000, 0);
+    expect(updated.eta).toBe(Infinity);
+  });
+
+  it("sets eta to 0 when download is complete", () => {
+    const updated = applyProgressUpdate(base, 1_000_000, 1_000_000, 50_000);
+    expect(updated.eta).toBe(0);
   });
 });
 
@@ -258,57 +240,35 @@ describe("formatEta", () => {
 // ── getWhisperModelList ───────────────────────────────────────────────────────
 
 describe("getWhisperModelList", () => {
-  it("returns a non-empty array", () => {
+  it("returns a non-empty list of well-formed ASR model entries", () => {
     const list = getWhisperModelList();
     expect(list.length).toBeGreaterThan(0);
-  });
-
-  it("every entry has an id", () => {
-    const list = getWhisperModelList();
     for (const entry of list) {
       expect(typeof entry.id).toBe("string");
       expect(entry.id.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("every entry has a label", () => {
-    const list = getWhisperModelList();
-    for (const entry of list) {
       expect(typeof entry.label).toBe("string");
       expect(entry.label.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("every entry has a source", () => {
-    const list = getWhisperModelList();
-    for (const entry of list) {
       expect(typeof entry.source).toBe("string");
       expect(entry.source.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("every entry has a description", () => {
-    const list = getWhisperModelList();
-    for (const entry of list) {
       expect(typeof entry.description).toBe("string");
       expect(entry.description.length).toBeGreaterThan(0);
-    }
-  });
-
-  it("every entry has sizeBytes as number or null", () => {
-    const list = getWhisperModelList();
-    for (const entry of list) {
       expect(entry.sizeBytes === null || typeof entry.sizeBytes === "number").toBe(true);
     }
   });
 
   it("only returns asr kind models", () => {
     // All returned entries should exist in MODEL_MATRIX as kind=asr
-    const { MODEL_MATRIX } = require("../src/model-manifest.ts");
+    const { MODEL_MATRIX } = require("../src/types/model-manifest.ts");
     const asrIds = new Set(MODEL_MATRIX.filter((m: { kind: string }) => m.kind === "asr").map((m: { id: string }) => m.id));
     const list = getWhisperModelList();
     for (const entry of list) {
       expect(asrIds.has(entry.id)).toBe(true);
     }
+  });
+
+  it("does not include diarization models", () => {
+    const list = getWhisperModelList();
+    const ids = list.map((e) => e.id);
+    expect(ids.some((id) => id.includes("pyannote"))).toBe(false);
   });
 });

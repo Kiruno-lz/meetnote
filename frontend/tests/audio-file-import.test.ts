@@ -4,8 +4,8 @@ import {
   extractDefaultTitle,
   computeFileHash,
   extractDurationFromAudioElement
-} from "../src/audio-file-import";
-import type { MockableAudioElement } from "../src/audio-file-import";
+} from "../src/utils/audio-file-import";
+import type { MockableAudioElement } from "../src/utils/audio-file-import";
 
 // ---------------------------------------------------------------------------
 // validateAudioFile
@@ -95,6 +95,20 @@ describe("validateAudioFile", () => {
     expect(validateAudioFile("a.mp3", 200).extension).toBe(".mp3");
     expect(validateAudioFile("a.m4a", 200).extension).toBe(".m4a");
   });
+
+  test("accepts valid audio file when sizeBytes is omitted (Tauri path)", () => {
+    const result = validateAudioFile("audio.m4a");
+    expect(result.ok).toBe(true);
+    expect(result.errors).toHaveLength(0);
+    expect(result.extension).toBe(".m4a");
+  });
+
+  test("accepts valid audio file when sizeBytes is explicitly undefined", () => {
+    const result = validateAudioFile("audio.m4a", undefined);
+    expect(result.ok).toBe(true);
+    expect(result.errors).toHaveLength(0);
+    expect(result.extension).toBe(".m4a");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -147,7 +161,7 @@ describe("extractDefaultTitle", () => {
 // ---------------------------------------------------------------------------
 
 describe("computeFileHash", () => {
-  test("returns a 64-character hex string", async () => {
+  test("returns a 64-character lowercase hex string", async () => {
     const hash = await computeFileHash(new ArrayBuffer(0));
     expect(hash).toHaveLength(64);
     expect(/^[0-9a-f]{64}$/.test(hash)).toBe(true);
@@ -166,21 +180,16 @@ describe("computeFileHash", () => {
     expect(hash1).not.toBe(hash2);
   });
 
-  test("empty buffer returns a 64-char hex hash", async () => {
-    const hash = await computeFileHash(new ArrayBuffer(0));
-    expect(hash).toHaveLength(64);
-  });
-
-  test("non-empty buffer with known bytes returns 64-char hex hash", async () => {
-    const hash = await computeFileHash(new Uint8Array([1, 2, 3]).buffer);
-    expect(hash).toHaveLength(64);
-    expect(/^[0-9a-f]{64}$/.test(hash)).toBe(true);
-  });
-
   test("empty and non-empty buffer produce different hashes", async () => {
     const empty = await computeFileHash(new ArrayBuffer(0));
     const nonEmpty = await computeFileHash(new Uint8Array([1]).buffer);
     expect(empty).not.toBe(nonEmpty);
+  });
+
+  test("single byte difference produces different hash", async () => {
+    const hash1 = await computeFileHash(new Uint8Array([0, 0, 0]).buffer);
+    const hash2 = await computeFileHash(new Uint8Array([0, 0, 1]).buffer);
+    expect(hash1).not.toBe(hash2);
   });
 });
 

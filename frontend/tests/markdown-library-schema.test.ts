@@ -12,11 +12,11 @@ import {
   type MarkdownFrontmatter,
   type MarkdownMeeting,
   type MarkdownLibraryManifest
-} from "../src/markdown-library-schema";
+} from "../src/types/markdown-library-schema";
 
 describe("markdown-library-schema", () => {
   describe("createMarkdownFrontmatter", () => {
-    it("creates valid frontmatter", () => {
+    it("creates frontmatter with all required fields matching the input", () => {
       const input = {
         title: "Team Standup",
         date: "2026-05-20",
@@ -32,7 +32,12 @@ describe("markdown-library-schema", () => {
 
       expect(frontmatter.kind).toBe("markdown.frontmatter");
       expect(frontmatter.title).toBe("Team Standup");
+      expect(frontmatter.date).toBe("2026-05-20");
+      expect(frontmatter.audioHash).toBe("abc123def456");
       expect(frontmatter.speakers).toEqual(["Alice", "Bob"]);
+      expect(frontmatter.modelVersion).toBe("claude-3-haiku");
+      expect(frontmatter.llmProvider).toBe("ollama");
+      expect(frontmatter.schemaVersion).toBe(MARKDOWN_LIBRARY_SCHEMA_VERSION);
     });
 
     it("throws on invalid title", () => {
@@ -592,12 +597,13 @@ generatedAt: 2026-05-20T12:31:21.565Z
   });
 
   describe("edge cases", () => {
-    it("handles multiple speakers with various names", () => {
+    it("handles multiple speakers preserving order and content", () => {
+      const speakers = ["Alice", "Bob", "Charlie", "Diana"];
       const frontmatter = createMarkdownFrontmatter({
         title: "Meeting",
         date: "2026-05-20",
         audioHash: "hash",
-        speakers: ["Alice", "Bob", "Charlie", "Diana"],
+        speakers,
         modelVersion: "v1",
         llmProvider: "ollama",
         schemaVersion: MARKDOWN_LIBRARY_SCHEMA_VERSION,
@@ -605,6 +611,7 @@ generatedAt: 2026-05-20T12:31:21.565Z
       });
 
       expect(frontmatter.speakers).toHaveLength(4);
+      expect(frontmatter.speakers).toEqual(speakers);
     });
 
     it("handles whitespace-only speaker names as invalid", () => {

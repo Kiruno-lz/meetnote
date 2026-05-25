@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { attachSpeakerState, attachTranscript, createMeetingProject } from "../src/audio-project";
+import { attachSpeakerState, attachTranscript, createMeetingProject } from "../src/types/audio-project";
 import {
   createLlmRequestFromCorrectedSpeakerInput,
   renderDeverbalizationPrompt,
   runDeterministicMockLlmProvider
-} from "../src/llm-provider";
-import { validateLlmProviderEnvelope } from "../src/llm-schema";
-import { createCorrectedSpeakerLlmInput, projectMeetingCorrectedSpeakerOutput } from "../src/speaker-output";
+} from "../src/utils/llm-provider";
+import { validateLlmProviderEnvelope } from "../src/types/llm-schema";
+import { createCorrectedSpeakerLlmInput, projectMeetingCorrectedSpeakerOutput } from "../src/utils/speaker-output";
 
 describe("LLM provider integration", () => {
   test("returns deterministic valid mock result envelopes traced to corrected speaker input", () => {

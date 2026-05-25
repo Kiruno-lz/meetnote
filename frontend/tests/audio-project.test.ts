@@ -13,8 +13,8 @@ import {
   resolveImportedMeetingProject,
   restoreMeetingProjectManifest,
   validateMeetingProjectManifest
-} from "../src/audio-project";
-import { applySpeakerCorrectionCommands } from "../src/speaker";
+} from "../src/types/audio-project";
+import { applySpeakerCorrectionCommands } from "../src/utils/speaker";
 
 describe("audio project model", () => {
   test("accepts only the supported MVP audio formats", () => {

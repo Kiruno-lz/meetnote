@@ -8,14 +8,14 @@ import {
   searchMeetings,
   type SaveMeetingMarkdownOptions,
   type SearchQuery
-} from "../src/markdown-library-storage";
+} from "../src/stores/markdown-library-storage";
 import {
   createMarkdownFrontmatter,
   serializeMarkdownFrontmatter,
   type MarkdownFrontmatter
-} from "../src/markdown-library-schema";
-import { generateMarkdownContent, type GenerateMarkdownOptions } from "../src/markdown-library-generator";
-import { createDeverbalizationOutput } from "../src/llm-schema";
+} from "../src/types/markdown-library-schema";
+import { generateMarkdownContent, type GenerateMarkdownOptions } from "../src/utils/markdown-library-generator";
+import { createDeverbalizationOutput } from "../src/types/llm-schema";
 
 // Test Helpers
 

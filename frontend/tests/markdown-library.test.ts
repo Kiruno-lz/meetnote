@@ -5,8 +5,8 @@ import {
   attachTranscript,
   createMeetingProject,
   restoreMeetingProjectManifest
-} from "../src/audio-project";
-import { createMarkdownLibraryRecord, rebuildLibraryIndex } from "../src/markdown-library";
+} from "../src/types/audio-project";
+import { createMarkdownLibraryRecord, rebuildLibraryIndex } from "../src/utils/markdown-library";
 
 describe("markdown file library", () => {
   test("creates a pure file record without database dependencies", () => {

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { attachSpeakerState, attachTranscript, createMeetingProject } from "../src/audio-project";
+import { attachSpeakerState, attachTranscript, createMeetingProject } from "../src/types/audio-project";
 import {
   createCorrectedSpeakerLlmInput,
   projectMeetingCorrectedSpeakerOutput,
   renderCorrectedSpeakerLlmInput,
   renderCorrectedSpeakerMarkdown
-} from "../src/speaker-output";
+} from "../src/utils/speaker-output";
 
 describe("corrected speaker output projection", () => {
   test("projects corrected speakers into deterministic LLM and markdown text", () => {

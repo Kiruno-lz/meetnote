@@ -5,7 +5,7 @@ import {
   createLlmProviderError,
   validateDeverbalizationOutput,
   validateLlmProviderEnvelope
-} from "../src/llm-schema";
+} from "../src/types/llm-schema";
 
 describe("LLM deverbalization schema", () => {
   test("accepts provider request envelopes with original transcript, timestamps, corrected speakers, and paragraph boundaries", () => {

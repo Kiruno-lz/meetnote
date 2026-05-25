@@ -6,7 +6,7 @@ import {
   createPyannoteAuthError,
   validateModelDownloadState,
   validateModelManifest
-} from "../src/model-manifest";
+} from "../src/types/model-manifest";
 
 describe("model matrix", () => {
   test("keeps Whisper large-v3 as the quality-first ASR candidate", () => {

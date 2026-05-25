@@ -11,7 +11,7 @@ import {
   resolveDiarizationRerun,
   resolveProjectDiarizationRerun,
   splitSpeakerSegment
-} from "../src/speaker";
+} from "../src/utils/speaker";
 import {
   attachSpeakerState,
   attachTranscript,
@@ -19,8 +19,8 @@ import {
   createMeetingProject,
   restoreMeetingProjectManifest,
   validateMeetingProjectManifest
-} from "../src/audio-project";
-import { createMockDiarizationResult } from "../src/diarization-schema";
+} from "../src/types/audio-project";
+import { createMockDiarizationResult } from "../src/types/diarization-schema";
 
 describe("speaker corrections", () => {
   test("renames a speaker without mutating other speakers", () => {

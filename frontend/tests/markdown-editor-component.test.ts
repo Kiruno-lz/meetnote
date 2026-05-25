@@ -4,7 +4,7 @@ import {
   parseMarkdownParts,
   reassembleMarkdown,
   splitMarkdownLines,
-} from "../src/markdown-editor-component.ts";
+} from "../src/components/markdown-editor-component.ts";
 
 // ——— parseMarkdownParts ———
 
