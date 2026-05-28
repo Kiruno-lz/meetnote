@@ -1,7 +1,7 @@
 import type { AppState } from "../stores/ui-state.ts";
 import { saveState } from "../stores/ui-state.ts";
 import type { SpeakerProfile } from "../types/audio-project.ts";
-import { renameSpeaker } from "../utils/speaker.ts";
+import { renameSpeaker, mergeSpeakers } from "../utils/speaker.ts";
 import { navigate } from "../main.ts";
 
 function escapeHtml(s: string): string {
@@ -112,9 +112,34 @@ export function renderSpeakerEditor(root: HTMLElement, state: AppState): void {
         // Remove source from profiles, keep target
         profiles = profiles.filter((p) => p.id !== sourceId);
 
-        // Also update the projectSnapshot's speakerSegments - for simplicity, we update the profiles
-        // The actual speaker segments merge is handled by applySpeakerCorrectionCommands,
-        // but here we just update the display profiles
+        // Sync updated speakerSegments and corrections into projectSnapshot
+        const meetingIdx = state.meetings.findIndex((m) => m.id === state.activeMeetingId);
+        if (meetingIdx >= 0) {
+          const meeting = state.meetings[meetingIdx];
+          if (meeting) {
+            const project = JSON.parse(meeting.projectSnapshot) as import("../types/audio-project.ts").MeetingProject;
+            const { segments: mergedSegments, corrections: mergedCorrections } = mergeSpeakers(
+              project.speakerSegments,
+              project.corrections,
+              sourceId,
+              targetId,
+              new Date().toISOString()
+            );
+            const updatedProject = {
+              ...project,
+              speakerSegments: mergedSegments,
+              corrections: mergedCorrections,
+              speakers: profiles,
+            };
+            state.meetings[meetingIdx] = {
+              ...meeting,
+              projectSnapshot: JSON.stringify(updatedProject),
+              speakerProfiles: profiles,
+            };
+            saveState(state);
+          }
+        }
+
         rerender();
       });
     });
@@ -140,12 +165,20 @@ export function renderSpeakerEditor(root: HTMLElement, state: AppState): void {
   root.querySelector("#btn-back")?.addEventListener("click", () => navigate("recording-detail"));
 
   root.querySelector("#btn-confirm")?.addEventListener("click", () => {
-    // Save updated profiles back to the meeting record
     const idx = state.meetings.findIndex((m) => m.id === state.activeMeetingId);
     if (idx >= 0) {
       const existing = state.meetings[idx];
       if (existing) {
-        state.meetings[idx] = { ...existing, speakerProfiles: profiles };
+        const project = JSON.parse(existing.projectSnapshot) as import("../types/audio-project.ts").MeetingProject;
+        const updatedProject = {
+          ...project,
+          speakers: profiles,
+        };
+        state.meetings[idx] = {
+          ...existing,
+          speakerProfiles: profiles,
+          projectSnapshot: JSON.stringify(updatedProject),
+        };
       }
     }
     saveState(state);

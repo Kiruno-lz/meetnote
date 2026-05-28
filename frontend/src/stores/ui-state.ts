@@ -33,6 +33,8 @@ export interface AppState {
   transcriptionDevice: string;
   /** Directory where generated Markdown files are saved (default "~/Documents/meetnote") */
   markdownLibraryPath: string;
+  /** HuggingFace token for pyannote diarization */
+  hfToken: string;
 }
 
 export function createInitialState(): AppState {
@@ -46,6 +48,7 @@ export function createInitialState(): AppState {
     transcriptionLanguage: "zh",
     transcriptionDevice: "auto",
     markdownLibraryPath: "~/Documents/meetnote",
+    hfToken: "",
   };
 }
 
@@ -76,6 +79,10 @@ export function loadState(): AppState {
         typeof parsed.markdownLibraryPath === "string" && parsed.markdownLibraryPath.trim()
           ? parsed.markdownLibraryPath
           : "~/Documents/meetnote",
+      hfToken:
+        typeof parsed.hfToken === "string"
+          ? parsed.hfToken
+          : "",
     };
     if (parsed.deverPreviewBackTo) {
       base.deverPreviewBackTo = parsed.deverPreviewBackTo as AppSection;

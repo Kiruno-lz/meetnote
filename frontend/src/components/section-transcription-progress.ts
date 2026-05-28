@@ -2,15 +2,53 @@ import type { AppState } from "../stores/ui-state.ts";
 import { saveState } from "../stores/ui-state.ts";
 import { navigate } from "../main.ts";
 import type { TranscriptSegment, SpeakerProfile, SpeakerSegment } from "../types/audio-project.ts";
+import { mergeTranscriptWithDiarization } from "../utils/speaker.ts";
 
 const STAGES: { id: string; label: string }[] = [
   { id: "queued", label: "排队中..." },
-  { id: "loading-model", label: "加载模型..." },
+  { id: "loading-model", label: "加载 Whisper 模型..." },
   { id: "transcribing", label: "转录音频..." },
-  { id: "finalizing", label: "整理结果..." }
+  { id: "asr-finalizing", label: "整理转录结果..." },
+  { id: "diarization-loading", label: "加载发言人模型..." },
+  { id: "diarization-segmenting", label: "分析发言片段..." },
+  { id: "diarization-clustering", label: "聚类发言人..." },
+  { id: "diarization-finalizing", label: "整理发言人结果..." },
+  { id: "merging", label: "合并结果..." },
 ];
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+function showToast(options: {
+  type: "info" | "success" | "warn" | "error";
+  message: string;
+  hint?: string;
+  durationMs?: number;
+}): void {
+  // Remove existing toast
+  document.querySelectorAll(".toast").forEach((el) => el.remove());
+
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${options.type}`;
+  const hintHtml = options.hint
+    ? `<span class="toast-hint">${options.hint}</span>`
+    : "";
+  toast.innerHTML =
+    `<button class="toast-dismiss" aria-label="关闭">&times;</button>` +
+    options.message.replace(/</g, "&lt;") +
+    hintHtml;
+
+  document.body.appendChild(toast);
+
+  const dismiss = toast.querySelector<HTMLButtonElement>(".toast-dismiss");
+  dismiss?.addEventListener("click", () => toast.remove());
+
+  const duration = options.durationMs ?? 8000;
+  if (duration > 0) {
+    setTimeout(() => {
+      if (toast.isConnected) toast.remove();
+    }, duration);
+  }
+}
 
 let asrActive = false;
 
@@ -76,7 +114,7 @@ async function runRealAsr(root: HTMLElement, state: AppState): Promise<void> {
           saveState(state);
         } else if (stage === "finalizing" || stage === "done") {
           updateStageUI(root, 3);
-          state.pipelineStage = "finalizing";
+          state.pipelineStage = "asr-finalizing";
           saveState(state);
         }
       }
@@ -92,7 +130,7 @@ async function runRealAsr(root: HTMLElement, state: AppState): Promise<void> {
 
     unlisten();
 
-    // Parse result
+    // Parse ASR result
     const asrOutput = JSON.parse(asrOutputRaw) as {
       segments: Array<{
         id: string;
@@ -106,35 +144,157 @@ async function runRealAsr(root: HTMLElement, state: AppState): Promise<void> {
       model: string;
     };
 
-    // Find the active meeting record to update
-    const meeting = state.meetings.find((m) => m.id === state.activeMeetingId);
-    if (meeting) {
-      const project = JSON.parse(meeting.projectSnapshot) as import("../types/audio-project.ts").MeetingProject;
+    // Build transcript segments from real ASR output
+    const realSegments: TranscriptSegment[] = asrOutput.segments.map((s) => ({
+      id: s.id,
+      startMs: s.startMs,
+      endMs: s.endMs,
+      text: s.text,
+      language: (
+        s.language === "zh" || s.language === "en"
+          ? s.language
+          : "unknown"
+      ) as "zh" | "en" | "mixed" | "unknown",
+    }));
 
-      // Build transcript segments from real ASR output
-      const realSegments: TranscriptSegment[] = asrOutput.segments.map((s) => ({
-        id: s.id,
-        startMs: s.startMs,
-        endMs: s.endMs,
-        text: s.text,
-        language: (
-          s.language === "zh" || s.language === "en"
-            ? s.language
-            : "unknown"
-        ) as "zh" | "en" | "mixed" | "unknown",
-      }));
+    // --- Speaker Diarization ---
+    let realSpeakerSegs: SpeakerSegment[];
+    let realSpeakerProfiles: SpeakerProfile[];
 
-      // All segments attributed to a single placeholder speaker (diarization is separate)
-      const realSpeakerSegs: SpeakerSegment[] = realSegments.map((s) => ({
+    if (state.hfToken) {
+      // Advance UI to diarization stage
+      updateStageUI(root, 4);
+      state.pipelineStage = "diarization-loading";
+      saveState(state);
+
+      const unlistenDiarization = await listen<{ stage: string; message: string }>(
+        "diarization-progress",
+        (event) => {
+          const stage = event.payload.stage;
+          if (stage === "loading-model") {
+            updateStageUI(root, 4);
+            state.pipelineStage = "diarization-loading";
+            saveState(state);
+          } else if (stage === "segmenting") {
+            updateStageUI(root, 5);
+            state.pipelineStage = "diarization-segmenting";
+            saveState(state);
+          } else if (stage === "clustering") {
+            updateStageUI(root, 6);
+            state.pipelineStage = "diarization-clustering";
+            saveState(state);
+          } else if (stage === "finalizing" || stage === "done") {
+            updateStageUI(root, 7);
+            state.pipelineStage = "diarization-finalizing";
+            saveState(state);
+          }
+        }
+      );
+
+      try {
+        const diarizationResultRaw = await invoke<string>("run_diarization", {
+          audioPath,
+          hfToken: state.hfToken,
+          device: state.transcriptionDevice ?? "auto",
+        });
+
+        unlistenDiarization();
+
+        // Advance to merging stage
+        updateStageUI(root, 8);
+        state.pipelineStage = "merging";
+        saveState(state);
+
+        const diarizationOutput = JSON.parse(diarizationResultRaw) as {
+          speakers: Array<{ id: string; label: string }>;
+          segments: Array<{
+            id: string;
+            speakerId: string;
+            startMs: number;
+            endMs: number;
+            confidence: number;
+            overlap: boolean;
+          }>;
+        };
+
+        // Merge ASR transcript with diarization segments
+        const merged = mergeTranscriptWithDiarization(
+          realSegments,
+          diarizationOutput.segments.map((s) => ({
+            id: s.id,
+            speakerId: s.speakerId,
+            startMs: s.startMs,
+            endMs: s.endMs,
+            confidence: s.confidence,
+          })),
+          { minOverlapMs: 100, minOverlapRatio: 0.1 }
+        );
+
+        // Build SpeakerProfile[] from diarization speakers, ensuring all referenced IDs exist
+        const speakerIdSet = new Set(merged.map((s) => s.speakerId));
+        const profileMap = new Map(diarizationOutput.speakers.map((sp) => [sp.id, sp]));
+        realSpeakerProfiles = [...speakerIdSet].map((sid) => {
+          const profile = profileMap.get(sid);
+          return profile
+            ? { id: profile.id, label: profile.label }
+            : { id: sid, label: sid };
+        });
+
+        // Convert merged result to SpeakerSegment[]
+        realSpeakerSegs = merged.map((s) => ({
+          id: `ss-${s.id}`,
+          speakerId: s.speakerId,
+          startMs: s.startMs,
+          endMs: s.endMs,
+          ...(s.confidence !== undefined ? { confidence: s.confidence } : {}),
+        }));
+      } catch (diarErr) {
+        unlistenDiarization();
+        // Diarization failed -- fall back to speaker-0 for all segments
+        const diarErrMsg = diarErr instanceof Error ? diarErr.message : String(diarErr);
+        console.warn("Diarization failed, falling back to single speaker:", diarErrMsg);
+
+        realSpeakerSegs = realSegments.map((s) => ({
+          id: `ss-${s.id}`,
+          speakerId: "speaker-0",
+          startMs: s.startMs,
+          endMs: s.endMs,
+        }));
+        realSpeakerProfiles = [
+          { id: "speaker-0", label: "发言人 1" },
+        ];
+
+        showToast({
+          type: "warn",
+          message: `发言人区分失败: ${diarErrMsg}`,
+          hint: "所有段落已标注为同一发言人。请检查 HF Token 和网络连接。",
+          durationMs: 0,
+        });
+      }
+    } else {
+      // No HF token -- all segments attributed to a single placeholder speaker
+      realSpeakerSegs = realSegments.map((s) => ({
         id: `ss-${s.id}`,
         speakerId: "speaker-0",
         startMs: s.startMs,
         endMs: s.endMs,
       }));
-
-      const realSpeakerProfiles: SpeakerProfile[] = [
+      realSpeakerProfiles = [
         { id: "speaker-0", label: "发言人 1" },
       ];
+
+      showToast({
+        type: "info",
+        message: "发言人区分已跳过（未配置 HuggingFace Token）",
+        hint: "在设置页面配置 HF Token 后，重新导入音频即可自动识别发言人。",
+        durationMs: 0,
+      });
+    }
+
+    // Update meeting record with ASR + diarization results
+    const meeting = state.meetings.find((m) => m.id === state.activeMeetingId);
+    if (meeting) {
+      const project = JSON.parse(meeting.projectSnapshot) as import("../types/audio-project.ts").MeetingProject;
 
       const updatedProject = {
         ...project,
@@ -163,8 +323,17 @@ async function runRealAsr(root: HTMLElement, state: AppState): Promise<void> {
     state.pipelineStage = "";
     saveState(state);
 
+    showToast({
+      type: "success",
+      message: `发言人区分完成，识别到 ${realSpeakerProfiles.length} 位发言人`,
+      hint: "可在「修正 Speaker」中调整发言人标注",
+      durationMs: 6000,
+    });
+
     updateStageUI(root, STAGES.length); // show all complete
-    setTimeout(() => navigate("recording-detail"), 300);
+    // Navigate after a brief delay to let the user see the completed state
+    // Toast notifications persist independently on document.body
+    setTimeout(() => navigate("recording-detail"), 800);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
 
@@ -179,20 +348,16 @@ async function runRealAsr(root: HTMLElement, state: AppState): Promise<void> {
     }
     saveState(state);
 
-    // Append error message to the existing section
+    // Append error toast and back button to the existing section
+    showToast({
+      type: "error",
+      message: `转录失败: ${errMsg}`,
+      hint: "需要在模型管理中下载 Whisper 模型，或运行 cd python && uv sync",
+      durationMs: 0,
+    });
+
     const section = root.querySelector<HTMLElement>(".section");
     if (section) {
-      const errorDiv = document.createElement("div");
-      errorDiv.style.cssText =
-        "margin-top:24px; padding:12px 16px; background:rgba(198,40,40,0.1); border:1px solid rgba(198,40,40,0.3); border-radius:8px; color:#ef5350; font-size:13px;";
-      errorDiv.innerHTML = `
-        <strong>转录失败：</strong>${errMsg.replace(/</g, "&lt;")}
-        <br><span style="color:#888; margin-top:4px; display:block;">
-          提示：需要在模型管理中下载 Whisper 模型，或运行 <code>cd python &amp;&amp; uv sync</code>
-        </span>
-      `;
-      section.appendChild(errorDiv);
-
       const backBtn = document.createElement("button");
       backBtn.className = "btn btn-secondary";
       backBtn.style.marginTop = "16px";
