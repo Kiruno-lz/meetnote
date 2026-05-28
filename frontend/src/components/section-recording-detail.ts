@@ -3,6 +3,11 @@ import { saveState } from "../stores/ui-state.ts";
 import type { MeetingProject } from "../types/audio-project.ts";
 import { navigate } from "../main.ts";
 import { updateMeetingTitle, deleteMeeting, isTitleValid } from "../utils/meeting-management.ts";
+import { projectMeetingCorrectedSpeakerOutput, createCorrectedSpeakerLlmInput, renderCorrectedSpeakerLlmInput } from "../utils/speaker-output.ts";
+import { createLlmRequestFromCorrectedSpeakerInput, runDeterministicMockLlmProvider } from "../utils/llm-provider.ts";
+import { generateMarkdownContent } from "../utils/markdown-library-generator.ts";
+import { createMarkdownFrontmatter, MARKDOWN_LIBRARY_SCHEMA_VERSION } from "../types/markdown-library-schema.ts";
+import type { DeverbalizationOutput } from "../types/llm-schema.ts";
 
 function escapeHtml(s: string): string {
   return s
@@ -136,7 +141,7 @@ export function renderRecordingDetail(root: HTMLElement, state: AppState): void 
       <div class="transcript-list">
         ${segmentsHtml || '<div class="empty-state">无转录内容</div>'}
       </div>
-      <div class="action-bar">
+      <div class="action-bar action-bar--sticky">
         <button class="btn btn-secondary" id="btn-speaker-editor">修正 Speaker</button>
         <button class="btn btn-primary" id="btn-deverb">一键去口语化</button>
       </div>
@@ -228,8 +233,82 @@ export function renderRecordingDetail(root: HTMLElement, state: AppState): void 
     navigate("speaker-editor");
   });
 
-  root.querySelector("#btn-deverb")?.addEventListener("click", () => {
+  root.querySelector("#btn-deverb")?.addEventListener("click", async () => {
+    // Guard: require transcript and speaker data before running LLM pipeline
+    if (project.transcript.length === 0) {
+      alert("无转录内容，请先完成转录");
+      return;
+    }
+    if (project.speakerSegments.length === 0) {
+      alert("无发言人数据，请先完成转录");
+      return;
+    }
+
+    // Step 1: Project corrected speaker output from meeting project
+    const correctedOutput = projectMeetingCorrectedSpeakerOutput(project);
+
+    // Step 2: Create LLM input
+    const llmInput = createCorrectedSpeakerLlmInput("ollama", correctedOutput);
+
+    // Step 3: Build segment timings from transcript
+    const segmentTimings = project.transcript.map((seg) => ({
+      sourceSegmentId: seg.id,
+      startMs: seg.startMs,
+      endMs: seg.endMs
+    }));
+
+    // Step 4: Create LLM request
+    const llmRequest = createLlmRequestFromCorrectedSpeakerInput({
+      requestId: `deverb-${project.audioHash}`,
+      input: llmInput,
+      segmentTimings
+    });
+
+    // Step 5: Run deterministic mock LLM provider
+    const llmEnvelope = runDeterministicMockLlmProvider({
+      request: llmRequest,
+      privacyConfirmed: true
+    });
+
+    if (llmEnvelope.kind !== "llm.deverbalization.result") {
+      alert("去口语化处理失败");
+      return;
+    }
+
+    const deverbalizationOutput = llmEnvelope as DeverbalizationOutput;
+
+    // Step 6: Generate markdown content
+    const speakerLabels = project.speakers
+      .filter((s) => s.id !== "unknown")
+      .map((s) => s.label);
+    const frontmatterSpeakers = speakerLabels.length > 0 ? speakerLabels : ["Unknown speaker"];
+    const createdAt = new Date().toISOString();
+
+    const frontmatter = createMarkdownFrontmatter({
+      title: meeting.title,
+      date: createdAt.split("T")[0] ?? "2024-01-01",
+      audioHash: project.audioHash,
+      speakers: frontmatterSpeakers,
+      modelVersion: deverbalizationOutput.modelVersion,
+      llmProvider: "ollama",
+      schemaVersion: MARKDOWN_LIBRARY_SCHEMA_VERSION,
+      generatedAt: createdAt
+    });
+
+    const originalTranscriptText = renderCorrectedSpeakerLlmInput(correctedOutput);
+
+    const markdownContent = generateMarkdownContent({
+      frontmatter,
+      deverbalizationOutput,
+      originalTranscript: originalTranscriptText,
+      speakerCorrections: []
+    });
+
+    // Step 7: Save generated markdown and persist state
+    meeting.markdownContent = markdownContent;
     saveState(state);
+
+    // Step 8: Navigate to preview
     navigate("deverbalization-preview");
   });
 }

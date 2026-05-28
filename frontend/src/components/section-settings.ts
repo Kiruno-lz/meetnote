@@ -76,6 +76,27 @@ export function renderSettings(root: HTMLElement, state: AppState): void {
         <div id="library-path-status" style="margin-top:6px;font-size:12px;color:#66bb6a;display:none;">已保存</div>
       </div>
 
+      <!-- Setting: HuggingFace Token -->
+      <div class="card" style="margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;color:#e0e0e0;margin-bottom:4px;">HF Token (发言人区分)</div>
+            <div style="font-size:12px;color:#888;line-height:1.5;">
+              用于 pyannote 发言人区分模型。需要接受 HuggingFace 上的模型协议后才能使用。
+            </div>
+          </div>
+          <div style="flex-shrink:0;">
+            <input
+              id="hf-token-input"
+              type="password"
+              placeholder="hf_..."
+              value="${escapeHtml(state.hfToken)}"
+              style="background:#1a1a1a;border:1px solid #3a3a3a;border-radius:6px;color:#e0e0e0;padding:6px 10px;font-size:13px;width:220px;outline:none;transition:border-color 0.15s;"
+            />
+          </div>
+        </div>
+      </div>
+
       <!-- Version info footer -->
       <div style="margin-top:32px;padding-top:16px;border-top:1px solid #2a2a2a;color:#555;font-size:12px;">
         meetnote · 设置会自动保存到本地存储
@@ -94,6 +115,13 @@ export function renderSettings(root: HTMLElement, state: AppState): void {
   const deviceSelect = root.querySelector<HTMLSelectElement>("#setting-device");
   deviceSelect?.addEventListener("change", () => {
     state.transcriptionDevice = deviceSelect.value;
+    saveState(state);
+  });
+
+  // HuggingFace token input
+  const hfInput = root.querySelector<HTMLInputElement>("#hf-token-input");
+  hfInput?.addEventListener("change", () => {
+    state.hfToken = hfInput.value.trim();
     saveState(state);
   });
 

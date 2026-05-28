@@ -1,4 +1,5 @@
 mod asr;
+mod diarization;
 mod download;
 
 use download::DownloadManager;
@@ -19,6 +20,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_status,
             asr::run_asr,
+            diarization::run_diarization,
             download::list_cached_models,
             download::delete_model_file,
             download::get_active_model_id,
