@@ -6,7 +6,17 @@ requires-python = ">=3.10"
 dependencies = [
     "openai-whisper>=20240930",
     "pyannote.audio>=3.1",
+    "funasr",
+    "qwen-asr",
+    "librosa",
 ]
+
+# flash-attn is a CUDA-only acceleration library that cannot be built on macOS
+# (it requires the CUDA toolkit). MiMo and Qwen3-ASR run without it using the
+# standard attention path, so it is opt-in: on a CUDA machine install with
+#   uv sync --extra cuda
+[project.optional-dependencies]
+cuda = ["flash-attn>=2.7.4"]
 
 [tool.uv]
 dev-dependencies = []
