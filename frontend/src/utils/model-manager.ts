@@ -1,4 +1,4 @@
-import { MODEL_MATRIX } from "../types/model-manifest.ts";
+import { MODEL_MATRIX, type ModelBackend, type ModelDownloadMethod } from "../types/model-manifest.ts";
 
 // Download status (frontend-managed)
 export type DownloadStatus =
@@ -158,6 +158,18 @@ const WHISPER_DISPLAY_META: Record<string, { label: string; description: string 
     label: "Whisper Tiny",
     description: "OpenAI Whisper Tiny — smallest and fastest Whisper model",
   },
+  "paraformer-zh": {
+    label: "Paraformer 中文",
+    description: "阿里达摩院中文语音识别，120x 实时速度，CPU 可运行",
+  },
+  "qwen3-asr-1.7b": {
+    label: "Qwen3 ASR 1.7B",
+    description: "通义千问 ASR 模型，支持 30 种语言和 22 种中文方言",
+  },
+  "mimo-v2.5-asr": {
+    label: "MiMo V2.5 ASR",
+    description: "小米多模态 ASR，支持方言和歌词识别（需要 GPU）",
+  },
 };
 
 export function getWhisperModelList(): Array<{
@@ -166,6 +178,10 @@ export function getWhisperModelList(): Array<{
   sizeBytes: number | null;
   source: string;
   description: string;
+  backend: ModelBackend;
+  downloadMethod: ModelDownloadMethod;
+  requiresGpu: boolean;
+  libraryDependencies: readonly string[];
 }> {
   return MODEL_MATRIX.filter((m) => m.kind === "asr").map((m) => {
     const meta = WHISPER_DISPLAY_META[m.id];
@@ -175,6 +191,10 @@ export function getWhisperModelList(): Array<{
       sizeBytes: m.downloadSizeBytes,
       source: m.source,
       description: meta?.description ?? m.source,
+      backend: m.backend,
+      downloadMethod: m.downloadMethod,
+      requiresGpu: m.hardware.requiresGpu ?? false,
+      libraryDependencies: m.libraryDependencies ?? [],
     };
   });
 }

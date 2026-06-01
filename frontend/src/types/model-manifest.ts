@@ -2,15 +2,21 @@ export type ModelKind = "asr" | "diarization";
 export type ModelFormat = "external" | "local-path";
 export type ModelUseCase = "quality-first" | "speaker-diarization";
 export type ModelLanguageProfile = "zh-primary-en-mixed" | "speaker-agnostic";
+export type ModelBackend = "whisper" | "paraformer" | "qwen3-asr" | "mimo";
+export type ModelDownloadMethod = "http" | "library-managed";
 
 export interface ModelMatrixEntry {
   readonly id: string;
   readonly kind: ModelKind;
   readonly defaultUseCase: ModelUseCase;
   readonly languageProfile: ModelLanguageProfile;
+  readonly backend: ModelBackend;
+  readonly downloadMethod: ModelDownloadMethod;
+  readonly libraryDependencies?: readonly string[];
   readonly hardware: {
     readonly minimumMemoryGb: number;
     readonly recommendedAcceleration: "cpu" | "gpu" | "apple-silicon";
+    readonly requiresGpu?: boolean;
   };
   readonly format: ModelFormat;
   readonly source: string;
@@ -82,6 +88,8 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     kind: "asr",
     defaultUseCase: "quality-first",
     languageProfile: "zh-primary-en-mixed",
+    backend: "whisper",
+    downloadMethod: "http",
     hardware: { minimumMemoryGb: 10, recommendedAcceleration: "apple-silicon" },
     format: "external",
     source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
@@ -94,6 +102,8 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     kind: "asr",
     defaultUseCase: "quality-first",
     languageProfile: "zh-primary-en-mixed",
+    backend: "whisper",
+    downloadMethod: "http",
     hardware: { minimumMemoryGb: 3, recommendedAcceleration: "apple-silicon" },
     format: "external",
     source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
@@ -106,6 +116,8 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     kind: "asr",
     defaultUseCase: "quality-first",
     languageProfile: "zh-primary-en-mixed",
+    backend: "whisper",
+    downloadMethod: "http",
     hardware: { minimumMemoryGb: 2, recommendedAcceleration: "apple-silicon" },
     format: "external",
     source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
@@ -118,6 +130,8 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     kind: "asr",
     defaultUseCase: "quality-first",
     languageProfile: "zh-primary-en-mixed",
+    backend: "whisper",
+    downloadMethod: "http",
     hardware: { minimumMemoryGb: 5, recommendedAcceleration: "cpu" },
     format: "external",
     source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
@@ -130,6 +144,8 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     kind: "asr",
     defaultUseCase: "quality-first",
     languageProfile: "zh-primary-en-mixed",
+    backend: "whisper",
+    downloadMethod: "http",
     hardware: { minimumMemoryGb: 2, recommendedAcceleration: "cpu" },
     format: "external",
     source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
@@ -142,6 +158,8 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     kind: "asr",
     defaultUseCase: "quality-first",
     languageProfile: "zh-primary-en-mixed",
+    backend: "whisper",
+    downloadMethod: "http",
     hardware: { minimumMemoryGb: 1, recommendedAcceleration: "cpu" },
     format: "external",
     source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
@@ -154,6 +172,8 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     kind: "asr",
     defaultUseCase: "quality-first",
     languageProfile: "zh-primary-en-mixed",
+    backend: "whisper",
+    downloadMethod: "http",
     hardware: { minimumMemoryGb: 1, recommendedAcceleration: "cpu" },
     format: "external",
     source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
@@ -162,10 +182,58 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     downloadSizeBytes: 77_000_000
   },
   {
+    id: "paraformer-zh",
+    kind: "asr",
+    defaultUseCase: "quality-first",
+    languageProfile: "zh-primary-en-mixed",
+    backend: "paraformer",
+    downloadMethod: "library-managed",
+    libraryDependencies: ["funasr"],
+    hardware: { minimumMemoryGb: 4, recommendedAcceleration: "cpu" },
+    format: "external",
+    source: "funasr/paraformer-zh",
+    checksum: "sha256:<required-at-download>",
+    license: "apache-2.0",
+    downloadSizeBytes: 440_000_000
+  },
+  {
+    id: "qwen3-asr-1.7b",
+    kind: "asr",
+    defaultUseCase: "quality-first",
+    languageProfile: "zh-primary-en-mixed",
+    backend: "qwen3-asr",
+    downloadMethod: "library-managed",
+    libraryDependencies: ["transformers", "torch"],
+    hardware: { minimumMemoryGb: 8, recommendedAcceleration: "gpu" },
+    format: "external",
+    source: "Qwen/Qwen3-ASR-1.7B",
+    checksum: "sha256:<required-at-download>",
+    license: "apache-2.0",
+    downloadSizeBytes: 3_400_000_000
+  },
+  {
+    id: "mimo-v2.5-asr",
+    kind: "asr",
+    defaultUseCase: "quality-first",
+    languageProfile: "zh-primary-en-mixed",
+    backend: "mimo",
+    downloadMethod: "library-managed",
+    libraryDependencies: ["transformers", "torch"],
+    hardware: { minimumMemoryGb: 20, recommendedAcceleration: "gpu", requiresGpu: true },
+    format: "external",
+    source: "XiaomiMiMo/MiMo-V2.5-ASR",
+    checksum: "sha256:<required-at-download>",
+    license: "apache-2.0",
+    downloadSizeBytes: 16_000_000_000
+  },
+  {
     id: "pyannote-speaker-diarization-3.1",
     kind: "diarization",
     defaultUseCase: "speaker-diarization",
     languageProfile: "speaker-agnostic",
+    backend: "whisper",
+    downloadMethod: "library-managed",
+    libraryDependencies: ["pyannote.audio"],
     hardware: {
       minimumMemoryGb: 8,
       recommendedAcceleration: "gpu"
@@ -343,6 +411,19 @@ function validateModelEntry(value: unknown, index: number, errors: string[]): vo
 
   if (value.format !== "external" && value.format !== "local-path") {
     errors.push(`MODEL_FORMAT_INVALID: models[${index}].format must be external or local-path`);
+  }
+
+  if (
+    value.backend !== "whisper" &&
+    value.backend !== "paraformer" &&
+    value.backend !== "qwen3-asr" &&
+    value.backend !== "mimo"
+  ) {
+    errors.push(`MODEL_BACKEND_INVALID: models[${index}].backend is unsupported`);
+  }
+
+  if (value.downloadMethod !== "http" && value.downloadMethod !== "library-managed") {
+    errors.push(`MODEL_DOWNLOAD_METHOD_INVALID: models[${index}].downloadMethod must be http or library-managed`);
   }
 
   requireNonEmptyString(value.source, `models[${index}].source`, "MODEL_SOURCE_REQUIRED", errors);

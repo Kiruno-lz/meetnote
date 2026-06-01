@@ -230,10 +230,13 @@ function attachActionListeners(root: HTMLElement, modelId: string, state: AppSta
 
 async function startDownload(root: HTMLElement, modelId: string, state: AppState): Promise<void> {
   if (!isTauri) return;
-  const destPath = `${state.modelCachePath}/${modelId}.bin`;
   const whisperModels = getWhisperModelList();
   const model = whisperModels.find((m) => m.id === modelId);
   if (!model) return;
+
+  const isLibraryManaged = model.downloadMethod === "library-managed";
+  // Library-managed models live in the HF/ModelScope cache; only http models map to a .bin file.
+  const destPath = isLibraryManaged ? "" : `${state.modelCachePath}/${modelId}.bin`;
 
   const dl: ActiveDownload = {
     modelId,
@@ -255,7 +258,19 @@ async function startDownload(root: HTMLElement, modelId: string, state: AppState
   updateDownloadUI(root, modelId, 0, dl.totalBytes, 0, "queued", state);
 
   try {
-    await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
+    if (isLibraryManaged) {
+      // model_downloader.py expects the repo id (model.source) as --model-id
+      await tauriInvoke("start_model_download", {
+        modelId,
+        url: "",
+        destPath: "",
+        downloadMethod: "library-managed",
+        backend: model.backend,
+        hfToken: state.hfToken || null,
+      });
+    } else {
+      await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
+    }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     downloadErrors.set(modelId, errMsg);
@@ -293,8 +308,19 @@ async function resumeDownload(root: HTMLElement, modelId: string, state: AppStat
     const whisperModels = getWhisperModelList();
     const model = whisperModels.find((m) => m.id === modelId);
     if (!model) return;
-    const destPath = `${state.modelCachePath}/${modelId}.bin`;
-    await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
+    if (model.downloadMethod === "library-managed") {
+      await tauriInvoke("start_model_download", {
+        modelId,
+        url: "",
+        destPath: "",
+        downloadMethod: "library-managed",
+        backend: model.backend,
+        hfToken: state.hfToken || null,
+      });
+    } else {
+      const destPath = `${state.modelCachePath}/${modelId}.bin`;
+      await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
+    }
   } catch (err) {
     console.error("start_model_download (resume) failed", err);
   }
@@ -354,12 +380,24 @@ async function switchModel(root: HTMLElement, modelId: string, state: AppState):
 async function deleteModel(root: HTMLElement, modelId: string, state: AppState): Promise<void> {
   if (!isTauri) return;
   try {
+    const model = getWhisperModelList().find((m) => m.id === modelId);
+    // Library-managed models can't be removed by deleting a single .bin file —
+    // they live in the shared HF/ModelScope cache. Surface guidance instead.
+    if (model?.downloadMethod === "library-managed") {
+      updateDownloadError(
+        modelId,
+        `库管理模型存放于共享缓存，无法在此删除。如需清理请手动删除 ~/.cache/huggingface 或 ~/.cache/modelscope 中的 ${model.source}`
+      );
+      return;
+    }
     const path = installedModelPaths.get(modelId);
     if (!path) {
       console.error("deleteModel: no path found for", modelId);
       return;
     }
     await tauriInvoke("delete_model_file", { path });
+    sessionInstalledModelIds.delete(modelId);
+    installedModelPaths.delete(modelId);
     // Re-render the card actions
     const actionsDiv = root.querySelector<HTMLElement>(`#model-actions-${modelId}`);
     if (actionsDiv) {
@@ -406,7 +444,13 @@ async function setupProgressListener(root: HTMLElement, state: AppState): Promis
     if (payload.status === "completed") {
       activeDownloads.delete(payload.modelId);
       sessionInstalledModelIds.add(payload.modelId);
-      const destPath = `${state.modelCachePath}/${payload.modelId}.bin`;
+      // Library-managed models live in the HF/ModelScope cache; record their repo id
+      // as the "path" so delete/active logic can distinguish them from .bin files.
+      const model = getWhisperModelList().find((m) => m.id === payload.modelId);
+      const destPath =
+        model?.downloadMethod === "library-managed"
+          ? model.source
+          : `${state.modelCachePath}/${payload.modelId}.bin`;
       installedModelPaths.set(payload.modelId, destPath);
 
       // Hide progress bar
@@ -485,6 +529,29 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
     }
 
     const whisperModels = getWhisperModelList();
+
+    // Library-managed models (Paraformer/Qwen3/MiMo) live in the HF/ModelScope cache,
+    // not as .bin files — probe each via the backend before building the card list.
+    if (isTauri) {
+      await Promise.all(
+        whisperModels
+          .filter((m) => m.downloadMethod === "library-managed")
+          .map(async (m) => {
+            try {
+              const installed = await tauriInvoke<boolean>("check_library_model_installed", {
+                modelSource: m.source,
+              });
+              if (installed) {
+                sessionInstalledModelIds.add(m.id);
+                installedModelPaths.set(m.id, m.source);
+              }
+            } catch {
+              // Probe failed — leave model as not-installed
+            }
+          })
+      );
+    }
+
     const installedIds = new Set([...installedModels.map((m) => m.modelId), ...sessionInstalledModelIds]);
 
     // Build model cards HTML
@@ -495,12 +562,33 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
         const download = activeDownloads.get(m.id);
         const sizeStr = m.sizeBytes !== null ? formatFileSize(m.sizeBytes) : "大小未知";
 
+        // Engine/backend badge
+        const backendColors: Record<string, string> = {
+          whisper: "#4a9eff",
+          paraformer: "#66bb6a",
+          "qwen3-asr": "#ab47bc",
+          mimo: "#ffa726",
+        };
+        const backendColor = backendColors[m.backend] ?? "#888";
+        const backendBadge = `<span style="display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;background:${backendColor}22;color:${backendColor};">${escapeHtml(m.backend)}</span>`;
+        const gpuBadge = m.requiresGpu
+          ? `<span style="display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;background:#ef535022;color:#ef5350;">需要 GPU</span>`
+          : "";
+        const depHint = m.libraryDependencies.length
+          ? `<div style="font-size:11px;color:#666;margin-top:3px;">依赖：${escapeHtml(m.libraryDependencies.join(", "))}</div>`
+          : "";
+
         return `
           <div class="card" id="model-card-${escapeHtml(m.id)}" style="margin-bottom:12px;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;">
               <div style="flex:1;min-width:0;margin-right:16px;">
-                <div style="font-weight:600;color:#e0e0e0;margin-bottom:2px;">${escapeHtml(m.label)}</div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap;">
+                  <span style="font-weight:600;color:#e0e0e0;">${escapeHtml(m.label)}</span>
+                  ${backendBadge}
+                  ${gpuBadge}
+                </div>
                 <div style="font-size:12px;color:#888;">${escapeHtml(sizeStr)} · ${escapeHtml(m.description)}</div>
+                ${depHint}
               </div>
               <div id="model-actions-${escapeHtml(m.id)}" style="flex-shrink:0;">
                 ${renderModelActions({ modelId: m.id, isInstalled, isActive, download })}
@@ -532,7 +620,7 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
           <span id="model-path-display" style="color:#ccc; font-size:13px; font-family:monospace; flex:1; word-break:break-all;">${escapeHtml(state.modelCachePath)}</span>
           <button class="btn btn-sm btn-secondary" id="btn-change-path" style="flex-shrink:0;">修改</button>
         </div>
-        <h3 style="font-size:15px;color:#e0e0e0;margin-bottom:12px;">Whisper 模型</h3>
+        <h3 style="font-size:15px;color:#e0e0e0;margin-bottom:12px;">ASR 模型</h3>
         <div id="model-list">${modelCardsHtml || '<div class="empty-state">无可用模型</div>'}</div>
       </div>
     `;
