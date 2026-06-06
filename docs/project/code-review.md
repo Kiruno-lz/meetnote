@@ -192,8 +192,8 @@ document.addEventListener("click", closeDropdown);
 |---|-----|------|------|
 | E1-1 | 🟢 **L2 测试全部 8 个因路径错误失败** | `tests/api/ts/*.test.ts` | ✅ 已修复：导入路径补全子目录，65/65 测试通过 |
 | E1-2 | 🔴 **E2E file-import spec 失败** | `tests/e2e/specs/file-import.spec.ts` | fixture `test-audio.wav` 在 git worktree 中丢失（二进制未跟踪） |
-| E1-3 | 🔴 **E2E mock-meeting-flow spec 失败** | `tests/e2e/specs/mock-meeting-flow.spec.ts` | CSS 选择器 `.meeting-library-item` 不存在，应为 `.meeting-item` |
-| E1-4 | 🟡 **Python 测试文档误标为 "pytest 未安装"** | 文档声称 | 实际是独立脚本（`python test_*.py`），无需 pytest |
+| E1-3 | 🟢 **E2E mock-meeting-flow spec 失败** | `tests/e2e/specs/mock-meeting-flow.spec.ts` | ✅ 已修复：CSS 选择器 `.meeting-library-item` → `.meeting-item` |
+| E1-4 | 🟢 **Python 测试文档误标为 "pytest 未安装"** | 文档声称 | ✅ 已纠正：实际是 `uv run python test_*.py` 独立脚本 |
 
 ### E2. 实现层
 
@@ -232,7 +232,7 @@ document.addEventListener("click", closeDropdown);
 | 3 | Manifest 字段列表 | 边界表仅列 8 个字段 | **实际有 16 个字段** | 文档缺少 8 个必有字段 |
 | 4 | ASR 输出 schema | `docs/reference/asr-cli.md` 版本 | 实际输出不同（缺少 kind/schemaVersion/requestId） | 功能偏离 |
 | 5 | Markdown 保存路径 | 文档说保存到 `meetings/YYYY/MM/<slug>/` | 实际未保存到文件系统 | 未实现 |
-| 6 | AGENTS.md | 仓库状态节引用 `docs/gap-analysis.md` | 该文件已移入 `docs/project/gap-analysis.md` | 断链（需更新 AGENTS.md 中的路径） |
+| 6 | 🟢 **AGENTS.md 断链** | AGENTS.md | ✅ 已修复：引用指向 `docs/project/gap-analysis.md` |
 
 ---
 
@@ -241,8 +241,8 @@ document.addEventListener("click", closeDropdown);
 | 指标 | 数据 |
 |------|------|
 | **L1 测试（前端）** | ✅ 312/312 通过 |
-| **L2 测试** | ❌ 0/8 通过（C1：路径错误，但测试逻辑本身有效） |
-| **L3 E2E 测试** | ⚠️ 2/4 通过（C2：fixture 缺失 + CSS 选择器错误） |
+| **L2 测试** | ✅ 65/65 通过（E1-1 已修复） |
+| **L3 E2E 测试** | ⚠️ 2/4 通过（CSS 已修复；fixture 需要在 worktree 中创建） |
 | **Python 测试** | ✅ 可运行（需 `uv run python test_*.py`，文档误标为 pytest） |
 | **死代码总量** | ~24 KB（3 个完整模块 + 5 个未使用函数） |
 | **已知实现层 Bug** | 13 个（2 个 🔴 严重，11 个 🟡 中等） |
@@ -251,7 +251,7 @@ document.addEventListener("click", closeDropdown);
 
 ### 最重要的 5 个行动
 
-1. **🔴 修复 L2 测试路径** — 8 个测试文件中的导入路径需加上 `types/`、`stores/`、`utils/` 子目录
+1. 🟢 **已修复：L2 测试路径** ✅
 2. **🔴 修复 ASR CLI JSON 输出** — 增加 `kind`、`schemaVersion`、`requestId`、结构化 `model` 字段
 3. **🔴 连接 LLM Provider** — 实现真实 Ollama/custom API 调用或用接口将 mock 替换为真实调用
 4. **🔴 连接 Markdown 保存与搜索** — 调用 `saveMeetingMarkdown` + 实现搜索 UI
