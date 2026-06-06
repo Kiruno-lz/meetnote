@@ -1,4 +1,4 @@
-import type { MeetingProject, SpeakerCorrection, SpeakerProfile, SpeakerSegment, TranscriptSegment } from "../types/audio-project";
+import type { MeetingProject, SpeakerCorrection, SpeakerProfile, SpeakerSegment, SpeakerDiarizationConflict, TranscriptSegment } from "../types/audio-project";
 import { resolveDiarizationRerunForProject } from "../types/audio-project";
 
 export interface SpeakerMergedTranscriptSegment {
@@ -81,15 +81,6 @@ export interface SpeakerCorrectionReplayResult {
   readonly speakers: SpeakerProfile[];
   readonly speakerSegments: SpeakerSegment[];
   readonly corrections: SpeakerManualCorrectionRecord[];
-}
-
-export interface SpeakerDiarizationConflict {
-  readonly segmentId: string;
-  readonly startMs: number;
-  readonly endMs: number;
-  readonly currentSpeakerId: string;
-  readonly generatedSpeakerId: string | null;
-  readonly reason: "manual-edit-would-change";
 }
 
 export type SpeakerDiarizationRerunResolution =
