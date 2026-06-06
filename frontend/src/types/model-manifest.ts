@@ -92,10 +92,10 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     downloadMethod: "http",
     hardware: { minimumMemoryGb: 10, recommendedAcceleration: "apple-silicon" },
     format: "external",
-    source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+    source: "https://openaipublic.azureedge.net/main/whisper/models/e5b1a55b89c1367dacf97e3e19bfd829a01529dbfdeefa8caeb59b3f1b81dadb/large-v3.pt",
     checksum: "sha256:<required-at-download>",
     license: "apache-2.0",
-    downloadSizeBytes: 3_100_000_000
+    downloadSizeBytes: 3_087_371_615
   },
   {
     id: "whisper-large-v3-turbo",
@@ -106,24 +106,10 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     downloadMethod: "http",
     hardware: { minimumMemoryGb: 3, recommendedAcceleration: "apple-silicon" },
     format: "external",
-    source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+    source: "https://openaipublic.azureedge.net/main/whisper/models/aff26ae408abcba5fbf8813c21e62b0941638c5f6eebfb145be0c9839262a19a/large-v3-turbo.pt",
     checksum: "sha256:<required-at-download>",
     license: "apache-2.0",
-    downloadSizeBytes: 874_000_000
-  },
-  {
-    id: "whisper-large-v3-turbo-q5_0",
-    kind: "asr",
-    defaultUseCase: "quality-first",
-    languageProfile: "zh-primary-en-mixed",
-    backend: "whisper",
-    downloadMethod: "http",
-    hardware: { minimumMemoryGb: 2, recommendedAcceleration: "apple-silicon" },
-    format: "external",
-    source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
-    checksum: "sha256:<required-at-download>",
-    license: "apache-2.0",
-    downloadSizeBytes: 547_000_000
+    downloadSizeBytes: 1_617_941_637
   },
   {
     id: "whisper-medium",
@@ -134,10 +120,10 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     downloadMethod: "http",
     hardware: { minimumMemoryGb: 5, recommendedAcceleration: "cpu" },
     format: "external",
-    source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+    source: "https://openaipublic.azureedge.net/main/whisper/models/345ae4da62f9b3d59415adc60127b97c714f32e89e936602e85993674d08dcb1/medium.pt",
     checksum: "sha256:<required-at-download>",
     license: "apache-2.0",
-    downloadSizeBytes: 1_528_000_000
+    downloadSizeBytes: 1_528_008_539
   },
   {
     id: "whisper-small",
@@ -148,10 +134,10 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     downloadMethod: "http",
     hardware: { minimumMemoryGb: 2, recommendedAcceleration: "cpu" },
     format: "external",
-    source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+    source: "https://openaipublic.azureedge.net/main/whisper/models/9ecf779972d90ba49c06d968637d720dd632c55bbf19d441fb42bf17a411e794/small.pt",
     checksum: "sha256:<required-at-download>",
     license: "apache-2.0",
-    downloadSizeBytes: 488_000_000
+    downloadSizeBytes: 483_617_219
   },
   {
     id: "whisper-base",
@@ -162,10 +148,10 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     downloadMethod: "http",
     hardware: { minimumMemoryGb: 1, recommendedAcceleration: "cpu" },
     format: "external",
-    source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+    source: "https://openaipublic.azureedge.net/main/whisper/models/ed3a0b6b1c0edf879ad9b11b1af5a0e6ab5db9205f891f668f8b0e6c6326e34e/base.pt",
     checksum: "sha256:<required-at-download>",
     license: "apache-2.0",
-    downloadSizeBytes: 148_000_000
+    downloadSizeBytes: 145_262_807
   },
   {
     id: "whisper-tiny",
@@ -176,10 +162,10 @@ export const MODEL_MATRIX: readonly ModelMatrixEntry[] = [
     downloadMethod: "http",
     hardware: { minimumMemoryGb: 1, recommendedAcceleration: "cpu" },
     format: "external",
-    source: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+    source: "https://openaipublic.azureedge.net/main/whisper/models/65147644a518d12f04e32d6f3b26facc3f8dd46e5390956a9424a650c0ce22b9/tiny.pt",
     checksum: "sha256:<required-at-download>",
     license: "apache-2.0",
-    downloadSizeBytes: 77_000_000
+    downloadSizeBytes: 75_572_083
   },
   {
     id: "paraformer-zh",
