@@ -80,8 +80,8 @@ run_checks() {
   check_path "frontend/package.json"     "frontend/package.json"
   check_path "frontend/src/main.ts"      "frontend/src/main.ts"
   check_path "frontend/src/mock-pipeline.ts" "frontend/src/mock-pipeline.ts"
-  check_path "src-tauri/Cargo.toml"      "src-tauri/Cargo.toml"
-  check_path "src-tauri/tauri.conf.json" "src-tauri/tauri.conf.json"
+  check_path "tauri/Cargo.toml"      "tauri/Cargo.toml"
+  check_path "tauri/tauri.conf.json" "tauri/tauri.conf.json"
   check_path "tests/e2e"                 "tests/e2e/"
   check_path "script/dev.sh"             "script/dev.sh"
 
