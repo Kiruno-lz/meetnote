@@ -639,7 +639,7 @@ function validateProjectReferences(input: Record<string, unknown>, errors: strin
   });
 }
 
-function resolveDiarizationRerunForProject(
+export function resolveDiarizationRerunForProject(
   project: MeetingProject,
   generatedSpeakers: readonly SpeakerProfile[],
   generatedSegments: readonly SpeakerSegment[]
@@ -719,7 +719,7 @@ function resolveDiarizationRerunForProject(
   };
 }
 
-function speakerSegmentsAreEquivalent(left: SpeakerSegment, right: SpeakerSegment): boolean {
+export function speakerSegmentsAreEquivalent(left: SpeakerSegment, right: SpeakerSegment): boolean {
   return left.speakerId === right.speakerId && left.startMs === right.startMs && left.endMs === right.endMs;
 }
 
