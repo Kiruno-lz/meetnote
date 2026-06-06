@@ -212,7 +212,7 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
   root.querySelector("#menu-rename")?.addEventListener("click", (e) => { e.stopPropagation(); closeDropdown(); enterRenameMode(); });
   root.querySelector("#menu-delete")?.addEventListener("click", (e) => { e.stopPropagation(); closeDropdown(); handleDelete(); });
 
-  root.querySelector("#btn-save-markdown")?.addEventListener("click", () => {
+  root.querySelector("#btn-save-markdown")?.addEventListener("click", async () => {
     if (isMarkdownBodyChanged(meeting.markdownContent, currentMarkdown)) {
       const idx = state.meetings.findIndex((m: MeetingRecord) => m.id === meeting.id);
       if (idx !== -1) {
@@ -220,6 +220,23 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
       }
     }
     saveState(state);
+
+    // Also write to filesystem if running in Tauri
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const safeTitle = meeting.title.replace(/[<>:"/\\|?*]/g, "_").trim() || "untitled";
+        const dateStr = new Date().toISOString().split("T")[0] ?? "unknown-date";
+        const slug = `${dateStr}-${safeTitle.toLowerCase().replace(/\s+/g, "-").replace(/-+/g, "-").slice(0, 80)}`;
+        const baseDir = state.markdownLibraryPath || "~/Documents/meetnote";
+        const mdPath = `${baseDir}/meetings/${dateStr}/${slug}/meeting.md`;
+        await invoke<string>("write_text_file", { path: mdPath, content: currentMarkdown });
+      } catch (err) {
+        console.warn("Failed to save markdown to filesystem:", err);
+        // Non-fatal — localStorage save already succeeded
+      }
+    }
+
     navigate("markdown-library");
   });
 }

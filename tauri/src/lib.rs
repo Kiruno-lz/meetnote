@@ -1,6 +1,7 @@
 mod asr;
 mod diarization;
 mod download;
+mod fs;
 mod utils;
 
 use download::DownloadManager;
@@ -32,6 +33,7 @@ pub fn run() {
             download::pause_model_download,
             download::cancel_model_download,
             download::get_file_size,
+            fs::write_text_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running meetnote tauri application");
