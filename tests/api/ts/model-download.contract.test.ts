@@ -3,7 +3,7 @@ import {
   createDownloadState,
   createPyannoteAuthError,
   validateModelDownloadState
-} from "../../../frontend/src/model-manifest";
+} from "../../../frontend/src/types/model-manifest";
 
 describe("model download contract", () => {
   test("keeps download state stable across JSON boundaries", () => {

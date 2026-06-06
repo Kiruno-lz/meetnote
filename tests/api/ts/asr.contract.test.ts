@@ -4,7 +4,7 @@ import {
   createAsrResult,
   createAsrRunRequest,
   validateAsrCliEnvelope
-} from "../../../frontend/src/asr-schema";
+} from "../../../frontend/src/types/asr-schema";
 
 describe("ASR CLI contract", () => {
   test("round-trips a mock ASR request through JSON serialization", () => {
