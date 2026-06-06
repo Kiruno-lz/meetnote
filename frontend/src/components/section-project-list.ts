@@ -2,29 +2,13 @@ import type { AppState, MeetingRecord } from "../stores/ui-state.ts";
 import { saveState } from "../stores/ui-state.ts";
 import { runMockPipeline } from "../utils/mock-pipeline.ts";
 import { DEMO_TRANSCRIPT_SEGMENTS, DEMO_SPEAKER_SEGMENTS, DEMO_SPEAKER_PROFILES } from "../utils/mock-fixtures.ts";
-import { validateAudioFile, computeFileHash, extractDefaultTitle } from "../utils/audio-file-import.ts";
+import { validateAudioFile, computeFileHash, extractDefaultTitle, extractDurationFromAudioElement, MockableAudioElement } from "../utils/audio-file-import.ts";
 import { createMeetingProject } from "../types/audio-project.ts";
 import { updateMeetingTitle, deleteMeeting, isTitleValid } from "../utils/meeting-management.ts";
 import { navigate } from "../main.ts";
 import { injectMeetingItemStyles, renderMeetingItemHtml, escapeHtml, formatDate } from "./meeting-record-item.ts";
 
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-async function getAudioDuration(file: File): Promise<number> {
-  return new Promise((resolve) => {
-    const audio = new Audio();
-    const url = URL.createObjectURL(file);
-    audio.onloadedmetadata = () => {
-      URL.revokeObjectURL(url);
-      resolve(isFinite(audio.duration) ? audio.duration : 0);
-    };
-    audio.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(0);
-    };
-    audio.src = url;
-  });
-}
 
 export function renderProjectList(root: HTMLElement, state: AppState): void {
   injectMeetingItemStyles();
@@ -261,7 +245,19 @@ async function handleRealAudioImport(
   try {
     const buffer = await file.arrayBuffer();
     const hash = await computeFileHash(buffer);
-    const durationSeconds = await getAudioDuration(file);
+    let objectUrl: string | null = null;
+    let durationSeconds: number;
+    try {
+      objectUrl = URL.createObjectURL(file);
+      durationSeconds = await extractDurationFromAudioElement(
+        () => new Audio() as unknown as MockableAudioElement,
+        objectUrl
+      );
+    } finally {
+      if (objectUrl !== null) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    }
     const title = extractDefaultTitle(file.name);
 
     const result = runMockPipeline({
