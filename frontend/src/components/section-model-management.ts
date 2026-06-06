@@ -39,11 +39,35 @@ let sessionActiveModelId: string | null = null;
 const MOCK_INSTALLED_MODELS: ModelFileInfo[] = [
   {
     modelId: "whisper-large-v3",
-    path: "~/.meetnote/models/whisper-large-v3.bin",
+    path: "~/.meetnote/models/large-v3.pt",
     sizeBytes: 3_100_000_000,
     isActive: true,
   },
 ];
+
+// ── Short-name ↔ manifest-id helpers ─────────────────────────────────────────
+
+/**
+ * Build identity map for model IDs. list_cached_models now returns
+ * manifest-style ids directly (e.g. "whisper-large-v3", "paraformer-zh"),
+ * matching MODEL_MATRIX ids exactly.
+ */
+function buildShortNameToManifestId(): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const m of getWhisperModelList()) {
+    map.set(m.id, m.id);
+  }
+  return map;
+}
+
+/**
+ * Compute the destination file name for an HTTP-downloaded model.
+ * For "https://.../large-v3.pt" returns "large-v3.pt".
+ * For library-managed models the caller should use empty destPath.
+ */
+function getDestFileName(model: ReturnType<typeof getWhisperModelList>[number]): string {
+  return model.source.split("/").pop() || model.id;
+}
 
 // ── DOM helpers ───────────────────────────────────────────────────────────────
 
@@ -216,7 +240,7 @@ function attachActionListeners(root: HTMLElement, modelId: string, state: AppSta
     ?.addEventListener("click", () => void startDownload(root, modelId, state));
 
   root.querySelector<HTMLElement>(`.btn-pause[data-model-id="${modelId}"]`)
-    ?.addEventListener("click", () => void pauseDownload(modelId));
+    ?.addEventListener("click", () => void pauseDownload(root, modelId, state));
 
   root.querySelector<HTMLElement>(`.btn-resume[data-model-id="${modelId}"]`)
     ?.addEventListener("click", () => void resumeDownload(root, modelId, state));
@@ -238,8 +262,10 @@ async function startDownload(root: HTMLElement, modelId: string, state: AppState
   if (!model) return;
 
   const isLibraryManaged = model.downloadMethod === "library-managed";
-  // Library-managed models live in the HF/ModelScope cache; only http models map to a .bin file.
-  const destPath = isLibraryManaged ? "" : `${state.modelCachePath}/${modelId}.bin`;
+  const destFileName = model.source.split("/").pop() || model.id;
+  // HTTP models go to {cacheDir}/{filename_from_source_url} (e.g. large-v3.pt),
+  // library-managed models pass an empty destPath and rely on cacheDir instead.
+  const destPath = isLibraryManaged ? "" : `${state.modelCachePath}/${destFileName}`;
 
   const dl: ActiveDownload = {
     modelId,
@@ -262,7 +288,6 @@ async function startDownload(root: HTMLElement, modelId: string, state: AppState
 
   try {
     if (isLibraryManaged) {
-      // model_downloader.py expects the full repo id (model.source) as --model-id
       await tauriInvoke("start_model_download", {
         modelId,
         url: "",
@@ -271,6 +296,8 @@ async function startDownload(root: HTMLElement, modelId: string, state: AppState
         backend: model.backend,
         modelSource: model.source,
         hfToken: state.hfToken || null,
+        cacheDir: state.modelCachePath,
+        totalSizeHint: model.sizeBytes ?? 0,
       });
     } else {
       await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
@@ -293,7 +320,7 @@ async function startDownload(root: HTMLElement, modelId: string, state: AppState
   }
 }
 
-async function pauseDownload(modelId: string): Promise<void> {
+async function pauseDownload(root: HTMLElement, modelId: string, state: AppState): Promise<void> {
   if (!isTauri) return;
   const dl = activeDownloads.get(modelId);
   if (dl) activeDownloads.set(modelId, { ...dl, status: "paused" });
@@ -302,17 +329,27 @@ async function pauseDownload(modelId: string): Promise<void> {
   } catch (err) {
     console.error("pause_model_download failed", err);
   }
+  // Re-render actions to show "继续" (resume) button
+  const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
+  if (actionsDiv) {
+    actionsDiv.innerHTML = renderModelActions({ modelId, isInstalled: false, isActive: false, download: activeDownloads.get(modelId) });
+    attachActionListeners(root, modelId, state);
+  }
 }
 
 async function resumeDownload(root: HTMLElement, modelId: string, state: AppState): Promise<void> {
   if (!isTauri) return;
   const dl = activeDownloads.get(modelId);
-  if (dl) activeDownloads.set(modelId, { ...dl, status: "downloading" });
+  if (dl) activeDownloads.set(modelId, { ...dl, status: "queued" });
   try {
     const whisperModels = getWhisperModelList();
     const model = whisperModels.find((m) => m.id === modelId);
     if (!model) return;
-    if (model.downloadMethod === "library-managed") {
+
+    const isLibraryManaged = model.downloadMethod === "library-managed";
+    const destFileName = model.source.split("/").pop() || model.id;
+
+    if (isLibraryManaged) {
       await tauriInvoke("start_model_download", {
         modelId,
         url: "",
@@ -321,14 +358,22 @@ async function resumeDownload(root: HTMLElement, modelId: string, state: AppStat
         backend: model.backend,
         modelSource: model.source,
         hfToken: state.hfToken || null,
+        cacheDir: state.modelCachePath,
+        totalSizeHint: model.sizeBytes ?? 0,
       });
     } else {
-      const destPath = `${state.modelCachePath}/${modelId}.bin`;
+      const destPath = `${state.modelCachePath}/${destFileName}`;
       await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
     }
   } catch (err) {
     console.error("start_model_download (resume) failed", err);
   }
+  // Show progress bar immediately pending first progress event
+  const entry = activeDownloads.get(modelId);
+  if (entry) {
+    updateDownloadUI(root, modelId, entry.downloadedBytes, entry.totalBytes, 0, "queued", state);
+  }
+  // Re-render actions to show "暂停" / "取消"
   const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
   if (actionsDiv) {
     actionsDiv.innerHTML = renderModelActions({ modelId, isInstalled: false, isActive: false, download: activeDownloads.get(modelId) });
@@ -386,35 +431,27 @@ async function deleteModel(root: HTMLElement, modelId: string, state: AppState):
   if (!isTauri) return;
   try {
     const model = getWhisperModelList().find((m) => m.id === modelId);
-    // Library-managed models live in the shared HF/ModelScope cache.
-    // Confirm with the user before removing, since other apps may share the cache.
-    if (model?.downloadMethod === "library-managed") {
-      const confirmed = window.confirm(
-        `模型 ${model.source} 存放于共享缓存 (~/.cache/huggingface)，删除可能影响其他使用该模型的应用。\n\n确定要删除吗？`
-      );
-      if (!confirmed) return;
+    if (!model) return;
 
-      await tauriInvoke("remove_library_model", { modelSource: model.source });
-      sessionInstalledModelIds.delete(modelId);
-      installedModelPaths.delete(modelId);
-
-      // Re-render the card actions as not installed
-      const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
-      if (actionsDiv) {
-        actionsDiv.innerHTML = renderModelActions({ modelId, isInstalled: false, isActive: false, download: undefined });
-        attachActionListeners(root, modelId, state);
+    if (model.downloadMethod === "library-managed") {
+      await tauriInvoke("remove_library_model", {
+        modelSource: model.source,
+        cacheDir: state.modelCachePath,
+        modelId,
+      });
+    } else {
+      const path = installedModelPaths.get(modelId);
+      if (!path) {
+        console.error("deleteModel: no path found for", modelId);
+        return;
       }
-      return;
+      await tauriInvoke("delete_model_file", { path, modelId });
     }
-    const path = installedModelPaths.get(modelId);
-    if (!path) {
-      console.error("deleteModel: no path found for", modelId);
-      return;
-    }
-    await tauriInvoke("delete_model_file", { path });
+
     sessionInstalledModelIds.delete(modelId);
     installedModelPaths.delete(modelId);
-    // Re-render the card actions
+
+    // Re-render the card actions as not installed
     const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
     if (actionsDiv) {
       actionsDiv.innerHTML = renderModelActions({ modelId, isInstalled: false, isActive: false, download: undefined });
@@ -463,13 +500,14 @@ async function setupProgressListener(state: AppState): Promise<void> {
     if (payload.status === "completed") {
       activeDownloads.delete(payload.modelId);
       sessionInstalledModelIds.add(payload.modelId);
-      // Library-managed models live in the HF/ModelScope cache; record their repo id
-      // as the "path" so delete/active logic can distinguish them from .bin files.
+
+      // Determine the on-disk path for the completed model.
       const model = getWhisperModelList().find((m) => m.id === payload.modelId);
+      const destFileName = model ? model.source.split("/").pop()! : payload.modelId;
       const destPath =
         model?.downloadMethod === "library-managed"
           ? model.source
-          : `${state.modelCachePath}/${payload.modelId}.bin`;
+          : `${state.modelCachePath}/${destFileName}`;
       installedModelPaths.set(payload.modelId, destPath);
 
       // Hide progress bar
@@ -496,6 +534,14 @@ async function setupProgressListener(state: AppState): Promise<void> {
         ? "downloading"
         : payload.status as DownloadStatus;
 
+    // Compute the correct destPath for the activeDownloads entry
+    const model = getWhisperModelList().find((m) => m.id === payload.modelId);
+    const destFileName = model ? getDestFileName(model) : `${payload.modelId}.pt`;
+    const progressDestPath =
+      model?.downloadMethod === "library-managed"
+        ? ""
+        : `${state.modelCachePath}/${destFileName}`;
+
     activeDownloads.set(payload.modelId, {
       modelId: payload.modelId,
       status: normalizedStatus,
@@ -504,7 +550,7 @@ async function setupProgressListener(state: AppState): Promise<void> {
       speedBps: payload.speedBps,
       eta: payload.speedBps > 0 ? (payload.totalBytes - payload.downloadedBytes) / payload.speedBps : Infinity,
       error: null,
-      destPath: `${state.modelCachePath}/${payload.modelId}.bin`,
+      destPath: progressDestPath,
     });
     updateDownloadUI(
       root,
@@ -534,11 +580,16 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
           cacheDir: state.modelCachePath,
         });
         activeModelId = installedModels.find((m) => m.isActive)?.modelId ?? null;
+
+        // Map short names from list_cached_models ("large-v3", "paraformer-zh")
+        // to manifest ids ("whisper-large-v3", "paraformer-zh") BEFORE storing.
+        const nameMap = buildShortNameToManifestId();
         for (const m of installedModels) {
-          installedModelPaths.set(m.modelId, m.path);
-          sessionInstalledModelIds.add(m.modelId);
+          const manifestId = nameMap.get(m.modelId) ?? m.modelId;
+          installedModelPaths.set(manifestId, m.path);
+          sessionInstalledModelIds.add(manifestId);
         }
-        sessionActiveModelId = activeModelId;
+        sessionActiveModelId = activeModelId ? (nameMap.get(activeModelId) ?? activeModelId) : null;
         if (activeModelId && activeModelId !== state.activeModelId) {
           state.activeModelId = activeModelId;
           saveState(state);
@@ -557,37 +608,50 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
 
     const whisperModels = getWhisperModelList();
 
-    // Library-managed models (Paraformer/Qwen3/MiMo) live in the HF/ModelScope cache,
-    // not as .bin files — probe each via the backend before building the card list.
-    if (isTauri) {
-      await Promise.all(
-        whisperModels
-          .filter((m) => m.downloadMethod === "library-managed")
-          .map(async (m) => {
-            try {
-              const installed = await tauriInvoke<boolean>("check_library_model_installed", {
-                modelSource: m.source,
-              });
-              if (installed) {
-                sessionInstalledModelIds.add(m.id);
-                installedModelPaths.set(m.id, m.source);
-              }
-            } catch {
-              // Probe failed — leave model as not-installed
-            }
-          })
-      );
+    // Build reverse mapping: short names from list_cached_models → manifest ids.
+    // list_cached_models returns "large-v3" for whisper .pt files, but we key
+    // everything by manifest id ("whisper-large-v3"). Library-managed model
+    // directory names already match their manifest ids.
+    const shortNameToManifestId = buildShortNameToManifestId();
+
+    // Build the set of installed manifest ids.
+    // installedModels comes from list_cached_models (short names for .pt files,
+    // directory names for library models). sessionInstalledModelIds always
+    // stores manifest ids (set during "completed" events and from prior
+    // list_cached_models runs).
+    const installedIds = new Set<string>();
+    for (const m of installedModels) {
+      const manifestId = shortNameToManifestId.get(m.modelId) ?? m.modelId;
+      installedIds.add(manifestId);
+    }
+    for (const id of sessionInstalledModelIds) {
+      installedIds.add(id);
     }
 
-    const installedIds = new Set([...installedModels.map((m) => m.modelId), ...sessionInstalledModelIds]);
+    // Also resolve activeModelId through the short-name map so the header
+    // label shows the correct manifest id.
+    const resolvedActiveModelId =
+      activeModelId ? (shortNameToManifestId.get(activeModelId) ?? activeModelId) : null;
+
+    // Build a map of actual on-disk sizes from list_cached_models.
+    // These come from the real filesystem (file metadata / dir walk) and
+    // supersede the hardcoded manifest sizes for installed models.
+    const actualSizes = new Map<string, number>();
+    for (const m of installedModels) {
+      const manifestId = shortNameToManifestId.get(m.modelId) ?? m.modelId;
+      if (m.sizeBytes > 0) actualSizes.set(manifestId, m.sizeBytes);
+    }
 
     // Build model cards HTML
     const modelCardsHtml = whisperModels
       .map((m) => {
         const isInstalled = installedIds.has(m.id);
-        const isActive = m.id === (sessionActiveModelId ?? activeModelId);
+        const isActive = m.id === (sessionActiveModelId ?? resolvedActiveModelId);
         const download = activeDownloads.get(m.id);
-        const sizeStr = m.sizeBytes !== null ? formatFileSize(m.sizeBytes) : "大小未知";
+        const onDiskSize = actualSizes.get(m.id);
+        const sizeStr = onDiskSize !== undefined
+          ? formatFileSize(onDiskSize)
+          : (m.sizeBytes !== null ? formatFileSize(m.sizeBytes) : "大小未知");
 
         // Engine/backend badge
         const backendColors: Record<string, string> = {
@@ -640,7 +704,7 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
         ${mockBanner}
         <div style="margin-bottom:20px;padding:12px 16px;background:#1e1e1e;border-radius:8px;border:1px solid #2e2e2e;">
           <span style="color:#888;font-size:13px;">当前 ASR 模型：</span>
-          <span id="active-model-label" style="color:#4a9eff;font-weight:600;">${escapeHtml(activeModelId ?? "未设置")}</span>
+          <span id="active-model-label" style="color:#4a9eff;font-weight:600;">${escapeHtml(resolvedActiveModelId ?? "未设置")}</span>
         </div>
         <div style="margin-bottom:16px; padding:10px 14px; background:#1e1e1e; border-radius:8px; border:1px solid #2e2e2e; display:flex; align-items:center; gap:12px;">
           <span style="color:#888; font-size:13px; flex-shrink:0;">模型存储目录：</span>

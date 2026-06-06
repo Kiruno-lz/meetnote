@@ -138,6 +138,7 @@ async function runRealAsr(root: HTMLElement, state: AppState): Promise<void> {
       backend,
       language: state.transcriptionLanguage ?? "zh",
       device: state.transcriptionDevice ?? "auto",
+      cacheDir: state.modelCachePath,
     });
 
     unlisten();

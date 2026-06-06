@@ -138,10 +138,6 @@ const WHISPER_DISPLAY_META: Record<string, { label: string; description: string 
     label: "Whisper Large v3 Turbo",
     description: "蒸馏版 Large v3，速度提升 ~8x，精度接近原版 — 推荐日常使用",
   },
-  "whisper-large-v3-turbo-q5_0": {
-    label: "Whisper Large v3 Turbo (Q5量化)",
-    description: "Turbo 的 Q5_0 量化版，体积更小，适合内存受限设备",
-  },
   "whisper-medium": {
     label: "Whisper Medium",
     description: "OpenAI Whisper Medium — balanced speed and accuracy",

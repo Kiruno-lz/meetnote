@@ -14,10 +14,10 @@ import {
 
 describe("createActiveDownload", () => {
   it("initializes with expected default values", () => {
-    const d = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
+    const d = createActiveDownload("whisper-large-v3", "/tmp/large-v3.pt");
     expect(d).toEqual({
       modelId: "whisper-large-v3",
-      destPath: "/tmp/model.bin",
+      destPath: "/tmp/large-v3.pt",
       status: "idle",
       downloadedBytes: 0,
       totalBytes: 0,
@@ -28,8 +28,8 @@ describe("createActiveDownload", () => {
   });
 
   it("does not share state between two independent instances", () => {
-    const a = createActiveDownload("whisper-small", "/tmp/small.bin");
-    const b = createActiveDownload("whisper-large-v3", "/tmp/large.bin");
+    const a = createActiveDownload("whisper-small", "/tmp/small.pt");
+    const b = createActiveDownload("whisper-large-v3", "/tmp/large-v3.pt");
     expect(a).not.toBe(b);
     expect(a.modelId).not.toBe(b.modelId);
     expect(a.destPath).not.toBe(b.destPath);
@@ -39,7 +39,7 @@ describe("createActiveDownload", () => {
 // ── applyProgressUpdate ───────────────────────────────────────────────────────
 
 describe("applyProgressUpdate", () => {
-  const base = createActiveDownload("whisper-large-v3", "/tmp/model.bin");
+  const base = createActiveDownload("whisper-large-v3", "/tmp/large-v3.pt");
 
   it("applies all progress fields and transitions status to downloading", () => {
     const updated = applyProgressUpdate(base, 512_000, 1_000_000, 100_000);
