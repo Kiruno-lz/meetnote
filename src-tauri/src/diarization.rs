@@ -107,11 +107,15 @@ pub async fn run_diarization(
     let audio_path = expand_tilde(&audio_path);
 
     // Find python script
-    let repo_root = find_repo_root()
-        .ok_or_else(|| "Cannot find repository root (python/diarization_cli.py not found)".to_string())?;
+    let repo_root = find_repo_root().ok_or_else(|| {
+        "Cannot find repository root (python/diarization_cli.py not found)".to_string()
+    })?;
     let script_path = repo_root.join("python/diarization_cli.py");
     if !script_path.exists() {
-        return Err(format!("Diarization script not found: {}", script_path.display()));
+        return Err(format!(
+            "Diarization script not found: {}",
+            script_path.display()
+        ));
     }
 
     // Find uv binary (macOS apps get a minimal PATH, so ~/.local/bin is usually missing)
@@ -187,13 +191,19 @@ pub async fn run_diarization(
                 return Err(err_msg.to_string());
             }
         }
-        return Err(format!("Diarization process exited with code {:?}", status.code()));
+        return Err(format!(
+            "Diarization process exited with code {:?}",
+            status.code()
+        ));
     }
 
     // Parse the output JSON to validate it
     let parsed: serde_json::Value = serde_json::from_str(&output).map_err(|e| {
         let preview = &output[..output.len().min(200)];
-        format!("Failed to parse diarization output: {} (output: {})", e, preview)
+        format!(
+            "Failed to parse diarization output: {} (output: {})",
+            e, preview
+        )
     })?;
 
     if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {

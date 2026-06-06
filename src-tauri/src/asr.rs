@@ -27,7 +27,7 @@ fn expand_tilde(path: &str) -> String {
 /// In Tauri dev mode, the binary is at src-tauri/target/debug/<bin>,
 /// so 4 levels up lands at the repo root.
 /// Falls back to current_dir() if the walk fails.
-fn find_repo_root() -> Option<std::path::PathBuf> {
+pub(crate) fn find_repo_root() -> Option<std::path::PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         let mut path = exe;
         // Walk up: binary → debug → target → src-tauri → repo_root
@@ -58,7 +58,7 @@ fn find_repo_root() -> Option<std::path::PathBuf> {
 
 /// Find the uv binary by trying common install locations.
 /// macOS apps get a minimal PATH so ~/.local/bin is usually missing.
-fn find_uv_binary() -> Result<std::path::PathBuf, String> {
+pub(crate) fn find_uv_binary() -> Result<std::path::PathBuf, String> {
     // Collect candidate paths
     let home = std::env::var("HOME").unwrap_or_default();
     let mut candidates: Vec<std::path::PathBuf> = vec![
@@ -101,6 +101,7 @@ pub async fn run_asr(
     model_id: String,
     language: String,
     device: Option<String>,
+    backend: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let audio_path = expand_tilde(&audio_path);
@@ -126,7 +127,9 @@ pub async fn run_asr(
         .arg("--model")
         .arg(&model_id)
         .arg("--language")
-        .arg(&language);
+        .arg(&language)
+        .arg("--backend")
+        .arg(backend.as_deref().unwrap_or("whisper"));
     if let Some(dev) = &device {
         cmd.arg("--device").arg(dev);
     }

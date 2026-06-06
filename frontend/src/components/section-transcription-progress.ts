@@ -3,10 +3,11 @@ import { saveState } from "../stores/ui-state.ts";
 import { navigate } from "../main.ts";
 import type { TranscriptSegment, SpeakerProfile, SpeakerSegment } from "../types/audio-project.ts";
 import { mergeTranscriptWithDiarization } from "../utils/speaker.ts";
+import { MODEL_MATRIX } from "../types/model-manifest.ts";
 
 const STAGES: { id: string; label: string }[] = [
   { id: "queued", label: "排队中..." },
-  { id: "loading-model", label: "加载 Whisper 模型..." },
+  { id: "loading-model", label: "加载 ASR 模型..." },
   { id: "transcribing", label: "转录音频..." },
   { id: "asr-finalizing", label: "整理转录结果..." },
   { id: "diarization-loading", label: "加载发言人模型..." },
@@ -92,7 +93,17 @@ async function runRealAsr(root: HTMLElement, state: AppState): Promise<void> {
   const audioPath = state.pendingAudioPath!;
 
   const rawModelId = state.activeModelId ?? "whisper-large-v3";
-  const modelId = rawModelId.startsWith("whisper-") ? rawModelId.slice("whisper-".length) : rawModelId;
+  const modelEntry = MODEL_MATRIX.find((m) => m.id === rawModelId);
+  const backend = modelEntry?.backend ?? "whisper";
+
+  // Whisper passes the bare size name (e.g. "large-v3"); library-managed backends
+  // pass their HF/ModelScope repo id (model.source) so the Python CLI loads the right model.
+  let modelId: string;
+  if (backend === "whisper") {
+    modelId = rawModelId.startsWith("whisper-") ? rawModelId.slice("whisper-".length) : rawModelId;
+  } else {
+    modelId = modelEntry?.source ?? rawModelId;
+  }
 
   // Advance UI to loading-model
   updateStageUI(root, 1);
@@ -124,6 +135,7 @@ async function runRealAsr(root: HTMLElement, state: AppState): Promise<void> {
     const asrOutputRaw = await invoke<string>("run_asr", {
       audioPath,
       modelId,
+      backend,
       language: state.transcriptionLanguage ?? "zh",
       device: state.transcriptionDevice ?? "auto",
     });
@@ -352,7 +364,7 @@ async function runRealAsr(root: HTMLElement, state: AppState): Promise<void> {
     showToast({
       type: "error",
       message: `转录失败: ${errMsg}`,
-      hint: "需要在模型管理中下载 Whisper 模型，或运行 cd python && uv sync",
+      hint: "需要在模型管理中下载对应 ASR 模型，或运行 cd python && uv sync",
       durationMs: 0,
     });
 

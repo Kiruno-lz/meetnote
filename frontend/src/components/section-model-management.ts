@@ -16,6 +16,9 @@ const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
 // Module-level unlisten handle to avoid stacking listeners across re-renders
 let _unlisten: (() => void) | null = null;
 
+// Module-level root reference so the progress listener always targets the current DOM
+let _currentRoot: HTMLElement | null = null;
+
 // Active downloads map (module-level so it survives re-renders within the session)
 const activeDownloads = new Map<string, ActiveDownload>();
 
@@ -69,15 +72,15 @@ function renderModelActions(ctx: ModelRenderContext): string {
     if (status === "downloading" || status === "queued") {
       return `
         <div style="display:flex;gap:8px;">
-          <button class="btn btn-sm btn-secondary btn-pause" data-model-id="${escapeHtml(modelId)}">暂停</button>
-          <button class="btn btn-sm btn-secondary btn-cancel" data-model-id="${escapeHtml(modelId)}">取消</button>
+          <button class="btn btn-sm btn-secondary btn-pause" data-model-id="${modelId}">暂停</button>
+          <button class="btn btn-sm btn-secondary btn-cancel" data-model-id="${modelId}">取消</button>
         </div>`;
     }
     if (status === "paused") {
       return `
         <div style="display:flex;gap:8px;">
-          <button class="btn btn-sm btn-primary btn-resume" data-model-id="${escapeHtml(modelId)}">继续</button>
-          <button class="btn btn-sm btn-secondary btn-cancel" data-model-id="${escapeHtml(modelId)}">取消</button>
+          <button class="btn btn-sm btn-primary btn-resume" data-model-id="${modelId}">继续</button>
+          <button class="btn btn-sm btn-secondary btn-cancel" data-model-id="${modelId}">取消</button>
         </div>`;
     }
   }
@@ -88,26 +91,26 @@ function renderModelActions(ctx: ModelRenderContext): string {
     }
     return `
       <div style="display:flex;gap:8px;">
-        <button class="btn btn-sm btn-secondary btn-use-model" data-model-id="${escapeHtml(modelId)}">切换使用</button>
-        <button class="btn btn-sm btn-danger btn-delete-model" data-model-id="${escapeHtml(modelId)}">删除</button>
+        <button class="btn btn-sm btn-secondary btn-use-model" data-model-id="${modelId}">切换使用</button>
+        <button class="btn btn-sm btn-danger btn-delete-model" data-model-id="${modelId}">删除</button>
       </div>`;
   }
 
-  return `<button class="btn btn-sm btn-primary btn-download" data-model-id="${escapeHtml(modelId)}">下载</button>`;
+  return `<button class="btn btn-sm btn-primary btn-download" data-model-id="${modelId}">下载</button>`;
 }
 
 // ── Progress bar renderer ─────────────────────────────────────────────────────
 
 function renderProgressBar(modelId: string): string {
   return `
-    <div id="model-progress-${escapeHtml(modelId)}" style="display:none;margin-top:12px;">
+    <div id="model-progress-${modelId}" style="display:none;margin-top:12px;">
       <div class="progress-bar-container" style="height:6px;background:#2e2e2e;border-radius:3px;overflow:hidden;">
-        <div class="progress-bar" id="pbar-${escapeHtml(modelId)}" style="width:0%;height:100%;background:#4a9eff;border-radius:3px;transition:width .3s;"></div>
+        <div class="progress-bar" id="pbar-${modelId}" style="width:0%;height:100%;background:#4a9eff;border-radius:3px;transition:width .3s;"></div>
       </div>
       <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:12px;color:#888;">
-        <span id="pbar-detail-${escapeHtml(modelId)}">0 B / 0 B</span>
-        <span id="pbar-speed-${escapeHtml(modelId)}">— B/s</span>
-        <span id="pbar-eta-${escapeHtml(modelId)}">—</span>
+        <span id="pbar-detail-${modelId}">0 B / 0 B</span>
+        <span id="pbar-speed-${modelId}">— B/s</span>
+        <span id="pbar-eta-${modelId}">—</span>
       </div>
     </div>`;
 }
@@ -123,12 +126,12 @@ function updateDownloadUI(
   status: DownloadStatus,
   state: AppState
 ): void {
-  const progressDiv = root.querySelector<HTMLElement>(`#model-progress-${modelId}`);
-  const pbar = root.querySelector<HTMLElement>(`#pbar-${modelId}`);
-  const pbarDetail = root.querySelector<HTMLElement>(`#pbar-detail-${modelId}`);
-  const pbarSpeed = root.querySelector<HTMLElement>(`#pbar-speed-${modelId}`);
-  const pbarEta = root.querySelector<HTMLElement>(`#pbar-eta-${modelId}`);
-  const actionsDiv = root.querySelector<HTMLElement>(`#model-actions-${modelId}`);
+  const progressDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-progress-${modelId}`)}`);
+  const pbar = root.querySelector<HTMLElement>(`#${CSS.escape(`pbar-${modelId}`)}`);
+  const pbarDetail = root.querySelector<HTMLElement>(`#${CSS.escape(`pbar-detail-${modelId}`)}`);
+  const pbarSpeed = root.querySelector<HTMLElement>(`#${CSS.escape(`pbar-speed-${modelId}`)}`);
+  const pbarEta = root.querySelector<HTMLElement>(`#${CSS.escape(`pbar-eta-${modelId}`)}`);
+  const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
 
   // Update progress bar visibility
   if (progressDiv) {
@@ -170,7 +173,7 @@ function updateDownloadUI(
 // ── Download error UI update ──────────────────────────────────────────────────
 
 function updateDownloadError(modelId: string, errMsg: string): void {
-  const progressDiv = document.getElementById(`model-progress-${CSS.escape(modelId)}`);
+  const progressDiv = document.getElementById(`model-progress-${modelId}`);
   if (!progressDiv) return;
   progressDiv.style.display = "block";
   progressDiv.innerHTML = `
@@ -230,10 +233,13 @@ function attachActionListeners(root: HTMLElement, modelId: string, state: AppSta
 
 async function startDownload(root: HTMLElement, modelId: string, state: AppState): Promise<void> {
   if (!isTauri) return;
-  const destPath = `${state.modelCachePath}/${modelId}.bin`;
   const whisperModels = getWhisperModelList();
   const model = whisperModels.find((m) => m.id === modelId);
   if (!model) return;
+
+  const isLibraryManaged = model.downloadMethod === "library-managed";
+  // Library-managed models live in the HF/ModelScope cache; only http models map to a .bin file.
+  const destPath = isLibraryManaged ? "" : `${state.modelCachePath}/${modelId}.bin`;
 
   const dl: ActiveDownload = {
     modelId,
@@ -247,7 +253,7 @@ async function startDownload(root: HTMLElement, modelId: string, state: AppState
   };
   activeDownloads.set(modelId, dl);
 
-  const actionsDiv = root.querySelector<HTMLElement>(`#model-actions-${modelId}`);
+  const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
   if (actionsDiv) {
     actionsDiv.innerHTML = renderModelActions({ modelId, isInstalled: false, isActive: false, download: dl });
     attachActionListeners(root, modelId, state);
@@ -255,7 +261,20 @@ async function startDownload(root: HTMLElement, modelId: string, state: AppState
   updateDownloadUI(root, modelId, 0, dl.totalBytes, 0, "queued", state);
 
   try {
-    await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
+    if (isLibraryManaged) {
+      // model_downloader.py expects the full repo id (model.source) as --model-id
+      await tauriInvoke("start_model_download", {
+        modelId,
+        url: "",
+        destPath: "",
+        downloadMethod: "library-managed",
+        backend: model.backend,
+        modelSource: model.source,
+        hfToken: state.hfToken || null,
+      });
+    } else {
+      await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
+    }
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     downloadErrors.set(modelId, errMsg);
@@ -293,12 +312,24 @@ async function resumeDownload(root: HTMLElement, modelId: string, state: AppStat
     const whisperModels = getWhisperModelList();
     const model = whisperModels.find((m) => m.id === modelId);
     if (!model) return;
-    const destPath = `${state.modelCachePath}/${modelId}.bin`;
-    await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
+    if (model.downloadMethod === "library-managed") {
+      await tauriInvoke("start_model_download", {
+        modelId,
+        url: "",
+        destPath: "",
+        downloadMethod: "library-managed",
+        backend: model.backend,
+        modelSource: model.source,
+        hfToken: state.hfToken || null,
+      });
+    } else {
+      const destPath = `${state.modelCachePath}/${modelId}.bin`;
+      await tauriInvoke("start_model_download", { modelId, url: model.source, destPath });
+    }
   } catch (err) {
     console.error("start_model_download (resume) failed", err);
   }
-  const actionsDiv = root.querySelector<HTMLElement>(`#model-actions-${modelId}`);
+  const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
   if (actionsDiv) {
     actionsDiv.innerHTML = renderModelActions({ modelId, isInstalled: false, isActive: false, download: activeDownloads.get(modelId) });
     attachActionListeners(root, modelId, state);
@@ -313,8 +344,8 @@ async function cancelDownload(root: HTMLElement, modelId: string, state: AppStat
     console.error("cancel_model_download failed", err);
   }
   activeDownloads.delete(modelId);
-  const actionsDiv = root.querySelector<HTMLElement>(`#model-actions-${modelId}`);
-  const progressDiv = root.querySelector<HTMLElement>(`#model-progress-${modelId}`);
+  const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
+  const progressDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-progress-${modelId}`)}`);
   if (progressDiv) progressDiv.style.display = "none";
   if (actionsDiv) {
     actionsDiv.innerHTML = renderModelActions({ modelId, isInstalled: false, isActive: false, download: undefined });
@@ -354,14 +385,37 @@ async function switchModel(root: HTMLElement, modelId: string, state: AppState):
 async function deleteModel(root: HTMLElement, modelId: string, state: AppState): Promise<void> {
   if (!isTauri) return;
   try {
+    const model = getWhisperModelList().find((m) => m.id === modelId);
+    // Library-managed models live in the shared HF/ModelScope cache.
+    // Confirm with the user before removing, since other apps may share the cache.
+    if (model?.downloadMethod === "library-managed") {
+      const confirmed = window.confirm(
+        `模型 ${model.source} 存放于共享缓存 (~/.cache/huggingface)，删除可能影响其他使用该模型的应用。\n\n确定要删除吗？`
+      );
+      if (!confirmed) return;
+
+      await tauriInvoke("remove_library_model", { modelSource: model.source });
+      sessionInstalledModelIds.delete(modelId);
+      installedModelPaths.delete(modelId);
+
+      // Re-render the card actions as not installed
+      const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
+      if (actionsDiv) {
+        actionsDiv.innerHTML = renderModelActions({ modelId, isInstalled: false, isActive: false, download: undefined });
+        attachActionListeners(root, modelId, state);
+      }
+      return;
+    }
     const path = installedModelPaths.get(modelId);
     if (!path) {
       console.error("deleteModel: no path found for", modelId);
       return;
     }
     await tauriInvoke("delete_model_file", { path });
+    sessionInstalledModelIds.delete(modelId);
+    installedModelPaths.delete(modelId);
     // Re-render the card actions
-    const actionsDiv = root.querySelector<HTMLElement>(`#model-actions-${modelId}`);
+    const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${modelId}`)}`);
     if (actionsDiv) {
       actionsDiv.innerHTML = renderModelActions({ modelId, isInstalled: false, isActive: false, download: undefined });
       attachActionListeners(root, modelId, state);
@@ -373,7 +427,7 @@ async function deleteModel(root: HTMLElement, modelId: string, state: AppState):
 
 // ── Listener setup ────────────────────────────────────────────────────────────
 
-async function setupProgressListener(root: HTMLElement, state: AppState): Promise<void> {
+async function setupProgressListener(state: AppState): Promise<void> {
   if (!isTauri) return;
   // Tear down previous listener if any
   if (_unlisten) {
@@ -381,6 +435,9 @@ async function setupProgressListener(root: HTMLElement, state: AppState): Promis
     _unlisten = null;
   }
   _unlisten = await tauriListen("model-download-progress", (payload) => {
+    // Use module-level root reference so the listener always targets the current DOM
+    const root = _currentRoot;
+    if (!root) return;
     // Detect failed status (emitted as "failed" or "failed: <msg>")
     const isFailed = payload.status === "failed" || payload.status.startsWith("failed:");
     if (isFailed) {
@@ -390,7 +447,7 @@ async function setupProgressListener(root: HTMLElement, state: AppState): Promis
       downloadErrors.set(payload.modelId, errMsg);
       updateDownloadError(payload.modelId, errMsg);
       activeDownloads.delete(payload.modelId);
-      const actionsDiv = root.querySelector<HTMLElement>(`#model-actions-${payload.modelId}`);
+      const actionsDiv = root.querySelector<HTMLElement>(`#${CSS.escape(`model-actions-${payload.modelId}`)}`);
       if (actionsDiv) {
         actionsDiv.innerHTML = renderModelActions({
           modelId: payload.modelId,
@@ -406,7 +463,13 @@ async function setupProgressListener(root: HTMLElement, state: AppState): Promis
     if (payload.status === "completed") {
       activeDownloads.delete(payload.modelId);
       sessionInstalledModelIds.add(payload.modelId);
-      const destPath = `${state.modelCachePath}/${payload.modelId}.bin`;
+      // Library-managed models live in the HF/ModelScope cache; record their repo id
+      // as the "path" so delete/active logic can distinguish them from .bin files.
+      const model = getWhisperModelList().find((m) => m.id === payload.modelId);
+      const destPath =
+        model?.downloadMethod === "library-managed"
+          ? model.source
+          : `${state.modelCachePath}/${payload.modelId}.bin`;
       installedModelPaths.set(payload.modelId, destPath);
 
       // Hide progress bar
@@ -427,9 +490,15 @@ async function setupProgressListener(root: HTMLElement, state: AppState): Promis
       return;
     }
 
+    // Normalize library-managed download statuses to UI-visible states
+    const normalizedStatus: DownloadStatus =
+      (payload.status === "starting" || payload.status === "loading")
+        ? "downloading"
+        : payload.status as DownloadStatus;
+
     activeDownloads.set(payload.modelId, {
       modelId: payload.modelId,
-      status: payload.status as DownloadStatus,
+      status: normalizedStatus,
       downloadedBytes: payload.downloadedBytes,
       totalBytes: payload.totalBytes,
       speedBps: payload.speedBps,
@@ -443,7 +512,7 @@ async function setupProgressListener(root: HTMLElement, state: AppState): Promis
       payload.downloadedBytes,
       payload.totalBytes,
       payload.speedBps,
-      payload.status as DownloadStatus,
+      normalizedStatus,
       state
     );
   });
@@ -452,6 +521,8 @@ async function setupProgressListener(root: HTMLElement, state: AppState): Promis
 // ── Main render function ──────────────────────────────────────────────────────
 
 export function renderModelManagement(root: HTMLElement, state: AppState): void {
+  // Update the module-level root reference so the progress listener targets the current DOM
+  _currentRoot = root;
   void (async () => {
     // Load installed models
     let installedModels: ModelFileInfo[];
@@ -485,6 +556,29 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
     }
 
     const whisperModels = getWhisperModelList();
+
+    // Library-managed models (Paraformer/Qwen3/MiMo) live in the HF/ModelScope cache,
+    // not as .bin files — probe each via the backend before building the card list.
+    if (isTauri) {
+      await Promise.all(
+        whisperModels
+          .filter((m) => m.downloadMethod === "library-managed")
+          .map(async (m) => {
+            try {
+              const installed = await tauriInvoke<boolean>("check_library_model_installed", {
+                modelSource: m.source,
+              });
+              if (installed) {
+                sessionInstalledModelIds.add(m.id);
+                installedModelPaths.set(m.id, m.source);
+              }
+            } catch {
+              // Probe failed — leave model as not-installed
+            }
+          })
+      );
+    }
+
     const installedIds = new Set([...installedModels.map((m) => m.modelId), ...sessionInstalledModelIds]);
 
     // Build model cards HTML
@@ -495,12 +589,33 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
         const download = activeDownloads.get(m.id);
         const sizeStr = m.sizeBytes !== null ? formatFileSize(m.sizeBytes) : "大小未知";
 
+        // Engine/backend badge
+        const backendColors: Record<string, string> = {
+          whisper: "#4a9eff",
+          paraformer: "#66bb6a",
+          "qwen3-asr": "#ab47bc",
+          mimo: "#ffa726",
+        };
+        const backendColor = backendColors[m.backend] ?? "#888";
+        const backendBadge = `<span style="display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;background:${backendColor}22;color:${backendColor};">${escapeHtml(m.backend)}</span>`;
+        const gpuBadge = m.requiresGpu
+          ? `<span style="display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600;background:#ef535022;color:#ef5350;">需要 GPU</span>`
+          : "";
+        const depHint = m.libraryDependencies.length
+          ? `<div style="font-size:11px;color:#666;margin-top:3px;">依赖：${escapeHtml(m.libraryDependencies.join(", "))}</div>`
+          : "";
+
         return `
           <div class="card" id="model-card-${escapeHtml(m.id)}" style="margin-bottom:12px;">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;">
               <div style="flex:1;min-width:0;margin-right:16px;">
-                <div style="font-weight:600;color:#e0e0e0;margin-bottom:2px;">${escapeHtml(m.label)}</div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap;">
+                  <span style="font-weight:600;color:#e0e0e0;">${escapeHtml(m.label)}</span>
+                  ${backendBadge}
+                  ${gpuBadge}
+                </div>
                 <div style="font-size:12px;color:#888;">${escapeHtml(sizeStr)} · ${escapeHtml(m.description)}</div>
+                ${depHint}
               </div>
               <div id="model-actions-${escapeHtml(m.id)}" style="flex-shrink:0;">
                 ${renderModelActions({ modelId: m.id, isInstalled, isActive, download })}
@@ -532,7 +647,7 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
           <span id="model-path-display" style="color:#ccc; font-size:13px; font-family:monospace; flex:1; word-break:break-all;">${escapeHtml(state.modelCachePath)}</span>
           <button class="btn btn-sm btn-secondary" id="btn-change-path" style="flex-shrink:0;">修改</button>
         </div>
-        <h3 style="font-size:15px;color:#e0e0e0;margin-bottom:12px;">Whisper 模型</h3>
+        <h3 style="font-size:15px;color:#e0e0e0;margin-bottom:12px;">ASR 模型</h3>
         <div id="model-list">${modelCardsHtml || '<div class="empty-state">无可用模型</div>'}</div>
       </div>
     `;
@@ -589,6 +704,6 @@ export function renderModelManagement(root: HTMLElement, state: AppState): void 
     }
 
     // Setup Tauri event listener
-    await setupProgressListener(root, state);
+    await setupProgressListener(state);
   })();
 }
