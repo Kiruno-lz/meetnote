@@ -2295,6 +2295,8 @@ dependencies = [
     { name = "openai-whisper" },
     { name = "pyannote-audio" },
     { name = "qwen-asr" },
+    { name = "torch" },
+    { name = "transformers" },
 ]
 
 [package.optional-dependencies]
@@ -2309,8 +2311,10 @@ requires-dist = [
     { name = "huggingface-hub" },
     { name = "librosa" },
     { name = "openai-whisper", specifier = ">=20240930" },
-    { name = "pyannote-audio", specifier = ">=3.1" },
+    { name = "pyannote-audio", specifier = ">=4.0" },
     { name = "qwen-asr" },
+    { name = "torch" },
+    { name = "transformers" },
 ]
 provides-extras = ["cuda"]
 

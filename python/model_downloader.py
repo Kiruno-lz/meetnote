@@ -14,7 +14,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
 
 def emit_progress(stage: str, progress: float) -> None:
@@ -35,51 +35,67 @@ def emit_result(success: bool, cache_path: Optional[str] = None, error: Optional
     print(json.dumps(result), flush=True)
 
 
-def download_paraformer(model_id: str, hf_token: Optional[str] = None) -> str:
+def download_paraformer(model_id: str, hf_token: Optional[str] = None, cache_dir: Optional[str] = None) -> str:
     """
-    Download Paraformer model using FunASR.
+    Download Paraformer model using huggingface_hub snapshot_download.
+
+    Uses snapshot_download to fetch files without loading the model into
+    memory, so no GPU is required during download. Downloads to the unified
+    cache_dir when provided, otherwise to the default HF cache.
 
     Args:
         model_id: Model identifier (e.g., "funasr/paraformer-zh")
         hf_token: Optional HuggingFace token (not typically needed for Paraformer)
+        cache_dir: Optional unified cache directory. When set, downloads to
+                   <cache_dir>/paraformer-zh/ instead of the HF cache.
 
     Returns:
         Path to the cached model directory
 
     Raises:
-        ImportError: If funasr is not installed
+        ImportError: If huggingface_hub is not installed
         RuntimeError: If download fails
     """
     try:
-        from funasr import AutoModel
-    except ImportError as e:
-        raise ImportError("funasr library not found. Install with: pip install funasr") from e
+        from huggingface_hub import snapshot_download
+    except ImportError:
+        raise ImportError("huggingface_hub not found. Install with: pip install huggingface-hub") from None
 
     emit_progress("starting", 0.0)
 
     try:
-        emit_progress("downloading", 0.3)
+        if hf_token:
+            import os
+            os.environ["HF_TOKEN"] = hf_token
 
-        # AutoModel will download to ~/.cache/modelscope/ by default
-        model = AutoModel(model=model_id, hub="hf")
+        local_dir = Path(cache_dir) / "paraformer-zh" if cache_dir else None
+        if local_dir:
+            local_dir.mkdir(parents=True, exist_ok=True)
 
-        emit_progress("loading", 0.8)
+        emit_progress("downloading", 0.1)
 
-        # Determine cache path (HuggingFace cache, since hub="hf")
-        cache_base = Path.home() / ".cache" / "huggingface" / "hub"
-        # HF stores models as models--<org>--<name>
-        model_name = model_id.replace("/", "--")
-        model_path = cache_base / f"models--{model_name}"
+        snapshot_download(
+            repo_id=model_id,
+            local_dir=str(local_dir) if local_dir else None,
+            token=hf_token,
+            resume_download=True,
+        )
 
         emit_progress("completed", 1.0)
 
-        return str(model_path)
+        if local_dir:
+            return str(local_dir)
+        else:
+            # Determine HF cache path for backwards compat
+            cache_base = Path.home() / ".cache" / "huggingface" / "hub"
+            model_name = model_id.replace("/", "--")
+            return str(cache_base / f"models--{model_name}")
 
     except Exception as e:
         raise RuntimeError(f"Failed to download Paraformer model: {e}") from e
 
 
-def download_qwen3_asr(model_id: str, hf_token: Optional[str] = None) -> str:
+def download_qwen3_asr(model_id: str, hf_token: Optional[str] = None, cache_dir: Optional[str] = None) -> str:
     """
     Download Qwen3-ASR model weights.
     Uses snapshot_download to fetch files without loading the model into
@@ -88,6 +104,8 @@ def download_qwen3_asr(model_id: str, hf_token: Optional[str] = None) -> str:
     Args:
         model_id: HuggingFace repo id (e.g., "Qwen/Qwen3-ASR-1.7B")
         hf_token: Optional HuggingFace token for gated models
+        cache_dir: Optional unified cache directory. When set, downloads to
+                   <cache_dir>/qwen3-asr-1.7b/ instead of the HF cache.
 
     Returns:
         Path to the cached model directory
@@ -98,8 +116,8 @@ def download_qwen3_asr(model_id: str, hf_token: Optional[str] = None) -> str:
     """
     try:
         from huggingface_hub import snapshot_download
-    except ImportError as e:
-        raise ImportError("huggingface_hub not found. Install with: pip install huggingface-hub") from e
+    except ImportError:
+        raise ImportError("huggingface_hub not found. Install with: pip install huggingface-hub") from None
 
     emit_progress("starting", 0.0)
 
@@ -108,23 +126,34 @@ def download_qwen3_asr(model_id: str, hf_token: Optional[str] = None) -> str:
             import os
             os.environ["HF_TOKEN"] = hf_token
 
+        local_dir = Path(cache_dir) / "qwen3-asr-1.7b" if cache_dir else None
+        if local_dir:
+            local_dir.mkdir(parents=True, exist_ok=True)
+
         emit_progress("downloading", 0.3)
 
-        cache_path = snapshot_download(
+        snapshot_download(
             repo_id=model_id,
+            local_dir=str(local_dir) if local_dir else None,
             token=hf_token,
             resume_download=True,
         )
 
         emit_progress("completed", 1.0)
 
-        return cache_path
+        if local_dir:
+            return str(local_dir)
+        else:
+            # Determine HF cache path for backwards compat
+            cache_base = Path.home() / ".cache" / "huggingface" / "hub"
+            model_name = model_id.replace("/", "--")
+            return str(cache_base / f"models--{model_name}")
 
     except Exception as e:
         raise RuntimeError(f"Failed to download Qwen3-ASR model: {e}") from e
 
 
-def download_mimo(model_id: str, hf_token: Optional[str] = None) -> str:
+def download_mimo(model_id: str, hf_token: Optional[str] = None, cache_dir: Optional[str] = None) -> str:
     """
     Download MiMo-V2.5-ASR model weights.
     Uses snapshot_download to fetch files without loading the model into
@@ -133,6 +162,8 @@ def download_mimo(model_id: str, hf_token: Optional[str] = None) -> str:
     Args:
         model_id: HuggingFace repo id (e.g., "XiaomiMiMo/MiMo-V2.5-ASR")
         hf_token: Optional HuggingFace token for gated models
+        cache_dir: Optional unified cache directory. When set, downloads to
+                   <cache_dir>/mimo-v2.5-asr/ instead of the HF cache.
 
     Returns:
         Path to the cached model directory
@@ -143,8 +174,8 @@ def download_mimo(model_id: str, hf_token: Optional[str] = None) -> str:
     """
     try:
         from huggingface_hub import snapshot_download
-    except ImportError as e:
-        raise ImportError("huggingface_hub not found. Install with: pip install huggingface-hub") from e
+    except ImportError:
+        raise ImportError("huggingface_hub not found. Install with: pip install huggingface-hub") from None
 
     emit_progress("starting", 0.0)
 
@@ -153,18 +184,28 @@ def download_mimo(model_id: str, hf_token: Optional[str] = None) -> str:
             import os
             os.environ["HF_TOKEN"] = hf_token
 
+        local_dir = Path(cache_dir) / "mimo-v2.5-asr" if cache_dir else None
+        if local_dir:
+            local_dir.mkdir(parents=True, exist_ok=True)
+
         emit_progress("downloading", 0.3)
 
-        cache_path = snapshot_download(
+        snapshot_download(
             repo_id=model_id,
-            # MiMo 2.5 ASR uses fp32 safetensors (~16 GB); allow listing all files
+            local_dir=str(local_dir) if local_dir else None,
             token=hf_token,
             resume_download=True,
         )
 
         emit_progress("completed", 1.0)
 
-        return cache_path
+        if local_dir:
+            return str(local_dir)
+        else:
+            # Determine HF cache path for backwards compat
+            cache_base = Path.home() / ".cache" / "huggingface" / "hub"
+            model_name = model_id.replace("/", "--")
+            return str(cache_base / f"models--{model_name}")
 
     except Exception as e:
         raise RuntimeError(f"Failed to download MiMo model: {e}") from e
@@ -188,22 +229,29 @@ def main() -> None:
         required=True,
         help="Model identifier (e.g., 'funasr/paraformer-zh', 'Qwen/Qwen3-ASR-1.7B')"
     )
+    parser.add_argument(
+        "--cache-dir",
+        type=str,
+        default="~/.meetnote/models",
+        help="Unified model cache directory (default: ~/.meetnote/models)"
+    )
 
     args = parser.parse_args()
 
     hf_token = sys.stdin.readline().strip() or None
 
-    try:
-        backend: Literal["paraformer", "qwen3-asr", "mimo"] = args.backend
+    # Resolve cache dir
+    cache_dir = str(Path(args.cache_dir).expanduser().resolve())
 
-        if backend == "paraformer":
-            cache_path = download_paraformer(args.model_id, hf_token)
-        elif backend == "qwen3-asr":
-            cache_path = download_qwen3_asr(args.model_id, hf_token)
-        elif backend == "mimo":
-            cache_path = download_mimo(args.model_id, hf_token)
+    try:
+        if args.backend == "paraformer":
+            cache_path = download_paraformer(args.model_id, hf_token, cache_dir)
+        elif args.backend == "qwen3-asr":
+            cache_path = download_qwen3_asr(args.model_id, hf_token, cache_dir)
+        elif args.backend == "mimo":
+            cache_path = download_mimo(args.model_id, hf_token, cache_dir)
         else:
-            raise ValueError(f"Unknown backend: {backend}")
+            raise ValueError(f"Unknown backend: {args.backend}")
 
         emit_result(success=True, cache_path=cache_path)
         sys.exit(0)
