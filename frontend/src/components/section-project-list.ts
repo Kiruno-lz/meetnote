@@ -283,7 +283,7 @@ async function handleRealAudioImport(
       projectSnapshot: JSON.stringify(result.project)
     };
 
-    // Upsert: avoid duplicates by id (same file re-imported updates in place)
+    // Upsert: avoid duplicates by id (same file re-imported via deterministic hash → same id → update in place)
     const existing = state.meetings.findIndex((m) => m.id === record.id);
     if (existing >= 0) {
       state.meetings[existing] = record;
