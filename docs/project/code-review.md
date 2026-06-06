@@ -115,6 +115,8 @@ document.addEventListener("click", closeDropdown);
 
 每次渲染组件时添加全局点击监听器，但**从未移除**。用户导航离开再返回时，监听器重复累积。同样问题存在于 `section-recording-detail.ts`。
 
+> ✅ **已修复**：使用 `AbortController` 在重新渲染前清理旧的 `document.addEventListener("click")` 监听器。两个组件均已修复。
+
 ---
 
 ## C. 架构偏离
@@ -205,16 +207,16 @@ document.addEventListener("click", closeDropdown);
 |---|-----|---------|------|
 | E2-1 | 🟢 **Whisper 置信度反转** | `python/asr_cli.py` | ✅ 已修复：`abs(avg_logprob)` → `1.0 - abs(avg_logprob)` |
 | E2-2 | 🟢 **ASR CLI 输出缺少必需字段** | `python/asr_cli.py` | ✅ 已修复：增加 `kind`、`schemaVersion`；错误输出增加结构化字段 |
-| E2-3 | 🔴 **UI 事件监听泄漏** | `section-speaker-editor.ts:163`、`section-recording-detail.ts:163` | 多次导航后重复绑定 |
-| E2-4 | 🟡 **Mock 流水线写入固定 `createdAt`** | `mock-pipeline.ts:36` | `"2024-01-01T00:00:00.000Z"` — 所有会议显示同一日期 |
-| E2-5 | 🟡 **Tauri 导入使用伪哈希** | `section-project-list.ts:335` | `tauri-${Date.now()}-${filename}` 无法检测重复 |
-| E2-6 | 🟡 **`activeMeetingId` 删除后悬空** | `ui-state.ts` | 删除当前打开的会议后 ID 未重置 |
-| E2-7 | 🟡 **Hardcoded `createdAt`** | `mock-pipeline.ts:36` | 所有会议创建时间相同 |
+| E2-3 | 🟢 **UI 事件监听泄漏** | `section-deverbalization-preview.ts` + `section-recording-detail.ts` | ✅ 已修复：使用 AbortController 模式在重新渲染前清理监听器 |
+| E2-4 | 🟢 **Mock 流水线写入固定 `createdAt`** | `mock-pipeline.ts` | ✅ 已修复：使用 `new Date().toISOString()` |
+| E2-5 | 🟢 **Tauri 导入使用伪哈希** | `section-project-list.ts` | ✅ 已修复：使用确定性 path+size crypto hash，回退到原有模式 |
+| E2-6 | 🟢 **`activeMeetingId` 删除后悬空** | `section-markdown-library.ts` | ✅ 已修复：删除时检查并置空 `activeMeetingId` |
+| E2-7 | 🟢 **Hardcoded `createdAt`** | `mock-pipeline.ts` | ✅ 已修复（与 E2-4 同一行）|
 | E2-8 | 🟢 **`transformer` 未列为 Python 依赖** | `python/pyproject.toml` | ✅ 已修复：添加 `transformers` 和 `torch` 为显式依赖 |
 | E2-9 | 🟢 **`pyannote.audio>=3.1` 版本下限错误** | `python/pyproject.toml` | ✅ 已修复：`>=3.1` → `>=4.0` |
 | E2-10 | 🟢 **Diarization CLI stdout 保护不足** | `python/diarization_cli.py` | ✅ 已修复：应用 fd 级别 stdout 重定向 |
 | E2-11 | 🟡 **库管理下载进度使用假 100 MB 总量** | `tauri/src/download.rs` | 不同大小的模型显示错误进度 |
-| E2-12 | 🟡 **重命名 speaker 的修正记录未持久化** | `section-speaker-editor.ts` | 仅在本地 state 中存在，保存时丢失 |
+| E2-12 | 🟢 **重命名 speaker 的修正记录未持久化** | `section-speaker-editor.ts` | ✅ 已修复：改名时立即创建 `SpeakerCorrection` 并写入 projectSnapshot |
 | E2-13 | 🟡 **`get_device("auto")` 不检测 CUDA** | `python/meetnote/device.py:11-13` | 直接跳过 `torch.cuda.is_available()` |
 
 ### E3. 安全/配置
