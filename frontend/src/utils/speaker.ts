@@ -547,7 +547,7 @@ function segmentsAreEquivalent(left: SpeakerSegment, right: SpeakerSegment): boo
   return left.speakerId === right.speakerId && left.startMs === right.startMs && left.endMs === right.endMs;
 }
 
-function getOverlapMs(
+export function getOverlapMs(
   leftStartMs: number,
   leftEndMs: number,
   rightStartMs: number,

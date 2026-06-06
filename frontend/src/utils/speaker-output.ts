@@ -1,4 +1,5 @@
 import type { MeetingProject, SpeakerProfile, SpeakerSegment, TranscriptSegment } from "../types/audio-project";
+import { getOverlapMs } from "../utils/speaker";
 
 export interface CorrectedSpeakerLine {
   readonly transcriptSegmentId: string;
@@ -161,6 +162,3 @@ function compareLines(left: CorrectedSpeakerLine, right: CorrectedSpeakerLine): 
   return left.startMs - right.startMs || left.endMs - right.endMs || left.transcriptSegmentId.localeCompare(right.transcriptSegmentId);
 }
 
-function getOverlapMs(leftStartMs: number, leftEndMs: number, rightStartMs: number, rightEndMs: number): number {
-  return Math.max(0, Math.min(leftEndMs, rightEndMs) - Math.max(leftStartMs, rightStartMs));
-}
