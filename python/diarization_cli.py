@@ -14,20 +14,8 @@ import os
 import contextlib
 import time
 
-
-def get_device(requested: str) -> str:
-    """Resolve requested device to an actual available device."""
-    import torch
-    if requested == "auto":
-        if torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"
-    elif requested == "mps":
-        if not torch.backends.mps.is_available():
-            print(json.dumps({"error": "MPS not available on this system"}))
-            sys.exit(1)
-        return "mps"
-    return "cpu"
+from meetnote.device import get_device
+from meetnote.progress import emit_progress
 
 
 def _main_impl():
@@ -63,9 +51,9 @@ def _main_impl():
         }))
         sys.exit(1)
 
-    print("PROGRESS:0/5:queued", file=sys.stderr, flush=True)
+    emit_progress("0/5:queued")
     time.sleep(0.3)
-    print("PROGRESS:1/5:loading-model", file=sys.stderr, flush=True)
+    emit_progress("1/5:loading-model")
 
     device = get_device(args.device)
     if device == "cpu" and args.cpu_threads > 0:
@@ -103,7 +91,7 @@ def _main_impl():
     import torch
     pipeline.to(torch.device(device))
 
-    print("PROGRESS:2/5:segmenting", file=sys.stderr, flush=True)
+    emit_progress("2/5:segmenting")
     time.sleep(0.3)
 
     try:
@@ -120,9 +108,9 @@ def _main_impl():
         }))
         sys.exit(1)
 
-    print("PROGRESS:3/5:clustering", file=sys.stderr, flush=True)
+    emit_progress("3/5:clustering")
     time.sleep(0.5)
-    print("PROGRESS:4/5:finalizing", file=sys.stderr, flush=True)
+    emit_progress("4/5:finalizing")
     time.sleep(0.3)
 
     # pyannote.audio 4.x returns DiarizeOutput; 3.x returns Annotation directly
@@ -169,7 +157,7 @@ def _main_impl():
         "segments": segments,
     }
 
-    print("PROGRESS:5/5:done", file=sys.stderr, flush=True)
+    emit_progress("5/5:done")
     print(json.dumps(output, ensure_ascii=False))
 
 

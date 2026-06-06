@@ -1,6 +1,7 @@
 mod asr;
 mod diarization;
 mod download;
+mod utils;
 
 use download::DownloadManager;
 use std::sync::Arc;

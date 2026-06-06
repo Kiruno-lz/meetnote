@@ -1,3 +1,4 @@
+use crate::utils::{expand_tilde, find_repo_root, find_uv_binary};
 use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -5,21 +6,6 @@ use tauri::Emitter;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::task::AbortHandle;
-
-// ── Path utilities ────────────────────────────────────────────────────────────
-
-fn expand_tilde(path: &str) -> String {
-    if path.starts_with("~/") || path == "~" {
-        if let Ok(home) = std::env::var("HOME") {
-            return if path == "~" {
-                home
-            } else {
-                format!("{}/{}", home, &path[2..])
-            };
-        }
-    }
-    path.to_string()
-}
 
 // ── Domain types ──────────────────────────────────────────────────────────────
 
@@ -500,9 +486,9 @@ async fn start_library_download(
     // 2. Find uv and model_downloader.py. Reuse asr.rs helpers so the lookup is
     // robust in bundled apps (current_dir() is not the project root there) and the
     // uv binary is found even when the app gets a minimal PATH (macOS .app bundles).
-    let uv_path = crate::asr::find_uv_binary()?;
+    let uv_path = find_uv_binary()?;
 
-    let project_root = crate::asr::find_repo_root()
+    let project_root = find_repo_root()
         .ok_or_else(|| "Cannot find repository root (python/asr_cli.py not found)".to_string())?;
     let downloader_script = project_root.join("python").join("model_downloader.py");
 

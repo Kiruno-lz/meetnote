@@ -16,8 +16,11 @@ import os
 import atexit
 import contextlib
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
+
+from meetnote.device import get_device
+from meetnote.progress import emit_progress
 
 # Preserved real-stdout fd, set once _main_impl redirects fd 1 to stderr so the
 # JSON result is never corrupted by third-party library banners. main()'s fallback
@@ -363,29 +366,6 @@ class MiMoEngine(ASREngine):
         )
 
 
-def get_device(requested: str) -> str:
-    """Resolve requested device to an actual available device."""
-    import torch
-
-    if requested == "auto":
-        if torch.cuda.is_available():
-            return "cuda"
-        elif torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"
-    elif requested == "cuda":
-        if not torch.cuda.is_available():
-            print(json.dumps({"error": "CUDA not available on this system"}), file=sys.stdout)
-            sys.exit(1)
-        return "cuda"
-    elif requested == "mps":
-        if not torch.backends.mps.is_available():
-            print(json.dumps({"error": "MPS not available on this system"}), file=sys.stdout)
-            sys.exit(1)
-        return "mps"
-    return "cpu"
-
-
 def create_engine(backend: str) -> ASREngine:
     """Factory function to create ASR engine by backend name."""
     engines = {
@@ -490,7 +470,7 @@ def _main_impl():
         torch.set_num_threads(args.cpu_threads)
 
     # Create engine
-    print("PROGRESS:0/4:loading-model", file=sys.stderr, flush=True)
+    emit_progress("0/4:loading-model")
 
     try:
         engine = create_engine(args.backend)
@@ -513,7 +493,7 @@ def _main_impl():
         sys.exit(1)
 
     # Transcribe
-    print("PROGRESS:1/4:transcribing", file=sys.stderr, flush=True)
+    emit_progress("1/4:transcribing")
 
     try:
         result = engine.transcribe(
@@ -526,7 +506,7 @@ def _main_impl():
         emit_json({"error": f"Transcription failed: {str(e)}"})
         sys.exit(1)
 
-    print("PROGRESS:3/4:finalizing", file=sys.stderr, flush=True)
+    emit_progress("3/4:finalizing")
 
     # Output result
     output = {
@@ -536,7 +516,7 @@ def _main_impl():
         "backend": result.backend,
     }
 
-    print("PROGRESS:4/4:done", file=sys.stderr, flush=True)
+    emit_progress("4/4:done")
     emit_json(output)
 
 
