@@ -17,6 +17,7 @@ import atexit
 import contextlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 from meetnote.device import get_device
@@ -48,6 +49,25 @@ class TranscriptionResult:
     backend: str
     kind: str = "asr.result"
     schemaVersion: str = "meetnote.asr.v1"
+
+
+def _model_id_to_dir_name(model_id: str) -> str:
+    """Map a model source identifier to a cache directory name.
+
+    Examples:
+        funasr/paraformer-zh     -> paraformer-zh
+        Qwen/Qwen3-ASR-1.7B     -> qwen3-asr-1.7b
+        XiaomiMiMo/MiMo-V2.5-ASR -> mimo-v2.5-asr
+    """
+    mapping = {
+        "funasr/paraformer-zh": "paraformer-zh",
+        "Qwen/Qwen3-ASR-1.7B": "qwen3-asr-1.7b",
+        "XiaomiMiMo/MiMo-V2.5-ASR": "mimo-v2.5-asr",
+    }
+    if model_id in mapping:
+        return mapping[model_id]
+    # Fallback: last path component, lowercased
+    return model_id.split("/")[-1].lower()
 
 
 class ASREngine(ABC):
@@ -85,6 +105,15 @@ class WhisperEngine(ASREngine):
         if device == "cpu" and cpu_threads > 0:
             import torch
             torch.set_num_threads(cpu_threads)
+
+        cache_dir = kwargs.get("cache_dir")
+        if cache_dir:
+            model_path = Path(cache_dir) / f"{model_id}.pt"
+            if not model_path.exists():
+                raise FileNotFoundError(
+                    f"Model not found at {model_path}. Please download it first."
+                )
+            model_id = str(model_path)
 
         try:
             self.model = whisper.load_model(model_id, device=device)
@@ -162,6 +191,16 @@ class ParaformerEngine(ASREngine):
         # (where auto-detect yields "mps") must fall back to CPU rather than request
         # a CUDA device that doesn't exist.
         funasr_device = "cuda" if device == "cuda" else "cpu"
+
+        cache_dir = kwargs.get("cache_dir")
+        if cache_dir:
+            dir_name = _model_id_to_dir_name(model_id)
+            local_path = Path(cache_dir) / dir_name
+            if not local_path.exists():
+                raise FileNotFoundError(
+                    f"Model not found at {local_path}. Please download it first."
+                )
+            model_id = str(local_path)
 
         self.model = AutoModel(
             model=model_id,
@@ -247,10 +286,21 @@ class Qwen3ASREngine(ASREngine):
             device_map = "cpu"
             dtype = torch.float32
 
+        cache_dir = kwargs.get("cache_dir")
+        if cache_dir:
+            dir_name = _model_id_to_dir_name(model_id)
+            local_path = Path(cache_dir) / dir_name
+            if not local_path.exists():
+                raise FileNotFoundError(
+                    f"Model not found at {local_path}. Please download it first."
+                )
+            model_id = str(local_path)
+
         self.model = Qwen3ASRModel.from_pretrained(
             model_id,
             dtype=dtype,
-            device_map=device_map
+            device_map=device_map,
+            trust_remote_code=True,
         )
 
         if device == "mps" and self.model is not None:
@@ -300,71 +350,55 @@ class Qwen3ASREngine(ASREngine):
 
 
 class MiMoEngine(ASREngine):
-    """Xiaomi MiMo-V2.5-ASR engine via transformers pipeline."""
+    """Xiaomi MiMo-V2.5-ASR engine.
+
+    MiMo-V2.5-ASR is a Qwen2-based ASR model that requires a custom audio
+    tokenizer and the ``MimoAudio`` pipeline from Xiaomi's GitHub repository
+    (https://github.com/XiaomiMiMo/MiMo-V2.5-ASR). The standard
+    ``transformers.pipeline("automatic-speech-recognition")`` does not support
+    this architecture.
+
+    The correct integration requires:
+
+    1. Cloning the MiMo-V2.5-ASR repo and installing its dependencies.
+    2. Downloading the separate ``MiMo-Audio-Tokenizer`` model.
+    3. Using ``from src.mimo_audio.mimo_audio import MimoAudio``.
+
+    Until that integration is complete, this engine provides a clear error
+    message pointing to the required setup steps.
+    """
 
     def __init__(self):
-        self.pipe = None
+        self.model = None
 
     def load_model(self, model_id: str, device: str, **kwargs):
-        """Load MiMo model via transformers pipeline."""
-        try:
-            from transformers import pipeline
-        except ImportError:
-            raise ImportError(
-                "transformers not installed. Run: cd python && uv add transformers\n"
-                "Or: pip install transformers"
-            )
-
-        # transformers pipeline uses device index for CUDA, "mps" for Apple Silicon, -1 for CPU
-        if device == "cuda":
-            pipe_device = 0
-        elif device == "mps":
-            pipe_device = "mps"
-        else:
-            pipe_device = -1
-
-        self.pipe = pipeline(
-            "automatic-speech-recognition",
-            model=model_id,
-            device=pipe_device
+        cache_dir = kwargs.get("cache_dir")
+        if cache_dir:
+            dir_name = _model_id_to_dir_name(model_id)
+            local_path = Path(cache_dir) / dir_name
+            if not local_path.exists():
+                raise FileNotFoundError(
+                    f"Model not found at {local_path}. Please download it first."
+                )
+        raise RuntimeError(
+            "MiMo-V2.5-ASR is not yet supported via the standard transformers pipeline. "
+            "Its architecture (MiMoV2ASRForCausalLM) combines a speech encoder with a "
+            "Qwen2 language model and requires a custom audio tokenizer.\n\n"
+            "To use MiMo, please:\n"
+            "1. Clone https://github.com/XiaomiMiMo/MiMo-V2.5-ASR\n"
+            "2. Install its dependencies: pip install -r requirements.txt\n"
+            "3. Download the audio tokenizer:\n"
+            "   huggingface-cli download XiaomiMiMo/MiMo-Audio-Tokenizer --local-dir models/MiMo-Audio-Tokenizer\n"
+            "4. Use the MimoAudio class:\n"
+            "   from src.mimo_audio.mimo_audio import MimoAudio\n"
+            "   model = MimoAudio(model_path='XiaomiMiMo/MiMo-V2.5-ASR', tokenizer_path='models/MiMo-Audio-Tokenizer')\n"
+            "   text = model.asr_sft('audio.wav')\n\n"
+            "Support for MiMo will be added in a future release."
         )
 
     def transcribe(self, audio_path: str, language: str, **kwargs) -> TranscriptionResult:
-        """Transcribe using MiMo."""
-        if self.pipe is None:
-            raise RuntimeError("Model not loaded")
-
-        result = self.pipe(audio_path)
-
-        segments = []
-        # transformers ASR pipeline returns dict with 'text' and optional 'chunks'
-        if isinstance(result, dict):
-            if "chunks" in result:
-                for i, chunk in enumerate(result["chunks"]):
-                    segments.append({
-                        "id": f"asr-seg-{i:04d}",
-                        "startMs": int(chunk.get("timestamp", [0, 0])[0] * 1000),
-                        "endMs": int(chunk.get("timestamp", [0, 0])[1] * 1000),
-                        "text": chunk.get("text", "").strip(),
-                        "language": language if language != "auto" else "zh",
-                        "confidence": 1.0,
-                    })
-            else:
-                # Single text result
-                segments.append({
-                    "id": "asr-seg-0000",
-                    "startMs": 0,
-                    "endMs": 0,
-                    "text": result.get("text", "").strip(),
-                    "language": language if language != "auto" else "zh",
-                    "confidence": 1.0,
-                })
-
-        return TranscriptionResult(
-            segments=segments,
-            language=language if language != "auto" else "zh",
-            model=kwargs.get("model_id", "mimo"),
-            backend="mimo"
+        raise RuntimeError(
+            "MiMo is not yet supported — load_model will provide setup instructions."
         )
 
 
@@ -428,6 +462,13 @@ def _main_impl():
         default=None,
         help="Request ID for traceability (passed through to output)"
     )
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help="Unified model cache directory (default: use library defaults). "
+             "When provided, models are loaded from {cache_dir}/{model_id}.pt "
+             "(whisper) or {cache_dir}/{dir_name}/ (other backends)."
+    )
 
     args = parser.parse_args()
 
@@ -447,6 +488,11 @@ def _main_impl():
 
     # Resolve device
     device = get_device(args.device)
+
+    # Resolve cache directory
+    cache_dir: Optional[str] = None
+    if args.cache_dir:
+        cache_dir = os.path.expanduser(args.cache_dir)
 
     # Redirect stdout to stderr at the file-descriptor level during model load and
     # inference. Third-party ASR libraries (funasr, qwen-asr, transformers) and their
@@ -490,9 +536,13 @@ def _main_impl():
         engine.load_model(
             model_id,
             device,
-            cpu_threads=args.cpu_threads
+            cpu_threads=args.cpu_threads,
+            cache_dir=cache_dir,
         )
     except ImportError as e:
+        emit_json({"kind": "asr.error", "schemaVersion": "meetnote.asr.v1", "code": "ASR_MODEL_MISSING", "error": str(e), "message": str(e), "recoverable": True})
+        sys.exit(1)
+    except FileNotFoundError as e:
         emit_json({"kind": "asr.error", "schemaVersion": "meetnote.asr.v1", "code": "ASR_MODEL_MISSING", "error": str(e), "message": str(e), "recoverable": True})
         sys.exit(1)
     except Exception as e:
