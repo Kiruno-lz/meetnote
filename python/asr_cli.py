@@ -16,7 +16,7 @@ import os
 import atexit
 import contextlib
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 
 from meetnote.device import get_device
@@ -46,6 +46,8 @@ class TranscriptionResult:
     language: str
     model: str
     backend: str
+    kind: str = "asr.result"
+    schemaVersion: str = "meetnote.asr.v1"
 
 
 class ASREngine(ABC):
@@ -129,7 +131,7 @@ class WhisperEngine(ASREngine):
                 "endMs": int(float(seg.get("end", 0)) * 1000),
                 "text": seg.get("text", "").strip(),
                 "language": seg_lang,
-                "confidence": round(min(1.0, max(0.0, abs(float(seg.get("avg_logprob", -0.1))))), 3),
+                "confidence": round(max(0.0, min(1.0, 1.0 - abs(float(seg.get("avg_logprob", -0.1))))), 3),
             })
 
         return TranscriptionResult(
@@ -421,6 +423,11 @@ def _main_impl():
         dest="cpu_threads",
         help="Number of CPU threads for torch (0 = let PyTorch decide)"
     )
+    parser.add_argument(
+        "--request-id",
+        default=None,
+        help="Request ID for traceability (passed through to output)"
+    )
 
     args = parser.parse_args()
 
@@ -475,7 +482,7 @@ def _main_impl():
     try:
         engine = create_engine(args.backend)
     except ValueError as e:
-        emit_json({"error": str(e)})
+        emit_json({"kind": "asr.error", "schemaVersion": "meetnote.asr.v1", "code": "ASR_PROCESS_FAILED", "error": str(e), "message": str(e), "recoverable": False})
         sys.exit(1)
 
     # Load model
@@ -486,10 +493,10 @@ def _main_impl():
             cpu_threads=args.cpu_threads
         )
     except ImportError as e:
-        emit_json({"error": str(e)})
+        emit_json({"kind": "asr.error", "schemaVersion": "meetnote.asr.v1", "code": "ASR_MODEL_MISSING", "error": str(e), "message": str(e), "recoverable": True})
         sys.exit(1)
     except Exception as e:
-        emit_json({"error": f"Failed to load model '{model_id}': {str(e)}"})
+        emit_json({"kind": "asr.error", "schemaVersion": "meetnote.asr.v1", "code": "ASR_PROCESS_FAILED", "error": f"Failed to load model '{model_id}': {str(e)}", "message": f"Failed to load model '{model_id}': {str(e)}", "recoverable": False})
         sys.exit(1)
 
     # Transcribe
@@ -503,18 +510,22 @@ def _main_impl():
             model_id=model_id
         )
     except Exception as e:
-        emit_json({"error": f"Transcription failed: {str(e)}"})
+        emit_json({"kind": "asr.error", "schemaVersion": "meetnote.asr.v1", "code": "ASR_PROCESS_FAILED", "error": f"Transcription failed: {str(e)}", "message": f"Transcription failed: {str(e)}", "recoverable": False})
         sys.exit(1)
 
     emit_progress("3/4:finalizing")
 
-    # Output result
+    # Output result with contract fields
     output = {
+        "kind": "asr.result",
+        "schemaVersion": "meetnote.asr.v1",
         "segments": result.segments,
         "language": result.language,
         "model": result.model,
         "backend": result.backend,
     }
+    if args.request_id:
+        output["requestId"] = args.request_id
 
     emit_progress("4/4:done")
     emit_json(output)
@@ -528,7 +539,7 @@ def main():
     except Exception as e:
         # Emit to the real stdout: if _main_impl already redirected fd 1 to stderr,
         # use the preserved fd; otherwise sys.stdout is still the real stdout.
-        payload = json.dumps({"error": f"Internal error: {str(e)}"})
+        payload = json.dumps({"kind": "asr.error", "schemaVersion": "meetnote.asr.v1", "code": "ASR_PROCESS_FAILED", "message": f"Internal error: {str(e)}", "recoverable": False})
         if _REAL_STDOUT_FD is not None:
             with os.fdopen(os.dup(_REAL_STDOUT_FD), "w", closefd=True) as out:
                 out.write(payload + "\n")

@@ -11,11 +11,15 @@ import sys
 import json
 import argparse
 import os
+import atexit
 import contextlib
 import time
 
 from meetnote.device import get_device
 from meetnote.progress import emit_progress
+
+# Preserved real-stdout fd, set once _main_impl redirects fd 1 to stderr.
+_REAL_STDOUT_FD: int | None = None
 
 
 def _main_impl():
@@ -27,8 +31,8 @@ def _main_impl():
     parser.add_argument(
         "--device",
         default="auto",
-        choices=["auto", "cpu", "mps"],
-        help="Inference device: auto (MPS if available, else CPU), cpu, mps",
+        choices=["auto", "cpu", "cuda", "mps"],
+        help="Inference device: auto, cpu, cuda, mps",
     )
     parser.add_argument(
         "--cpu-threads",
@@ -40,15 +44,13 @@ def _main_impl():
     args = parser.parse_args()
 
     if not os.path.exists(args.audio):
-        print(json.dumps({"error": f"Audio file not found: {args.audio}"}))
+        emit_json({"kind": "diarization.error", "schemaVersion": "meetnote.diarization.v1", "code": "DIARIZATION_PROCESS_FAILED", "error": f"Audio file not found: {args.audio}", "message": f"Audio file not found: {args.audio}", "recoverable": False})
         sys.exit(1)
 
     try:
         from pyannote.audio import Pipeline
     except ImportError:
-        print(json.dumps({
-            "error": "pyannote.audio not installed. Run: cd python && uv sync",
-        }))
+        emit_json({"kind": "diarization.error", "schemaVersion": "meetnote.diarization.v1", "code": "DIARIZATION_MODEL_MISSING", "error": "pyannote.audio not installed. Run: cd python && uv sync", "message": "pyannote.audio not installed.", "recoverable": True})
         sys.exit(1)
 
     emit_progress("0/5:queued")
@@ -68,24 +70,12 @@ def _main_impl():
     except Exception as e:
         err_msg = str(e).lower()
         if "401" in err_msg or "unauthorized" in err_msg:
-            print(json.dumps({
-                "error": f"HuggingFace authentication failed: {str(e)}",
-                "code": "DIARIZATION_AUTH_REQUIRED",
-            }))
+            code = "DIARIZATION_AUTH_REQUIRED"
         elif "403" in err_msg or "gated" in err_msg or "accept" in err_msg:
-            print(json.dumps({
-                "error": (
-                    f"HuggingFace model access denied (403). You must accept the model terms at: "
-                    f"https://huggingface.co/pyannote/speaker-diarization-3.1 "
-                    f"and https://huggingface.co/pyannote/segmentation-3.0 — {str(e)}"
-                ),
-                "code": "DIARIZATION_MODEL_GATED",
-            }))
+            code = "DIARIZATION_AUTH_REQUIRED"
         else:
-            print(json.dumps({
-                "error": f"Failed to load diarization model: {str(e)}",
-                "code": "DIARIZATION_MODEL_MISSING",
-            }))
+            code = "DIARIZATION_MODEL_MISSING"
+        emit_json({"kind": "diarization.error", "schemaVersion": "meetnote.diarization.v1", "code": code, "error": str(e), "message": str(e), "recoverable": True})
         sys.exit(1)
 
     import torch
@@ -102,10 +92,7 @@ def _main_impl():
                 max_speakers=args.max_speakers,
             )
     except Exception as e:
-        print(json.dumps({
-            "error": f"Diarization failed: {str(e)}",
-            "code": "DIARIZATION_PROCESS_FAILED",
-        }))
+        emit_json({"kind": "diarization.error", "schemaVersion": "meetnote.diarization.v1", "code": "DIARIZATION_PROCESS_FAILED", "error": f"Diarization failed: {str(e)}", "message": f"Diarization failed: {str(e)}", "recoverable": False})
         sys.exit(1)
 
     emit_progress("3/5:clustering")
@@ -153,22 +140,52 @@ def _main_impl():
         })
 
     output = {
+        "kind": "diarization.result",
+        "schemaVersion": "meetnote.diarization.v1",
         "speakers": speakers,
         "segments": segments,
     }
 
     emit_progress("5/5:done")
-    print(json.dumps(output, ensure_ascii=False))
+    emit_json(output)
+
+
+def emit_json(payload: dict) -> None:
+    """Write one JSON line to the real (un-redirected) stdout."""
+    if _REAL_STDOUT_FD is not None:
+        with os.fdopen(os.dup(_REAL_STDOUT_FD), "w", closefd=True) as out:
+            out.write(json.dumps(payload, ensure_ascii=False))
+            out.write("\n")
+            out.flush()
+    else:
+        print(json.dumps(payload, ensure_ascii=False))
+
+
+def redirect_stdout_to_stderr():
+    """Redirect file descriptor 1 to stderr to prevent library stdout pollution."""
+    global _REAL_STDOUT_FD
+    _REAL_STDOUT_FD = os.dup(1)
+    os.dup2(2, 1)
+    atexit.register(lambda fd=_REAL_STDOUT_FD: os.close(fd))
+    sys.stdout = os.fdopen(2, "w", closefd=False)
 
 
 def main():
     try:
+        redirect_stdout_to_stderr()
         _main_impl()
     except SystemExit:
         raise
     except Exception as e:
-        print(json.dumps({"error": f"Internal error: {str(e)}"}))
+        payload = json.dumps({"kind": "diarization.error", "schemaVersion": "meetnote.diarization.v1", "code": "DIARIZATION_PROCESS_FAILED", "message": f"Internal error: {str(e)}", "recoverable": False})
+        if _REAL_STDOUT_FD is not None:
+            with os.fdopen(os.dup(_REAL_STDOUT_FD), "w", closefd=True) as out:
+                out.write(payload + "\n")
+                out.flush()
+        else:
+            print(payload, file=sys.stdout)
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
