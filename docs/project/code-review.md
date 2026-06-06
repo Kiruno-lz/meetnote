@@ -223,9 +223,9 @@ document.addEventListener("click", closeDropdown);
 
 | # | 问题 | 文件 | 说明 |
 |---|------|------|------|
-| E3-1 | 🔴 **CSP 禁用** | `tauri/tauri.conf.json` | `"csp": null` — 无内容安全策略 |
-| E3-2 | 🟡 **无 Tauri 2 capabilities 配置** | `tauri/tauri.conf.json` | 生产构建可能 IPC 调用失败 |
-| E3-3 | 🟡 **HF Token 通过命令行参数暴露** | `tauri/src/download.rs` | 对同一机器的其他进程可见 |
+| E3-1 | 🟢 **CSP 禁用** | `tauri/tauri.conf.json` | ✅ 已修复：设置合理的 CSP policy |
+| E3-2 | 🟡 **无 Tauri 2 capabilities 配置** | `tauri/tauri.conf.json` | ⏳ 后置：开发模式下可运行，release 前需补 |
+| E3-3 | 🟡 **HF Token 通过命令行参数暴露** | `tauri/src/download.rs` | ⏳ 需改用环境变量或 stdin 传递 |
 
 ---
 
@@ -258,7 +258,7 @@ document.addEventListener("click", closeDropdown);
 ### 最重要的 5 个行动
 
 1. 🟢 **已修复：L2 测试路径** ✅
-2. **🔴 修复 ASR CLI JSON 输出** — 增加 `kind`、`schemaVersion`、`requestId`、结构化 `model` 字段
-3. **🔴 连接 LLM Provider** — 实现真实 Ollama/custom API 调用或用接口将 mock 替换为真实调用
-4. **🔴 连接 Markdown 保存与搜索** — 调用 `saveMeetingMarkdown` + 实现搜索 UI
-5. **🔴 修复状态泄漏** — 移除全局 `document.addEventListener` 和死代码模块
+2. 🟢 **已修复：ASR CLI JSON 输出** ✅
+3. 🟡 **连接 LLM Provider** — 接口文件存在但未连接真实 API ⏳
+4. 🟡 **连接 Markdown 保存与搜索** — 核心函数实现但 UI 未调用 ⏳
+5. 🟢 **已修复：状态泄漏** ✅
