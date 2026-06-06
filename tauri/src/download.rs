@@ -562,10 +562,11 @@ async fn start_library_download(
             match serde_json::from_str::<PythonEvent>(&line) {
                 Ok(event) => match event {
                     PythonEvent::Progress { stage, progress } => {
-                        // Map progress (0.0-1.0) to bytes for UI consistency
-                        // Use arbitrary total (100MB) for progress bar
-                        let total_bytes = 100_000_000u64;
-                        let downloaded_bytes = (progress * total_bytes as f64) as u64;
+                        // Library-managed download reports progress as 0.0–1.0.
+                        // Use a percentage-based scale (0–100) for the UI progress bar.
+                        const TOTAL_PCT: u64 = 100;
+                        let total_bytes = TOTAL_PCT;
+                        let downloaded_bytes = (progress * TOTAL_PCT as f64) as u64;
 
                         let status_str = match stage.as_str() {
                             "starting" => "starting",
@@ -600,7 +601,7 @@ async fn start_library_download(
                         code,
                     } => {
                         if success {
-                            let total_bytes = 100_000_000u64;
+                            let total_bytes = 100u64;
                             let event = DownloadProgressEvent {
                                 model_id: model_id_clone.clone(),
                                 downloaded_bytes: total_bytes,
