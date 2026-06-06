@@ -17,6 +17,7 @@ pub async fn run_asr(
     language: String,
     device: Option<String>,
     backend: Option<String>,
+    cache_dir: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
     let audio_path = expand_tilde(&audio_path);
@@ -47,6 +48,9 @@ pub async fn run_asr(
         .arg(backend.as_deref().unwrap_or("whisper"));
     if let Some(dev) = &device {
         cmd.arg("--device").arg(dev);
+    }
+    if let Some(ref cdir) = cache_dir {
+        cmd.arg("--cache-dir").arg(cdir);
     }
     cmd.current_dir(repo_root.join("python"))
         .stdout(Stdio::piped())
