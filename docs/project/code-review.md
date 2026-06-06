@@ -14,9 +14,9 @@
 | 1 | **Speaker 修正 UI 支持 4 种操作**（重命名、合并、拆分、批量替换） | UI 只实现了**重命名**和**合并**。拆分、区间分配、批量替换三个功能**在 speaker.ts 中已实现但 UI 组件 section-speaker-editor.ts 未接入**，也没有任何 UI 控件暴露这些操作。 | 🔴 高 |
 | 2 | **Speaker 修正使用 `applySpeakerCorrectionCommands` 回放引擎** | UI **直接调用原始函数** (`renameSpeaker`, `mergeSpeakers`)，手动修改 projectSnapshot。重命名的修正记录未持久化到 `corrections` 数组——仅在本地 `profiles` 变量中存在，确认按钮只保存 profiles 列表，**不保存修正记录对象**。 | 🔴 高 |
 | 3 | **LLM 去口语化支持 Ollama / custom provider** | LLM 管道在所有模式下（包括 Tauri 模式）**始终使用 `runDeterministicMockLlmProvider`**，没有真正的 Ollama API 调用或 custom API 集成。Provider 接口 (`llm-provider.ts`) 存在但从未连接到真实 API。 | 🔴 高 |
-| 4 | **4 维搜索**（日期、speaker、标题、关键词） | 搜索 API (`searchMeetings`) 在 `stores/markdown-library-storage.ts` 中完整实现，但**该文件未在任何 UI 组件中引用**——它完全是死代码。用户界面没有搜索功能入口。 | 🟡 中 |
-| 5 | **Markdown 保存到文件系统** | `saveMeetingMarkdown` 在 stores/ 中实现但**从未被 UI 调用**。当前 Markdown 仅作 `localStorage` 中的显示，没有文件写入。 | 🟡 中 |
-| 6 | **音频重复导入检测**（基于 audioHash） | `planAudioImport` / `resolveImportedMeetingProject` 函数已实现并测试，但**UI 不使用它们**——UI 使用自己的简单 `findIndex` + upsert 逻辑。Tauri 导入路径使用 `tauri-${Date.now()}-${filename}` 伪哈希，**无法检测重复**。 | 🟡 中 |
+| 4 | 🟢 **4 维搜索**（日期、speaker、标题、关键词） | ✅ 已修复：搜索输入框 + 4 维度实时过滤 |
+| 5 | 🟢 **Markdown 保存到文件系统** | ✅ 已修复：Rust write_text_file + Tauri IPC |
+| 6 | 🟢 **音频重复导入检测**（基于 audioHash） | ✅ 已修复：E2-5 确定性 hash + findIndex by id 实现去重 |
 
 ### A2. 已实现但文档未记录
 
@@ -215,9 +215,9 @@ document.addEventListener("click", closeDropdown);
 | E2-8 | 🟢 **`transformer` 未列为 Python 依赖** | `python/pyproject.toml` | ✅ 已修复：添加 `transformers` 和 `torch` 为显式依赖 |
 | E2-9 | 🟢 **`pyannote.audio>=3.1` 版本下限错误** | `python/pyproject.toml` | ✅ 已修复：`>=3.1` → `>=4.0` |
 | E2-10 | 🟢 **Diarization CLI stdout 保护不足** | `python/diarization_cli.py` | ✅ 已修复：应用 fd 级别 stdout 重定向 |
-| E2-11 | 🟡 **库管理下载进度使用假 100 MB 总量** | `tauri/src/download.rs` | 不同大小的模型显示错误进度 |
+| E2-11 | 🟢 **库管理下载进度使用假 100 MB 总量** | `tauri/src/download.rs` | ✅ 已修复：改为百分比尺度 (0-100) |
 | E2-12 | 🟢 **重命名 speaker 的修正记录未持久化** | `section-speaker-editor.ts` | ✅ 已修复：改名时立即创建 `SpeakerCorrection` 并写入 projectSnapshot |
-| E2-13 | 🟡 **`get_device("auto")` 不检测 CUDA** | `python/meetnote/device.py:11-13` | 直接跳过 `torch.cuda.is_available()` |
+| E2-13 | 🟢 **`get_device("auto")` 不检测 CUDA** | `python/meetnote/device.py` | ✅ 已修复（上一轮实际已修复，标记遗漏）|
 
 ### E3. 安全/配置
 
@@ -248,12 +248,12 @@ document.addEventListener("click", closeDropdown);
 |------|------|
 | **L1 测试（前端）** | ✅ 312/312 通过 |
 | **L2 测试** | ✅ 65/65 通过（E1-1 已修复） |
-| **L3 E2E 测试** | ⚠️ 2/4 通过（CSS 已修复；fixture 需要在 worktree 中创建） |
-| **Python 测试** | ✅ 可运行（需 `uv run python test_*.py`，文档误标为 pytest） |
-| **死代码总量** | ~24 KB（3 个完整模块 + 5 个未使用函数）—— 代码可运行但未连接到 UI |
-| **已知实现层 Bug** | 13 个 **→ 已修复 10 个**，剩余 3 个低优先级 |
-| **架构偏离** | 5 项 —— 已修复 2 项（事件泄漏），3 项需后续架构工作 |
-| **文档偏差** | 6 项 —— 已修复 3 项，3 项需随功能实现更新 |
+| **L3 E2E 测试** | ✅ 4/4 通过（fixture 改为动态生成 WAV，CSS 已修复） |
+| **Python 测试** | ✅ 可运行（`uv run python python/test_*.py`） |
+| **死代码总量** | ~12 KB（`utils/markdown-library.ts` 已删除；`stores/markdown-library-storage.ts` 保留为 L2 测试后端） |
+| **已知实现层 Bug** | 13 个 **→ 已修复 12 个**，剩余 1 个无实际影响 |
+| **架构偏离** | 5 项 —— 已修复 3 项（事件泄漏 + Markdown 保存 + 搜索 UI），2 项需后续架构工作 |
+| **文档偏差** | 6 项 —— 已修复 4 项，2 项需随功能实现更新 |
 
 ### 最重要的 5 个行动
 
