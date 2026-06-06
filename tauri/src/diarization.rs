@@ -1,7 +1,7 @@
 use crate::utils::{expand_tilde, find_repo_root, find_uv_binary};
 use std::process::Stdio;
 use tauri::Emitter;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -36,15 +36,13 @@ pub async fn run_diarization(
     // Find uv binary (macOS apps get a minimal PATH, so ~/.local/bin is usually missing)
     let uv_path = find_uv_binary()?;
 
-    // Build command: uv run python <script> --audio <path> --hf-token <token> [--min-speakers N] [--max-speakers N] [--device <dev>]
+    // Build command: uv run python <script> --audio <path> [--min-speakers N] [--max-speakers N] [--device <dev>]
     let mut cmd = Command::new(&uv_path);
     cmd.arg("run")
         .arg("python")
         .arg(script_path.to_str().unwrap_or("python/diarization_cli.py"))
         .arg("--audio")
-        .arg(&audio_path)
-        .arg("--hf-token")
-        .arg(&hf_token);
+        .arg(&audio_path);
     if let Some(min) = min_speakers {
         cmd.arg("--min-speakers").arg(min.to_string());
     }
@@ -56,11 +54,22 @@ pub async fn run_diarization(
     }
     cmd.current_dir(repo_root.join("python"))
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .stdin(Stdio::piped());
 
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn diarization process: {}", e))?;
+
+    // Write HF token to stdin then close it
+    {
+        let mut stdin = child.stdin.take().ok_or("Failed to capture stdin")?;
+        stdin
+            .write_all(format!("{}\n", hf_token).as_bytes())
+            .await
+            .map_err(|e| format!("Failed to write token to stdin: {}", e))?;
+        drop(stdin); // close stdin → EOF sent to Python
+    }
 
     // Stream stderr for progress events
     let stderr = child.stderr.take().ok_or("No stderr handle")?;
