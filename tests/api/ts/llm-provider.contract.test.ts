@@ -5,12 +5,12 @@ import {
   createLlmProviderError,
   validateDeverbalizationOutput,
   validateLlmProviderEnvelope
-} from "../../../frontend/src/llm-schema";
+} from "../../../frontend/src/types/llm-schema";
 import {
   createLlmRequestFromCorrectedSpeakerInput,
   renderDeverbalizationPrompt,
   runDeterministicMockLlmProvider
-} from "../../../frontend/src/llm-provider";
+} from "../../../frontend/src/utils/llm-provider";
 
 describe("LLM provider contract", () => {
   test("round-trips request envelopes through JSON serialization", () => {

@@ -4,7 +4,7 @@ import {
   createDiarizationResult,
   createDiarizationRunRequest,
   validateDiarizationCliEnvelope
-} from "../../../frontend/src/diarization-schema";
+} from "../../../frontend/src/types/diarization-schema";
 
 describe("diarization CLI contract", () => {
   test("round-trips a pyannote diarization request through JSON serialization", () => {

@@ -1,14 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { promises as fs } from "fs";
 import { resolve } from "path";
-import { generateMarkdownContent } from "../../../frontend/src/markdown-library-generator";
+import { generateMarkdownContent } from "../../../frontend/src/utils/markdown-library-generator";
 import {
   createMarkdownFrontmatter,
   parseMarkdownFrontmatter,
   MARKDOWN_LIBRARY_SCHEMA_VERSION
-} from "../../../frontend/src/markdown-library-schema";
-import { createDeverbalizationOutput } from "../../../frontend/src/llm-schema";
-import { saveMeetingMarkdown, searchMeetings } from "../../../frontend/src/markdown-library-storage";
+} from "../../../frontend/src/types/markdown-library-schema";
+import { createDeverbalizationOutput } from "../../../frontend/src/types/llm-schema";
+import { saveMeetingMarkdown, searchMeetings } from "../../../frontend/src/stores/markdown-library-storage";
 
 interface FixtureData {
   audioMetadata: { filename: string; durationMs: number; audioHash: string; uploadedAt: string };

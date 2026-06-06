@@ -9,8 +9,8 @@ import {
   createMeetingProjectManifest,
   planAudioImport,
   restoreMeetingProjectManifest
-} from "../../../frontend/src/audio-project";
-import { applySpeakerCorrectionCommands } from "../../../frontend/src/speaker";
+} from "../../../frontend/src/types/audio-project";
+import { applySpeakerCorrectionCommands } from "../../../frontend/src/utils/speaker";
 
 describe("project storage contract", () => {
   test("round-trips a project manifest through JSON serialization", () => {

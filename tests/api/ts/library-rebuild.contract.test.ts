@@ -7,18 +7,18 @@ import {
   rebuildLibraryIndex,
   searchMeetings,
   type SearchQuery
-} from "../../../frontend/src/markdown-library-storage";
+} from "../../../frontend/src/stores/markdown-library-storage";
 import {
   createMarkdownFrontmatter,
   serializeMarkdownFrontmatter,
   type MarkdownFrontmatter
-} from "../../../frontend/src/markdown-library-schema";
-import { generateMarkdownContent, type GenerateMarkdownOptions } from "../../../frontend/src/markdown-library-generator";
+} from "../../../frontend/src/types/markdown-library-schema";
+import { generateMarkdownContent, type GenerateMarkdownOptions } from "../../../frontend/src/utils/markdown-library-generator";
 import {
   createDeverbalizationOutput,
   type DeverbalizationOutput,
   type LlmProviderModel
-} from "../../../frontend/src/llm-schema";
+} from "../../../frontend/src/types/llm-schema";
 
 // Helper: Create real markdown via full generation pipeline
 function createRealMarkdown(title: string, date: string, audioHash: string, speakers: readonly string[], generatedAt: string): string {
