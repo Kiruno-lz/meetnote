@@ -8,6 +8,8 @@ import { createLlmRequestFromCorrectedSpeakerInput, runDeterministicMockLlmProvi
 import { generateMarkdownContent } from "../utils/markdown-library-generator.ts";
 import { createMarkdownFrontmatter, MARKDOWN_LIBRARY_SCHEMA_VERSION } from "../types/markdown-library-schema.ts";
 import type { DeverbalizationOutput } from "../types/llm-schema.ts";
+// Abort controller for document-level click listener cleanup on re-render
+let _detailClickAbort: AbortController | null = null;
 
 function escapeHtml(s: string): string {
   return s
@@ -157,10 +159,13 @@ export function renderRecordingDetail(root: HTMLElement, state: AppState): void 
     e.stopPropagation();
     if (dropdown) dropdown.style.display = dropdown.style.display === "none" ? "block" : "none";
   });
+  // Remove previous document click listener via module-level abort signal
+  _detailClickAbort?.abort();
+  _detailClickAbort = new AbortController();
   const closeDropdown = () => {
     if (dropdown) dropdown.style.display = "none";
   };
-  document.addEventListener("click", closeDropdown);
+  document.addEventListener("click", closeDropdown, { signal: _detailClickAbort.signal });
 
   // Rename action
   function enterRenameMode(): void {

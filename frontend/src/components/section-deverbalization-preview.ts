@@ -25,6 +25,8 @@ function msToTime(ms: number): string {
 }
 
 const SPEAKER_COLORS = ["#4a9eff", "#ff7043", "#66bb6a", "#ab47bc"];
+// Abort controller for document-level click listener cleanup on re-render
+let _deverbClickAbort: AbortController | null = null;
 
 export function renderDeverbalizationPreview(root: HTMLElement, state: AppState): void {
   const meetingOrUndef = state.meetings.find((m) => m.id === state.activeMeetingId);
@@ -156,8 +158,11 @@ export function renderDeverbalizationPreview(root: HTMLElement, state: AppState)
     e.stopPropagation();
     if (dropdown) dropdown.style.display = dropdown.style.display === "none" ? "block" : "none";
   });
+  // Remove previous document click listener (module-level abort signal)
+  if (typeof _deverbClickAbort !== "undefined") _deverbClickAbort?.abort();
+  _deverbClickAbort = new AbortController();
   const closeDropdown = (): void => { if (dropdown) dropdown.style.display = "none"; };
-  document.addEventListener("click", closeDropdown);
+  document.addEventListener("click", closeDropdown, { signal: _deverbClickAbort.signal });
 
   // Rename inline-edit
   function enterRenameMode(): void {

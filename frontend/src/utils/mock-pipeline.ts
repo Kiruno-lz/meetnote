@@ -33,7 +33,7 @@ export interface MockPipelineResult {
 }
 
 export function runMockPipeline(input: MockPipelineInput): MockPipelineResult {
-  const createdAt = "2024-01-01T00:00:00.000Z";
+  const createdAt = new Date().toISOString();
 
   // Step 1: Create project (AudioImport)
   const baseProject = createMeetingProject({

@@ -332,7 +332,18 @@ async function handleNativeTauriAudioImport(
   }
 
   const title = extractDefaultTitle(filename);
-  const uniqueHash = `tauri-${Date.now()}-${filename}`;
+  // Deterministic fingerprint from path + size for basic dedup.
+  // Real SHA-256 would require reading the file content via Tauri fs plugin.
+  let hashStr = "";
+  try {
+    const rawBytes = new TextEncoder().encode(`${filePath}:${sizeBytes}`);
+    const hashBuf = await crypto.subtle.digest("SHA-256", rawBytes);
+    hashStr = Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+  } catch {
+    // Fallback if crypto.subtle is unavailable (non-secure context)
+    hashStr = `tauri-${Date.now()}-${filename}`;
+  }
+  const uniqueHash = hashStr;
   // Estimate duration from file size (conservative: ~20 KB/s for compressed audio).
   // This is a placeholder — real ASR will replace the transcript with actual timestamps.
   const durationSeconds = Math.max(1.0, sizeBytes / 20000);

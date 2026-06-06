@@ -91,6 +91,35 @@ export function renderSpeakerEditor(root: HTMLElement, state: AppState): void {
         if (!newLabel) return;
         try {
           profiles = renameSpeaker(profiles, id, newLabel);
+
+          // Persist rename as a correction record immediately
+          const meetingIdx = state.meetings.findIndex((m) => m.id === state.activeMeetingId);
+          if (meetingIdx >= 0) {
+            const meeting = state.meetings[meetingIdx];
+            if (meeting) {
+              const project = JSON.parse(meeting.projectSnapshot) as import("../types/audio-project.ts").MeetingProject;
+              const oldLabel = project.speakers.find((s) => s.id === id)?.label ?? id;
+              const renameCorrection: import("../types/audio-project.ts").SpeakerCorrection = {
+                id: `corr-rename-${Date.now()}`,
+                targetSpeakerId: id,
+                replacementSpeakerId: id,
+                reason: "manual-rename",
+                createdAt: new Date().toISOString(),
+                kind: "rename-speaker",
+              };
+              const updatedProject: import("../types/audio-project.ts").MeetingProject = {
+                ...project,
+                speakers: profiles,
+                corrections: [...project.corrections, renameCorrection],
+              };
+              state.meetings[meetingIdx] = {
+                ...meeting,
+                speakerProfiles: profiles,
+                projectSnapshot: JSON.stringify(updatedProject),
+              };
+              saveState(state);
+            }
+          }
           rerender();
         } catch (err) {
           alert(err instanceof Error ? err.message : "改名失败");

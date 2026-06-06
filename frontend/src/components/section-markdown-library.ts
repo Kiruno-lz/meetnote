@@ -152,6 +152,9 @@ export function renderMarkdownLibrary(root: HTMLElement, state: AppState): void 
 
       if (confirm(`确认删除「${meeting.title}」吗？`)) {
         state.meetings = deleteMeeting(state.meetings, id);
+        if (state.activeMeetingId === id) {
+          state.activeMeetingId = null;
+        }
         saveState(state);
         renderMarkdownLibrary(root, state);
       }
