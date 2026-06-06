@@ -47,16 +47,16 @@ test("mock meeting end-to-end flow", async ({ page }) => {
   await page.locator("#btn-save-markdown").click();
 
   // Step 10: Verify markdown library shows the saved meeting (click navigates to preview)
-  await expect(page.locator(".meeting-library-item").first()).toBeVisible();
+  await expect(page.locator(".meeting-item").first()).toBeVisible();
   await expect(
-    page.locator(".meeting-library-item .meeting-title").first()
+    page.locator(".meeting-item .meeting-title").first()
   ).toContainText("演示会议");
 
   // Step 11: Click meeting in library → navigates to deverbalization-preview
-  await page.locator(".meeting-library-item").first().click();
+  await page.locator(".meeting-item").first().click();
   await expect(page.locator(".deverb-right-content")).toBeVisible({ timeout: 3000 });
 
   // Step 12: Back button from library-opened preview returns to markdown-library
   await page.locator("#btn-back").click();
-  await expect(page.locator(".meeting-library-item").first()).toBeVisible();
+  await expect(page.locator(".meeting-item").first()).toBeVisible();
 });

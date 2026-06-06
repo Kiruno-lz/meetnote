@@ -190,7 +190,7 @@ document.addEventListener("click", closeDropdown);
 
 | # | Bug | 文件 | 说明 |
 |---|-----|------|------|
-| E1-1 | 🔴 **L2 测试全部 8 个因路径错误失败** | `tests/api/ts/*.test.ts` | 导入路径缺少子目录（`types/`、`stores/`、`utils/`） |
+| E1-1 | 🟢 **L2 测试全部 8 个因路径错误失败** | `tests/api/ts/*.test.ts` | ✅ 已修复：导入路径补全子目录，65/65 测试通过 |
 | E1-2 | 🔴 **E2E file-import spec 失败** | `tests/e2e/specs/file-import.spec.ts` | fixture `test-audio.wav` 在 git worktree 中丢失（二进制未跟踪） |
 | E1-3 | 🔴 **E2E mock-meeting-flow spec 失败** | `tests/e2e/specs/mock-meeting-flow.spec.ts` | CSS 选择器 `.meeting-library-item` 不存在，应为 `.meeting-item` |
 | E1-4 | 🟡 **Python 测试文档误标为 "pytest 未安装"** | 文档声称 | 实际是独立脚本（`python test_*.py`），无需 pytest |
