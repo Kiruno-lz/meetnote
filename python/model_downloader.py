@@ -188,24 +188,20 @@ def main() -> None:
         required=True,
         help="Model identifier (e.g., 'funasr/paraformer-zh', 'Qwen/Qwen3-ASR-1.7B')"
     )
-    parser.add_argument(
-        "--hf-token",
-        type=str,
-        default=None,
-        help="HuggingFace token for gated models"
-    )
 
     args = parser.parse_args()
+
+    hf_token = sys.stdin.readline().strip() or None
 
     try:
         backend: Literal["paraformer", "qwen3-asr", "mimo"] = args.backend
 
         if backend == "paraformer":
-            cache_path = download_paraformer(args.model_id, args.hf_token)
+            cache_path = download_paraformer(args.model_id, hf_token)
         elif backend == "qwen3-asr":
-            cache_path = download_qwen3_asr(args.model_id, args.hf_token)
+            cache_path = download_qwen3_asr(args.model_id, hf_token)
         elif backend == "mimo":
-            cache_path = download_mimo(args.model_id, args.hf_token)
+            cache_path = download_mimo(args.model_id, hf_token)
         else:
             raise ValueError(f"Unknown backend: {backend}")
 

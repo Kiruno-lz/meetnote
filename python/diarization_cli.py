@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 meetnote Diarization CLI - pyannote.audio speaker diarization
-Usage: uv run python python/diarization_cli.py --audio <path> --hf-token <token>
+Usage: uv run python python/diarization_cli.py --audio <path>
 
 Output: JSON to stdout
 Progress: lines to stderr prefixed with PROGRESS:
@@ -23,9 +23,9 @@ _REAL_STDOUT_FD: int | None = None
 
 
 def _main_impl():
+    hf_token = sys.stdin.readline().strip() or None
     parser = argparse.ArgumentParser(description="meetnote Diarization CLI")
     parser.add_argument("--audio", required=True, help="Path to audio file")
-    parser.add_argument("--hf-token", required=True, dest="hf_token", help="HuggingFace access token")
     parser.add_argument("--min-speakers", type=int, default=1, dest="min_speakers", help="Minimum number of speakers")
     parser.add_argument("--max-speakers", type=int, default=10, dest="max_speakers", help="Maximum number of speakers")
     parser.add_argument(
@@ -65,7 +65,7 @@ def _main_impl():
     try:
         pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-3.1",
-            token=args.hf_token,
+            token=hf_token,
         )
     except Exception as e:
         err_msg = str(e).lower()

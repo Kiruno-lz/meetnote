@@ -3,7 +3,7 @@ use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::Emitter;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::task::AbortHandle;
 
@@ -523,12 +523,9 @@ async fn start_library_download(
         .arg("--model-id")
         .arg(&model_source);
 
-    if let Some(token) = hf_token {
-        cmd.arg("--hf-token").arg(token);
-    }
-
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::piped())
         .current_dir(project_root.join("python"));
 
     // 5. Spawn process
@@ -536,9 +533,22 @@ async fn start_library_download(
         .spawn()
         .map_err(|e| format!("Failed to spawn model_downloader.py: {}", e))?;
 
+    // 6. Write HF token to stdin if provided, then close stdin
+    {
+        let mut stdin = child.stdin.take().ok_or("Failed to capture stdin")?;
+        if let Some(ref token) = hf_token {
+            stdin
+                .write_all(format!("{}\n", token).as_bytes())
+                .await
+                .map_err(|e| format!("Failed to write token to stdin: {}", e))?;
+        }
+        // Drop closes stdin, signaling EOF to Python
+        drop(stdin);
+    }
+
     let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
 
-    // 6. Spawn async task to monitor output
+    // 7. Spawn async task to monitor output
     let model_id_clone = model_id.clone();
     let state_clone = state.inner().clone();
     let app_clone = app.clone();
