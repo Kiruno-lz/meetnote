@@ -224,7 +224,7 @@ document.addEventListener("click", closeDropdown);
 | # | 问题 | 文件 | 说明 |
 |---|------|------|------|
 | E3-1 | 🟢 **CSP 禁用** | `tauri/tauri.conf.json` | ✅ 已修复：设置合理的 CSP policy |
-| E3-2 | 🟡 **无 Tauri 2 capabilities 配置** | `tauri/tauri.conf.json` | ⏳ 后置：开发模式下可运行，release 前需补 |
+| E3-2 | 🟢 **无 Tauri 2 capabilities 配置** | `tauri/capabilities/default.json` | ✅ 已修复：补全 `dialog:allow-save` |
 | E3-3 | 🟢 **HF Token 通过命令行参数暴露** | `tauri/src/download.rs`, `tauri/src/diarization.rs` | ✅ 已修复：改为 stdin 管道传递 |
 
 ---
