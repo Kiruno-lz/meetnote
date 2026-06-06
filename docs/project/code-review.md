@@ -53,6 +53,8 @@
 | `model` | `{id, version}` 对象 | ❌ 字符串 `"whisper"` | 前端只能看到短名称 |
 | 错误格式 | `{kind, code, message, recoverable}` | ❌ `{"error": "..."}` | 结构化错误码缺失 |
 
+> ✅ **已修复**：ASR CLI 输出已增加 `kind: "asr.result"`、`schemaVersion: "meetnote.asr.v1"`；错误输出已增加结构化 `kind/code/message/recoverable` 字段（同时保留 `error` 字段兼容 Rust 桥接）。`requestId` 可通过 `--request-id` 参数传入。
+
 ### B2. Rust 进度事件解析错误
 
 ```rust
@@ -101,6 +103,8 @@ abs(float(seg.get("avg_logprob", -0.1)))
 ### B5. Diarization CLI 的 stdout 污染保护不完整
 
 ASR CLI 使用**文件描述符级别**的 stdout 重定向（`os.dup2(2, 1)`），但 diarization CLI 仅使用 Python 层面的 `contextlib.redirect_stdout`。如果 pyannote 或任何 C 扩展直接写入 fd 1，JSON 输出会被污染。
+
+> ✅ **已修复**：Diarization CLI 现使用与 ASR CLI 相同的 `redirect_stdout_to_stderr()` fd 级别重定向模式。
 
 ### B6. section-speaker-editor.ts 的事件监听泄漏
 
@@ -199,16 +203,16 @@ document.addEventListener("click", closeDropdown);
 
 | # | Bug | 文件/行 | 说明 |
 |---|-----|---------|------|
-| E2-1 | 🔴 **Whisper 置信度反转** | `python/asr_cli.py:132` | `abs(avg_logprob)` → 低置信度得到高分 |
-| E2-2 | 🔴 **ASR CLI 输出缺少必需字段** | `python/asr_cli.py:512-517` | 与 `docs/reference/asr-cli.md` 契约严重不一致 |
+| E2-1 | 🟢 **Whisper 置信度反转** | `python/asr_cli.py` | ✅ 已修复：`abs(avg_logprob)` → `1.0 - abs(avg_logprob)` |
+| E2-2 | 🟢 **ASR CLI 输出缺少必需字段** | `python/asr_cli.py` | ✅ 已修复：增加 `kind`、`schemaVersion`；错误输出增加结构化字段 |
 | E2-3 | 🔴 **UI 事件监听泄漏** | `section-speaker-editor.ts:163`、`section-recording-detail.ts:163` | 多次导航后重复绑定 |
 | E2-4 | 🟡 **Mock 流水线写入固定 `createdAt`** | `mock-pipeline.ts:36` | `"2024-01-01T00:00:00.000Z"` — 所有会议显示同一日期 |
 | E2-5 | 🟡 **Tauri 导入使用伪哈希** | `section-project-list.ts:335` | `tauri-${Date.now()}-${filename}` 无法检测重复 |
 | E2-6 | 🟡 **`activeMeetingId` 删除后悬空** | `ui-state.ts` | 删除当前打开的会议后 ID 未重置 |
 | E2-7 | 🟡 **Hardcoded `createdAt`** | `mock-pipeline.ts:36` | 所有会议创建时间相同 |
-| E2-8 | 🟡 **`transformer` 未列为 Python 依赖** | `python/pyproject.toml` | MiMo 引擎依赖但仅被间接引入 |
-| E2-9 | 🟡 **`pyannote.audio>=3.1` 版本下限错误** | `python/pyproject.toml` | 代码使用 4.x API，应要求 `>=4.0` |
-| E2-10 | 🟡 **Diarization CLI stdout 保护不足** | `python/diarization_cli.py` | 仅 Python 层面 redirect，未做 fd 级别 |
+| E2-8 | 🟢 **`transformer` 未列为 Python 依赖** | `python/pyproject.toml` | ✅ 已修复：添加 `transformers` 和 `torch` 为显式依赖 |
+| E2-9 | 🟢 **`pyannote.audio>=3.1` 版本下限错误** | `python/pyproject.toml` | ✅ 已修复：`>=3.1` → `>=4.0` |
+| E2-10 | 🟢 **Diarization CLI stdout 保护不足** | `python/diarization_cli.py` | ✅ 已修复：应用 fd 级别 stdout 重定向 |
 | E2-11 | 🟡 **库管理下载进度使用假 100 MB 总量** | `tauri/src/download.rs` | 不同大小的模型显示错误进度 |
 | E2-12 | 🟡 **重命名 speaker 的修正记录未持久化** | `section-speaker-editor.ts` | 仅在本地 state 中存在，保存时丢失 |
 | E2-13 | 🟡 **`get_device("auto")` 不检测 CUDA** | `python/meetnote/device.py:11-13` | 直接跳过 `torch.cuda.is_available()` |
