@@ -228,15 +228,32 @@ class Qwen3ASREngine(ASREngine):
                 "Or: pip install qwen-asr"
             )
 
-        # Qwen3-ASR uses device_map
-        device_map = "auto" if device == "cuda" else "cpu"
-        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+        # Qwen3-ASR uses device_map.
+        # CUDA: device_map="auto" with bfloat16.
+        # MPS (Apple Silicon): device_map=None (loads on CPU/MPS with float32)
+        # CPU: device_map="cpu" with float32.
+        if device == "cuda":
+            device_map = "auto"
+            dtype = torch.bfloat16
+        elif device == "mps":
+            device_map = None      # MPS doesn't support device_map; use manual to()
+            dtype = torch.float32
+        else:
+            device_map = "cpu"
+            dtype = torch.float32
 
         self.model = Qwen3ASRModel.from_pretrained(
             model_id,
             dtype=dtype,
             device_map=device_map
         )
+
+        if device == "mps" and self.model is not None:
+            try:
+                self.model = self.model.to("mps")
+            except Exception as e:
+                print(f"WARN: moving Qwen3-ASR to MPS failed ({e}), falling back to CPU", file=sys.stderr, flush=True)
+                self.model = self.model.to("cpu")
 
     def transcribe(self, audio_path: str, language: str, **kwargs) -> TranscriptionResult:
         """Transcribe using Qwen3-ASR."""
@@ -293,8 +310,13 @@ class MiMoEngine(ASREngine):
                 "Or: pip install transformers"
             )
 
-        # transformers pipeline uses device index or "cpu"
-        pipe_device = 0 if device == "cuda" else -1
+        # transformers pipeline uses device index for CUDA, "mps" for Apple Silicon, -1 for CPU
+        if device == "cuda":
+            pipe_device = 0
+        elif device == "mps":
+            pipe_device = "mps"
+        else:
+            pipe_device = -1
 
         self.pipe = pipeline(
             "automatic-speech-recognition",

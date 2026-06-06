@@ -65,10 +65,11 @@ def download_paraformer(model_id: str, hf_token: Optional[str] = None) -> str:
 
         emit_progress("loading", 0.8)
 
-        # Determine cache path (modelscope default)
-        cache_base = Path.home() / ".cache" / "modelscope" / "hub"
-        # FunASR stores models under hub/<model_id>
-        model_path = cache_base / model_id.replace("/", "--")
+        # Determine cache path (HuggingFace cache, since hub="hf")
+        cache_base = Path.home() / ".cache" / "huggingface" / "hub"
+        # HF stores models as models--<org>--<name>
+        model_name = model_id.replace("/", "--")
+        model_path = cache_base / f"models--{model_name}"
 
         emit_progress("completed", 1.0)
 
@@ -80,56 +81,44 @@ def download_paraformer(model_id: str, hf_token: Optional[str] = None) -> str:
 
 def download_qwen3_asr(model_id: str, hf_token: Optional[str] = None) -> str:
     """
-    Download Qwen3-ASR model.
+    Download Qwen3-ASR model weights.
+    Uses snapshot_download to fetch files without loading the model into
+    memory, so no GPU is required during download.
 
     Args:
-        model_id: Model identifier (e.g., "Qwen/Qwen3-ASR-1.7B")
+        model_id: HuggingFace repo id (e.g., "Qwen/Qwen3-ASR-1.7B")
         hf_token: Optional HuggingFace token for gated models
 
     Returns:
         Path to the cached model directory
 
     Raises:
-        ImportError: If qwen_asr is not installed
-        RuntimeError: If download fails or GPU is not available
+        ImportError: If huggingface_hub is not installed
+        RuntimeError: If download fails
     """
     try:
-        from qwen_asr import Qwen3ASRModel
+        from huggingface_hub import snapshot_download
     except ImportError as e:
-        raise ImportError("qwen_asr library not found. Install with: pip install qwen-asr") from e
-
-    # Check for GPU availability
-    try:
-        import torch
-        if not torch.cuda.is_available():
-            raise RuntimeError("GPU is required for Qwen3-ASR but CUDA is not available")
-    except ImportError:
-        raise ImportError("PyTorch not found. Install with: pip install torch")
+        raise ImportError("huggingface_hub not found. Install with: pip install huggingface-hub") from e
 
     emit_progress("starting", 0.0)
 
     try:
-        emit_progress("downloading", 0.3)
-
-        # Set HF token if provided
         if hf_token:
             import os
             os.environ["HF_TOKEN"] = hf_token
 
-        # from_pretrained will download to ~/.cache/huggingface/
-        model = Qwen3ASRModel.from_pretrained(model_id)
+        emit_progress("downloading", 0.3)
 
-        emit_progress("loading", 0.8)
-
-        # Determine cache path (HuggingFace default)
-        cache_base = Path.home() / ".cache" / "huggingface" / "hub"
-        # HF stores models as models--<org>--<name>
-        model_name = model_id.replace("/", "--")
-        model_path = cache_base / f"models--{model_name}"
+        cache_path = snapshot_download(
+            repo_id=model_id,
+            token=hf_token,
+            resume_download=True,
+        )
 
         emit_progress("completed", 1.0)
 
-        return str(model_path)
+        return cache_path
 
     except Exception as e:
         raise RuntimeError(f"Failed to download Qwen3-ASR model: {e}") from e
@@ -137,47 +126,45 @@ def download_qwen3_asr(model_id: str, hf_token: Optional[str] = None) -> str:
 
 def download_mimo(model_id: str, hf_token: Optional[str] = None) -> str:
     """
-    Download MiMo-V2.5-ASR model using transformers pipeline.
+    Download MiMo-V2.5-ASR model weights.
+    Uses snapshot_download to fetch files without loading the model into
+    memory, so no GPU is required during download.
 
     Args:
-        model_id: Model identifier (e.g., "XiaomiMiMo/MiMo-V2.5-ASR")
+        model_id: HuggingFace repo id (e.g., "XiaomiMiMo/MiMo-V2.5-ASR")
         hf_token: Optional HuggingFace token for gated models
 
     Returns:
         Path to the cached model directory
 
     Raises:
-        ImportError: If transformers is not installed
+        ImportError: If huggingface_hub is not installed
         RuntimeError: If download fails
     """
     try:
-        from transformers import pipeline
+        from huggingface_hub import snapshot_download
     except ImportError as e:
-        raise ImportError("transformers library not found. Install with: pip install transformers") from e
+        raise ImportError("huggingface_hub not found. Install with: pip install huggingface-hub") from e
 
     emit_progress("starting", 0.0)
 
     try:
+        if hf_token:
+            import os
+            os.environ["HF_TOKEN"] = hf_token
+
         emit_progress("downloading", 0.3)
 
-        # Create pipeline which will download to ~/.cache/huggingface/
-        pipe = pipeline(
-            "automatic-speech-recognition",
-            model=model_id,
-            token=hf_token if hf_token else None
+        cache_path = snapshot_download(
+            repo_id=model_id,
+            # MiMo 2.5 ASR uses fp32 safetensors (~16 GB); allow listing all files
+            token=hf_token,
+            resume_download=True,
         )
-
-        emit_progress("loading", 0.8)
-
-        # Determine cache path (HuggingFace default)
-        cache_base = Path.home() / ".cache" / "huggingface" / "hub"
-        # HF stores models as models--<org>--<name>
-        model_name = model_id.replace("/", "--")
-        model_path = cache_base / f"models--{model_name}"
 
         emit_progress("completed", 1.0)
 
-        return str(model_path)
+        return cache_path
 
     except Exception as e:
         raise RuntimeError(f"Failed to download MiMo model: {e}") from e

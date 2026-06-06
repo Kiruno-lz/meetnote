@@ -162,6 +162,27 @@ pub async fn check_library_model_installed(model_source: String) -> Result<bool,
     Ok(installed)
 }
 
+/// Remove a library-managed model from the HuggingFace cache directory.
+///
+/// `model_source` is the repo id, e.g. "funasr/paraformer-zh" or "Qwen/Qwen3-ASR-1.7B".
+/// This removes `~/.cache/huggingface/hub/models--{org}--{name}` if it exists.
+#[tauri::command]
+pub async fn remove_library_model(model_source: String) -> Result<(), String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let home_path = std::path::PathBuf::from(&home);
+
+    // HuggingFace cache: ~/.cache/huggingface/hub/models--{org}--{name}
+    let hf_dir_name = format!("models--{}", model_source.replace('/', "--"));
+    let hf_path = home_path.join(".cache/huggingface/hub").join(&hf_dir_name);
+
+    if hf_path.exists() && hf_path.is_dir() {
+        std::fs::remove_dir_all(&hf_path)
+            .map_err(|e| format!("Failed to remove {}: {}", hf_path.display(), e))?;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_active_model_id(state: tauri::State<'_, Arc<DownloadManager>>) -> String {
     state.active_model_id.lock().unwrap().clone()
@@ -188,6 +209,7 @@ pub async fn start_model_download(
     dest_path: String,
     download_method: Option<String>,
     backend: Option<String>,
+    model_source: Option<String>,
     hf_token: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<DownloadManager>>,
@@ -196,7 +218,16 @@ pub async fn start_model_download(
     if let Some(method) = download_method {
         if method == "library-managed" {
             let backend = backend.ok_or("backend is required for library-managed download")?;
-            return start_library_download(model_id, backend, hf_token, app, state).await;
+            let model_source_str = model_source.unwrap_or_else(|| model_id.clone());
+            return start_library_download(
+                model_id,
+                backend,
+                model_source_str,
+                hf_token,
+                app,
+                state,
+            )
+            .await;
         }
     }
 
@@ -449,6 +480,7 @@ enum PythonEvent {
 async fn start_library_download(
     model_id: String,
     backend: String,
+    model_source: String,
     hf_token: Option<String>,
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<DownloadManager>>,
@@ -503,7 +535,7 @@ async fn start_library_download(
         .arg("--backend")
         .arg(&backend)
         .arg("--model-id")
-        .arg(&model_id);
+        .arg(&model_source);
 
     if let Some(token) = hf_token {
         cmd.arg("--hf-token").arg(token);

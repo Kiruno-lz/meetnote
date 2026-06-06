@@ -23,6 +23,7 @@ pub fn run() {
             diarization::run_diarization,
             download::list_cached_models,
             download::check_library_model_installed,
+            download::remove_library_model,
             download::delete_model_file,
             download::get_active_model_id,
             download::set_active_model_id,

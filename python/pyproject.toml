@@ -9,6 +9,7 @@ dependencies = [
     "funasr",
     "qwen-asr",
     "librosa",
+    "huggingface-hub",
 ]
 
 # flash-attn is a CUDA-only acceleration library that cannot be built on macOS

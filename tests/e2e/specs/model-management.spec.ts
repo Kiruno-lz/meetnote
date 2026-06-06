@@ -257,6 +257,315 @@ export async function emit() {}
 
     console.log(`✓ paraformer download call args: ${JSON.stringify(paraCall.args)}`);
   });
+
+  test("library-managed models pass modelSource and UI updates on starting status", async ({ page }) => {
+    // Stub Tauri core/event modules
+    await page.route("**/node_modules/@tauri-apps/api/core.js", (route) => {
+      route.fulfill({
+        contentType: "application/javascript",
+        body: `
+export async function invoke(cmd, args) {
+  const bus = window.__tauriTestBus;
+  if (bus && bus.onInvoke) return bus.onInvoke(cmd, args);
+  return undefined;
+}
+export function transformCallback(fn) { return fn; }
+`,
+      });
+    });
+    await page.route("**/node_modules/@tauri-apps/api/event.js", (route) => {
+      route.fulfill({
+        contentType: "application/javascript",
+        body: `
+export async function listen(event, handler) {
+  const bus = window.__tauriTestBus;
+  if (!bus) return () => {};
+  bus.listeners = bus.listeners || {};
+  bus.listeners[event] = bus.listeners[event] || [];
+  bus.listeners[event].push(handler);
+  return () => {
+    if (bus.listeners && bus.listeners[event]) {
+      bus.listeners[event] = bus.listeners[event].filter(h => h !== handler);
+    }
+  };
+}
+export async function emit(event, payload) {
+  const bus = window.__tauriTestBus;
+  if (!bus || !bus.listeners || !bus.listeners[event]) return;
+  for (const h of bus.listeners[event]) h({ payload });
+}
+`,
+      });
+    });
+
+    await page.addInitScript(() => {
+      try { localStorage.clear(); } catch {}
+      (window as any).__TAURI_INTERNALS__ = { version: "2.0.0" };
+      (window as any).__downloadCalls = [];
+      (window as any).__tauriTestBus = {
+        listeners: {} as Record<string, Array<(e: { payload: unknown }) => void>>,
+        onInvoke: (cmd: string, args: any) => {
+          if (cmd === "list_cached_models") return Promise.resolve([]);
+          if (cmd === "get_active_model_id") return Promise.resolve("");
+          if (cmd === "check_library_model_installed") return Promise.resolve(false);
+          if (cmd === "start_model_download") {
+            (window as any).__downloadCalls.push({ cmd, args });
+            // Simulate library-managed download: emit "starting" then "downloading" then "completed"
+            const bus = (window as any).__tauriTestBus;
+            const modelId = args.modelId;
+            setTimeout(() => {
+              const handlers = bus.listeners?.["model-download-progress"] ?? [];
+              for (const h of handlers) {
+                h({
+                  payload: {
+                    modelId,
+                    downloadedBytes: 0,
+                    totalBytes: 100_000_000,
+                    speedBps: 0,
+                    status: "starting",  // Library-managed download initial status
+                  },
+                });
+              }
+            }, 100);
+            setTimeout(() => {
+              const handlers = bus.listeners?.["model-download-progress"] ?? [];
+              for (const h of handlers) {
+                h({
+                  payload: {
+                    modelId,
+                    downloadedBytes: 50_000_000,
+                    totalBytes: 100_000_000,
+                    speedBps: 0,
+                    status: "downloading",
+                  },
+                });
+              }
+            }, 300);
+            setTimeout(() => {
+              const handlers = bus.listeners?.["model-download-progress"] ?? [];
+              for (const h of handlers) {
+                h({
+                  payload: {
+                    modelId,
+                    downloadedBytes: 100_000_000,
+                    totalBytes: 100_000_000,
+                    speedBps: 0,
+                    status: "completed",
+                  },
+                });
+              }
+            }, 600);
+            return Promise.resolve(undefined);
+          }
+          if (cmd === "set_active_model_id") return Promise.resolve(undefined);
+          return Promise.resolve(undefined);
+        },
+      };
+    });
+
+    await page.goto("/");
+    await page.locator(".nav-btn").filter({ hasText: "模型管理" }).click();
+    await expect(page.locator("h2").filter({ hasText: "模型管理" })).toBeVisible();
+
+    // ── Qwen3 ASR 1.7B: download must pass modelSource ──────────────────────
+    const qwenCard = page.locator("#model-card-qwen3-asr-1\\.7b");
+    await expect(qwenCard).toBeVisible({ timeout: 5000 });
+
+    const qwenDownloadBtn = qwenCard.locator(".btn-download");
+    await expect(qwenDownloadBtn).toBeVisible({ timeout: 3000 });
+    await qwenDownloadBtn.click();
+
+    // Wait for "starting" event to arrive (100ms delay in mock)
+    await page.waitForTimeout(200);
+
+    // Progress bar must become visible even though status is "starting"
+    const qwenProgressDiv = page.locator("#model-progress-qwen3-asr-1\\.7b");
+    await expect(qwenProgressDiv).toBeVisible({ timeout: 3000 });
+
+    // Verify modelSource was passed in the invoke call
+    const calls = await page.evaluate(() => (window as any).__downloadCalls);
+    const qwenCall = calls.find((c: any) => c.args?.modelId === "qwen3-asr-1.7b");
+    expect(qwenCall, "start_model_download should be called for qwen3-asr-1.7b").toBeTruthy();
+    expect(qwenCall.args.downloadMethod).toBe("library-managed");
+    expect(qwenCall.args.backend).toBe("qwen3-asr");
+    expect(qwenCall.args.modelSource).toBe("Qwen/Qwen3-ASR-1.7B");
+
+    console.log(`✓ qwen3-asr download call args: ${JSON.stringify(qwenCall.args)}`);
+
+    // Wait for "downloading" event (300ms) to verify progress updates
+    await page.waitForTimeout(400);
+    const qwenDetail = page.locator("#pbar-detail-qwen3-asr-1\\.7b");
+    const detailText = await qwenDetail.textContent();
+    expect(detailText).not.toBe("0 B / 0 B");
+
+    // Wait for "completed" event (600ms) to verify card switches to installed
+    await page.waitForTimeout(500);
+
+    // After completed, should show "切换使用" button (not "下载")
+    const useBtn = qwenCard.locator(".btn-use-model");
+    await expect(useBtn).toBeVisible({ timeout: 3000 });
+
+    // ── MiMo V2.5 ASR: download must also pass modelSource ──────────────────
+    const mimoCard = page.locator("#model-card-mimo-v2\\.5-asr");
+    await expect(mimoCard).toBeVisible({ timeout: 5000 });
+
+    const mimoDownloadBtn = mimoCard.locator(".btn-download");
+    await expect(mimoDownloadBtn).toBeVisible({ timeout: 3000 });
+    await mimoDownloadBtn.click();
+
+    await page.waitForTimeout(800); // Wait for all mock events
+
+    const allCalls = await page.evaluate(() => (window as any).__downloadCalls);
+    const mimoCall = allCalls.find((c: any) => c.args?.modelId === "mimo-v2.5-asr");
+    expect(mimoCall, "start_model_download should be called for mimo-v2.5-asr").toBeTruthy();
+    expect(mimoCall.args.downloadMethod).toBe("library-managed");
+    expect(mimoCall.args.backend).toBe("mimo");
+    expect(mimoCall.args.modelSource).toBe("XiaomiMiMo/MiMo-V2.5-ASR");
+
+    console.log(`✓ mimo download call args: ${JSON.stringify(mimoCall.args)}`);
+  });
+
+  test("whisper download still works after library-managed download completes", async ({ page }) => {
+    // This test verifies that the progress listener survives across different
+    // model downloads — a library-managed model completing should not break
+    // subsequent Whisper HTTP download progress updates.
+
+    await page.route("**/node_modules/@tauri-apps/api/core.js", (route) => {
+      route.fulfill({
+        contentType: "application/javascript",
+        body: `
+export async function invoke(cmd, args) {
+  const bus = window.__tauriTestBus;
+  if (bus && bus.onInvoke) return bus.onInvoke(cmd, args);
+  return undefined;
+}
+export function transformCallback(fn) { return fn; }
+`,
+      });
+    });
+    await page.route("**/node_modules/@tauri-apps/api/event.js", (route) => {
+      route.fulfill({
+        contentType: "application/javascript",
+        body: `
+export async function listen(event, handler) {
+  const bus = window.__tauriTestBus;
+  if (!bus) return () => {};
+  bus.listeners = bus.listeners || {};
+  bus.listeners[event] = bus.listeners[event] || [];
+  bus.listeners[event].push(handler);
+  return () => {
+    if (bus.listeners && bus.listeners[event]) {
+      bus.listeners[event] = bus.listeners[event].filter(h => h !== handler);
+    }
+  };
+}
+export async function emit(event, payload) {
+  const bus = window.__tauriTestBus;
+  if (!bus || !bus.listeners || !bus.listeners[event]) return;
+  for (const h of bus.listeners[event]) h({ payload });
+}
+`,
+      });
+    });
+
+    let downloadSequence: Array<{ modelId: string; status: string }> = [];
+
+    await page.addInitScript(() => {
+      try { localStorage.clear(); } catch {}
+      (window as any).__TAURI_INTERNALS__ = { version: "2.0.0" };
+      (window as any).__downloadCalls = [];
+      (window as any).__tauriTestBus = {
+        listeners: {} as Record<string, Array<(e: { payload: unknown }) => void>>,
+        onInvoke: (cmd: string, args: any) => {
+          if (cmd === "list_cached_models") return Promise.resolve([]);
+          if (cmd === "get_active_model_id") return Promise.resolve("");
+          if (cmd === "check_library_model_installed") return Promise.resolve(false);
+          if (cmd === "start_model_download") {
+            (window as any).__downloadCalls.push({ cmd, args });
+            const bus = (window as any).__tauriTestBus;
+            const modelId = args.modelId;
+            const isLibraryManaged = args.downloadMethod === "library-managed";
+
+            if (isLibraryManaged) {
+              // Simulate quick library download: starting → completed
+              setTimeout(() => {
+                const handlers = bus.listeners?.["model-download-progress"] ?? [];
+                for (const h of handlers) {
+                  h({ payload: { modelId, downloadedBytes: 0, totalBytes: 100_000_000, speedBps: 0, status: "starting" } });
+                }
+              }, 100);
+              setTimeout(() => {
+                const handlers = bus.listeners?.["model-download-progress"] ?? [];
+                for (const h of handlers) {
+                  h({ payload: { modelId, downloadedBytes: 100_000_000, totalBytes: 100_000_000, speedBps: 0, status: "completed" } });
+                }
+              }, 300);
+            } else {
+              // Simulate Whisper HTTP download: downloading → completed
+              setTimeout(() => {
+                const handlers = bus.listeners?.["model-download-progress"] ?? [];
+                for (const h of handlers) {
+                  h({ payload: { modelId, downloadedBytes: 5_000_000, totalBytes: 148_000_000, speedBps: 1_048_576, status: "downloading" } });
+                }
+              }, 150);
+              setTimeout(() => {
+                const handlers = bus.listeners?.["model-download-progress"] ?? [];
+                for (const h of handlers) {
+                  h({ payload: { modelId, downloadedBytes: 148_000_000, totalBytes: 148_000_000, speedBps: 0, status: "completed" } });
+                }
+              }, 500);
+            }
+            return Promise.resolve(undefined);
+          }
+          if (cmd === "set_active_model_id") return Promise.resolve(undefined);
+          return Promise.resolve(undefined);
+        },
+      };
+    });
+
+    await page.goto("/");
+    await page.locator(".nav-btn").filter({ hasText: "模型管理" }).click();
+    await expect(page.locator("h2").filter({ hasText: "模型管理" })).toBeVisible();
+
+    // Step 1: Start a library-managed download (paraformer)
+    const paraformerCard = page.locator("#model-card-paraformer-zh");
+    await expect(paraformerCard).toBeVisible({ timeout: 5000 });
+    await paraformerCard.locator(".btn-download").click();
+
+    // Wait for library download to complete
+    await page.waitForTimeout(500);
+
+    // Verify paraformer is now installed
+    const paraformerUseBtn = paraformerCard.locator(".btn-use-model");
+    await expect(paraformerUseBtn).toBeVisible({ timeout: 3000 });
+    console.log("✓ Paraformer library download completed, card shows '切换使用'");
+
+    // Step 2: Now start a Whisper HTTP download
+    const whisperBaseCard = page.locator("#model-card-whisper-base");
+    await expect(whisperBaseCard).toBeVisible({ timeout: 3000 });
+
+    // Whisper should still have download button (not installed)
+    const whisperDownloadBtn = whisperBaseCard.locator(".btn-download");
+    await expect(whisperDownloadBtn).toBeVisible({ timeout: 3000 });
+    await whisperDownloadBtn.click();
+
+    // Progress bar should appear for Whisper
+    const whisperProgressDiv = page.locator("#model-progress-whisper-base");
+    await expect(whisperProgressDiv).toBeVisible({ timeout: 3000 });
+
+    // Speed readout should update (proves the listener is still active)
+    const speedEl = page.locator("#pbar-speed-whisper-base");
+    await expect(speedEl).not.toHaveText("— B/s", { timeout: 5000 });
+
+    // Wait for Whisper download to complete
+    await page.waitForTimeout(600);
+
+    // Whisper should now show as installed
+    const whisperUseBtn = whisperBaseCard.locator(".btn-use-model");
+    await expect(whisperUseBtn).toBeVisible({ timeout: 3000 });
+
+    console.log("✓ Whisper download works correctly after library-managed download");
+  });
 });
 
 
