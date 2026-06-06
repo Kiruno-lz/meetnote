@@ -1,4 +1,5 @@
 import type { MeetingProject, SpeakerCorrection, SpeakerProfile, SpeakerSegment, TranscriptSegment } from "../types/audio-project";
+import { resolveDiarizationRerunForProject } from "../types/audio-project";
 
 export interface SpeakerMergedTranscriptSegment {
   readonly id: string;
@@ -366,7 +367,10 @@ export function resolveProjectDiarizationRerun(
   project: MeetingProject,
   generatedSegments: readonly SpeakerSegment[]
 ): ProjectSpeakerDiarizationRerunResolution {
-  const resolution = resolveDiarizationRerun(project.speakerSegments, generatedSegments, project.corrections);
+  const generatedSpeakerIds = [...new Set(generatedSegments.map((segment) => segment.speakerId))];
+  const generatedSpeakers: SpeakerProfile[] = generatedSpeakerIds.map((id) => ({ id, label: id }));
+
+  const resolution = resolveDiarizationRerunForProject(project, generatedSpeakers, generatedSegments);
 
   if (resolution.status === "conflict") {
     return {
