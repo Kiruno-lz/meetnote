@@ -1,6 +1,6 @@
 # ASR CLI 契约
 
-本文对应 `PLAN.md` 第 6 节，定义 meetnote app 与后续 ASR subprocess/CLI 之间的 JSON 边界。当前仓库只实现 TypeScript schema、mock contract test 和文档；尚未接入真实 Whisper 运行器，未下载模型，未启动 Python 工具链。
+本文对应 `PLAN.md` 第 6 节，定义 meetnote app 与 ASR subprocess/CLI 之间的 JSON 边界。当前已实现 4 引擎 ASR CLI（Whisper/Paraformer/Qwen3-ASR/MiMo）、Rust 桥接和 TypeScript schema。详见 `docs/ASR_MODELS_GUIDE.md`。
 
 ## 边界
 

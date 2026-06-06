@@ -1,6 +1,6 @@
 # 模型下载与模型矩阵
 
-本文对应 `PLAN.md` 第 3 节，定义模型管理的文档契约和当前 TypeScript schema 边界。当前仓库已提供前端侧 manifest/download state 校验，但尚未实现真实下载器、ASR CLI 或 pyannote CLI；不得把下述 schema 当作已可运行下载能力。
+本文对应 `PLAN.md` 第 3 节，定义模型管理的文档契约和 TypeScript schema 边界。当前已实现 HTTP/library-managed 下载器（`tauri/src/download.rs` + `python/model_downloader.py`）、ASR CLI（`python/asr_cli.py`）、pyannote CLI（`python/diarization_cli.py`）以及完整的前端模型管理 UI。
 
 ## 边界
 

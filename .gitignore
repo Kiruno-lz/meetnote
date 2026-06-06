@@ -73,3 +73,5 @@ temp/
 
 .understand-anything/
 .claude/
+.codegraph
+.reasonix

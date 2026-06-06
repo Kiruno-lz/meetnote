@@ -6,9 +6,15 @@
 
 ## 当前仓库状态
 
-- 初始化前检查结果：仓库基本为空，仅有 `.git` 与系统文件；本次初始化新增 `AGENTS.md` 与 `PLAN.md`。
-- 项目内 `skills/` 目录未发现，`SKILL.md` 扫描结果为空；后续若新增 Skill，执行任务前必须重新扫描并记录 name/description。
-- 本文档使用 `AGENTS.md` 作为仓库常规 Agent 指南。
+- 仓库已从空仓库演进为包含完整代码的 MVP 实现（2026-06-06）。
+- 前端：312 个 L1 测试通过，TypeScript 类型检查 0 error；包含 11 个 UI 组件、6 个类型 Schema、10 个工具模块。
+- Rust 桥接：4 个模块（asr/diarization/download/utils）基于 Tauri 2.x。
+- Python 后端：ASR 4 引擎 CLI、pyannote speaker diarization CLI、模型下载器。
+- L2 契约测试（8 个文件）因路径解析问题当前全部失败（详见 `docs/project/gap-analysis.md#G-01`）。
+- 完整的代码深度审查报告见 `docs/project/code-review.md`。
+- L3 Playwright E2E 测试（4 个 spec）上次运行 2 个失败。
+- 文档现状：所有文档已整理到 `docs/` 目录，详见 `docs/index.md`。根目录仅保留 `README.md`（轻量入口）和 `AGENTS.md`（本文）。
+- 项目内 `skills/` 目录未发现；后续若新增 Skill，执行任务前必须重新扫描并记录 name/description。
 
 ## 项目目标
 
