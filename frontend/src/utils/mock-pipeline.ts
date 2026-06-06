@@ -24,6 +24,8 @@ export interface MockPipelineInput {
   mockSpeakerSegments: SpeakerSegment[];
   mockSpeakerProfiles?: SpeakerProfile[];
   speakerCorrectionCommands?: SpeakerCorrectionCommand[];
+  /** Optional createdAt override (for deterministic tests). Defaults to now. */
+  createdAt?: string;
 }
 
 export interface MockPipelineResult {
@@ -33,7 +35,7 @@ export interface MockPipelineResult {
 }
 
 export function runMockPipeline(input: MockPipelineInput): MockPipelineResult {
-  const createdAt = new Date().toISOString();
+  const createdAt = input.createdAt ?? new Date().toISOString();
 
   // Step 1: Create project (AudioImport)
   const baseProject = createMeetingProject({

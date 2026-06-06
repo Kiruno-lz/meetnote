@@ -40,7 +40,7 @@ function buildBaseInput(): MockPipelineInput {
 
 describe("runMockPipeline", () => {
   test("runs end-to-end with fixture data and returns well-formed markdown output", () => {
-    const result = runMockPipeline(buildBaseInput());
+    const result = runMockPipeline({ ...buildBaseInput(), createdAt: "2024-01-01T00:00:00.000Z" });
 
     expect(result.markdownContent).toBeTruthy();
     expect(result.markdownContent.length).toBeGreaterThan(0);
@@ -122,7 +122,7 @@ describe("runMockPipeline", () => {
   });
 
   test("deterministic — same input always produces same markdownContent", () => {
-    const input = buildBaseInput();
+    const input = { ...buildBaseInput(), createdAt: "2024-01-01T00:00:00.000Z" };
     const result1 = runMockPipeline(input);
     const result2 = runMockPipeline(input);
 
