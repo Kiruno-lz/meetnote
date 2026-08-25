@@ -1,7 +1,7 @@
+use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 
 pub fn spawn_blocking<T, F>(work: F) -> impl Future<Output = T> + Send
@@ -46,7 +46,7 @@ pub enum JobEvent {
 pub struct JobContext {
     job_id: JobId,
     cancelled: Arc<AtomicBool>,
-    events: Sender<JobEvent>,
+    events: UnboundedSender<JobEvent>,
 }
 
 impl JobContext {
@@ -60,32 +60,32 @@ impl JobContext {
 
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
-        let _ = self.events.send(JobEvent::Cancelled {
+        let _ = self.events.unbounded_send(JobEvent::Cancelled {
             job_id: self.job_id,
         });
     }
 
     pub fn report(&self, progress: Progress) {
-        let _ = self.events.send(JobEvent::Progress {
+        let _ = self.events.unbounded_send(JobEvent::Progress {
             job_id: self.job_id,
             progress,
         });
     }
 
     pub fn started(&self) {
-        let _ = self.events.send(JobEvent::Started {
+        let _ = self.events.unbounded_send(JobEvent::Started {
             job_id: self.job_id,
         });
     }
 
     pub fn completed(&self) {
-        let _ = self.events.send(JobEvent::Completed {
+        let _ = self.events.unbounded_send(JobEvent::Completed {
             job_id: self.job_id,
         });
     }
 
     pub fn failed(&self, message: impl Into<String>) {
-        let _ = self.events.send(JobEvent::Failed {
+        let _ = self.events.unbounded_send(JobEvent::Failed {
             job_id: self.job_id,
             message: message.into(),
         });
@@ -98,9 +98,9 @@ pub struct JobRuntime {
 }
 
 impl JobRuntime {
-    pub fn create_job(&self) -> (JobContext, Receiver<JobEvent>) {
+    pub fn create_job(&self) -> (JobContext, UnboundedReceiver<JobEvent>) {
         let job_id = JobId(self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
-        let (events, receiver) = mpsc::channel();
+        let (events, receiver) = mpsc::unbounded();
         let context = JobContext {
             job_id,
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -113,6 +113,7 @@ impl JobRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
 
     #[test]
     fn creates_monotonic_job_ids_and_reports_progress() {
@@ -128,7 +129,9 @@ mod tests {
         assert_eq!(first.job_id(), JobId(1));
         assert_eq!(second.job_id(), JobId(2));
         assert_eq!(
-            receiver.recv().unwrap(),
+            futures::executor::block_on(receiver.into_future())
+                .0
+                .unwrap(),
             JobEvent::Progress {
                 job_id: JobId(1),
                 progress: Progress {
@@ -148,7 +151,9 @@ mod tests {
 
         assert!(context.is_cancelled());
         assert_eq!(
-            receiver.recv().unwrap(),
+            futures::executor::block_on(receiver.into_future())
+                .0
+                .unwrap(),
             JobEvent::Cancelled { job_id: JobId(1) }
         );
     }

@@ -1,11 +1,13 @@
 use application::{BackendInventory, WorkspaceService};
 use contracts::ModelRef;
 use domain::{MeetingProject, ProjectId, ProjectStatus};
+use futures::{FutureExt, StreamExt};
 use gpui::{
     div, prelude::*, px, rgb, size, App, Bounds, ClickEvent, Context, PathPromptOptions, Window,
     WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
+use runtime::{JobContext, JobEvent};
 
 #[derive(Clone)]
 pub struct DesktopServices {
@@ -21,6 +23,7 @@ struct RootView {
     selected_project: Option<ProjectId>,
     notice: String,
     processing: bool,
+    cancel_contexts: Option<(JobContext, JobContext)>,
 }
 
 impl RootView {
@@ -34,6 +37,7 @@ impl RootView {
             selected_project,
             notice: "Import an audio file to create a meeting project.".into(),
             processing: false,
+            cancel_contexts: None,
         }
     }
 
@@ -77,6 +81,28 @@ impl RootView {
         cx.notify();
     }
 
+    fn process_or_cancel(
+        &mut self,
+        event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.processing {
+            self.cancel_processing(event, window, cx);
+        } else {
+            self.process_selected(event, window, cx);
+        }
+    }
+
+    fn cancel_processing(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some((asr_context, diarization_context)) = &self.cancel_contexts {
+            asr_context.cancel();
+            diarization_context.cancel();
+            self.notice = "Cancellation requested…".into();
+            cx.notify();
+        }
+    }
+
     fn process_selected(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(project_id) = self.selected_project.clone() else {
             self.notice = "Select a project first.".into();
@@ -101,29 +127,70 @@ impl RootView {
         let workspace = self.services.workspace.clone();
         let asr_model = self.services.asr_model.clone();
         let diarization_model = self.services.diarization_model.clone();
+        let job = match workspace.start_project_processing(project_id, asr_model, diarization_model)
+        {
+            Ok(job) => job,
+            Err(error) => {
+                self.processing = false;
+                self.notice = format!("Processing failed: {}", error.message);
+                cx.notify();
+                return;
+            }
+        };
+        self.cancel_contexts = Some((job.asr_context.clone(), job.diarization_context.clone()));
+        let mut asr_events = job.asr_events.fuse();
+        let mut diarization_events = job.diarization_events.fuse();
+        let mut processing_future = job.future.fuse();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = workspace
-                .process_project(project_id, asr_model, diarization_model)
-                .await;
-            this.update(cx, |this, cx| {
-                this.processing = false;
-                match result {
-                    Ok(project) => {
-                        this.projects = this.services.workspace.list_projects().unwrap_or_default();
-                        this.selected_project = Some(project.id.clone());
-                        this.notice = format!("Finished {}", project.title);
+            loop {
+                let mut asr_next = asr_events.next().fuse();
+                let mut diarization_next = diarization_events.next().fuse();
+                futures::select! {
+                    event = asr_next => {
+                        if let Some(event) = event {
+                            this.update(cx, |this, cx| this.apply_job_event("ASR", event, cx)).ok();
+                        }
                     }
-                    Err(error) => {
-                        this.projects = this.services.workspace.list_projects().unwrap_or_default();
-                        this.notice = format!("Processing failed: {}", error.message);
+                    event = diarization_next => {
+                        if let Some(event) = event {
+                            this.update(cx, |this, cx| this.apply_job_event("DIA", event, cx)).ok();
+                        }
+                    }
+                    result = processing_future => {
+                        this.update(cx, |this, cx| {
+                            this.processing = false;
+                            this.cancel_contexts = None;
+                            this.projects = this.services.workspace.list_projects().unwrap_or_default();
+                            match result {
+                                Ok(project) => {
+                                    this.selected_project = Some(project.id.clone());
+                                    this.notice = format!("Finished {}", project.title);
+                                }
+                                Err(error) => this.notice = format!("Processing failed: {}", error.message),
+                            }
+                            cx.notify();
+                        }).ok();
+                        break;
                     }
                 }
-                cx.notify();
-            })
-            .ok();
+            }
         })
         .detach();
+    }
+
+    fn apply_job_event(&mut self, source: &str, event: JobEvent, cx: &mut Context<Self>) {
+        self.notice = match event {
+            JobEvent::Started { .. } => format!("{source} started…"),
+            JobEvent::Progress { progress, .. } => match progress.total {
+                Some(total) => format!("{source} progress: {}/{}", progress.completed, total),
+                None => format!("{source} progress: {}", progress.completed),
+            },
+            JobEvent::Completed { .. } => format!("{source} completed…"),
+            JobEvent::Failed { message, .. } => format!("{source} failed: {message}"),
+            JobEvent::Cancelled { .. } => format!("{source} cancelled…"),
+        };
+        cx.notify();
     }
 }
 
@@ -295,11 +362,11 @@ fn main_panel(
                                 |button| button.bg(rgb(0x2563eb)),
                             )
                             .child(if processing {
-                                "Processing…"
+                                "Cancel"
                             } else {
                                 "Process meeting"
                             })
-                            .on_click(cx.listener(RootView::process_selected)),
+                            .on_click(cx.listener(RootView::process_or_cancel)),
                     ),
             );
 

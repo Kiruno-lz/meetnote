@@ -9,7 +9,10 @@ use std::pin::Pin;
 mod workspace;
 
 pub use contracts::BackendDescriptor;
-pub use workspace::{render_markdown, ProcessingRequest, ProcessingService, WorkspaceService};
+pub use workspace::{
+    render_markdown, ProcessingContexts, ProcessingRequest, ProcessingService,
+    ProjectProcessingJob, WorkspaceService,
+};
 
 pub type BackendFuture<T> = Pin<Box<dyn Future<Output = Result<T, BackendError>> + Send>>;
 

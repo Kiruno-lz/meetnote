@@ -5610,8 +5610,10 @@ dependencies = [
  "application",
  "contracts",
  "domain",
+ "futures",
  "gpui",
  "gpui_platform",
+ "runtime",
 ]
 
 [[package]]

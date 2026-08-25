@@ -1,7 +1,8 @@
 use crate::{run_pipeline, AsrBackend, BackendFuture, DiarizationBackend, PipelineResult};
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use domain::{MeetingProject, ProjectId, ProjectStatus, SpeakerTaggedSegment};
-use runtime::{JobContext, JobRuntime};
+use futures::channel::mpsc::UnboundedReceiver;
+use runtime::{JobContext, JobEvent, JobRuntime};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -21,6 +22,13 @@ pub struct ProcessingService {
     asr_backend: Arc<dyn AsrBackend>,
     diarization_backend: Arc<dyn DiarizationBackend>,
     runtime: Arc<JobRuntime>,
+}
+
+pub struct ProcessingContexts {
+    pub asr_context: JobContext,
+    pub diarization_context: JobContext,
+    pub asr_events: UnboundedReceiver<JobEvent>,
+    pub diarization_events: UnboundedReceiver<JobEvent>,
 }
 
 impl ProcessingService {
@@ -47,10 +55,15 @@ impl ProcessingService {
         )
     }
 
-    pub fn contexts(&self) -> (JobContext, JobContext) {
-        let (asr_context, _) = self.runtime.create_job();
-        let (diarization_context, _) = self.runtime.create_job();
-        (asr_context, diarization_context)
+    pub fn contexts(&self) -> ProcessingContexts {
+        let (asr_context, asr_events) = self.runtime.create_job();
+        let (diarization_context, diarization_events) = self.runtime.create_job();
+        ProcessingContexts {
+            asr_context,
+            diarization_context,
+            asr_events,
+            diarization_events,
+        }
     }
 
     pub fn process(
@@ -92,6 +105,14 @@ pub struct WorkspaceService {
     markdown_directory: PathBuf,
 }
 
+pub struct ProjectProcessingJob {
+    pub future: BackendFuture<MeetingProject>,
+    pub asr_context: JobContext,
+    pub diarization_context: JobContext,
+    pub asr_events: UnboundedReceiver<JobEvent>,
+    pub diarization_events: UnboundedReceiver<JobEvent>,
+}
+
 impl WorkspaceService {
     pub fn new(
         processing: ProcessingService,
@@ -128,53 +149,67 @@ impl WorkspaceService {
         self.repository.get(project_id)
     }
 
-    pub fn process_project(
+    pub fn start_project_processing(
         &self,
         project_id: ProjectId,
         asr_model: ModelRef,
         diarization_model: ModelRef,
-    ) -> BackendFuture<MeetingProject> {
-        let workspace = self.clone();
-        Box::pin(async move {
-            let mut project = workspace
-                .repository
-                .get(&project_id)
-                .map_err(persistence_error)?
-                .ok_or_else(|| persistence_error("project does not exist"))?;
-            project.status = ProjectStatus::Processing;
-            workspace
-                .repository
-                .save(project.clone())
-                .map_err(persistence_error)?;
+    ) -> Result<ProjectProcessingJob, contracts::BackendError> {
+        let mut project = self
+            .repository
+            .get(&project_id)
+            .map_err(persistence_error)?
+            .ok_or_else(|| persistence_error("project does not exist"))?;
+        project.status = ProjectStatus::Processing;
+        self.repository
+            .save(project.clone())
+            .map_err(persistence_error)?;
 
-            let request = ProcessingRequest {
-                audio_path: project.audio_path.clone(),
-                asr_model,
-                diarization_model,
-                language: None,
-                expected_speakers: None,
-                device: ComputeDevice::Auto,
-            };
-            let result = match workspace.processing.probe(&request) {
-                Ok(()) => {
-                    let (asr_context, diarization_context) = workspace.processing.contexts();
-                    asr_context.started();
-                    diarization_context.started();
-                    workspace
-                        .processing
-                        .process(request, asr_context, diarization_context)
-                        .await
-                }
-                Err(error) => Err(error),
-            };
+        let request = ProcessingRequest {
+            audio_path: project.audio_path.clone(),
+            asr_model,
+            diarization_model,
+            language: None,
+            expected_speakers: None,
+            device: ComputeDevice::Auto,
+        };
+        self.processing.probe(&request).map_err(|error| {
+            project.status = ProjectStatus::Failed;
+            let _ = self.repository.save(project.clone());
+            error
+        })?;
+
+        let contexts = self.processing.contexts();
+        contexts.asr_context.started();
+        contexts.diarization_context.started();
+        let asr_context = contexts.asr_context.clone();
+        let diarization_context = contexts.diarization_context.clone();
+        let asr_status_context = contexts.asr_context.clone();
+        let diarization_status_context = contexts.diarization_context.clone();
+        let workspace = self.clone();
+        let future = Box::pin(async move {
+            let result = workspace
+                .processing
+                .process(request, asr_context, diarization_context)
+                .await;
             let result = match result {
                 Ok(result) => result,
                 Err(error) => {
+                    if error.code == contracts::BackendErrorCode::Cancelled {
+                        asr_status_context.cancel();
+                        diarization_status_context.cancel();
+                    } else {
+                        asr_status_context.failed(error.message.clone());
+                        diarization_status_context.failed(error.message.clone());
+                    }
                     project.status = ProjectStatus::Failed;
                     let _ = workspace.repository.save(project);
                     return Err(error);
                 }
             };
+
+            asr_status_context.completed();
+            diarization_status_context.completed();
 
             project.status = ProjectStatus::Ready;
             project.transcript = result.asr.segments.clone();
@@ -196,6 +231,27 @@ impl WorkspaceService {
                 .save(project.clone())
                 .map_err(persistence_error)?;
             Ok(project)
+        });
+        Ok(ProjectProcessingJob {
+            future,
+            asr_context: contexts.asr_context,
+            diarization_context: contexts.diarization_context,
+            asr_events: contexts.asr_events,
+            diarization_events: contexts.diarization_events,
+        })
+    }
+
+    pub fn process_project(
+        &self,
+        project_id: ProjectId,
+        asr_model: ModelRef,
+        diarization_model: ModelRef,
+    ) -> BackendFuture<MeetingProject> {
+        let workspace = self.clone();
+        Box::pin(async move {
+            let job =
+                workspace.start_project_processing(project_id, asr_model, diarization_model)?;
+            job.future.await
         })
     }
 }

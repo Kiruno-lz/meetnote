@@ -7,5 +7,7 @@ edition.workspace = true
 application = { path = "../application" }
 contracts = { path = "../contracts" }
 domain = { path = "../domain" }
+futures.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
+runtime = { path = "../runtime" }
