@@ -102,6 +102,33 @@ impl RootView {
         cx.notify();
     }
 
+    fn merge_speaker(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(project_id) = self.selected_project.clone() else {
+            return;
+        };
+        let workspace = self.services.workspace.clone();
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || {
+                workspace.merge_speaker(&project_id, "speaker-1", "speaker-0")
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(project) => {
+                        this.projects = this.services.workspace.list_projects().unwrap_or_default();
+                        this.selected_project = Some(project.id);
+                        this.notice =
+                            "Merged speaker-1 into speaker-0 and updated Markdown.".into();
+                    }
+                    Err(error) => this.notice = format!("Speaker edit failed: {error}"),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     fn download_asr_model(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.downloading || Path::new(&self.services.asr_model.artifact_path).is_file() {
             self.notice = "ASR model is already ready or downloading.".into();
@@ -449,6 +476,25 @@ fn main_panel(
             );
 
         if project.status == ProjectStatus::Ready {
+            if project
+                .speaker_segments
+                .iter()
+                .any(|segment| segment.speaker_id == "speaker-1")
+            {
+                panel = panel.child(
+                    div()
+                        .id("merge-speaker")
+                        .cursor_pointer()
+                        .w(px(260.))
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(rgb(0x263142))
+                        .text_sm()
+                        .child("Merge speaker-1 into speaker-0")
+                        .on_click(cx.listener(RootView::merge_speaker)),
+                );
+            }
             panel = panel.child(
                 div()
                     .flex_1()

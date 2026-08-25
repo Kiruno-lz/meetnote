@@ -46,6 +46,22 @@ impl MeetingProject {
             markdown_path: None,
         }
     }
+
+    pub fn merge_speaker(&mut self, from: &str, into: &str) -> usize {
+        let mut changed = 0;
+        for segment in &mut self.diarization {
+            if segment.speaker_id == from {
+                segment.speaker_id = into.to_string();
+                changed += 1;
+            }
+        }
+        for segment in &mut self.speaker_segments {
+            if segment.speaker_id == from {
+                segment.speaker_id = into.to_string();
+            }
+        }
+        changed
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -162,5 +178,28 @@ mod tests {
         let result = align_transcript_and_speakers(&transcript, &diarization);
 
         assert_eq!(result[0].speaker_id, "unknown");
+    }
+
+    #[test]
+    fn merges_speaker_labels_without_touching_transcript_text() {
+        let mut project = MeetingProject::new(ProjectId::new("p1"), "Meeting", "a.wav");
+        project.diarization.push(DiarizationSegment {
+            id: "d1".into(),
+            speaker_id: "speaker-1".into(),
+            start_ms: 0,
+            end_ms: 1_000,
+            confidence: None,
+        });
+        project.speaker_segments.push(SpeakerTaggedSegment {
+            transcript_segment_id: "t1".into(),
+            speaker_id: "speaker-1".into(),
+            start_ms: 0,
+            end_ms: 1_000,
+            text: "keep this text".into(),
+        });
+
+        assert_eq!(project.merge_speaker("speaker-1", "speaker-0"), 1);
+        assert_eq!(project.diarization[0].speaker_id, "speaker-0");
+        assert_eq!(project.speaker_segments[0].text, "keep this text");
     }
 }

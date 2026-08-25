@@ -149,6 +149,34 @@ impl WorkspaceService {
         self.repository.get(project_id)
     }
 
+    pub fn merge_speaker(
+        &self,
+        project_id: &ProjectId,
+        from: &str,
+        into: &str,
+    ) -> Result<MeetingProject, String> {
+        let mut project = self
+            .repository
+            .get(project_id)?
+            .ok_or_else(|| "project does not exist".to_string())?;
+        let changed = project.merge_speaker(from, into);
+        if changed == 0 {
+            return Ok(project);
+        }
+        let markdown_path = self
+            .markdown_directory
+            .join(format!("{}.md", project.id.as_str()));
+        fs::create_dir_all(&self.markdown_directory).map_err(|error| error.to_string())?;
+        fs::write(
+            &markdown_path,
+            render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
+        )
+        .map_err(|error| error.to_string())?;
+        project.markdown_path = Some(markdown_path.display().to_string());
+        self.repository.save(project.clone())?;
+        Ok(project)
+    }
+
     pub fn start_project_processing(
         &self,
         project_id: ProjectId,

@@ -160,7 +160,7 @@ sherpa-onnx diarization
 - JobRuntime 事件订阅、取消和 ASR/diarization 状态展示已完成；仍需补充更细的阶段百分比和恢复策略。
 - SQLite schema 与迁移。
 - 应用内模型下载、校验和安装界面。
-- speaker 手工合并/重命名和 LLM 忠实去口语化。
+- speaker 合并和 Markdown 回写已完成；自由命名编辑与 LLM 忠实去口语化仍需后续补充。
 
 验收：GPUI 可导入音频、创建项目、执行 pipeline、重启后恢复项目，并显示 speaker-labelled transcript。
 
