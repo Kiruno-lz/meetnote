@@ -1,10 +1,10 @@
 # Rust-native 工程实施计划
 
-## v0.1：可编译架构基础
+## v0.1：可启动的 Rust-native foundation
 
 ### 目标
 
-建立一个可编译、可测试、可启动的 Rust-native foundation，不下载模型，不接入真实推理依赖，不实现完整会议 UI。
+建立一个可编译、可测试、可启动并已接入第一组真实推理后端的 Rust-native foundation，不下载模型权重，不实现完整会议 UI。
 
 ### 交付目录
 
@@ -39,12 +39,14 @@ crates/
 - JobRuntime 的 job id、取消状态、进度事件和测试。
 - Rust 读取并校验 `resources/models/catalog.json`。
 - `persistence` 的 in-memory repository，SQLite 延后实现。
-- whisper-rs、sherpa-onnx 和 native diarization 的 placeholder adapter。
+- `whisper-rs` 的真实 ASR adapter，支持 GGML/GGUF 文件、CPU/Metal 设备选择和时间戳结果。
+- `sherpa-onnx` 的真实 diarization adapter，支持 ONNX bundle、CPU/CoreML provider 和 speaker clustering。
+- 应用入口注册 `whisper-rs + sherpa-onnx`，GPUI 读取并展示两个 backend descriptor。
 
 ### v0.1 不实现
 
-- 不加载 Whisper、sherpa-onnx 或 diarization crate 模型。
-- 不下载模型或引入大型推理依赖。
+- 不在构建或测试阶段加载模型权重；模型加载发生在应用收到有效 `ModelRef` 推理任务之后。
+- 不下载模型权重；推理依赖可以编译进 workspace，但测试不要求本地存在模型 artifact。
 - 不实现 SQLite schema。
 - 不实现完整会议项目 UI。
 - 不实现 LLM provider 的网络调用。
@@ -66,6 +68,9 @@ cargo build -p meetnote
 - `cargo test --workspace --exclude meetnote --exclude ui` 已通过，覆盖 fake ASR、fake diarization、对齐、JobRuntime 取消/进度事件、两个 backend registry、in-memory repository 和 catalog。
 - GPUI 依赖已锁定并完成 Rust 依赖编译；通过 `runtime_shaders` feature 避免构建期调用 `xcrun metal`。
 - `cargo build -p meetnote`、`cargo test --workspace` 和短暂 `cargo run -p meetnote` 启动验证均已通过。
+- Xcode 26.6 已被 `xcode-select` 选中，GPUI 使用 `runtime_shaders` 完成 macOS 编译与启动验证。
+- `whisper-rs` 通过 `whisper-rs-sys` 接入 whisper.cpp；`sherpa-onnx` 通过 native C API 接入 speaker diarization；两者均经过 Rust 类型检查。
+- 应用入口已注册 `WhisperRsBackend` 和 `SherpaOnnxDiarizationBackend`，尚未下载模型权重，因此本轮不宣称真实音频推理结果。
 - 新增 backend 只需实现 trait 并注册，不修改 application pipeline。
 - catalog 中的模型来源、格式和状态已能被 Rust 读取。
 
@@ -111,10 +116,10 @@ cargo build -p meetnote
 
 ## 阶段 3：第一个真实纵向流程
 
-建议组合：
+已落地组合：
 
 ```text
-whisper-rs
+whisper-rs ASR
 +
 sherpa-onnx diarization
 ```
@@ -129,7 +134,7 @@ sherpa-onnx diarization
   -> 保存 canonical project
 ```
 
-验收：不依赖 Python、不依赖 Tauri、不经过跨进程 JSON。
+验收：不依赖 Python、不依赖 Tauri、不经过跨进程 JSON；当前已完成后端编译、注册和缺失模型探测，待模型安装后补充真实音频端到端测试。
 
 ## 阶段 4：替换后端验证
 

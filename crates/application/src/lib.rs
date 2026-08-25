@@ -1,11 +1,12 @@
 use contracts::{
-    AsrRequest, AsrResult, BackendDescriptor, BackendError, BackendTask, DiarizationRequest,
-    DiarizationResult,
+    AsrRequest, AsrResult, BackendError, BackendTask, DiarizationRequest, DiarizationResult,
 };
 use domain::{align_transcript_and_speakers, SpeakerTaggedSegment};
 use runtime::JobContext;
 use std::future::Future;
 use std::pin::Pin;
+
+pub use contracts::BackendDescriptor;
 
 pub type BackendFuture<T> = Pin<Box<dyn Future<Output = Result<T, BackendError>> + Send>>;
 
@@ -30,6 +31,18 @@ pub trait ProjectRepository: Send + Sync {
     fn get(&self, project_id: &domain::ProjectId)
         -> Result<Option<domain::MeetingProject>, String>;
     fn list(&self) -> Result<Vec<domain::MeetingProject>, String>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendInventory {
+    pub asr: Vec<BackendDescriptor>,
+    pub diarization: Vec<BackendDescriptor>,
+}
+
+impl BackendInventory {
+    pub fn new(asr: Vec<BackendDescriptor>, diarization: Vec<BackendDescriptor>) -> Self {
+        Self { asr, diarization }
+    }
 }
 
 pub struct PipelineResult {
@@ -111,6 +124,7 @@ mod tests {
                         backend_id: "fake-asr".into(),
                         model_id: "fake".into(),
                         revision: None,
+                        artifact_path: "fixture-model".into(),
                     },
                     language: Some("zh".into()),
                     segments: vec![TranscriptSegment {
@@ -147,6 +161,7 @@ mod tests {
                         backend_id: "fake-diarization".into(),
                         model_id: "fake".into(),
                         revision: None,
+                        artifact_path: "fixture-model".into(),
                     },
                     segments: vec![DiarizationSegment {
                         id: "d1".into(),
@@ -170,6 +185,7 @@ mod tests {
             backend_id: "fake".into(),
             model_id: "fake".into(),
             revision: None,
+            artifact_path: "fixture-model".into(),
         };
         let result = futures::executor::block_on(run_pipeline(
             &FakeAsr,

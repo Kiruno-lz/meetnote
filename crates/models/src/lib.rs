@@ -25,6 +25,8 @@ pub struct ModelCatalogEntry {
     pub license: String,
     pub requires_auth: bool,
     pub status: String,
+    #[serde(default)]
+    pub artifact_files: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

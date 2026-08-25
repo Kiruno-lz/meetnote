@@ -91,6 +91,12 @@ cancelled
 
 没有完成转换和校验的条目不能显示为已安装。
 
+v0.1 的 backend artifact 约定：
+
+- `whisper-rs` 接收一个已解析的 GGML/GGUF 文件路径，例如 `ggml-large-v3.bin`；OpenAI Whisper 的 PyTorch `.pt` 文件不能直接加载。
+- `sherpa-onnx` diarization 接收一个目录路径，目录至少包含 catalog `artifactFiles` 声明的 `segmentation.onnx` 和 `embedding.onnx`。
+- `ModelRef.artifact_path` 是安装完成后的解析路径，不是下载 URL；文件模型指向文件，bundle 模型指向目录。
+
 ## 安全与可追溯
 
 - SHA-256 必须来自可信的固定 manifest。

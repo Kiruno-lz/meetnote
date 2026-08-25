@@ -4,6 +4,9 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+audio = { path = "../audio" }
 application = { path = "../application" }
 contracts = { path = "../contracts" }
+domain = { path = "../domain" }
 runtime = { path = "../runtime" }
+whisper-rs = { version = "0.16.0", default-features = false, features = ["metal"] }

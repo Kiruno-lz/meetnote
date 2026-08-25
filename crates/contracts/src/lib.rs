@@ -6,6 +6,7 @@ pub struct ModelRef {
     pub backend_id: String,
     pub model_id: String,
     pub revision: Option<String>,
+    pub artifact_path: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,7 +1,28 @@
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+
+pub fn spawn_blocking<T, F>(work: F) -> impl Future<Output = T> + Send
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (sender, receiver) = futures::channel::oneshot::channel();
+    std::thread::Builder::new()
+        .name("meetnote-inference".into())
+        .spawn(move || {
+            let _ = sender.send(work());
+        })
+        .expect("failed to spawn inference worker");
+
+    async move {
+        receiver
+            .await
+            .expect("inference worker dropped before returning a result")
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct JobId(pub u64);
