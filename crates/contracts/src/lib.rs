@@ -73,6 +73,7 @@ pub enum BackendErrorCode {
     InferenceFailed,
     Cancelled,
     OutputValidationFailed,
+    PersistenceFailed,
     NotImplemented,
 }
 

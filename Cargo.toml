@@ -28,6 +28,7 @@ serde_json = "1"
 thiserror = "2"
 futures = "0.3"
 hound = "3.5"
+symphonia = { version = "0.5", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mp3", "wav"] }
 
 # GPUI is still pre-1.0. Keep the UI and platform crates on one exact revision.
 gpui = { git = "https://github.com/zed-industries/zed.git", rev = "38c5dd7c98b20826cf6f8da24d4116a58c3a6a75", package = "gpui", default-features = false }

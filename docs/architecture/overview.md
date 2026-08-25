@@ -91,7 +91,7 @@ resources/models/catalog.json
 
 ### persistence
 
-SQLite 保存可编辑项目状态；文件系统保存音频、模型和 Markdown 产物。localStorage 不再存在。
+v0.2 当前使用原子替换的 JSON project store 保存可编辑项目状态；文件系统保存音频、模型和 Markdown 产物。SQLite 是后续 schema migration 的目标，不再使用 localStorage。
 
 ### models
 

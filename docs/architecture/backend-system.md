@@ -16,8 +16,8 @@ Candle ASR + custom ONNX diarization
 
 ```rust
 pub trait AsrBackend: Send + Sync {
-    fn descriptor(&self) -> AsrBackendDescriptor;
-    fn probe(&self, model: &ResolvedModel) -> Result<BackendHealth, BackendError>;
+    fn descriptor(&self) -> BackendDescriptor;
+    fn probe(&self, model: &ModelRef) -> Result<(), BackendError>;
     fn transcribe(
         &self,
         request: AsrRequest,
@@ -42,8 +42,8 @@ pub trait AsrBackend: Send + Sync {
 
 ```rust
 pub trait DiarizationBackend: Send + Sync {
-    fn descriptor(&self) -> DiarizationBackendDescriptor;
-    fn probe(&self, model: &ResolvedModel) -> Result<BackendHealth, BackendError>;
+    fn descriptor(&self) -> BackendDescriptor;
+    fn probe(&self, model: &ModelRef) -> Result<(), BackendError>;
     fn diarize(
         &self,
         request: DiarizationRequest,
@@ -91,8 +91,9 @@ InferenceRuntime
 - `InferenceFailed`
 - `Cancelled`
 - `OutputValidationFailed`
+- `PersistenceFailed`
 
-后端私有错误保留在 `BackendError::details`，不直接暴露给 GPUI。
+当前后端统一返回 `BackendError { code, message }`；GPUI 只消费错误码和用户可读消息。
 
 ## 任务事件
 
@@ -101,7 +102,7 @@ pub enum JobEvent {
     Started { job_id: JobId },
     Progress { job_id: JobId, progress: Progress },
     Completed { job_id: JobId },
-    Failed { job_id: JobId, error: AppError },
+    Failed { job_id: JobId, message: String },
     Cancelled { job_id: JobId },
 }
 ```

@@ -1,5 +1,5 @@
 use application::{diarization_descriptor, BackendFuture, DiarizationBackend};
-use audio::read_wav_mono_16k;
+use audio::read_audio_mono_16k;
 use contracts::{
     BackendDescriptor, BackendError, BackendErrorCode, ComputeDevice, DiarizationRequest,
     DiarizationResult, ModelRef,
@@ -88,7 +88,7 @@ fn diarize_sync(
     }
 
     backend.probe(&request.model)?;
-    let audio = read_wav_mono_16k(&request.audio_path).map_err(|error| BackendError {
+    let audio = read_audio_mono_16k(&request.audio_path).map_err(|error| BackendError {
         code: BackendErrorCode::InvalidAudio,
         message: error.to_string(),
     })?;

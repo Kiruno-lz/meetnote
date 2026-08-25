@@ -7,6 +7,7 @@ edition.workspace = true
 contracts = { path = "../contracts" }
 domain = { path = "../domain" }
 runtime = { path = "../runtime" }
+futures.workspace = true
 
 [dev-dependencies]
 futures.workspace = true

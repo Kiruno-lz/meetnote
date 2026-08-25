@@ -5,5 +5,7 @@ edition.workspace = true
 
 [dependencies]
 application = { path = "../application" }
+contracts = { path = "../contracts" }
+domain = { path = "../domain" }
 gpui.workspace = true
 gpui_platform.workspace = true

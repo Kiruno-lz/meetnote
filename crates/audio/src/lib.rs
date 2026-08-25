@@ -1,4 +1,13 @@
+use std::fs::File;
 use std::path::Path;
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::formats::FormatOptions;
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
+use symphonia::default::{get_codecs, get_probe};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -17,6 +26,20 @@ pub enum AudioError {
     Read { path: String, source: hound::Error },
     #[error("audio has no samples: {path}")]
     Empty { path: String },
+    #[error("failed to decode audio file {path}: {message}")]
+    Decode { path: String, message: String },
+}
+
+pub fn read_audio_mono_16k(path: impl AsRef<Path>) -> Result<MonoPcm16k, AudioError> {
+    let path = path.as_ref();
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("wav"))
+    {
+        return read_wav_mono_16k(path);
+    }
+    read_with_symphonia(path)
 }
 
 pub fn read_wav_mono_16k(path: impl AsRef<Path>) -> Result<MonoPcm16k, AudioError> {
@@ -76,6 +99,94 @@ fn resample_linear(samples: &[f32], source_rate: u32, target_rate: u32) -> Vec<f
             samples[left] * (1.0 - fraction as f32) + samples[right] * fraction as f32
         })
         .collect()
+}
+
+fn read_with_symphonia(path: &Path) -> Result<MonoPcm16k, AudioError> {
+    let path_display = path.display().to_string();
+    let file = File::open(path).map_err(|error| AudioError::Decode {
+        path: path_display.clone(),
+        message: error.to_string(),
+    })?;
+    let media_source = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(extension) = path.extension().and_then(|extension| extension.to_str()) {
+        hint.with_extension(extension);
+    }
+    let probed = get_probe()
+        .format(
+            &hint,
+            media_source,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .map_err(|error| AudioError::Decode {
+            path: path_display.clone(),
+            message: error.to_string(),
+        })?;
+    let mut format = probed.format;
+    let track = format.default_track().ok_or_else(|| AudioError::Decode {
+        path: path_display.clone(),
+        message: "audio has no default track".into(),
+    })?;
+    let track_id = track.id;
+    let sample_rate = track
+        .codec_params
+        .sample_rate
+        .ok_or_else(|| AudioError::Decode {
+            path: path_display.clone(),
+            message: "audio track has no sample rate".into(),
+        })?;
+    let mut decoder = get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|error| AudioError::Decode {
+            path: path_display.clone(),
+            message: error.to_string(),
+        })?;
+    let mut mono = Vec::new();
+
+    loop {
+        let packet = match format.next_packet() {
+            Ok(packet) => packet,
+            Err(SymphoniaError::IoError(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break
+            }
+            Err(error) => {
+                return Err(AudioError::Decode {
+                    path: path_display.clone(),
+                    message: error.to_string(),
+                })
+            }
+        };
+        if packet.track_id() != track_id {
+            continue;
+        }
+        let decoded = decoder
+            .decode(&packet)
+            .map_err(|error| AudioError::Decode {
+                path: path_display.clone(),
+                message: error.to_string(),
+            })?;
+        let spec = *decoded.spec();
+        let channels = spec.channels.count().max(1);
+        let mut buffer = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
+        buffer.copy_interleaved_ref(decoded);
+        mono.extend(
+            buffer
+                .samples()
+                .chunks(channels)
+                .map(|frame| frame.iter().copied().sum::<f32>() / frame.len() as f32),
+        );
+    }
+
+    if mono.is_empty() {
+        return Err(AudioError::Empty { path: path_display });
+    }
+    Ok(MonoPcm16k {
+        samples: resample_linear(&mono, sample_rate, 16_000),
+        sample_rate: 16_000,
+    })
 }
 
 #[cfg(test)]

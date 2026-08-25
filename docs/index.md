@@ -12,4 +12,4 @@
 
 旧版 Tauri、TypeScript、Python 和旧测试树已从工作目录清理。Git 提交 `0b031d0` 是清理前的文档归档检查点，之后的历史提交保留旧实现。当前已进入 v0.1 Rust-native foundation。
 
-v0.1 已建立 Cargo workspace、domain、contracts、application、runtime、model catalog、fake pipeline、backend managers、真实 `whisper-rs` ASR、真实 `sherpa-onnx` diarization 和最小 GPUI 入口。模型下载、真实音频端到端验证与 SQLite 按实施计划后续接入。
+v0.2 正在落地：GPUI 项目工作区、音频导入、Rust 音频解码、后台 processing service、JSON 项目持久化和真实音频 pipeline 已接入。SQLite、应用内模型下载、细粒度进度展示和 LLM 去口语化仍未完成。

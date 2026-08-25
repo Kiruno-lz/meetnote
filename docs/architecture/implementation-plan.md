@@ -70,7 +70,7 @@ cargo build -p meetnote
 - `cargo build -p meetnote`、`cargo test --workspace` 和短暂 `cargo run -p meetnote` 启动验证均已通过。
 - Xcode 26.6 已被 `xcode-select` 选中，GPUI 使用 `runtime_shaders` 完成 macOS 编译与启动验证。
 - `whisper-rs` 通过 `whisper-rs-sys` 接入 whisper.cpp；`sherpa-onnx` 通过 native C API 接入 speaker diarization；两者均经过 Rust 类型检查。
-- 应用入口已注册 `WhisperRsBackend` 和 `SherpaOnnxDiarizationBackend`，尚未下载模型权重，因此本轮不宣称真实音频推理结果。
+- foundation checkpoint 当时只验证了 backend probe；随后已下载本地测试模型并完成真实 M4A 端到端推理，结果已由 v0.2 workspace 保存链路复用。
 - 新增 backend 只需实现 trait 并注册，不修改 application pipeline。
 - catalog 中的模型来源、格式和状态已能被 Rust 读取。
 
@@ -134,7 +134,7 @@ sherpa-onnx diarization
   -> 保存 canonical project
 ```
 
-验收：不依赖 Python、不依赖 Tauri、不经过跨进程 JSON；当前已完成后端编译、注册和缺失模型探测，待模型安装后补充真实音频端到端测试。
+验收：不依赖 Python、不依赖 Tauri、不经过跨进程 JSON；已使用本地 GGML 与 ONNX 权重完成真实 M4A 音频端到端测试。
 
 ## 阶段 4：替换后端验证
 
@@ -144,6 +144,25 @@ sherpa-onnx diarization
 - `diarization` crate backend
 
 验收：同一个 application pipeline 可以切换 backend；UI 不修改。
+
+## v0.2：桌面工作区
+
+当前落地：
+
+- GPUI 项目列表和项目详情窗口。
+- 系统音频文件选择器，支持导入 WAV、MP3、M4A、FLAC 等 Symphonia 可解码格式。
+- `WorkspaceService` 连接项目导入、模型 probe、后台 pipeline 和项目状态。
+- JSON 项目仓库和 Markdown 产物保存。
+- 真实 ASR/diarization 结果在 GPUI 中按 speaker 展示。
+
+仍需完成：
+
+- JobRuntime 事件订阅和细粒度 UI 进度。
+- SQLite schema 与迁移。
+- 应用内模型下载、校验和安装界面。
+- speaker 手工合并/重命名和 LLM 忠实去口语化。
+
+验收：GPUI 可导入音频、创建项目、执行 pipeline、重启后恢复项目，并显示 speaker-labelled transcript。
 
 ## 阶段 5：GPUI UI
 

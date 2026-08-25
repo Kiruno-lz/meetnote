@@ -15,4 +15,5 @@ futures.workspace = true
 runtime = { path = "../../crates/runtime" }
 serde.workspace = true
 serde_json.workspace = true
+persistence = { path = "../../crates/persistence" }
 ui = { path = "../../crates/ui" }

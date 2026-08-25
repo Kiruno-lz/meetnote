@@ -6,7 +6,10 @@ use runtime::JobContext;
 use std::future::Future;
 use std::pin::Pin;
 
+mod workspace;
+
 pub use contracts::BackendDescriptor;
+pub use workspace::{render_markdown, ProcessingRequest, ProcessingService, WorkspaceService};
 
 pub type BackendFuture<T> = Pin<Box<dyn Future<Output = Result<T, BackendError>> + Send>>;
 
@@ -59,10 +62,11 @@ pub async fn run_pipeline(
     asr_context: JobContext,
     diarization_context: JobContext,
 ) -> Result<PipelineResult, BackendError> {
-    let asr = asr_backend.transcribe(asr_request, asr_context).await?;
-    let diarization = diarization_backend
-        .diarize(diarization_request, diarization_context)
-        .await?;
+    let asr_future = asr_backend.transcribe(asr_request, asr_context);
+    let diarization_future = diarization_backend.diarize(diarization_request, diarization_context);
+    let (asr, diarization) = futures::join!(asr_future, diarization_future);
+    let asr = asr?;
+    let diarization = diarization?;
     let aligned = align_transcript_and_speakers(&asr.segments, &diarization.segments);
 
     Ok(PipelineResult {

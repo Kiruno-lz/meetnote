@@ -12,7 +12,7 @@ meetnote 是 Rust-native meeting intelligence platform。桌面 UI 使用 GPUI�
 - ASR 与 diarization 分别拥有独立的 backend manager，后端可替换、可组合。
 - 推理后端不得启动 Python subprocess；项目不维护 Rust/Python 兼容层。
 - 模型下载、校验、缓存和安装由 Rust model manager 统一负责。
-- SQLite 保存可编辑项目状态；音频、模型和 Markdown 是文件系统资产。
+- v0.2 使用原子替换的 JSON project store 保存可编辑项目状态；SQLite 是后续迁移目标，音频、模型和 Markdown 是文件系统资产。
 - 所有后端输出先归一化到统一 contracts，再进入对齐、人工修正和纪要生成流程。
 
 ## Workspace 约定

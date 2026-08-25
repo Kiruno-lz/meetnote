@@ -1,16 +1,21 @@
-use application::{run_pipeline, AsrBackend, BackendInventory, DiarizationBackend};
+use application::{
+    run_pipeline, AsrBackend, BackendInventory, DiarizationBackend, ProcessingService,
+    WorkspaceService,
+};
 use asr::{AsrBackendManager, AsrBackendRegistry};
 use asr_whisper_rs::WhisperRsBackend;
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use diarization::{DiarizationBackendManager, DiarizationBackendRegistry};
 use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
 use domain::SpeakerTaggedSegment;
+use persistence::JsonProjectRepository;
 use runtime::JobRuntime;
 use serde::Serialize;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use ui::DesktopServices;
 
 fn main() {
     let whisper_backend = Arc::new(WhisperRsBackend::default());
@@ -23,6 +28,31 @@ fn main() {
     let mut diarization_registry = DiarizationBackendRegistry::default();
     diarization_registry.register(diarization_backend.clone());
     let diarization_manager = DiarizationBackendManager::new(diarization_registry);
+
+    let repository = Arc::new(
+        JsonProjectRepository::open("data/projects/projects.json")
+            .expect("failed to open project repository"),
+    );
+    let workspace = WorkspaceService::new(
+        ProcessingService::new(whisper_backend.clone(), diarization_backend.clone()),
+        repository,
+        "data/markdown",
+    );
+    let desktop_services = DesktopServices {
+        workspace,
+        asr_model: ModelRef {
+            backend_id: "whisper-rs".into(),
+            model_id: "whisper-base-en-ggml".into(),
+            revision: None,
+            artifact_path: "models/asr/whisper-large-v3-ggml/ggml-base.en.bin".into(),
+        },
+        diarization_model: ModelRef {
+            backend_id: "sherpa-onnx".into(),
+            model_id: "sherpa-onnx-speaker-diarization-bundle".into(),
+            revision: None,
+            artifact_path: "models/diarization/sherpa-onnx-speaker-diarization-bundle".into(),
+        },
+    };
 
     let args: Vec<String> = env::args().collect();
     if args.get(1).map(String::as_str) == Some("process") {
@@ -46,10 +76,13 @@ fn main() {
         return;
     }
 
-    ui::run(BackendInventory::new(
-        asr_manager.available_backends(),
-        diarization_manager.available_backends(),
-    ));
+    ui::run(
+        BackendInventory::new(
+            asr_manager.available_backends(),
+            diarization_manager.available_backends(),
+        ),
+        desktop_services,
+    );
 }
 
 #[derive(Serialize)]

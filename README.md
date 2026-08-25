@@ -4,7 +4,7 @@ Rust-native meeting intelligence platform：本地导入音频，使用可切换
 
 ## 当前状态
 
-当前仓库已完成旧版 Tauri、TypeScript、Python 实现的清理，并完成 v0.1 Rust-native foundation：workspace、contracts、fake pipeline、backend managers、模型 catalog、真实 `whisper-rs` ASR、真实 `sherpa-onnx` diarization 和最小 GPUI 应用入口已经建立。新的工程边界、后端管理层、模型管理和实施顺序见 [`docs/index.md`](docs/index.md)。
+当前仓库已完成旧版 Tauri、TypeScript、Python 实现的清理，并正在完成 v0.2 Rust-native desktop workspace：GPUI 项目列表、音频导入、Rust 音频解码、后台 processing service、JSON 项目持久化、真实 `whisper-rs` ASR 和 `sherpa-onnx` diarization 已接入。新的工程边界、后端管理层、模型管理和实施顺序见 [`docs/index.md`](docs/index.md)。
 
 ## 目标架构
 
@@ -36,16 +36,15 @@ GPUI UI
 `meetnote` 默认启动 GPUI；传入 `process` 子命令可运行第一条真实 pipeline：
 
 ```bash
-ffmpeg -i docs/example/2p_en_video.m4a -ar 16000 -ac 1 -c:a pcm_s16le data/runs/2p_en_video.wav
 cargo run -p meetnote -- process \
-  data/runs/2p_en_video.wav \
+  docs/example/2p_en_video.m4a \
   models/asr/whisper-large-v3-ggml/ggml-base.en.bin \
   models/diarization/sherpa-onnx-speaker-diarization-bundle \
   data/runs/2p_en_video
 ```
 
-命令输出 JSON 和 Markdown；模型文件位于被 `.gitignore` 忽略的 `models/`，不会提交进仓库。
+命令直接读取 M4A，并输出 JSON 和 Markdown；模型文件位于被 `.gitignore` 忽略的 `models/`，不会提交进仓库。
 
 ## 当前不执行
 
-本阶段不下载模型权重。真实推理依赖已接入，但只有在提供有效的 `ModelRef.artifact_path` 后才会加载模型。完整 workspace 构建、测试和最小 GPUI 入口启动验证已通过；GPUI 使用 `runtime_shaders`，避免构建期依赖构建时 `metallib` 工具。
+模型权重由用户按需放入本地 cache，不进入仓库。当前桌面入口使用 `data/` 保存项目 JSON 和 Markdown；SQLite、应用内模型下载、细粒度进度面板和 LLM 去口语化仍是后续 v0.2 收尾工作。GPUI 使用 `runtime_shaders`，避免构建期依赖 `metallib` 工具。

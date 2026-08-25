@@ -13,11 +13,39 @@ impl ProjectId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MeetingProject {
     pub id: ProjectId,
     pub title: String,
     pub audio_path: String,
+    pub status: ProjectStatus,
+    pub transcript: Vec<TranscriptSegment>,
+    pub diarization: Vec<DiarizationSegment>,
+    pub speaker_segments: Vec<SpeakerTaggedSegment>,
+    pub markdown_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectStatus {
+    Imported,
+    Processing,
+    Ready,
+    Failed,
+}
+
+impl MeetingProject {
+    pub fn new(id: ProjectId, title: impl Into<String>, audio_path: impl Into<String>) -> Self {
+        Self {
+            id,
+            title: title.into(),
+            audio_path: audio_path.into(),
+            status: ProjectStatus::Imported,
+            transcript: Vec::new(),
+            diarization: Vec::new(),
+            speaker_segments: Vec::new(),
+            markdown_path: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
