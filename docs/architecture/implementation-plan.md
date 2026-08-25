@@ -63,7 +63,7 @@ cargo build -p meetnote
 
 - workspace 已从根目录解析。
 - `cargo fmt --all -- --check` 已通过。
-- `cargo test --workspace --exclude meetnote --exclude ui` 已通过，覆盖 fake ASR、fake diarization、对齐、JobRuntime、backend registry 和 catalog。
+- `cargo test --workspace --exclude meetnote --exclude ui` 已通过，覆盖 fake ASR、fake diarization、对齐、JobRuntime 取消/进度事件、两个 backend registry、in-memory repository 和 catalog。
 - GPUI 依赖已锁定并完成 Rust 依赖编译，但 `cargo test --workspace` / `cargo build -p meetnote` 被本机缺少 Metal shader compiler 阻塞：当前 `xcode-select` 指向 Command Line Tools，`/Applications/Xcode.app` 不存在。
 - 新增 backend 只需实现 trait 并注册，不修改 application pipeline。
 - catalog 中的模型来源、格式和状态已能被 Rust 读取。

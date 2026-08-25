@@ -36,3 +36,23 @@ impl ProjectRepository for InMemoryProjectRepository {
             .collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stores_and_lists_projects_without_a_database() {
+        let repository = InMemoryProjectRepository::default();
+        let project = MeetingProject {
+            id: ProjectId::new("project-1"),
+            title: "Fixture meeting".into(),
+            audio_path: "fixture.wav".into(),
+        };
+
+        repository.save(project.clone()).unwrap();
+
+        assert_eq!(repository.get(&project.id).unwrap(), Some(project.clone()));
+        assert_eq!(repository.list().unwrap(), vec![project]);
+    }
+}

@@ -69,3 +69,38 @@ impl DiarizationBackendManager {
         backend.diarize(request, context).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use application::{diarization_descriptor, BackendFuture};
+
+    struct FakeBackend;
+
+    impl DiarizationBackend for FakeBackend {
+        fn descriptor(&self) -> BackendDescriptor {
+            diarization_descriptor("fake-diarization", &["test"])
+        }
+
+        fn probe(&self, _model: &ModelRef) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        fn diarize(
+            &self,
+            _request: DiarizationRequest,
+            _context: JobContext,
+        ) -> BackendFuture<DiarizationResult> {
+            Box::pin(async { Err(BackendError::not_implemented("test backend")) })
+        }
+    }
+
+    #[test]
+    fn registry_exposes_registered_backend() {
+        let mut registry = DiarizationBackendRegistry::default();
+        registry.register(Arc::new(FakeBackend));
+        let manager = DiarizationBackendManager::new(registry);
+
+        assert_eq!(manager.available_backends()[0].id, "fake-diarization");
+    }
+}

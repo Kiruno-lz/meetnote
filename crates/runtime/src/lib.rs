@@ -39,12 +39,34 @@ impl JobContext {
 
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Relaxed);
+        let _ = self.events.send(JobEvent::Cancelled {
+            job_id: self.job_id,
+        });
     }
 
     pub fn report(&self, progress: Progress) {
         let _ = self.events.send(JobEvent::Progress {
             job_id: self.job_id,
             progress,
+        });
+    }
+
+    pub fn started(&self) {
+        let _ = self.events.send(JobEvent::Started {
+            job_id: self.job_id,
+        });
+    }
+
+    pub fn completed(&self) {
+        let _ = self.events.send(JobEvent::Completed {
+            job_id: self.job_id,
+        });
+    }
+
+    pub fn failed(&self, message: impl Into<String>) {
+        let _ = self.events.send(JobEvent::Failed {
+            job_id: self.job_id,
+            message: message.into(),
         });
     }
 }
@@ -93,6 +115,20 @@ mod tests {
                     total: Some(2),
                 },
             }
+        );
+    }
+
+    #[test]
+    fn cancellation_is_observable_and_sets_the_cancelled_state() {
+        let runtime = JobRuntime::default();
+        let (context, receiver) = runtime.create_job();
+
+        context.cancel();
+
+        assert!(context.is_cancelled());
+        assert_eq!(
+            receiver.recv().unwrap(),
+            JobEvent::Cancelled { job_id: JobId(1) }
         );
     }
 }
