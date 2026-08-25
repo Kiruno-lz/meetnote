@@ -31,6 +31,21 @@ GPUI UI
 - Diarization：`sherpa-onnx`、`diarization` crate，后续可加入自定义 ONNX/CoreML pipeline。
 - 后端通过统一 Rust trait 注册和选择，应用层不依赖具体推理实现。
 
+## 本地处理示例
+
+`meetnote` 默认启动 GPUI；传入 `process` 子命令可运行第一条真实 pipeline：
+
+```bash
+ffmpeg -i docs/example/2p_en_video.m4a -ar 16000 -ac 1 -c:a pcm_s16le data/runs/2p_en_video.wav
+cargo run -p meetnote -- process \
+  data/runs/2p_en_video.wav \
+  models/asr/whisper-large-v3-ggml/ggml-base.en.bin \
+  models/diarization/sherpa-onnx-speaker-diarization-bundle \
+  data/runs/2p_en_video
+```
+
+命令输出 JSON 和 Markdown；模型文件位于被 `.gitignore` 忽略的 `models/`，不会提交进仓库。
+
 ## 当前不执行
 
 本阶段不下载模型权重。真实推理依赖已接入，但只有在提供有效的 `ModelRef.artifact_path` 后才会加载模型。完整 workspace 构建、测试和最小 GPUI 入口启动验证已通过；GPUI 使用 `runtime_shaders`，避免构建期依赖构建时 `metallib` 工具。

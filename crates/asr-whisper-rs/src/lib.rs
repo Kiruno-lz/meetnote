@@ -57,6 +57,7 @@ fn transcribe_sync(
         });
     }
 
+    whisper_rs::install_logging_hooks();
     let audio = read_wav_mono_16k(&request.audio_path).map_err(|error| BackendError {
         code: BackendErrorCode::InvalidAudio,
         message: error.to_string(),

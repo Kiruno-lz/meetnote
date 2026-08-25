@@ -145,6 +145,19 @@
       "status": "candidate-source"
     },
     {
+      "id": "whisper-base-en-ggml",
+      "task": "asr",
+      "modelFamily": "whisper",
+      "candidateBackends": ["whisper-rs"],
+      "sourceFormat": "ggml",
+      "source": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+      "sizeBytes": null,
+      "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+      "license": "apache-2.0",
+      "requiresAuth": false,
+      "status": "candidate-source"
+    },
+    {
       "id": "sherpa-onnx-speaker-diarization-bundle",
       "task": "diarization",
       "modelFamily": "sherpa-onnx-speaker-diarization",

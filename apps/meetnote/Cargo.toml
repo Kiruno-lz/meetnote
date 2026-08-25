@@ -7,6 +7,12 @@ edition.workspace = true
 application = { path = "../../crates/application" }
 asr = { path = "../../crates/asr" }
 asr-whisper-rs = { path = "../../crates/asr-whisper-rs" }
+contracts = { path = "../../crates/contracts" }
 diarization = { path = "../../crates/diarization" }
 diarization-sherpa-onnx = { path = "../../crates/diarization-sherpa-onnx" }
+domain = { path = "../../crates/domain" }
+futures.workspace = true
+runtime = { path = "../../crates/runtime" }
+serde.workspace = true
+serde_json.workspace = true
 ui = { path = "../../crates/ui" }

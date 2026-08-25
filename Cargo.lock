@@ -3067,8 +3067,14 @@ dependencies = [
  "application",
  "asr",
  "asr-whisper-rs",
+ "contracts",
  "diarization",
  "diarization-sherpa-onnx",
+ "domain",
+ "futures",
+ "runtime",
+ "serde",
+ "serde_json",
  "ui",
 ]
 

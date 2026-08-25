@@ -58,8 +58,11 @@ pub fn align_transcript_and_speakers(
                 .filter_map(|candidate| {
                     let overlap_start = segment.start_ms.max(candidate.start_ms);
                     let overlap_end = segment.end_ms.min(candidate.end_ms);
-                    (overlap_end > overlap_start)
-                        .then_some((overlap_end - overlap_start, candidate))
+                    if overlap_end > overlap_start {
+                        Some((overlap_end - overlap_start, candidate))
+                    } else {
+                        None
+                    }
                 })
                 .max_by_key(|(overlap, candidate)| {
                     (*overlap, std::cmp::Reverse(candidate.start_ms))
@@ -110,5 +113,26 @@ mod tests {
         let result = align_transcript_and_speakers(&transcript, &diarization);
 
         assert_eq!(result[0].speaker_id, "speaker-b");
+    }
+
+    #[test]
+    fn marks_a_transcript_without_overlap_as_unknown() {
+        let transcript = vec![TranscriptSegment {
+            id: "t1".into(),
+            start_ms: 0,
+            end_ms: 1_000,
+            text: "hello".into(),
+        }];
+        let diarization = vec![DiarizationSegment {
+            id: "d1".into(),
+            speaker_id: "speaker-a".into(),
+            start_ms: 2_000,
+            end_ms: 3_000,
+            confidence: None,
+        }];
+
+        let result = align_transcript_and_speakers(&transcript, &diarization);
+
+        assert_eq!(result[0].speaker_id, "unknown");
     }
 }
