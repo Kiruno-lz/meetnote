@@ -1,7 +1,9 @@
-# OS
+# macOS and editor files
 .DS_Store
+.idea/
+.vscode/
 
-# Environment and secrets
+# Secrets and local configuration
 .env
 .env.*
 !.env.example
@@ -12,47 +14,17 @@
 *.pem
 *.p12
 
-# Dependencies and package manager state
-node_modules/
-frontend/node_modules/
-src-tauri/node_modules/
-
-# Build outputs
-dist/
-build/
-coverage/
+# Rust outputs
 target/
-release/
 debug/
+release/
 out/
 
-# Tauri / Rust
-src-tauri/target/
-src-tauri/gen/
-src-tauri/Cargo.lock
-
-# TypeScript / frontend caches
-.turbo/
-.cache/
-.vite/
-.next/
-.svelte-kit/
-*.tsbuildinfo
-
-# Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.venv/
-venv/
-env/
-
-# Models, audio, and local data
-models/
+# Local models, audio and application data
+/models/
 model-cache/
 cache/
+data/
 tmp/
 temp/
 *.wav
@@ -68,10 +40,16 @@ temp/
 *.mkv
 *.avi
 
-# Logs
+# Logs and coverage
 *.log
+coverage/
 
-.understand-anything/
+# Local agent/tool state
 .claude/
 .codegraph
 .reasonix
+.understand-anything/
+.vite/
+
+# Keep the checked-in model catalog while ignoring downloaded artifacts.
+!resources/models/catalog.json
