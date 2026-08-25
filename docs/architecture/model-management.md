@@ -64,6 +64,8 @@ cancelled
 - 校验失败后清理
 - 临时文件与最终文件隔离
 
+v0.2 已落地 `models::download::download_file`：支持 HTTP Range 续传、`.part` 临时文件、流式 SHA-256 校验和原子 rename。GPUI 当前将它用于可直接下载的 Whisper GGML artifact；sherpa-onnx diarization 是多文件 bundle，界面只展示 readiness，避免把 bundle 误当成单文件下载。
+
 ## library-managed 的新含义
 
 旧版 `library-managed` 表示启动 Python 模型下载器。新版本中它只表示：

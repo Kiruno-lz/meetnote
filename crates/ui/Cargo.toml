@@ -10,4 +10,5 @@ domain = { path = "../domain" }
 futures.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
+models = { path = "../models" }
 runtime = { path = "../runtime" }

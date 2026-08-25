@@ -52,6 +52,11 @@ fn main() {
             revision: None,
             artifact_path: "models/diarization/sherpa-onnx-speaker-diarization-bundle".into(),
         },
+        asr_model_source:
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin".into(),
+        asr_model_sha256: Some(
+            "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002".into(),
+        ),
     };
 
     let args: Vec<String> = env::args().collect();

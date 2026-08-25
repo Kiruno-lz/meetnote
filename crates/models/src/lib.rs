@@ -1,8 +1,105 @@
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::Path;
 
 const CATALOG_SCHEMA_VERSION: &str = "meetnote.model-catalog.v1";
+
+pub mod download {
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    pub enum DownloadError {
+        #[error("model source is not an HTTP URL: {0}")]
+        UnsupportedSource(String),
+        #[error("model download request failed: {0}")]
+        Request(#[from] ureq::Error),
+        #[error("model download IO failed: {0}")]
+        Io(#[from] std::io::Error),
+        #[error("model checksum mismatch for {path}: expected {expected}, got {actual}")]
+        ChecksumMismatch {
+            path: String,
+            expected: String,
+            actual: String,
+        },
+    }
+
+    pub fn download_file(
+        source: &str,
+        destination: impl AsRef<Path>,
+        expected_sha256: Option<&str>,
+        mut on_progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<(), DownloadError> {
+        if !source.starts_with("https://") && !source.starts_with("http://") {
+            return Err(DownloadError::UnsupportedSource(source.into()));
+        }
+        let destination = destination.as_ref();
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let partial = destination.with_extension("part");
+        let existing = partial
+            .metadata()
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        let mut request = ureq::get(source);
+        if existing > 0 {
+            request = request.set("Range", &format!("bytes={existing}-"));
+        }
+        let response = request.call()?;
+        let append = existing > 0 && response.status() == 206;
+        let offset = if append { existing } else { 0 };
+        let total = response
+            .header("Content-Length")
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(|length| length + offset);
+        let mut output = if append {
+            OpenOptions::new().append(true).open(&partial)?
+        } else {
+            File::create(&partial)?
+        };
+        let mut hash = Sha256::new();
+        if append {
+            let mut previous = File::open(&partial)?;
+            let mut buffer = [0_u8; 64 * 1024];
+            loop {
+                let read = previous.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                hash.update(&buffer[..read]);
+            }
+        }
+        let mut reader = response.into_reader();
+        let mut downloaded = offset;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let read = reader.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            output.write_all(&buffer[..read])?;
+            hash.update(&buffer[..read]);
+            downloaded += read as u64;
+            on_progress(downloaded, total);
+        }
+        output.flush()?;
+        let actual = format!("{:x}", hash.finalize());
+        if let Some(expected) = expected_sha256 {
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err(DownloadError::ChecksumMismatch {
+                    path: partial.display().to_string(),
+                    expected: expected.into(),
+                    actual,
+                });
+            }
+        }
+        fs::rename(partial, destination)?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,6 +203,7 @@ impl ModelCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use download::DownloadError;
 
     #[test]
     fn loads_the_repository_catalog() {
@@ -121,5 +219,20 @@ mod tests {
             .models
             .iter()
             .any(|model| model.task == "diarization"));
+    }
+
+    #[test]
+    fn rejects_non_http_model_sources_before_writing() {
+        let result = download::download_file(
+            "local/model.bin",
+            "/tmp/meetnote-model.bin",
+            None,
+            |_, _| {},
+        );
+
+        assert!(matches!(
+            result,
+            Err(DownloadError::UnsupportedSource(source)) if source == "local/model.bin"
+        ));
     }
 }

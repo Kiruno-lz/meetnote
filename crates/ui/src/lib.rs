@@ -15,6 +15,8 @@ pub struct DesktopServices {
     pub workspace: WorkspaceService,
     pub asr_model: ModelRef,
     pub diarization_model: ModelRef,
+    pub asr_model_source: String,
+    pub asr_model_sha256: Option<String>,
 }
 
 impl DesktopServices {
@@ -41,6 +43,7 @@ struct RootView {
     notice: String,
     processing: bool,
     cancel_contexts: Option<(JobContext, JobContext)>,
+    downloading: bool,
 }
 
 impl RootView {
@@ -55,6 +58,7 @@ impl RootView {
             notice: "Import an audio file to create a meeting project.".into(),
             processing: false,
             cancel_contexts: None,
+            downloading: false,
         }
     }
 
@@ -96,6 +100,41 @@ impl RootView {
         self.selected_project = Some(project_id);
         self.notice.clear();
         cx.notify();
+    }
+
+    fn download_asr_model(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.downloading || Path::new(&self.services.asr_model.artifact_path).is_file() {
+            self.notice = "ASR model is already ready or downloading.".into();
+            cx.notify();
+            return;
+        }
+        self.downloading = true;
+        self.notice = "Downloading ASR model…".into();
+        let source = self.services.asr_model_source.clone();
+        let destination = self.services.asr_model.artifact_path.clone();
+        let checksum = self.services.asr_model_sha256.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || {
+                models::download::download_file(
+                    &source,
+                    &destination,
+                    checksum.as_deref(),
+                    |_, _| {},
+                )
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.downloading = false;
+                this.notice = match result {
+                    Ok(()) => "ASR model installed.".into(),
+                    Err(error) => format!("ASR model download failed: {error}"),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn process_or_cancel(
@@ -242,7 +281,7 @@ impl Render for RootView {
     }
 }
 
-fn header(_: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
+fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     div()
         .h(px(64.))
         .px_6()
@@ -271,14 +310,34 @@ fn header(_: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
         )
         .child(
             div()
-                .id("import-audio")
-                .cursor_pointer()
-                .px_4()
-                .py_2()
-                .rounded_md()
-                .bg(rgb(0x3b82f6))
-                .child("Import audio")
-                .on_click(cx.listener(RootView::import_audio)),
+                .flex()
+                .gap_2()
+                .child(
+                    div()
+                        .id("download-asr-model")
+                        .cursor_pointer()
+                        .px_3()
+                        .py_2()
+                        .rounded_md()
+                        .bg(rgb(0x263142))
+                        .child(if root.downloading {
+                            "Downloading…"
+                        } else {
+                            "ASR model"
+                        })
+                        .on_click(cx.listener(RootView::download_asr_model)),
+                )
+                .child(
+                    div()
+                        .id("import-audio")
+                        .cursor_pointer()
+                        .px_4()
+                        .py_2()
+                        .rounded_md()
+                        .bg(rgb(0x3b82f6))
+                        .child("Import audio")
+                        .on_click(cx.listener(RootView::import_audio)),
+                ),
         )
 }
 
