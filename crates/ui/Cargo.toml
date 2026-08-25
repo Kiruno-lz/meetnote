@@ -12,3 +12,9 @@ gpui.workspace = true
 gpui_platform.workspace = true
 models = { path = "../models" }
 runtime = { path = "../runtime" }
+
+[dev-dependencies]
+asr-whisper-rs = { path = "../asr-whisper-rs" }
+diarization-sherpa-onnx = { path = "../diarization-sherpa-onnx" }
+gpui = { workspace = true, features = ["test-support"] }
+persistence = { path = "../persistence" }

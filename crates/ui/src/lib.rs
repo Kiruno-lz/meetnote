@@ -615,3 +615,47 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
         cx.activate(true);
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use application::{ProcessingService, WorkspaceService};
+    use asr_whisper_rs::WhisperRsBackend;
+    use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
+    use gpui::TestAppContext;
+    use persistence::InMemoryProjectRepository;
+    use std::sync::Arc;
+
+    #[gpui::test]
+    fn boots_an_empty_desktop_workspace(cx: &mut TestAppContext) {
+        let repository = Arc::new(InMemoryProjectRepository::default());
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(
+                Arc::new(WhisperRsBackend::default()),
+                Arc::new(SherpaOnnxDiarizationBackend::default()),
+            ),
+            repository,
+            std::env::temp_dir().join("meetnote-ui-test-markdown"),
+        );
+        let services = DesktopServices {
+            workspace,
+            asr_model: ModelRef {
+                backend_id: "whisper-rs".into(),
+                model_id: "fixture".into(),
+                revision: None,
+                artifact_path: "missing-model".into(),
+            },
+            diarization_model: ModelRef {
+                backend_id: "sherpa-onnx".into(),
+                model_id: "fixture".into(),
+                revision: None,
+                artifact_path: "missing-bundle".into(),
+            },
+            asr_model_source: "https://example.invalid/model.bin".into(),
+            asr_model_sha256: None,
+        };
+        let view = cx.new(|_| RootView::new(BackendInventory::new(vec![], vec![]), services));
+
+        assert_eq!(view.read_with(cx, |view, _| view.projects.len()), 0);
+    }
+}
