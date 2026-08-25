@@ -7,6 +7,7 @@ use gpui::{
     WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
+use models::download::BundleArtifact;
 use runtime::{JobContext, JobEvent};
 use std::path::Path;
 
@@ -17,16 +18,30 @@ pub struct DesktopServices {
     pub diarization_model: ModelRef,
     pub asr_model_source: String,
     pub asr_model_sha256: Option<String>,
+    pub diarization_artifacts: Vec<BundleArtifact>,
 }
 
 impl DesktopServices {
+    fn models_ready(&self) -> bool {
+        Path::new(&self.asr_model.artifact_path).is_file()
+            && self.diarization_artifacts.iter().all(|artifact| {
+                Path::new(&self.diarization_model.artifact_path)
+                    .join(&artifact.filename)
+                    .is_file()
+            })
+    }
+
     fn model_status(&self) -> String {
         let asr = if Path::new(&self.asr_model.artifact_path).is_file() {
             "ready"
         } else {
             "missing"
         };
-        let diarization = if Path::new(&self.diarization_model.artifact_path).is_dir() {
+        let diarization = if self.diarization_artifacts.iter().all(|artifact| {
+            Path::new(&self.diarization_model.artifact_path)
+                .join(&artifact.filename)
+                .is_file()
+        }) {
             "ready"
         } else {
             "missing"
@@ -129,24 +144,33 @@ impl RootView {
         .detach();
     }
 
-    fn download_asr_model(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.downloading || Path::new(&self.services.asr_model.artifact_path).is_file() {
-            self.notice = "ASR model is already ready or downloading.".into();
+    fn download_models(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.downloading || self.services.models_ready() {
+            self.notice = "Models are already ready or downloading.".into();
             cx.notify();
             return;
         }
         self.downloading = true;
-        self.notice = "Downloading ASR model…".into();
-        let source = self.services.asr_model_source.clone();
-        let destination = self.services.asr_model.artifact_path.clone();
-        let checksum = self.services.asr_model_sha256.clone();
+        self.notice = "Downloading models…".into();
+        let asr_source = self.services.asr_model_source.clone();
+        let asr_destination = self.services.asr_model.artifact_path.clone();
+        let asr_checksum = self.services.asr_model_sha256.clone();
+        let diarization_destination = self.services.diarization_model.artifact_path.clone();
+        let diarization_artifacts = self.services.diarization_artifacts.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || {
-                models::download::download_file(
-                    &source,
-                    &destination,
-                    checksum.as_deref(),
+                if !Path::new(&asr_destination).is_file() {
+                    models::download::download_file(
+                        &asr_source,
+                        &asr_destination,
+                        asr_checksum.as_deref(),
+                        |_, _| {},
+                    )?;
+                }
+                models::download::download_bundle(
+                    &diarization_artifacts,
+                    &diarization_destination,
                     |_, _| {},
                 )
             })
@@ -349,10 +373,12 @@ fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
                         .bg(rgb(0x263142))
                         .child(if root.downloading {
                             "Downloading…"
+                        } else if root.services.models_ready() {
+                            "Models ready"
                         } else {
-                            "ASR model"
+                            "Download models"
                         })
-                        .on_click(cx.listener(RootView::download_asr_model)),
+                        .on_click(cx.listener(RootView::download_models)),
                 )
                 .child(
                     div()
@@ -653,6 +679,7 @@ mod tests {
             },
             asr_model_source: "https://example.invalid/model.bin".into(),
             asr_model_sha256: None,
+            diarization_artifacts: vec![],
         };
         let view = cx.new(|_| RootView::new(BackendInventory::new(vec![], vec![]), services));
 

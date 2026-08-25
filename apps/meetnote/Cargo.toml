@@ -16,4 +16,5 @@ runtime = { path = "../../crates/runtime" }
 serde.workspace = true
 serde_json.workspace = true
 persistence = { path = "../../crates/persistence" }
+models = { path = "../../crates/models" }
 ui = { path = "../../crates/ui" }

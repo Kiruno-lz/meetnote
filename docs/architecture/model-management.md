@@ -64,7 +64,7 @@ cancelled
 - 校验失败后清理
 - 临时文件与最终文件隔离
 
-v0.2 已落地 `models::download::download_file`：支持 HTTP Range 续传、`.part` 临时文件、流式 SHA-256 校验和原子 rename。GPUI 当前将它用于可直接下载的 Whisper GGML artifact；sherpa-onnx diarization 是多文件 bundle，界面只展示 readiness，避免把 bundle 误当成单文件下载。
+v0.2 已落地 `models::download`：单文件支持 HTTP Range 续传、`.part` 临时文件、流式 SHA-256 校验和原子 rename；bundle 支持逐 artifact 下载，并从 sherpa-onnx tar.bz2 中提取指定 ONNX member 后再安装。GPUI 会在两个 bundle artifact 都存在后显示 DIA ready。
 
 ## library-managed 的新含义
 

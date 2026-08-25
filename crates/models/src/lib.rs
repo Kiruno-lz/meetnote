@@ -18,12 +18,22 @@ pub mod download {
         Request(#[from] ureq::Error),
         #[error("model download IO failed: {0}")]
         Io(#[from] std::io::Error),
+        #[error("model archive error: {0}")]
+        Archive(String),
         #[error("model checksum mismatch for {path}: expected {expected}, got {actual}")]
         ChecksumMismatch {
             path: String,
             expected: String,
             actual: String,
         },
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct BundleArtifact {
+        pub filename: String,
+        pub source: String,
+        pub expected_sha256: Option<String>,
+        pub archive_member: Option<String>,
     }
 
     pub fn download_file(
@@ -99,6 +109,109 @@ pub mod download {
         fs::rename(partial, destination)?;
         Ok(())
     }
+
+    pub fn download_bundle(
+        artifacts: &[BundleArtifact],
+        destination: impl AsRef<Path>,
+        mut on_progress: impl FnMut(usize, usize),
+    ) -> Result<(), DownloadError> {
+        let destination = destination.as_ref();
+        fs::create_dir_all(destination)?;
+        for (index, artifact) in artifacts.iter().enumerate() {
+            let target = destination.join(&artifact.filename);
+            if target.is_file() {
+                on_progress(index + 1, artifacts.len());
+                continue;
+            }
+            if let Some(member) = &artifact.archive_member {
+                let archive_path = destination.join(format!("{}.archive.part", artifact.filename));
+                download_file(
+                    &artifact.source,
+                    &archive_path,
+                    artifact.expected_sha256.as_deref(),
+                    |_, _| {},
+                )?;
+                extract_archive_member(&archive_path, member, &target)?;
+                fs::remove_file(archive_path)?;
+            } else {
+                download_file(
+                    &artifact.source,
+                    &target,
+                    artifact.expected_sha256.as_deref(),
+                    |_, _| {},
+                )?;
+            }
+            on_progress(index + 1, artifacts.len());
+        }
+        Ok(())
+    }
+
+    fn extract_archive_member(
+        archive_path: &Path,
+        member: &str,
+        destination: &Path,
+    ) -> Result<(), DownloadError> {
+        let input = File::open(archive_path)?;
+        let decoder = bzip2::read::BzDecoder::new(input);
+        let mut archive = tar::Archive::new(decoder);
+        let temporary = destination.with_extension("part");
+        let mut found = false;
+        for entry in archive
+            .entries()
+            .map_err(|error| DownloadError::Archive(error.to_string()))?
+        {
+            let mut entry = entry.map_err(|error| DownloadError::Archive(error.to_string()))?;
+            let path = entry
+                .path()
+                .map_err(|error| DownloadError::Archive(error.to_string()))?;
+            if path.to_string_lossy().ends_with(member) {
+                if let Some(parent) = destination.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                let mut output = File::create(&temporary)?;
+                std::io::copy(&mut entry, &mut output)?;
+                output.flush()?;
+                fs::rename(&temporary, destination)?;
+                found = true;
+                break;
+            }
+        }
+        if found {
+            Ok(())
+        } else {
+            Err(DownloadError::Archive(format!(
+                "archive member not found: {member}"
+            )))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn extracts_a_named_bundle_member() {
+            let root = std::env::temp_dir().join(format!("meetnote-bundle-{}", std::process::id()));
+            fs::create_dir_all(&root).unwrap();
+            let archive_path = root.join("fixture.tar.bz2");
+            let file = File::create(&archive_path).unwrap();
+            let encoder = bzip2::write::BzEncoder::new(file, bzip2::Compression::fast());
+            let mut archive = tar::Builder::new(encoder);
+            let payload = b"onnx-fixture";
+            let mut header = tar::Header::new_gnu();
+            header.set_path("model-root/model.onnx").unwrap();
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append(&header, &payload[..]).unwrap();
+            archive.into_inner().unwrap().finish().unwrap();
+
+            let destination = root.join("segmentation.onnx");
+            extract_archive_member(&archive_path, "model.onnx", &destination).unwrap();
+            assert_eq!(fs::read(&destination).unwrap(), payload);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,6 +237,19 @@ pub struct ModelCatalogEntry {
     pub status: String,
     #[serde(default)]
     pub artifact_files: Vec<String>,
+    #[serde(default)]
+    pub artifacts: Vec<CatalogArtifact>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogArtifact {
+    pub filename: String,
+    pub source: String,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    #[serde(default)]
+    pub archive_member: Option<String>,
 }
 
 #[derive(Debug, thiserror::Error)]

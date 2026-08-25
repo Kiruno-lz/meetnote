@@ -169,7 +169,18 @@
       "license": "mit",
       "requiresAuth": false,
       "status": "candidate-source",
-      "artifactFiles": ["segmentation.onnx", "embedding.onnx"]
+      "artifactFiles": ["segmentation.onnx", "embedding.onnx"],
+      "artifacts": [
+        {
+          "filename": "segmentation.onnx",
+          "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+          "archiveMember": "sherpa-onnx-pyannote-segmentation-3-0/model.onnx"
+        },
+        {
+          "filename": "embedding.onnx",
+          "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+        }
+      ]
     }
   ]
 }

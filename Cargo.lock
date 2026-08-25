@@ -3204,6 +3204,7 @@ dependencies = [
  "diarization-sherpa-onnx",
  "domain",
  "futures",
+ "models",
  "persistence",
  "runtime",
  "serde",
@@ -3270,9 +3271,11 @@ dependencies = [
 name = "models"
 version = "0.1.0"
 dependencies = [
+ "bzip2 0.6.1",
  "serde",
  "serde_json",
  "sha2",
+ "tar",
  "thiserror 2.0.20",
  "ureq",
 ]
