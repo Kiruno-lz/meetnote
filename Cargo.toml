@@ -29,4 +29,4 @@ futures = "0.3"
 
 # GPUI is still pre-1.0. Keep the UI and platform crates on one exact revision.
 gpui = { git = "https://github.com/zed-industries/zed.git", rev = "38c5dd7c98b20826cf6f8da24d4116a58c3a6a75", package = "gpui", default-features = false }
-gpui_platform = { git = "https://github.com/zed-industries/zed.git", rev = "38c5dd7c98b20826cf6f8da24d4116a58c3a6a75", package = "gpui_platform", default-features = false, features = ["font-kit"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed.git", rev = "38c5dd7c98b20826cf6f8da24d4116a58c3a6a75", package = "gpui_platform", default-features = false, features = ["font-kit", "runtime_shaders"] }

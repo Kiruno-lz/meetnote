@@ -33,4 +33,4 @@ GPUI UI
 
 ## 当前不执行
 
-本阶段不下载模型、不接入真实推理依赖。非 UI workspace 测试已通过；GPUI 全量构建需要本机安装完整 Xcode 的 Metal shader compiler。
+本阶段不下载模型、不接入真实推理依赖。完整 workspace 构建、测试和最小 GPUI 入口启动验证已通过；GPUI 使用 `runtime_shaders`，避免构建期依赖完整 Xcode 的 Metal shader compiler。
