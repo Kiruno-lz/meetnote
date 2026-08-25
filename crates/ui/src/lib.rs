@@ -8,12 +8,29 @@ use gpui::{
 };
 use gpui_platform::application;
 use runtime::{JobContext, JobEvent};
+use std::path::Path;
 
 #[derive(Clone)]
 pub struct DesktopServices {
     pub workspace: WorkspaceService,
     pub asr_model: ModelRef,
     pub diarization_model: ModelRef,
+}
+
+impl DesktopServices {
+    fn model_status(&self) -> String {
+        let asr = if Path::new(&self.asr_model.artifact_path).is_file() {
+            "ready"
+        } else {
+            "missing"
+        };
+        let diarization = if Path::new(&self.diarization_model.artifact_path).is_dir() {
+            "ready"
+        } else {
+            "missing"
+        };
+        format!("ASR {asr} / DIA {diarization}")
+    }
 }
 
 struct RootView {
@@ -217,6 +234,7 @@ impl Render for RootView {
                         selected.as_ref(),
                         &self.inventory,
                         &self.notice,
+                        &self.services.model_status(),
                         self.processing,
                         cx,
                     )),
@@ -322,6 +340,7 @@ fn main_panel(
     project: Option<&MeetingProject>,
     inventory: &BackendInventory,
     notice: &str,
+    model_status: &str,
     processing: bool,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
@@ -434,7 +453,8 @@ fn main_panel(
                 notice,
                 backend_ids(&inventory.asr),
                 backend_ids(&inventory.diarization)
-            )),
+            ))
+            .child(format!("Models: {model_status}")),
     )
 }
 
