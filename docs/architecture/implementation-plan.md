@@ -157,7 +157,7 @@ sherpa-onnx diarization
 
 仍需完成：
 
-- JobRuntime 事件订阅和细粒度 UI 进度。
+- JobRuntime 事件订阅、取消和 ASR/diarization 状态展示已完成；仍需补充更细的阶段百分比和恢复策略。
 - SQLite schema 与迁移。
 - 应用内模型下载、校验和安装界面。
 - speaker 手工合并/重命名和 LLM 忠实去口语化。

@@ -47,4 +47,4 @@ cargo run -p meetnote -- process \
 
 ## 当前不执行
 
-模型权重由用户按需放入本地 cache，不进入仓库。当前桌面入口使用 `data/` 保存项目 JSON 和 Markdown；SQLite、应用内模型下载、细粒度进度面板和 LLM 去口语化仍是后续 v0.2 收尾工作。GPUI 使用 `runtime_shaders`，避免构建期依赖 `metallib` 工具。
+模型权重由用户按需放入本地 cache，不进入仓库。当前桌面入口使用 `data/` 保存项目 JSON 和 Markdown，GPUI 显示模型 readiness 并消费 ASR/diarization 异步状态事件；SQLite、应用内模型下载、speaker 手工修正和 LLM 去口语化仍是后续 v0.2 hardening 工作。
