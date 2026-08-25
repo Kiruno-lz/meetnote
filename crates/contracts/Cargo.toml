@@ -1,0 +1,8 @@
+[package]
+name = "contracts"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+domain = { path = "../domain" }
+serde.workspace = true

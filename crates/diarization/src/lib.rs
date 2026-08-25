@@ -1,0 +1,71 @@
+use application::DiarizationBackend;
+use contracts::{BackendDescriptor, BackendError, DiarizationRequest, DiarizationResult, ModelRef};
+use runtime::JobContext;
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+pub struct DiarizationBackendRegistry {
+    backends: BTreeMap<String, Arc<dyn DiarizationBackend>>,
+}
+
+impl Default for DiarizationBackendRegistry {
+    fn default() -> Self {
+        Self {
+            backends: BTreeMap::new(),
+        }
+    }
+}
+
+impl DiarizationBackendRegistry {
+    pub fn register(&mut self, backend: Arc<dyn DiarizationBackend>) {
+        let id = backend.descriptor().id;
+        self.backends.insert(id, backend);
+    }
+
+    pub fn descriptor(&self, id: &str) -> Option<BackendDescriptor> {
+        self.backends.get(id).map(|backend| backend.descriptor())
+    }
+
+    pub fn get(&self, id: &str) -> Option<Arc<dyn DiarizationBackend>> {
+        self.backends.get(id).cloned()
+    }
+}
+
+pub struct DiarizationBackendManager {
+    registry: DiarizationBackendRegistry,
+}
+
+impl DiarizationBackendManager {
+    pub fn new(registry: DiarizationBackendRegistry) -> Self {
+        Self { registry }
+    }
+
+    pub fn available_backends(&self) -> Vec<BackendDescriptor> {
+        self.registry
+            .backends
+            .values()
+            .map(|backend| backend.descriptor())
+            .collect()
+    }
+
+    pub fn probe(&self, backend_id: &str, model: &ModelRef) -> Result<(), BackendError> {
+        let backend = self.registry.get(backend_id).ok_or_else(|| BackendError {
+            code: contracts::BackendErrorCode::BackendUnavailable,
+            message: format!("Diarization backend not registered: {backend_id}"),
+        })?;
+        backend.probe(model)
+    }
+
+    pub async fn diarize(
+        &self,
+        backend_id: &str,
+        request: DiarizationRequest,
+        context: JobContext,
+    ) -> Result<DiarizationResult, BackendError> {
+        let backend = self.registry.get(backend_id).ok_or_else(|| BackendError {
+            code: contracts::BackendErrorCode::BackendUnavailable,
+            message: format!("Diarization backend not registered: {backend_id}"),
+        })?;
+        backend.diarize(request, context).await
+    }
+}

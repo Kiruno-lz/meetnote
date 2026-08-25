@@ -1,0 +1,12 @@
+[package]
+name = "application"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+contracts = { path = "../contracts" }
+domain = { path = "../domain" }
+runtime = { path = "../runtime" }
+
+[dev-dependencies]
+futures.workspace = true

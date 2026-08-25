@@ -4,7 +4,7 @@ Rust-native meeting intelligence platform：本地导入音频，使用可切换
 
 ## 当前状态
 
-当前仓库已完成旧版 Tauri、TypeScript、Python 实现的归档清理，处于 Rust-native 重构起点。新的工程边界、后端管理层、模型管理和实施顺序见 [`docs/index.md`](docs/index.md)。
+当前仓库已完成旧版 Tauri、TypeScript、Python 实现的清理，并完成 v0.1 Rust-native foundation：workspace、contracts、fake pipeline、backend managers、model catalog 和最小 GPUI 应用入口已经建立。新的工程边界、后端管理层、模型管理和实施顺序见 [`docs/index.md`](docs/index.md)。
 
 ## 目标架构
 
@@ -33,4 +33,4 @@ GPUI UI
 
 ## 当前不执行
 
-本阶段只建立架构和工程边界，不下载模型、不安装推理依赖、不运行构建。实现工作按实施计划逐阶段开始。
+本阶段不下载模型、不接入真实推理依赖。非 UI workspace 测试已通过；GPUI 全量构建需要本机安装完整 Xcode 的 Metal shader compiler。

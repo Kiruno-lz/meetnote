@@ -10,6 +10,6 @@
 
 ## 当前阶段
 
-旧版 Tauri、TypeScript、Python 和旧测试树已从工作目录清理。Git 提交 `0b031d0` 是清理前的文档归档检查点，之后的历史提交保留旧实现。
+旧版 Tauri、TypeScript、Python 和旧测试树已从工作目录清理。Git 提交 `0b031d0` 是清理前的文档归档检查点，之后的历史提交保留旧实现。当前已进入 v0.1 Rust-native foundation。
 
-当前阶段不下载模型、不安装依赖、不运行构建；下一阶段从 Cargo workspace、domain、contracts 和 application interfaces 开始。
+v0.1 已建立 Cargo workspace、domain、contracts、application、runtime、model catalog、fake pipeline、backend managers 和最小 GPUI 入口。真实推理 backend 与 SQLite 仍按实施计划后续接入。

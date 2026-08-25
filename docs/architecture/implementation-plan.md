@@ -1,5 +1,73 @@
 # Rust-native 工程实施计划
 
+## v0.1：可编译架构基础
+
+### 目标
+
+建立一个可编译、可测试、可启动的 Rust-native foundation，不下载模型，不接入真实推理依赖，不实现完整会议 UI。
+
+### 交付目录
+
+```text
+Cargo.toml
+apps/meetnote/
+crates/
+├── domain/
+├── contracts/
+├── application/
+├── runtime/
+├── persistence/
+├── models/
+├── asr/
+├── asr-whisper-rs/
+├── asr-sherpa-onnx/
+├── diarization/
+├── diarization-sherpa-onnx/
+├── diarization-native/
+├── llm/
+└── ui/
+```
+
+### v0.1 必须具备
+
+- GPUI 最小窗口和应用入口。
+- `domain` 的会议项目、转录段、diarization 段和基础对齐算法。
+- `contracts` 的 ASR、diarization、模型和错误类型。
+- `application` 的 ASR/Diarization trait 与 fake pipeline。
+- 独立的 ASR backend registry/manager。
+- 独立的 diarization backend registry/manager。
+- JobRuntime 的 job id、取消状态、进度事件和测试。
+- Rust 读取并校验 `resources/models/catalog.json`。
+- `persistence` 的 in-memory repository，SQLite 延后实现。
+- whisper-rs、sherpa-onnx 和 native diarization 的 placeholder adapter。
+
+### v0.1 不实现
+
+- 不加载 Whisper、sherpa-onnx 或 diarization crate 模型。
+- 不下载模型或引入大型推理依赖。
+- 不实现 SQLite schema。
+- 不实现完整会议项目 UI。
+- 不实现 LLM provider 的网络调用。
+
+### v0.1 验收命令
+
+```bash
+cargo fmt --all -- --check
+cargo test --workspace --exclude meetnote --exclude ui
+cargo build -p meetnote
+```
+
+### v0.1 验收结果
+
+当前结果：
+
+- workspace 已从根目录解析。
+- `cargo fmt --all -- --check` 已通过。
+- `cargo test --workspace --exclude meetnote --exclude ui` 已通过，覆盖 fake ASR、fake diarization、对齐、JobRuntime、backend registry 和 catalog。
+- GPUI 依赖已锁定并完成 Rust 依赖编译，但 `cargo test --workspace` / `cargo build -p meetnote` 被本机缺少 Metal shader compiler 阻塞：当前 `xcode-select` 指向 Command Line Tools，`/Applications/Xcode.app` 不存在。
+- 新增 backend 只需实现 trait 并注册，不修改 application pipeline。
+- catalog 中的模型来源、格式和状态已能被 Rust 读取。
+
 ## 阶段 0：架构冻结
 
 产物：

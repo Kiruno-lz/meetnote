@@ -1,0 +1,9 @@
+[package]
+name = "asr"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+application = { path = "../application" }
+contracts = { path = "../contracts" }
+runtime = { path = "../runtime" }
