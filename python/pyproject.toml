@@ -14,12 +14,9 @@ dependencies = [
     "torch",
 ]
 
-# flash-attn is a CUDA-only acceleration library that cannot be built on macOS
-# (it requires the CUDA toolkit). MiMo and Qwen3-ASR run without it using the
-# standard attention path, so it is opt-in: on a CUDA machine install with
-#   uv sync --extra cuda
 [project.optional-dependencies]
 cuda = ["flash-attn>=2.7.4"]
+mlx = ["mlx-qwen3-asr>=0.3.5"]
 
 [tool.uv]
 dev-dependencies = []

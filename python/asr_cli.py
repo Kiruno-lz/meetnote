@@ -255,8 +255,66 @@ class ParaformerEngine(ASREngine):
         )
 
 
+class MlxQwen3ASREngine(ASREngine):
+    """Qwen3-ASR engine via MLX (Apple Silicon only, ~5GB peak memory).
+
+    Uses MLX instead of PyTorch to load Qwen3-ASR directly on Apple GPU
+    at float16, avoiding the float32 + CPU→GPU double allocation that
+    causes 30GB+ memory spikes in PyTorch/MPS.
+    """
+
+    def __init__(self):
+        self.session = None
+        self.model_id = None
+
+    def load_model(self, model_id: str, device: str, **kwargs):
+        try:
+            import mlx.core as mx
+            import mlx_qwen3_asr as M
+        except ImportError:
+            raise ImportError(
+                "mlx-qwen3-asr not installed. Run: cd python && uv add mlx-qwen3-asr"
+            )
+
+        model, config = M.load_model(model_id, dtype=mx.float16)
+        self.session = M.Session(model=model, dtype=mx.float16)
+        self.model_id = model_id
+
+    def transcribe(self, audio_path: str, language: str, **kwargs) -> TranscriptionResult:
+        if self.session is None:
+            raise RuntimeError("Model not loaded")
+
+        lang = None if language == "auto" else language
+        result = self.session.transcribe(
+            audio_path,
+            language=lang,
+            return_timestamps=False,
+            draft_model=None,
+            forced_aligner=None,
+            verbose=False,
+        )
+
+        segments = []
+        # Single text result (no timestamps — avoids forced_aligner download)
+        segments.append({
+            "id": "asr-seg-0000",
+            "startMs": 0,
+            "endMs": 0,
+            "text": getattr(result, 'text', str(result)).strip(),
+            "language": language if language != "auto" else "zh",
+            "confidence": 1.0,
+        })
+
+        return TranscriptionResult(
+            segments=segments,
+            language=getattr(result, 'language', language or "zh"),
+            model=kwargs.get("model_id", "qwen3-asr-mlx"),
+            backend="qwen3-asr"
+        )
+
+
 class Qwen3ASREngine(ASREngine):
-    """Qwen3-ASR engine."""
+    """Qwen3-ASR engine. Used as fallback when MLX is not available."""
 
     def __init__(self):
         self.model = None
@@ -402,8 +460,29 @@ class MiMoEngine(ASREngine):
         )
 
 
-def create_engine(backend: str) -> ASREngine:
-    """Factory function to create ASR engine by backend name."""
+def create_engine(backend: str, mlx_override: Optional[bool] = None) -> ASREngine:
+    """Factory function to create ASR engine by backend name.
+
+    For qwen3-asr, auto-detects MLX (Apple Silicon) which uses ~5GB peak
+    memory vs ~30GB+ for PyTorch/MPS. Falls back to PyTorch when MLX
+    is unavailable or when device=cpu.
+
+    Args:
+        backend: Engine name ("whisper", "paraformer", "qwen3-asr", "mimo").
+        mlx_override: Force MLX (True), force PyTorch (False), or auto (None).
+    """
+    if backend == "qwen3-asr":
+        use_mlx = mlx_override
+        if use_mlx is None:
+            # Auto-detect: prefer MLX when available on Apple Silicon
+            try:
+                import mlx_qwen3_asr  # type: ignore
+                use_mlx = True
+            except ImportError:
+                use_mlx = False
+        if use_mlx:
+            return MlxQwen3ASREngine()
+
     engines = {
         "whisper": WhisperEngine,
         "paraformer": ParaformerEngine,
@@ -526,7 +605,7 @@ def _main_impl():
     emit_progress("0/4:loading-model")
 
     try:
-        engine = create_engine(args.backend)
+        engine = create_engine(args.backend, mlx_override=False if args.device == "cpu" else None)
     except ValueError as e:
         emit_json({"kind": "asr.error", "schemaVersion": "meetnote.asr.v1", "code": "ASR_PROCESS_FAILED", "error": str(e), "message": str(e), "recoverable": False})
         sys.exit(1)
