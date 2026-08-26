@@ -7,6 +7,7 @@
 - [模型目录与下载协议](architecture/model-management.md)
 - [工程实施计划](architecture/implementation-plan.md)
 - [架构决策](architecture/decisions.md)
+- [GPUI UI 规划](architecture/ui-plan.md)
 
 ## 当前阶段
 
