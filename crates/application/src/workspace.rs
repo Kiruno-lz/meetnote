@@ -1,4 +1,7 @@
-use crate::{run_pipeline, AsrBackend, BackendFuture, DiarizationBackend, PipelineResult};
+use crate::{
+    run_pipeline, AsrBackend, AsrBackendProvider, BackendFuture, DiarizationBackend,
+    DiarizationBackendProvider, PipelineResult,
+};
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use domain::{MeetingProject, ProjectId, ProjectStatus, SpeakerTaggedSegment};
 use futures::channel::mpsc::UnboundedReceiver;
@@ -19,8 +22,8 @@ pub struct ProcessingRequest {
 
 #[derive(Clone)]
 pub struct ProcessingService {
-    asr_backend: Arc<dyn AsrBackend>,
-    diarization_backend: Arc<dyn DiarizationBackend>,
+    asr_provider: Arc<dyn AsrBackendProvider>,
+    diarization_provider: Arc<dyn DiarizationBackendProvider>,
     runtime: Arc<JobRuntime>,
 }
 
@@ -36,22 +39,48 @@ impl ProcessingService {
         asr_backend: Arc<dyn AsrBackend>,
         diarization_backend: Arc<dyn DiarizationBackend>,
     ) -> Self {
+        Self::new_with_providers(
+            Arc::new(SingleAsrBackendProvider {
+                backend: asr_backend,
+            }),
+            Arc::new(SingleDiarizationBackendProvider {
+                backend: diarization_backend,
+            }),
+        )
+    }
+
+    pub fn new_with_providers(
+        asr_provider: Arc<dyn AsrBackendProvider>,
+        diarization_provider: Arc<dyn DiarizationBackendProvider>,
+    ) -> Self {
         Self {
-            asr_backend,
-            diarization_backend,
+            asr_provider,
+            diarization_provider,
             runtime: Arc::new(JobRuntime::default()),
         }
     }
 
     pub fn probe(&self, request: &ProcessingRequest) -> Result<(), contracts::BackendError> {
-        self.asr_backend.probe(&request.asr_model)?;
-        self.diarization_backend.probe(&request.diarization_model)
+        self.asr_provider
+            .backend(&request.asr_model.backend_id)?
+            .probe(&request.asr_model)?;
+        self.diarization_provider
+            .backend(&request.diarization_model.backend_id)?
+            .probe(&request.diarization_model)
     }
 
     pub fn backend_ids(&self) -> (String, String) {
         (
-            self.asr_backend.descriptor().id,
-            self.diarization_backend.descriptor().id,
+            self.asr_provider
+                .available_backends()
+                .first()
+                .map(|backend| backend.id.clone())
+                .unwrap_or_default(),
+            self.diarization_provider
+                .available_backends()
+                .first()
+                .map(|backend| backend.id.clone())
+                .unwrap_or_default(),
         )
     }
 
@@ -72,8 +101,17 @@ impl ProcessingService {
         asr_context: JobContext,
         diarization_context: JobContext,
     ) -> BackendFuture<PipelineResult> {
-        let asr_backend = self.asr_backend.clone();
-        let diarization_backend = self.diarization_backend.clone();
+        let asr_backend = match self.asr_provider.backend(&request.asr_model.backend_id) {
+            Ok(backend) => backend,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
+        let diarization_backend = match self
+            .diarization_provider
+            .backend(&request.diarization_model.backend_id)
+        {
+            Ok(backend) => backend,
+            Err(error) => return Box::pin(async move { Err(error) }),
+        };
         Box::pin(async move {
             run_pipeline(
                 asr_backend.as_ref(),
@@ -95,6 +133,51 @@ impl ProcessingService {
             )
             .await
         })
+    }
+}
+
+struct SingleAsrBackendProvider {
+    backend: Arc<dyn AsrBackend>,
+}
+
+impl AsrBackendProvider for SingleAsrBackendProvider {
+    fn available_backends(&self) -> Vec<crate::BackendDescriptor> {
+        vec![self.backend.descriptor()]
+    }
+
+    fn backend(&self, backend_id: &str) -> Result<Arc<dyn AsrBackend>, contracts::BackendError> {
+        if backend_id == self.backend.descriptor().id {
+            Ok(self.backend.clone())
+        } else {
+            Err(contracts::BackendError {
+                code: contracts::BackendErrorCode::BackendUnavailable,
+                message: format!("ASR backend not registered: {backend_id}"),
+            })
+        }
+    }
+}
+
+struct SingleDiarizationBackendProvider {
+    backend: Arc<dyn DiarizationBackend>,
+}
+
+impl DiarizationBackendProvider for SingleDiarizationBackendProvider {
+    fn available_backends(&self) -> Vec<crate::BackendDescriptor> {
+        vec![self.backend.descriptor()]
+    }
+
+    fn backend(
+        &self,
+        backend_id: &str,
+    ) -> Result<Arc<dyn DiarizationBackend>, contracts::BackendError> {
+        if backend_id == self.backend.descriptor().id {
+            Ok(self.backend.clone())
+        } else {
+            Err(contracts::BackendError {
+                code: contracts::BackendErrorCode::BackendUnavailable,
+                message: format!("Diarization backend not registered: {backend_id}"),
+            })
+        }
     }
 }
 

@@ -5,6 +5,7 @@ use domain::{align_transcript_and_speakers, SpeakerTaggedSegment};
 use runtime::JobContext;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 mod workspace;
 
@@ -22,6 +23,11 @@ pub trait AsrBackend: Send + Sync {
     fn transcribe(&self, request: AsrRequest, context: JobContext) -> BackendFuture<AsrResult>;
 }
 
+pub trait AsrBackendProvider: Send + Sync {
+    fn available_backends(&self) -> Vec<BackendDescriptor>;
+    fn backend(&self, backend_id: &str) -> Result<Arc<dyn AsrBackend>, BackendError>;
+}
+
 pub trait DiarizationBackend: Send + Sync {
     fn descriptor(&self) -> BackendDescriptor;
     fn probe(&self, model: &contracts::ModelRef) -> Result<(), BackendError>;
@@ -30,6 +36,11 @@ pub trait DiarizationBackend: Send + Sync {
         request: DiarizationRequest,
         context: JobContext,
     ) -> BackendFuture<DiarizationResult>;
+}
+
+pub trait DiarizationBackendProvider: Send + Sync {
+    fn available_backends(&self) -> Vec<BackendDescriptor>;
+    fn backend(&self, backend_id: &str) -> Result<Arc<dyn DiarizationBackend>, BackendError>;
 }
 
 pub trait ProjectRepository: Send + Sync {

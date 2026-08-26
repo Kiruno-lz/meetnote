@@ -57,6 +57,7 @@ crates/
 ├── application/
 ├── runtime/
 ├── persistence/
+├── settings/
 ├── models/
 ├── asr/
 ├── asr-whisper-rs/
@@ -91,11 +92,15 @@ resources/models/catalog.json
 
 ### persistence
 
-v0.2 当前使用原子替换的 JSON project store 保存可编辑项目状态；文件系统保存音频、模型和 Markdown 产物。SQLite 是后续 schema migration 的目标，不再使用 localStorage。
+v0.2 当前使用原子替换的 JSON project store 保存可编辑项目状态；文件系统保存音频、模型和 Markdown 产物。不引入 SQLite，也不使用 localStorage。
 
 ### models
 
 模型目录、解析、下载、断点续传、SHA-256 校验、原子安装、缓存索引和 backend probe。
+
+### settings
+
+版本化设置 schema、JSON 原子持久化、运行时设置快照与更新；不使用 SQLite。
 
 ### ui
 
@@ -120,7 +125,7 @@ ASR segments + diarization segments
 
 ## 持久化原则
 
-SQLite 是当前可编辑项目的运行数据源，Markdown 是用户可读和可迁移的文档产物。每次生成 Markdown 时记录：
+JSON project store 是当前可编辑项目的运行数据源，Markdown 是用户可读和可迁移的文档产物。每次生成结果时记录：
 
 - 使用的 ASR backend、model 和 revision
 - 使用的 diarization backend、model 和 revision

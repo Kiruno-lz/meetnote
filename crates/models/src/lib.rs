@@ -9,6 +9,8 @@ const CATALOG_SCHEMA_VERSION: &str = "meetnote.model-catalog.v1";
 
 pub mod download {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Condvar, Mutex};
 
     #[derive(Debug, thiserror::Error)]
     pub enum DownloadError {
@@ -26,6 +28,60 @@ pub mod download {
             expected: String,
             actual: String,
         },
+        #[error("model download cancelled")]
+        Cancelled,
+    }
+
+    #[derive(Clone, Default)]
+    pub struct DownloadControl {
+        paused: Arc<AtomicBool>,
+        cancelled: Arc<AtomicBool>,
+        wait_lock: Arc<Mutex<()>>,
+        wait_condvar: Arc<Condvar>,
+    }
+
+    impl DownloadControl {
+        pub fn pause(&self) {
+            self.paused.store(true, Ordering::Release);
+        }
+
+        pub fn resume(&self) {
+            self.paused.store(false, Ordering::Release);
+            self.wait_condvar.notify_all();
+        }
+
+        pub fn cancel(&self) {
+            self.cancelled.store(true, Ordering::Release);
+            self.wait_condvar.notify_all();
+        }
+
+        pub fn is_cancelled(&self) -> bool {
+            self.cancelled.load(Ordering::Acquire)
+        }
+
+        pub(crate) fn checkpoint(&self) -> Result<(), DownloadError> {
+            if self.is_cancelled() {
+                return Err(DownloadError::Cancelled);
+            }
+            if self.paused.load(Ordering::Acquire) {
+                let guard = self
+                    .wait_lock
+                    .lock()
+                    .map_err(|_| std::io::Error::other("download control lock poisoned"))?;
+                let _guard = self
+                    .wait_condvar
+                    .wait_while(guard, |_| {
+                        self.paused.load(Ordering::Acquire)
+                            && !self.cancelled.load(Ordering::Acquire)
+                    })
+                    .map_err(|_| std::io::Error::other("download control lock poisoned"))?;
+            }
+            if self.is_cancelled() {
+                Err(DownloadError::Cancelled)
+            } else {
+                Ok(())
+            }
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -40,11 +96,28 @@ pub mod download {
         source: &str,
         destination: impl AsRef<Path>,
         expected_sha256: Option<&str>,
+        on_progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<(), DownloadError> {
+        download_file_controlled(
+            source,
+            destination,
+            expected_sha256,
+            &DownloadControl::default(),
+            on_progress,
+        )
+    }
+
+    pub fn download_file_controlled(
+        source: &str,
+        destination: impl AsRef<Path>,
+        expected_sha256: Option<&str>,
+        control: &DownloadControl,
         mut on_progress: impl FnMut(u64, Option<u64>),
     ) -> Result<(), DownloadError> {
         if !source.starts_with("https://") && !source.starts_with("http://") {
             return Err(DownloadError::UnsupportedSource(source.into()));
         }
+        control.checkpoint()?;
         let destination = destination.as_ref();
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
@@ -86,6 +159,7 @@ pub mod download {
         let mut downloaded = offset;
         let mut buffer = [0_u8; 64 * 1024];
         loop {
+            control.checkpoint()?;
             let read = reader.read(&mut buffer)?;
             if read == 0 {
                 break;
@@ -99,6 +173,7 @@ pub mod download {
         let actual = format!("{:x}", hash.finalize());
         if let Some(expected) = expected_sha256 {
             if !actual.eq_ignore_ascii_case(expected) {
+                let _ = fs::remove_file(&partial);
                 return Err(DownloadError::ChecksumMismatch {
                     path: partial.display().to_string(),
                     expected: expected.into(),
@@ -106,6 +181,7 @@ pub mod download {
                 });
             }
         }
+        control.checkpoint()?;
         fs::rename(partial, destination)?;
         Ok(())
     }
@@ -113,11 +189,26 @@ pub mod download {
     pub fn download_bundle(
         artifacts: &[BundleArtifact],
         destination: impl AsRef<Path>,
+        on_progress: impl FnMut(usize, usize),
+    ) -> Result<(), DownloadError> {
+        download_bundle_controlled(
+            artifacts,
+            destination,
+            &DownloadControl::default(),
+            on_progress,
+        )
+    }
+
+    pub fn download_bundle_controlled(
+        artifacts: &[BundleArtifact],
+        destination: impl AsRef<Path>,
+        control: &DownloadControl,
         mut on_progress: impl FnMut(usize, usize),
     ) -> Result<(), DownloadError> {
         let destination = destination.as_ref();
         fs::create_dir_all(destination)?;
         for (index, artifact) in artifacts.iter().enumerate() {
+            control.checkpoint()?;
             let target = destination.join(&artifact.filename);
             if target.is_file() {
                 on_progress(index + 1, artifacts.len());
@@ -125,23 +216,68 @@ pub mod download {
             }
             if let Some(member) = &artifact.archive_member {
                 let archive_path = destination.join(format!("{}.archive.part", artifact.filename));
-                download_file(
+                download_file_controlled(
                     &artifact.source,
                     &archive_path,
                     artifact.expected_sha256.as_deref(),
+                    control,
                     |_, _| {},
                 )?;
                 extract_archive_member(&archive_path, member, &target)?;
                 fs::remove_file(archive_path)?;
             } else {
-                download_file(
+                download_file_controlled(
                     &artifact.source,
                     &target,
                     artifact.expected_sha256.as_deref(),
+                    control,
                     |_, _| {},
                 )?;
             }
             on_progress(index + 1, artifacts.len());
+        }
+        Ok(())
+    }
+
+    pub fn download_bundle_with_progress(
+        artifacts: &[BundleArtifact],
+        destination: impl AsRef<Path>,
+        control: &DownloadControl,
+        mut on_progress: impl FnMut(usize, usize, u64, Option<u64>),
+    ) -> Result<(), DownloadError> {
+        let destination = destination.as_ref();
+        fs::create_dir_all(destination)?;
+        for (index, artifact) in artifacts.iter().enumerate() {
+            control.checkpoint()?;
+            let target = destination.join(&artifact.filename);
+            if target.is_file() {
+                on_progress(index + 1, artifacts.len(), 0, None);
+                continue;
+            }
+            let mut report = |completed: u64, total: Option<u64>| {
+                on_progress(index, artifacts.len(), completed, total)
+            };
+            if let Some(member) = &artifact.archive_member {
+                let archive_path = destination.join(format!("{}.archive.part", artifact.filename));
+                download_file_controlled(
+                    &artifact.source,
+                    &archive_path,
+                    artifact.expected_sha256.as_deref(),
+                    control,
+                    &mut report,
+                )?;
+                extract_archive_member(&archive_path, member, &target)?;
+                fs::remove_file(archive_path)?;
+            } else {
+                download_file_controlled(
+                    &artifact.source,
+                    &target,
+                    artifact.expected_sha256.as_deref(),
+                    control,
+                    &mut report,
+                )?;
+            }
+            on_progress(index + 1, artifacts.len(), 0, None);
         }
         Ok(())
     }
@@ -214,6 +350,8 @@ pub mod download {
     }
 }
 
+pub mod manager;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelCatalog {
@@ -252,6 +390,20 @@ pub struct CatalogArtifact {
     pub archive_member: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelInstallState {
+    Missing,
+    Partial,
+    Installed,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelAvailability {
+    pub model: ModelCatalogEntry,
+    pub install_state: ModelInstallState,
+    pub artifact_paths: Vec<std::path::PathBuf>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CatalogError {
     #[error("failed to read model catalog {path}: {source}")]
@@ -279,6 +431,28 @@ impl ModelCatalog {
             source,
         })?;
         Self::parse(&input)
+    }
+
+    pub fn find(&self, model_id: &str) -> Option<&ModelCatalogEntry> {
+        self.models.iter().find(|model| model.id == model_id)
+    }
+
+    pub fn browse(
+        &self,
+        model_root: impl AsRef<Path>,
+        task: Option<&str>,
+        backend_id: Option<&str>,
+    ) -> Vec<ModelAvailability> {
+        self.models
+            .iter()
+            .filter(|model| task.map_or(true, |task| model.task == task))
+            .filter(|model| {
+                backend_id.map_or(true, |backend| {
+                    model.candidate_backends.iter().any(|id| id == backend)
+                })
+            })
+            .map(|model| model.availability(model_root.as_ref()))
+            .collect()
     }
 
     pub fn validate(&self) -> Result<(), CatalogError> {
@@ -323,6 +497,55 @@ impl ModelCatalog {
             }
         }
         Ok(())
+    }
+}
+
+impl ModelCatalogEntry {
+    pub fn install_directory(&self, model_root: impl AsRef<Path>) -> std::path::PathBuf {
+        model_root.as_ref().join(&self.task).join(&self.id)
+    }
+
+    pub fn artifact_filenames(&self) -> Vec<String> {
+        if !self.artifacts.is_empty() {
+            return self
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.filename.clone())
+                .collect();
+        }
+        let filename = self
+            .source
+            .split('?')
+            .next()
+            .and_then(|source| source.rsplit('/').next())
+            .filter(|filename| !filename.is_empty())
+            .unwrap_or("model.bin");
+        vec![filename.to_string()]
+    }
+
+    pub fn artifact_paths(&self, model_root: impl AsRef<Path>) -> Vec<std::path::PathBuf> {
+        let directory = self.install_directory(model_root);
+        self.artifact_filenames()
+            .into_iter()
+            .map(|filename| directory.join(filename))
+            .collect()
+    }
+
+    pub fn availability(&self, model_root: impl AsRef<Path>) -> ModelAvailability {
+        let artifact_paths = self.artifact_paths(model_root);
+        let present = artifact_paths.iter().filter(|path| path.is_file()).count();
+        let install_state = if present == 0 {
+            ModelInstallState::Missing
+        } else if present == artifact_paths.len() {
+            ModelInstallState::Installed
+        } else {
+            ModelInstallState::Partial
+        };
+        ModelAvailability {
+            model: self.clone(),
+            install_state,
+            artifact_paths,
+        }
     }
 }
 

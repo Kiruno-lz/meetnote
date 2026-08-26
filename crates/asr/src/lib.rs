@@ -1,4 +1,4 @@
-use application::AsrBackend;
+use application::{AsrBackend, AsrBackendProvider};
 use contracts::{AsrRequest, AsrResult, BackendDescriptor, BackendError, ModelRef};
 use runtime::JobContext;
 use std::collections::BTreeMap;
@@ -70,6 +70,19 @@ impl AsrBackendManager {
             message: format!("ASR backend not registered: {backend_id}"),
         })?;
         backend.transcribe(request, context).await
+    }
+}
+
+impl AsrBackendProvider for AsrBackendManager {
+    fn available_backends(&self) -> Vec<BackendDescriptor> {
+        self.available_backends()
+    }
+
+    fn backend(&self, backend_id: &str) -> Result<Arc<dyn AsrBackend>, BackendError> {
+        self.registry.get(backend_id).ok_or_else(|| BackendError {
+            code: contracts::BackendErrorCode::BackendUnavailable,
+            message: format!("ASR backend not registered: {backend_id}"),
+        })
     }
 }
 

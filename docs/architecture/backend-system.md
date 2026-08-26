@@ -29,14 +29,23 @@ pub trait AsrBackend: Send + Sync {
 核心对象：
 
 - `AsrBackendRegistry`：注册和发现 backend。
-- `AsrBackendSelector`：根据配置、模型和设备选择 backend。
-- `AsrSessionManager`：缓存已加载模型和推理 session。
-- `AsrCapabilityResolver`：判断语言、时间戳、流式、设备和模型兼容性。
+- `AsrBackendManager`：维护 registry，按 `backend_id` 返回实现并执行 probe。
+- `AsrBackendProvider`：application 使用的稳定选择边界，不依赖具体实现 crate。
+- session 缓存和能力解析在具体 backend 需要时独立增加，不进入 application pipeline。
 
 第一批实现：
 
 - `asr-whisper-rs`：whisper.cpp、GGML/GGUF、Metal/CPU。
 - `asr-sherpa-onnx`：sherpa-onnx 支持的 ONNX ASR 模型族。
+
+运行时选择流程：
+
+```text
+AppSettings.asr_backend_id / ModelRef.backend_id
+  -> AsrBackendProvider
+  -> AsrBackendManager
+  -> selected AsrBackend
+```
 
 ## Diarization 接口
 
@@ -56,6 +65,9 @@ pub trait DiarizationBackend: Send + Sync {
 
 - `diarization-sherpa-onnx`：segmentation、speaker embedding 和 clustering。
 - `diarization-native`：接入 `diarization` crate，保留 ONNX/CoreML provider 选择能力。
+
+`DiarizationBackendManager` 以同样方式实现 `DiarizationBackendProvider`。ASR 和
+diarization 可以独立选择，application 只接收两个统一的 `ModelRef`。
 
 ## 不把任意 ONNX 当作通用 backend
 

@@ -29,13 +29,15 @@ fn main() {
     let mut diarization_registry = DiarizationBackendRegistry::default();
     diarization_registry.register(diarization_backend.clone());
     let diarization_manager = DiarizationBackendManager::new(diarization_registry);
+    let asr_inventory = asr_manager.available_backends();
+    let diarization_inventory = diarization_manager.available_backends();
 
     let repository = Arc::new(
         JsonProjectRepository::open("data/projects/projects.json")
             .expect("failed to open project repository"),
     );
     let workspace = WorkspaceService::new(
-        ProcessingService::new(whisper_backend.clone(), diarization_backend.clone()),
+        ProcessingService::new_with_providers(Arc::new(asr_manager), Arc::new(diarization_manager)),
         repository,
         "data/markdown",
     );
@@ -97,10 +99,7 @@ fn main() {
     }
 
     ui::run(
-        BackendInventory::new(
-            asr_manager.available_backends(),
-            diarization_manager.available_backends(),
-        ),
+        BackendInventory::new(asr_inventory, diarization_inventory),
         desktop_services,
     );
 }

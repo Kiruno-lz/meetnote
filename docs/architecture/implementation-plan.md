@@ -17,6 +17,7 @@ crates/
 ├── application/
 ├── runtime/
 ├── persistence/
+├── settings/
 ├── models/
 ├── asr/
 ├── asr-whisper-rs/
@@ -38,7 +39,7 @@ crates/
 - 独立的 diarization backend registry/manager。
 - JobRuntime 的 job id、取消状态、进度事件和测试。
 - Rust 读取并校验 `resources/models/catalog.json`。
-- `persistence` 的 in-memory repository，SQLite 延后实现。
+- `persistence` 的 in-memory repository 与 JSON project store；不实现 SQLite。
 - `whisper-rs` 的真实 ASR adapter，支持 GGML/GGUF 文件、CPU/Metal 设备选择和时间戳结果。
 - `sherpa-onnx` 的真实 diarization adapter，支持 ONNX bundle、CPU/CoreML provider 和 speaker clustering。
 - 应用入口注册 `whisper-rs + sherpa-onnx`，GPUI 读取并展示两个 backend descriptor。
@@ -158,11 +159,33 @@ sherpa-onnx diarization
 仍需完成：
 
 - JobRuntime 事件订阅、取消和 ASR/diarization 状态展示已完成；仍需补充更细的阶段百分比和恢复策略。
-- SQLite schema 与迁移。
 - 完整 diarization bundle 的多文件下载、archive member 提取和 readiness 检查已完成。
 - speaker 合并和 Markdown 回写已完成；自由命名编辑与 LLM 忠实去口语化属于后续 hardening。
 
 验收：GPUI 可导入音频、创建项目、执行 pipeline、重启后恢复项目，并显示 speaker-labelled transcript。
+
+## v0.2.1：后端能力层
+
+UI 暂不绑定本阶段新增接口；所有能力先在 Rust crate 中可测试、可独立调用。
+
+已完成：
+
+- `settings` crate 提供版本化 `AppSettings`、JSON 原子保存、读取、更新和重置；不使用 SQLite。
+- `AsrBackendProvider` 与 `DiarizationBackendProvider` 让 application 根据 `ModelRef.backend_id` 运行时选择后端。
+- `models::ModelManager` 提供 catalog 按任务/backend 浏览、缺失/部分/已安装状态查询和安装目录规划。
+- 下载任务提供进度事件、暂停、继续、取消；取消和中断保留 `.part`，继续使用 HTTP Range，校验失败清理临时文件。
+- gated 模型在缺少认证接入时拒绝开始下载，不把 token 写入 catalog、日志或命令行。
+
+后端验收：
+
+```bash
+cargo fmt --all -- --check
+cargo check --workspace
+cargo test --workspace
+```
+
+GPUI 页面后续只需要订阅 `DownloadTask.events`，调用 `ModelManager::pause/resume/cancel`，
+并将 `AppSettings` 绑定到设置表单；不需要修改下载器或 application pipeline。
 
 ## 阶段 5：GPUI UI
 
@@ -181,7 +204,6 @@ GPUI View 不得直接执行领域算法、文件 IO 或推理。
 
 ## 阶段 6：生产化
 
-- SQLite migration
 - 崩溃恢复
 - 模型安装恢复
 - Metal/CoreML 性能评测

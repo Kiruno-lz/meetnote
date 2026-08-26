@@ -37,7 +37,9 @@ failed
 cancelled
 ```
 
-状态需要持久化，应用重启后可以恢复已下载字节数和临时文件状态。
+运行时任务状态由 Rust `ModelManager` 管理；取消或进程中断会保留 `.part`，下一次下载
+自动通过 HTTP Range 继续。项目不引入 SQLite；后续如需跨进程恢复，只能增加独立的
+JSON 下载任务清单，不改变模型安装协议。
 
 ## HTTP 下载流程
 
@@ -65,6 +67,10 @@ cancelled
 - 临时文件与最终文件隔离
 
 v0.2 已落地 `models::download`：单文件支持 HTTP Range 续传、`.part` 临时文件、流式 SHA-256 校验和原子 rename；bundle 支持逐 artifact 下载，并从 sherpa-onnx tar.bz2 中提取指定 ONNX member 后再安装。GPUI 会在两个 bundle artifact 都存在后显示 DIA ready。
+
+v0.2.1 已落地 `models::manager::ModelManager`：提供 catalog 按 task/backend 浏览、模型安装状态查询、
+下载任务事件订阅，以及 `pause`、`resume`、`cancel` 控制。下载控制与文件写入解耦，
+不会要求 UI 参与模型协议。
 
 ## library-managed 的新含义
 

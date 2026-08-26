@@ -3272,6 +3272,7 @@ name = "models"
 version = "0.1.0"
 dependencies = [
  "bzip2 0.6.1",
+ "contracts",
  "serde",
  "serde_json",
  "sha2",
@@ -4984,6 +4985,16 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "settings"
+version = "0.1.0"
+dependencies = [
+ "contracts",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-use application::DiarizationBackend;
+use application::{DiarizationBackend, DiarizationBackendProvider};
 use contracts::{BackendDescriptor, BackendError, DiarizationRequest, DiarizationResult, ModelRef};
 use runtime::JobContext;
 use std::collections::BTreeMap;
@@ -67,6 +67,19 @@ impl DiarizationBackendManager {
             message: format!("Diarization backend not registered: {backend_id}"),
         })?;
         backend.diarize(request, context).await
+    }
+}
+
+impl DiarizationBackendProvider for DiarizationBackendManager {
+    fn available_backends(&self) -> Vec<BackendDescriptor> {
+        self.available_backends()
+    }
+
+    fn backend(&self, backend_id: &str) -> Result<Arc<dyn DiarizationBackend>, BackendError> {
+        self.registry.get(backend_id).ok_or_else(|| BackendError {
+            code: contracts::BackendErrorCode::BackendUnavailable,
+            message: format!("Diarization backend not registered: {backend_id}"),
+        })
     }
 }
 

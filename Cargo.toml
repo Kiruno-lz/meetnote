@@ -16,6 +16,7 @@ members = [
     "crates/models",
     "crates/persistence",
     "crates/runtime",
+    "crates/settings",
     "crates/ui",
 ]
 

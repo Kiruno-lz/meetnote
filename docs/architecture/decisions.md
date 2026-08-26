@@ -8,7 +8,7 @@
 4. ASR 与 diarization 分别通过独立 backend manager 管理。
 5. 允许 `whisper-rs`、`sherpa-onnx`、`diarization` crate 和未来 native/ONNX backend 并存。
 6. `crates/` 下使用语义目录名，去除重复的 `meetnote-` 前缀。
-7. v0.2 使用原子替换 JSON 保存可编辑项目状态，SQLite migration 作为后续持久化升级；Markdown 作为可读产物。
+7. v0.2 及后续版本使用原子替换 JSON 保存可编辑项目状态，Markdown 作为可读产物；不引入 SQLite。
 8. 模型清单和下载生命周期协议迁移到 Rust model manager。
 9. 新增 backend 不得修改 domain、application 和 UI 的稳定接口。
 10. GPUI 在 macOS 上启用 `runtime_shaders`，将 shader 编译从构建期移到运行期，降低本地构建工具链要求。

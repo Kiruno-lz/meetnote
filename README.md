@@ -47,4 +47,4 @@ cargo run -p meetnote -- process \
 
 ## 当前不执行
 
-模型权重由用户按需放入本地 cache，不进入仓库。当前桌面入口使用 `data/` 保存项目 JSON 和 Markdown，GPUI 显示模型 readiness、支持 Whisper 与 sherpa-onnx bundle 下载、消费 ASR/diarization 异步状态事件，并支持基础 speaker 合并修正；SQLite、自由 speaker 命名和 LLM 去口语化仍是后续 hardening 工作。
+模型权重由用户按需放入本地 cache，不进入仓库。当前桌面入口使用 `data/` 保存项目 JSON 和 Markdown，GPUI 显示模型 readiness、支持 Whisper 与 sherpa-onnx bundle 下载、消费 ASR/diarization 异步状态事件，并支持基础 speaker 合并修正；SQLite 不纳入本项目架构，自由 speaker 命名和 LLM 去口语化仍是后续 hardening 工作。
