@@ -352,6 +352,8 @@ pub mod download {
 
 pub mod manager;
 
+pub use manager::ModelManager;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelCatalog {

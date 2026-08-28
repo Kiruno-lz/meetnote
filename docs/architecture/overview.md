@@ -2,17 +2,19 @@
 
 ## 目标
 
-meetnote 是一个本地优先的会议智能工作台：
+meetnote 是一个本地优先的音频转录与语音资料整理工作台。会议只是其中一种场景：
 
 ```text
-导入音频
+导入音频资产
   -> ASR
   -> speaker diarization
   -> transcript/speaker 对齐
-  -> 人工修正
-  -> 忠实去口语化
-  -> Markdown 纪要
+  -> 语义场景拆分（可选）
+  -> 项目树与内部链接
+  -> LLM 整理、总结和索引
 ```
+
+处理顺序固定为先完成整段音频转录，再进行语义分析，最后判断是否需要整理和拆分；拆分不能替代完整转录。
 
 桌面应用由单一 Rust 进程提供。GPUI 是 UI 层，application layer 是业务编排层，推理后端通过 Rust trait 接入。
 
@@ -76,7 +78,7 @@ resources/models/catalog.json
 
 ### domain
 
-纯 Rust 领域模型和算法：项目状态、音频资产、转录段、speaker 段、人工修正、对齐、文档版本和领域错误。
+纯 Rust 领域模型和算法：音频资产、项目节点、UUID、父子层级、时间范围、分类标签、转录段、speaker 段、人工修正、对齐、文档版本和领域错误。
 
 ### contracts
 
@@ -84,7 +86,7 @@ resources/models/catalog.json
 
 ### application
 
-用例编排：导入、转录、分离、对齐、人工修正、去口语化、保存和搜索。只依赖接口，不依赖 GPUI 或具体推理库。
+用例编排：导入、转录、分离、对齐、语义拆分、项目整理、人工修正、LLM 索引、保存和搜索。只依赖接口，不依赖 GPUI 或具体推理库。
 
 ### runtime
 
@@ -125,7 +127,7 @@ ASR segments + diarization segments
 
 ## 持久化原则
 
-JSON project store 是当前可编辑项目的运行数据源，Markdown 是用户可读和可迁移的文档产物。每次生成结果时记录：
+JSON project store 是当前可编辑项目树和内容的运行数据源，Markdown 是用户可读和可迁移的文档产物。主项目通过内部 Markdown 链接引用子项目，不复制子项目全文。每次生成结果时记录：
 
 - 使用的 ASR backend、model 和 revision
 - 使用的 diarization backend、model 和 revision

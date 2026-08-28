@@ -1,6 +1,6 @@
 # meetnote
 
-Rust-native meeting intelligence platform：本地导入音频，使用可切换的 Rust/native ASR 与 speaker diarization 后端，生成可编辑、可追溯的会议纪要。
+Rust-native meeting intelligence platform：本地导入音频，使用可切换的 Rust/native ASR 与 speaker diarization 后端，将长音频整理为可编辑、可追溯的语义项目树。会议只是其中一种场景。
 
 ## 当前状态
 
@@ -24,6 +24,7 @@ GPUI UI
 - [模型目录与下载协议](docs/architecture/model-management.md)
 - [工程实施计划](docs/architecture/implementation-plan.md)
 - [架构决策](docs/architecture/decisions.md)
+- [GPUI UI 规划](docs/architecture/ui-plan.md)
 
 ## 后端方向
 
@@ -47,4 +48,4 @@ cargo run -p meetnote -- process \
 
 ## 当前不执行
 
-模型权重由用户按需放入本地 cache，不进入仓库。当前桌面入口使用 `data/` 保存项目 JSON 和 Markdown，GPUI 显示模型 readiness、支持 Whisper 与 sherpa-onnx bundle 下载、消费 ASR/diarization 异步状态事件，并支持基础 speaker 合并修正；SQLite 不纳入本项目架构，自由 speaker 命名和 LLM 去口语化仍是后续 hardening 工作。
+模型权重由用户按需放入本地 cache，不进入仓库。当前桌面入口使用 `data/` 保存项目 JSON 和 Markdown；语义项目拆分、LLM 整理与语音库索引将在领域模型和 application service 完成后绑定到 GPUI。SQLite 不纳入本项目架构。

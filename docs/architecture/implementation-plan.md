@@ -4,7 +4,7 @@
 
 ### 目标
 
-建立一个可编译、可测试、可启动并已接入第一组真实推理后端的 Rust-native foundation，不下载模型权重，不实现完整会议 UI。
+建立一个可编译、可测试、可启动并已接入第一组真实推理后端的 Rust-native foundation，不下载模型权重，不实现完整音频资料工作区 UI。
 
 ### 交付目录
 
@@ -146,6 +146,23 @@ sherpa-onnx diarization
 
 验收：同一个 application pipeline 可以切换 backend；UI 不修改。
 
+## 产品领域演进：音频项目与语义项目树
+
+下一阶段的领域模型必须从 `MeetingProject` 演进为音频资产和语义项目节点：
+
+```text
+AudioAsset
+└── ProjectNode (最多三层)
+    ├── metadata: UUID / parent / time range / title / tags
+    ├── original content
+    ├── summary content
+    └── child nodes
+```
+
+处理顺序固定为完整转录、语义分析、再决定是否整理和拆分。长音频允许按语义场景拆分；短音频或单场景音频保持单项目。主项目承担对子项目的整理、总结和索引，只通过内部链接引用子项目，不复制子项目全文。所有拆分、重排、总结和标签变更都必须是可追溯的 application command。
+
+LLM service 负责语义拆分建议、项目整理、总结和语音库索引；原始转录是不可覆盖的输入，LLM 输出必须经过 schema 校验，涉及项目树或内容写入时必须经过用户确认。
+
 ## v0.2：桌面工作区
 
 当前落地：
@@ -162,7 +179,7 @@ sherpa-onnx diarization
 - 完整 diarization bundle 的多文件下载、archive member 提取和 readiness 检查已完成。
 - speaker 合并和 Markdown 回写已完成；自由命名编辑与 LLM 忠实去口语化属于后续 hardening。
 
-验收：GPUI 可导入音频、创建项目、执行 pipeline、重启后恢复项目，并显示 speaker-labelled transcript。
+验收：GPUI 可导入音频、创建项目、执行 pipeline、重启后恢复项目，并显示 speaker-labelled transcript。现有 `MeetingProject` 是 MVP 结构，后续按“产品领域演进”升级为音频项目树。
 
 ## v0.2.1：后端能力层
 
@@ -187,20 +204,24 @@ cargo test --workspace
 GPUI 页面后续只需要订阅 `DownloadTask.events`，调用 `ModelManager::pause/resume/cancel`，
 并将 `AppSettings` 绑定到设置表单；不需要修改下载器或 application pipeline。
 
-## 阶段 5：GPUI UI
+## 阶段 5：GPUI UI 实施状态与后续顺序
 
-顺序：
+完整布局、状态模型、Command/Event 边界和验收标准以 [GPUI UI 规划](ui-plan.md) 为准，实施顺序固定为：
 
-1. 应用壳和导航
-2. 项目列表
-3. 录音详情
-4. 转录进度
-5. speaker 编辑器
-6. Markdown 预览
-7. 模型管理
-8. 设置
+1. 冻结音频项目与语义项目节点的数据契约。
+2. 构建无历史的 Assistant 单次输入首页和全局导航。
+3. 构建最多三层的项目树、Summary/Original 切换和拖动重排。
+4. 将 Meeting detail 实现为悬浮面板，不进行页面跳转。
+5. 绑定设置、UI locale 和 i18n 基础能力。
+6. 绑定模型浏览、下载队列和 LLM 整理/索引状态。
 
-GPUI View 不得直接执行领域算法、文件 IO 或推理。
+当前已实现 Assistant、Meetings、Models、Settings 四个工作区入口、项目树、Summary/Original 展示、悬浮详情、模型下载任务绑定和 backend 设置选择。GPUI View 不得直接执行领域算法、文件 IO、模型下载或 LLM 调用。
+
+仍需完成：
+
+- 正式拆分中性的 `AudioProject`/`ProjectNode` 领域类型和项目内容版本。
+- 将 LLM 语义拆分建议、项目总结和语音库索引接入 controller。
+- 补齐拖动同级前后排序、完整 i18n 资源和可编辑文本输入。
 
 ## 阶段 6：生产化
 

@@ -1483,6 +1483,7 @@ name = "domain"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "uuid",
 ]
 
 [[package]]
@@ -3209,6 +3210,7 @@ dependencies = [
  "runtime",
  "serde",
  "serde_json",
+ "settings",
  "ui",
 ]
 
@@ -5934,6 +5936,7 @@ dependencies = [
  "models",
  "persistence",
  "runtime",
+ "settings",
 ]
 
 [[package]]

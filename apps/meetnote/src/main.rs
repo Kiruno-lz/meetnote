@@ -8,10 +8,11 @@ use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use diarization::{DiarizationBackendManager, DiarizationBackendRegistry};
 use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
 use domain::SpeakerTaggedSegment;
-use models::download::BundleArtifact;
+use models::{ModelCatalog, ModelManager};
 use persistence::JsonProjectRepository;
 use runtime::JobRuntime;
 use serde::Serialize;
+use settings::{JsonSettingsRepository, SettingsService};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -41,8 +42,17 @@ fn main() {
         repository,
         "data/markdown",
     );
+    let settings = SettingsService::open(Arc::new(JsonSettingsRepository::open(
+        "data/settings/settings.json",
+    )))
+    .expect("failed to open settings repository");
+    let catalog = ModelCatalog::from_path("resources/models/catalog.json")
+        .expect("failed to open model catalog");
+    let model_manager = ModelManager::new(catalog, "models");
     let desktop_services = DesktopServices {
         workspace,
+        settings,
+        model_manager,
         asr_model: ModelRef {
             backend_id: "whisper-rs".into(),
             model_id: "whisper-base-en-ggml".into(),
@@ -55,25 +65,6 @@ fn main() {
             revision: None,
             artifact_path: "models/diarization/sherpa-onnx-speaker-diarization-bundle".into(),
         },
-        asr_model_source:
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin".into(),
-        asr_model_sha256: Some(
-            "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002".into(),
-        ),
-        diarization_artifacts: vec![
-            BundleArtifact {
-                filename: "segmentation.onnx".into(),
-                source: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2".into(),
-                expected_sha256: None,
-                archive_member: Some("sherpa-onnx-pyannote-segmentation-3-0/model.onnx".into()),
-            },
-            BundleArtifact {
-                filename: "embedding.onnx".into(),
-                source: "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx".into(),
-                expected_sha256: None,
-                archive_member: None,
-            },
-        ],
     };
 
     let args: Vec<String> = env::args().collect();

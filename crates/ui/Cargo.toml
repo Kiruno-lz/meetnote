@@ -12,6 +12,7 @@ gpui.workspace = true
 gpui_platform.workspace = true
 models = { path = "../models" }
 runtime = { path = "../runtime" }
+settings = { path = "../settings" }
 
 [dev-dependencies]
 asr-whisper-rs = { path = "../asr-whisper-rs" }

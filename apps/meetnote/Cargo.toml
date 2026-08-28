@@ -18,3 +18,4 @@ serde_json.workspace = true
 persistence = { path = "../../crates/persistence" }
 models = { path = "../../crates/models" }
 ui = { path = "../../crates/ui" }
+settings = { path = "../../crates/settings" }
