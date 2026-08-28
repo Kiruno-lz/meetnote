@@ -15,6 +15,7 @@ pub enum Overlay {
 #[derive(Debug, Clone)]
 pub struct UiState {
     pub route: super::route::Route,
+    pub locale: super::i18n::Locale,
     pub selected_project: Option<ProjectId>,
     pub detail_overlay: Option<Overlay>,
     pub content_mode: ContentMode,
@@ -26,9 +27,10 @@ pub struct UiState {
 }
 
 impl UiState {
-    pub fn from_projects(projects: &[MeetingProject]) -> Self {
+    pub fn from_projects(projects: &[MeetingProject], locale: super::i18n::Locale) -> Self {
         Self {
             route: super::route::Route::Assistant,
+            locale,
             selected_project: projects.first().map(|project| project.id.clone()),
             detail_overlay: None,
             content_mode: ContentMode::Summary,

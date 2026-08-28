@@ -221,7 +221,7 @@ GPUI 页面后续只需要订阅 `DownloadTask.events`，调用 `ModelManager::p
 
 - 正式拆分中性的 `AudioProject`/`ProjectNode` 领域类型和项目内容版本。
 - 将 LLM 语义拆分建议、项目总结和语音库索引接入 controller。
-- 补齐拖动同级前后排序、完整 i18n 资源和可编辑文本输入。
+- LLM service 接入前，Assistant 保持为无历史的真实文本输入占位工作台。
 
 ## 阶段 6：生产化
 

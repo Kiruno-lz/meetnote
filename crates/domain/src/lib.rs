@@ -211,6 +211,51 @@ pub fn reparent_project(
     Ok(())
 }
 
+pub fn reorder_project(
+    projects: &mut [AudioProject],
+    project_id: &ProjectId,
+    target_id: &ProjectId,
+    before: bool,
+) -> Result<(), ProjectTreeError> {
+    if project_id == target_id {
+        return Err(ProjectTreeError::Cycle);
+    }
+    let project = projects
+        .iter()
+        .find(|project| &project.id == project_id)
+        .ok_or(ProjectTreeError::ProjectNotFound)?;
+    let target = projects
+        .iter()
+        .find(|project| &project.id == target_id)
+        .ok_or(ProjectTreeError::ParentNotFound)?;
+    if project.parent_id != target.parent_id {
+        return Err(ProjectTreeError::CrossAudioAsset);
+    }
+    let mut sibling_ids: Vec<_> = projects
+        .iter()
+        .filter(|candidate| candidate.parent_id == target.parent_id)
+        .map(|candidate| (candidate.sibling_order, candidate.id.clone()))
+        .collect();
+    sibling_ids.sort_by_key(|(order, _)| *order);
+    sibling_ids.retain(|(_, id)| id != project_id);
+    let target_index = sibling_ids
+        .iter()
+        .position(|(_, id)| id == target_id)
+        .ok_or(ProjectTreeError::ParentNotFound)?;
+    let insert_at = if before {
+        target_index
+    } else {
+        target_index + 1
+    };
+    sibling_ids.insert(insert_at, (0, project_id.clone()));
+    for (order, (_, id)) in sibling_ids.into_iter().enumerate() {
+        if let Some(project) = projects.iter_mut().find(|project| project.id == id) {
+            project.sibling_order = order as u32;
+        }
+    }
+    Ok(())
+}
+
 fn overlaps(left_start: u64, left_end: u64, right_start: u64, right_end: u64) -> bool {
     left_start < right_end && right_start < left_end
 }
@@ -416,5 +461,29 @@ mod tests {
             Err(ProjectTreeError::Cycle)
         );
         assert_eq!(projects[1].depth, 1);
+    }
+
+    #[test]
+    fn reordering_updates_sibling_order_before_or_after_a_target() {
+        let mut first = MeetingProject::new(ProjectId::new("first"), "First", "a.wav");
+        let mut second = MeetingProject::new(ProjectId::new("second"), "Second", "b.wav");
+        let mut third = MeetingProject::new(ProjectId::new("third"), "Third", "c.wav");
+        first.sibling_order = 0;
+        second.sibling_order = 1;
+        third.sibling_order = 2;
+        let mut projects = vec![first, second, third];
+
+        reorder_project(
+            &mut projects,
+            &ProjectId::new("third"),
+            &ProjectId::new("first"),
+            true,
+        )
+        .unwrap();
+
+        projects.sort_by_key(|project| project.sibling_order);
+        assert_eq!(projects[0].id.as_str(), "third");
+        assert_eq!(projects[1].id.as_str(), "first");
+        assert_eq!(projects[2].id.as_str(), "second");
     }
 }

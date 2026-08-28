@@ -3,8 +3,8 @@ use contracts::ModelRef;
 use domain::{MeetingProject, ProjectId, ProjectStatus};
 use futures::{FutureExt, StreamExt};
 use gpui::{
-    div, prelude::*, px, rgb, size, App, Bounds, ClickEvent, Context, PathPromptOptions, Window,
-    WindowBounds, WindowOptions,
+    div, prelude::*, px, rgb, size, App, Bounds, ClickEvent, Context, KeyBinding,
+    PathPromptOptions, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use models::manager::{DownloadEvent, DownloadState};
@@ -13,11 +13,15 @@ use settings::SettingsService;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+mod i18n;
 mod route;
 mod state;
+mod text_input;
 
+use i18n::{text as tr, Locale};
 use route::Route;
 use state::{ContentMode, Overlay, UiState};
+use text_input::TextInput;
 
 #[derive(Clone)]
 pub struct DesktopServices {
@@ -29,7 +33,7 @@ pub struct DesktopServices {
 }
 
 impl DesktopServices {
-    fn model_status(&self) -> String {
+    fn model_status(&self, locale: Locale) -> String {
         let asr = if Path::new(&self.asr_model.artifact_path).is_file() {
             "ready"
         } else {
@@ -40,7 +44,20 @@ impl DesktopServices {
         } else {
             "missing"
         };
-        format!("ASR {asr} / DIA {diarization}")
+        let ready = tr(locale, "ready");
+        let missing = match locale {
+            Locale::ZhCn => "缺失",
+            Locale::EnUs => "missing",
+        };
+        format!(
+            "ASR {} / DIA {}",
+            if asr == "ready" { ready } else { missing },
+            if diarization == "ready" {
+                ready
+            } else {
+                missing
+            }
+        )
     }
 }
 
@@ -49,6 +66,7 @@ struct RootView {
     services: DesktopServices,
     projects: Vec<MeetingProject>,
     ui: UiState,
+    assistant_input: gpui::Entity<TextInput>,
     cancel_contexts: Option<(JobContext, JobContext)>,
 }
 
@@ -73,14 +91,24 @@ impl Render for DragGhost {
 }
 
 impl RootView {
-    fn new(inventory: BackendInventory, services: DesktopServices) -> Self {
+    fn new(
+        inventory: BackendInventory,
+        services: DesktopServices,
+        assistant_input: gpui::Entity<TextInput>,
+    ) -> Self {
         let projects = services.workspace.list_projects().unwrap_or_default();
-        let ui = UiState::from_projects(&projects);
+        let locale = services
+            .settings
+            .snapshot()
+            .map(|settings| Locale::from_code(&settings.ui_locale))
+            .unwrap_or(Locale::ZhCn);
+        let ui = UiState::from_projects(&projects, locale);
         Self {
             inventory,
             services,
             projects,
             ui,
+            assistant_input,
             cancel_contexts: None,
         }
     }
@@ -90,7 +118,7 @@ impl RootView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose meeting audio".into()),
+            prompt: Some(tr(self.ui.locale, "choose_audio").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = receiver.await else {
@@ -108,9 +136,11 @@ impl RootView {
                     Ok(project) => {
                         this.ui.selected_project = Some(project.id.clone());
                         this.projects = this.services.workspace.list_projects().unwrap_or_default();
-                        this.ui.notice = format!("Imported {}", project.title);
+                        this.ui.notice = i18n::message(this.ui.locale, "imported", &project.title);
                     }
-                    Err(error) => this.ui.notice = format!("Import failed: {error}"),
+                    Err(error) => {
+                        this.ui.notice = i18n::message(this.ui.locale, "import_failed", &error)
+                    }
                 }
                 cx.notify();
             })
@@ -128,6 +158,28 @@ impl RootView {
     fn navigate(&mut self, route: Route, cx: &mut Context<Self>) {
         self.ui.route = route;
         self.ui.detail_overlay = None;
+        cx.notify();
+    }
+
+    fn set_locale(&mut self, locale: Locale, cx: &mut Context<Self>) {
+        let mut settings = self.services.settings.snapshot().unwrap_or_default();
+        settings.ui_locale = locale.code().into();
+        match self.services.settings.update(settings) {
+            Ok(_) => {
+                self.ui.locale = locale;
+                self.assistant_input.update(cx, |input, _| {
+                    input.set_placeholder(tr(locale, "ask_placeholder"));
+                });
+                self.ui.notice = match locale {
+                    Locale::ZhCn => "界面语言已切换为中文。".into(),
+                    Locale::EnUs => "Interface language changed to English.".into(),
+                };
+            }
+            Err(error) => {
+                self.ui.notice =
+                    i18n::message(self.ui.locale, "settings_failed", &error.to_string())
+            }
+        }
         cx.notify();
     }
 
@@ -149,9 +201,16 @@ impl RootView {
     }
 
     fn assistant_action(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.ui.notice =
-            "Assistant input is ready for the LLM index service. No conversation history is stored."
-                .into();
+        let query = self.assistant_input.read(cx).value();
+        self.ui.assistant_query = query.clone();
+        self.ui.notice = if query.trim().is_empty() {
+            match self.ui.locale {
+                Locale::ZhCn => "发送前请输入内容。".into(),
+                Locale::EnUs => "Type a request before sending it.".into(),
+            }
+        } else {
+            i18n::message(self.ui.locale, "request_received", &query)
+        };
         cx.notify();
     }
 
@@ -178,9 +237,53 @@ impl RootView {
                 match result {
                     Ok(projects) => {
                         this.projects = projects;
-                        this.ui.notice = "Project hierarchy updated.".into();
+                        this.ui.notice = match this.ui.locale {
+                            Locale::ZhCn => "项目层级已更新。".into(),
+                            Locale::EnUs => "Project hierarchy updated.".into(),
+                        };
                     }
-                    Err(error) => this.ui.notice = format!("Cannot move project: {error}"),
+                    Err(error) => {
+                        this.ui.notice = match this.ui.locale {
+                            Locale::ZhCn => format!("无法移动项目：{error}"),
+                            Locale::EnUs => format!("Cannot move project: {error}"),
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn reorder_project(
+        &mut self,
+        project_id: ProjectId,
+        target_id: ProjectId,
+        before: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = self.services.workspace.clone();
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || {
+                workspace.reorder_project(&project_id, &target_id, before)
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(projects) => {
+                        this.projects = projects;
+                        this.ui.notice = match this.ui.locale {
+                            Locale::ZhCn => "项目顺序已更新。".into(),
+                            Locale::EnUs => "Project order updated.".into(),
+                        };
+                    }
+                    Err(error) => {
+                        this.ui.notice = match this.ui.locale {
+                            Locale::ZhCn => format!("无法调整项目顺序：{error}"),
+                            Locale::EnUs => format!("Cannot reorder project: {error}"),
+                        }
+                    }
                 }
                 cx.notify();
             })
@@ -200,8 +303,17 @@ impl RootView {
                 settings.asr_model = None;
             }
             match self.services.settings.update(settings) {
-                Ok(_) => self.ui.notice = format!("ASR backend selected: {backend_id}"),
-                Err(error) => self.ui.notice = format!("Settings update failed: {error}"),
+                Ok(_) => {
+                    self.ui.notice = i18n::message(
+                        self.ui.locale,
+                        "backend_selected",
+                        &format!("ASR {backend_id}"),
+                    )
+                }
+                Err(error) => {
+                    self.ui.notice =
+                        i18n::message(self.ui.locale, "settings_failed", &error.to_string())
+                }
             }
         }
         cx.notify();
@@ -218,8 +330,17 @@ impl RootView {
                 settings.diarization_model = None;
             }
             match self.services.settings.update(settings) {
-                Ok(_) => self.ui.notice = format!("Diarization backend selected: {backend_id}"),
-                Err(error) => self.ui.notice = format!("Settings update failed: {error}"),
+                Ok(_) => {
+                    self.ui.notice = i18n::message(
+                        self.ui.locale,
+                        "backend_selected",
+                        &format!("Diarization {backend_id}"),
+                    )
+                }
+                Err(error) => {
+                    self.ui.notice =
+                        i18n::message(self.ui.locale, "settings_failed", &error.to_string())
+                }
             }
         }
         cx.notify();
@@ -247,11 +368,16 @@ impl RootView {
                     settings.diarization_model = Some(model);
                 }
                 self.ui.notice = match self.services.settings.update(settings) {
-                    Ok(_) => format!("Selected {model_id} for {task}."),
-                    Err(error) => format!("Settings update failed: {error}"),
+                    Ok(_) => format!("{model_id} · {task}"),
+                    Err(error) => {
+                        i18n::message(self.ui.locale, "settings_failed", &error.to_string())
+                    }
                 };
             }
-            Err(error) => self.ui.notice = format!("Model is not ready: {error}"),
+            Err(error) => {
+                self.ui.notice =
+                    i18n::message(self.ui.locale, "model_not_ready", &error.to_string())
+            }
         }
         cx.notify();
     }
@@ -260,7 +386,7 @@ impl RootView {
         match self.services.model_manager.start(&model_id) {
             Ok(task) => {
                 self.ui.downloading = true;
-                self.ui.notice = format!("Downloading {model_id}…");
+                self.ui.notice = i18n::message(self.ui.locale, "download_started", &model_id);
                 let events = Arc::new(Mutex::new(task.events));
                 cx.spawn(async move |this, cx| loop {
                     let events = events.clone();
@@ -280,20 +406,20 @@ impl RootView {
                     this.update(cx, |this, cx| {
                         this.ui.notice = match &progress.state {
                             DownloadState::Completed => {
-                                format!("Installed {}.", progress.model_id)
+                                i18n::message(this.ui.locale, "installed", &progress.model_id)
                             }
                             DownloadState::Cancelled => {
-                                format!("Cancelled {}.", progress.model_id)
+                                i18n::message(this.ui.locale, "cancelled", &progress.model_id)
                             }
                             DownloadState::Failed(error) => {
-                                format!("Download failed: {error}")
+                                i18n::message(this.ui.locale, "download_failed", error)
                             }
-                            _ => format!(
-                                "{} artifact {}/{}: {} bytes",
-                                progress.model_id,
+                            _ => i18n::download_progress(
+                                this.ui.locale,
+                                &progress.model_id,
                                 progress.artifact_index,
                                 progress.artifact_count,
-                                progress.completed_bytes
+                                progress.completed_bytes,
                             ),
                         };
                         if terminal {
@@ -309,7 +435,11 @@ impl RootView {
                 .detach();
             }
             Err(error) => {
-                self.ui.notice = format!("Cannot download {model_id}: {error}");
+                self.ui.notice = i18n::message(
+                    self.ui.locale,
+                    "download_failed",
+                    &format!("{model_id}: {error}"),
+                );
                 cx.notify();
             }
         }
@@ -327,8 +457,14 @@ impl RootView {
             DownloadAction::Cancel => self.services.model_manager.cancel(id),
         };
         self.ui.notice = match result {
-            Ok(()) => "Download task updated.".into(),
-            Err(error) => format!("Download task failed: {error}"),
+            Ok(()) => match self.ui.locale {
+                Locale::ZhCn => "下载任务已更新。".into(),
+                Locale::EnUs => "Download task updated.".into(),
+            },
+            Err(error) => match self.ui.locale {
+                Locale::ZhCn => format!("下载任务失败：{error}"),
+                Locale::EnUs => format!("Download task failed: {error}"),
+            },
         };
         cx.notify();
     }
@@ -351,7 +487,12 @@ impl RootView {
                         this.ui.notice =
                             "Merged speaker-1 into speaker-0 and updated Markdown.".into();
                     }
-                    Err(error) => this.ui.notice = format!("Speaker edit failed: {error}"),
+                    Err(error) => {
+                        this.ui.notice = match this.ui.locale {
+                            Locale::ZhCn => format!("说话人编辑失败：{error}"),
+                            Locale::EnUs => format!("Speaker edit failed: {error}"),
+                        }
+                    }
                 }
                 cx.notify();
             })
@@ -402,7 +543,7 @@ impl RootView {
             return;
         };
         self.ui.processing = true;
-        self.ui.notice = format!("Processing {}…", project.title);
+        self.ui.notice = i18n::message(self.ui.locale, "processing", &project.title);
         let workspace = self.services.workspace.clone();
         let settings = self.services.settings.snapshot().unwrap_or_default();
         let asr_model = match (settings.asr_backend_id, settings.asr_model) {
@@ -434,7 +575,7 @@ impl RootView {
             Ok(job) => job,
             Err(error) => {
                 self.ui.processing = false;
-                self.ui.notice = format!("Processing failed: {}", error.message);
+                self.ui.notice = i18n::message(self.ui.locale, "processing_failed", &error.message);
                 cx.notify();
                 return;
             }
@@ -444,37 +585,45 @@ impl RootView {
         let mut diarization_events = job.diarization_events.fuse();
         let mut processing_future = job.future.fuse();
         cx.notify();
-        cx.spawn(async move |this, cx| {
-            loop {
-                let mut asr_next = asr_events.next().fuse();
-                let mut diarization_next = diarization_events.next().fuse();
-                futures::select! {
-                    event = asr_next => {
-                        if let Some(event) = event {
-                            this.update(cx, |this, cx| this.apply_job_event("ASR", event, cx)).ok();
-                        }
+        cx.spawn(async move |this, cx| loop {
+            let mut asr_next = asr_events.next().fuse();
+            let mut diarization_next = diarization_events.next().fuse();
+            futures::select! {
+                event = asr_next => {
+                    if let Some(event) = event {
+                        this.update(cx, |this, cx| this.apply_job_event("ASR", event, cx)).ok();
                     }
-                    event = diarization_next => {
-                        if let Some(event) = event {
-                            this.update(cx, |this, cx| this.apply_job_event("DIA", event, cx)).ok();
-                        }
+                }
+                event = diarization_next => {
+                    if let Some(event) = event {
+                        this.update(cx, |this, cx| this.apply_job_event("DIA", event, cx)).ok();
                     }
-                    result = processing_future => {
-                        this.update(cx, |this, cx| {
-                            this.ui.processing = false;
-                            this.cancel_contexts = None;
-                            this.projects = this.services.workspace.list_projects().unwrap_or_default();
-                            match result {
-                                Ok(project) => {
-                                    this.ui.selected_project = Some(project.id.clone());
-                                    this.ui.notice = format!("Finished {}", project.title);
-                                }
-                                Err(error) => this.ui.notice = format!("Processing failed: {}", error.message),
+                }
+                result = processing_future => {
+                    this.update(cx, |this, cx| {
+                        this.ui.processing = false;
+                        this.cancel_contexts = None;
+                        this.projects = this.services.workspace.list_projects().unwrap_or_default();
+                        match result {
+                            Ok(project) => {
+                                this.ui.selected_project = Some(project.id.clone());
+                                this.ui.notice = i18n::message(
+                                    this.ui.locale,
+                                    "finished",
+                                    &project.title,
+                                );
                             }
-                            cx.notify();
-                        }).ok();
-                        break;
-                    }
+                            Err(error) => {
+                                this.ui.notice = i18n::message(
+                                    this.ui.locale,
+                                    "processing_failed",
+                                    &error.message,
+                                )
+                            }
+                        }
+                        cx.notify();
+                    }).ok();
+                    break;
                 }
             }
         })
@@ -483,14 +632,32 @@ impl RootView {
 
     fn apply_job_event(&mut self, source: &str, event: JobEvent, cx: &mut Context<Self>) {
         self.ui.notice = match event {
-            JobEvent::Started { .. } => format!("{source} started…"),
-            JobEvent::Progress { progress, .. } => match progress.total {
-                Some(total) => format!("{source} progress: {}/{}", progress.completed, total),
-                None => format!("{source} progress: {}", progress.completed),
+            JobEvent::Started { .. } => match self.ui.locale {
+                Locale::ZhCn => format!("{source} 已开始……"),
+                Locale::EnUs => format!("{source} started…"),
             },
-            JobEvent::Completed { .. } => format!("{source} completed…"),
-            JobEvent::Failed { message, .. } => format!("{source} failed: {message}"),
-            JobEvent::Cancelled { .. } => format!("{source} cancelled…"),
+            JobEvent::Progress { progress, .. } => match progress.total {
+                Some(total) => match self.ui.locale {
+                    Locale::ZhCn => format!("{source} 进度：{}/{}", progress.completed, total),
+                    Locale::EnUs => format!("{source} progress: {}/{}", progress.completed, total),
+                },
+                None => match self.ui.locale {
+                    Locale::ZhCn => format!("{source} 进度：{}", progress.completed),
+                    Locale::EnUs => format!("{source} progress: {}", progress.completed),
+                },
+            },
+            JobEvent::Completed { .. } => match self.ui.locale {
+                Locale::ZhCn => format!("{source} 已完成……"),
+                Locale::EnUs => format!("{source} completed…"),
+            },
+            JobEvent::Failed { message, .. } => match self.ui.locale {
+                Locale::ZhCn => format!("{source} 失败：{message}"),
+                Locale::EnUs => format!("{source} failed: {message}"),
+            },
+            JobEvent::Cancelled { .. } => match self.ui.locale {
+                Locale::ZhCn => format!("{source} 已取消……"),
+                Locale::EnUs => format!("{source} cancelled…"),
+            },
         };
         cx.notify();
     }
@@ -526,18 +693,13 @@ impl Render for RootView {
             .child(header(self, cx))
             .child(body);
         if self.ui.detail_overlay.is_some() && self.ui.route == Route::Meetings {
-            shell = shell.child(detail_overlay(selected.as_ref(), cx));
+            shell = shell.child(detail_overlay(selected.as_ref(), self.ui.locale, cx));
         }
         shell
     }
 }
 
 fn assistant_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
-    let assistant_placeholder = if root.ui.assistant_query.is_empty() {
-        "Ask about your recordings…".to_string()
-    } else {
-        root.ui.assistant_query.clone()
-    };
     div()
         .flex_1()
         .flex()
@@ -556,7 +718,7 @@ fn assistant_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl Into
             div()
                 .text_lg()
                 .text_color(rgb(0x8992a3))
-                .child("Ask your voice library"),
+                .child(tr(root.ui.locale, "ask_library")),
         )
         .child(
             div()
@@ -570,16 +732,29 @@ fn assistant_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl Into
                 .bg(rgb(0x171b22))
                 .cursor_pointer()
                 .text_color(rgb(0x8992a3))
-                .child(assistant_placeholder)
-                .on_click(cx.listener(RootView::assistant_action)),
+                .child(root.assistant_input.clone()),
         )
         .child(
             div()
                 .flex()
                 .gap_3()
-                .child(assistant_action_button("Organize voice library"))
-                .child(assistant_action_button("Find a meeting"))
-                .child(assistant_action_button("Split a project")),
+                .child(
+                    div()
+                        .id("assistant-submit")
+                        .cursor_pointer()
+                        .px_4()
+                        .py_2()
+                        .rounded_md()
+                        .bg(rgb(0x2563eb))
+                        .child(tr(root.ui.locale, "send"))
+                        .on_click(cx.listener(RootView::assistant_action)),
+                )
+                .child(assistant_action_button(tr(
+                    root.ui.locale,
+                    "organize_library",
+                )))
+                .child(assistant_action_button(tr(root.ui.locale, "find_project")))
+                .child(assistant_action_button(tr(root.ui.locale, "split_project"))),
         )
         .child(
             div()
@@ -613,9 +788,10 @@ fn meetings_panel(
             selected,
             &root.inventory,
             &root.ui.notice,
-            &root.services.model_status(),
+            &root.services.model_status(root.ui.locale),
             root.ui.processing,
             root.ui.content_mode,
+            root.ui.locale,
             cx,
         ))
 }
@@ -629,20 +805,20 @@ fn models_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoEle
         .flex()
         .flex_col()
         .gap_4()
-        .child(div().text_2xl().child("Models"))
+        .child(div().text_2xl().child(tr(root.ui.locale, "models")))
         .child(
             div()
                 .text_sm()
                 .text_color(rgb(0x8992a3))
-                .child("Catalog, installation state, and download tasks"),
+                .child(tr(root.ui.locale, "catalog_description")),
         );
     if entries.is_empty() {
-        panel = panel.child(empty_card("No models are available in the catalog."));
+        panel = panel.child(empty_card(tr(root.ui.locale, "no_models")));
     } else {
-        let cards = entries.into_iter().map(|entry| {
-            let model_id = entry.model.id.clone();
-            let action =
-                if matches!(
+        let cards =
+            entries.into_iter().map(|entry| {
+                let model_id = entry.model.id.clone();
+                let action = if matches!(
                     entry.install_state,
                     models::ModelInstallState::Missing | models::ModelInstallState::Partial
                 ) {
@@ -654,7 +830,7 @@ fn models_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoEle
                         .rounded_md()
                         .bg(rgb(0x2563eb))
                         .text_sm()
-                        .child("Download")
+                        .child(tr(root.ui.locale, "download"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.download_model(model_id.clone(), cx)
                         }))
@@ -669,7 +845,7 @@ fn models_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoEle
                         .rounded_md()
                         .bg(rgb(0x263142))
                         .text_sm()
-                        .child("Use in settings")
+                        .child(tr(root.ui.locale, "use_settings"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.use_model(model_id.clone(), task.clone(), backend_id.clone(), cx)
                         }))
@@ -677,34 +853,33 @@ fn models_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoEle
                 } else {
                     div().into_any_element()
                 };
-            div()
-                .p_4()
-                .rounded_lg()
-                .bg(rgb(0x171b22))
-                .child(
-                    div()
-                        .flex()
-                        .justify_between()
-                        .child(div().text_lg().child(entry.model.id))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(rgb(0x60a5fa))
-                                .child(format!("{:?}", entry.install_state)),
-                        )
-                        .child(action),
-                )
-                .child(
-                    div()
-                        .mt_2()
-                        .text_sm()
-                        .text_color(rgb(0x8992a3))
-                        .child(format!(
-                            "{} · {} · {}",
-                            entry.model.task, entry.model.source_format, entry.model.license
-                        )),
-                )
-        });
+                div()
+                    .p_4()
+                    .rounded_lg()
+                    .bg(rgb(0x171b22))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_between()
+                            .child(div().text_lg().child(entry.model.id))
+                            .child(
+                                div().text_sm().text_color(rgb(0x60a5fa)).child(
+                                    i18n::install_state(root.ui.locale, entry.install_state),
+                                ),
+                            )
+                            .child(action),
+                    )
+                    .child(
+                        div()
+                            .mt_2()
+                            .text_sm()
+                            .text_color(rgb(0x8992a3))
+                            .child(format!(
+                                "{} · {} · {}",
+                                entry.model.task, entry.model.source_format, entry.model.license
+                            )),
+                    )
+            });
         panel = panel.child(
             div()
                 .flex()
@@ -716,15 +891,18 @@ fn models_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoEle
     let downloads = root.services.model_manager.list().unwrap_or_default();
     for progress in downloads {
         let id = progress.id;
-        let action = match progress.state {
+        let action = match &progress.state {
             DownloadState::Paused => DownloadAction::Resume,
             DownloadState::Queued | DownloadState::Downloading => DownloadAction::Pause,
             _ => DownloadAction::Cancel,
         };
-        let label = match progress.state {
-            DownloadState::Paused => "Resume",
-            DownloadState::Queued | DownloadState::Downloading => "Pause",
-            _ => "Cancel",
+        let label = match (root.ui.locale, &progress.state) {
+            (Locale::ZhCn, DownloadState::Paused) => "继续",
+            (Locale::EnUs, DownloadState::Paused) => "Resume",
+            (Locale::ZhCn, DownloadState::Queued | DownloadState::Downloading) => "暂停",
+            (Locale::EnUs, DownloadState::Queued | DownloadState::Downloading) => "Pause",
+            (Locale::ZhCn, _) => "取消",
+            (Locale::EnUs, _) => "Cancel",
         };
         panel =
             panel.child(
@@ -732,12 +910,12 @@ fn models_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoEle
                     .p_3()
                     .rounded_md()
                     .bg(rgb(0x1b2029))
-                    .child(format!(
-                        "{} · artifact {}/{} · {} bytes",
-                        progress.model_id,
+                    .child(i18n::download_progress(
+                        root.ui.locale,
+                        &progress.model_id,
                         progress.artifact_index,
                         progress.artifact_count,
-                        progress.completed_bytes
+                        progress.completed_bytes,
                     ))
                     .child(
                         div()
@@ -811,6 +989,25 @@ fn settings_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoE
                 })),
         );
     }
+    let mut locale_choices = div().flex().gap_2();
+    for (locale, label) in [(Locale::ZhCn, "中文"), (Locale::EnUs, "English")] {
+        let selected = root.ui.locale == locale;
+        locale_choices = locale_choices.child(
+            div()
+                .id(format!("locale-{}", locale.code()))
+                .cursor_pointer()
+                .px_3()
+                .py_2()
+                .rounded_md()
+                .bg(if selected {
+                    rgb(0x2563eb)
+                } else {
+                    rgb(0x263142)
+                })
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| this.set_locale(locale, cx))),
+        );
+    }
     div()
         .flex_1()
         .h_full()
@@ -818,72 +1015,83 @@ fn settings_panel(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoE
         .flex()
         .flex_col()
         .gap_4()
-        .child(div().text_2xl().child("Settings"))
+        .child(div().text_2xl().child(tr(root.ui.locale, "settings")))
         .child(settings_section(
-            "Interface",
+            tr(root.ui.locale, "interface"),
             vec![
-                setting_row("Language / Interface locale", &snapshot.ui_locale).into_any_element(),
+                setting_row(tr(root.ui.locale, "language"), &snapshot.ui_locale).into_any_element(),
+                locale_choices.into_any_element(),
             ],
         ))
         .child(settings_section(
-            "Transcription",
+            tr(root.ui.locale, "transcription"),
             vec![
                 setting_row(
-                    "ASR backend",
-                    snapshot.asr_backend_id.as_deref().unwrap_or("Auto"),
+                    tr(root.ui.locale, "asr_backend"),
+                    snapshot
+                        .asr_backend_id
+                        .as_deref()
+                        .unwrap_or(tr(root.ui.locale, "auto")),
                 )
                 .into_any_element(),
                 asr_choices.into_any_element(),
                 setting_row(
-                    "ASR model",
+                    tr(root.ui.locale, "asr_model"),
                     snapshot
                         .asr_model
                         .as_ref()
                         .map(|model| model.model_id.as_str())
-                        .unwrap_or("Not selected"),
+                        .unwrap_or(tr(root.ui.locale, "not_selected")),
                 )
                 .into_any_element(),
                 setting_row(
-                    "Transcription language",
-                    snapshot.language.as_deref().unwrap_or("Auto"),
+                    tr(root.ui.locale, "transcription_language"),
+                    snapshot
+                        .language
+                        .as_deref()
+                        .unwrap_or(tr(root.ui.locale, "auto")),
                 )
                 .into_any_element(),
             ],
         ))
         .child(settings_section(
-            "Speaker separation",
+            tr(root.ui.locale, "speaker_separation"),
             vec![
                 setting_row(
-                    "Diarization backend",
-                    snapshot.diarization_backend_id.as_deref().unwrap_or("Auto"),
+                    tr(root.ui.locale, "diarization_backend"),
+                    snapshot
+                        .diarization_backend_id
+                        .as_deref()
+                        .unwrap_or(tr(root.ui.locale, "auto")),
                 )
                 .into_any_element(),
                 diarization_choices.into_any_element(),
                 setting_row(
-                    "Diarization model",
+                    tr(root.ui.locale, "diarization_model"),
                     snapshot
                         .diarization_model
                         .as_ref()
                         .map(|model| model.model_id.as_str())
-                        .unwrap_or("Not selected"),
+                        .unwrap_or(tr(root.ui.locale, "not_selected")),
                 )
                 .into_any_element(),
                 setting_row(
-                    "Expected speakers",
+                    tr(root.ui.locale, "expected_speakers"),
                     &snapshot
                         .expected_speakers
                         .map(|value| value.to_string())
-                        .unwrap_or_else(|| "Auto".into()),
+                        .unwrap_or_else(|| tr(root.ui.locale, "auto").into()),
                 )
                 .into_any_element(),
             ],
         ))
         .child(settings_section(
-            "Runtime",
-            vec![
-                setting_row("Compute device", &format!("{:?}", snapshot.compute_device))
-                    .into_any_element(),
-            ],
+            tr(root.ui.locale, "runtime"),
+            vec![setting_row(
+                tr(root.ui.locale, "compute_device"),
+                i18n::device(root.ui.locale, snapshot.compute_device),
+            )
+            .into_any_element()],
         ))
 }
 
@@ -920,6 +1128,7 @@ fn empty_card(message: &'static str) -> impl IntoElement {
 
 fn detail_overlay(
     project: Option<&MeetingProject>,
+    locale: Locale,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     let content = project
@@ -987,7 +1196,7 @@ fn detail_overlay(
                     div()
                         .text_sm()
                         .text_color(rgb(0x60a5fa))
-                        .child("PROJECT DETAIL"),
+                        .child(tr(locale, "project_detail")),
                 )
                 .child(
                     div()
@@ -1000,7 +1209,7 @@ fn detail_overlay(
         .child(content)
 }
 
-fn header(_root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
+fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     div()
         .h(px(64.))
         .px_6()
@@ -1024,17 +1233,29 @@ fn header(_root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                     div()
                         .text_sm()
                         .text_color(rgb(0x8992a3))
-                        .child("local meeting intelligence"),
+                        .child(tr(root.ui.locale, "local_intelligence")),
                 ),
         )
         .child(
             div()
                 .flex()
                 .gap_2()
-                .child(nav_button("Assistant", Route::Assistant, cx))
-                .child(nav_button("Meetings", Route::Meetings, cx))
-                .child(nav_button("Models", Route::Models, cx))
-                .child(nav_button("Settings", Route::Settings, cx))
+                .child(nav_button(
+                    tr(root.ui.locale, "assistant"),
+                    Route::Assistant,
+                    cx,
+                ))
+                .child(nav_button(
+                    tr(root.ui.locale, "meetings"),
+                    Route::Meetings,
+                    cx,
+                ))
+                .child(nav_button(tr(root.ui.locale, "models"), Route::Models, cx))
+                .child(nav_button(
+                    tr(root.ui.locale, "settings"),
+                    Route::Settings,
+                    cx,
+                ))
                 .child(
                     div()
                         .id("import-audio")
@@ -1043,7 +1264,7 @@ fn header(_root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                         .py_2()
                         .rounded_md()
                         .bg(rgb(0x3b82f6))
-                        .child("Import audio")
+                        .child(tr(Locale::EnUs, "import_audio"))
                         .on_click(cx.listener(RootView::import_audio)),
                 ),
         )
@@ -1075,7 +1296,7 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
             div()
                 .text_sm()
                 .text_color(rgb(0x8992a3))
-                .child("AUDIO PROJECTS"),
+                .child(tr(root.ui.locale, "audio_projects")),
         );
 
     if root.projects.is_empty() {
@@ -1086,7 +1307,7 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                 .bg(rgb(0x1b2029))
                 .text_sm()
                 .text_color(rgb(0x8992a3))
-                .child("No meetings yet. Import an audio file to begin."),
+                .child(tr(root.ui.locale, "no_projects")),
         );
     } else {
         for (project, depth) in ordered_projects(&root.projects, &root.ui.expanded_projects) {
@@ -1134,44 +1355,67 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                 } else {
                     div().w(px(10.)).into_any_element()
                 };
-            content = content.child(
-                div()
-                    .id(project.id.as_str().to_string())
-                    .cursor_pointer()
-                    .p_3()
-                    .ml(px((depth as f32) * 16.))
-                    .rounded_md()
-                    .bg(if selected {
-                        rgb(0x27344a)
-                    } else {
-                        rgb(0x171b22)
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .child(drag_handle)
-                            .child(expand_handle)
-                            .child(div().text_sm().child(format!(
-                                "{} {}",
-                                if depth > 0 { "↳" } else { "◈" },
-                                project.title
-                            ))),
+            let before_target = project.id.clone();
+            let after_target = project.id.clone();
+            let before_drop = div()
+                .id(format!("before-{}", project.id.as_str()))
+                .h(px(5.))
+                .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
+                    this.reorder_project(
+                        dragged.project_id.clone(),
+                        before_target.clone(),
+                        true,
+                        cx,
                     )
-                    .child(
-                        div()
-                            .mt_1()
-                            .text_xs()
-                            .text_color(rgb(0x8992a3))
-                            .child(status_label(project.status)),
+                }));
+            let after_drop = div()
+                .id(format!("after-{}", project.id.as_str()))
+                .h(px(5.))
+                .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
+                    this.reorder_project(
+                        dragged.project_id.clone(),
+                        after_target.clone(),
+                        false,
+                        cx,
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_project(project_id.clone(), cx)
-                    }))
-                    .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
-                        this.move_project(dragged.project_id.clone(), target_id.clone(), cx)
-                    })),
-            );
+                }));
+            let row = div()
+                .id(project.id.as_str().to_string())
+                .cursor_pointer()
+                .p_3()
+                .ml(px((depth as f32) * 16.))
+                .rounded_md()
+                .bg(if selected {
+                    rgb(0x27344a)
+                } else {
+                    rgb(0x171b22)
+                })
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(drag_handle)
+                        .child(expand_handle)
+                        .child(div().text_sm().child(format!(
+                            "{} {}",
+                            if depth > 0 { "↳" } else { "◈" },
+                            project.title
+                        ))),
+                )
+                .child(
+                    div()
+                        .mt_1()
+                        .text_xs()
+                        .text_color(rgb(0x8992a3))
+                        .child(status_label(root.ui.locale, project.status)),
+                )
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.select_project(project_id.clone(), cx)),
+                )
+                .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
+                    this.move_project(dragged.project_id.clone(), target_id.clone(), cx)
+                }));
+            content = content.child(div().child(before_drop).child(row).child(after_drop));
         }
     }
     content
@@ -1220,6 +1464,7 @@ fn main_panel(
     model_status: &str,
     processing: bool,
     content_mode: ContentMode,
+    content_locale: Locale,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     let mut panel = div().flex_1().h_full().p_6().flex().flex_col().gap_4();
@@ -1244,7 +1489,7 @@ fn main_panel(
                             .rounded_md()
                             .bg(status_color(project.status))
                             .text_sm()
-                            .child(status_label(project.status)),
+                            .child(status_label(content_locale, project.status)),
                     )
                     .child(
                         div()
@@ -1259,9 +1504,9 @@ fn main_panel(
                                 |button| button.bg(rgb(0x2563eb)),
                             )
                             .child(if processing {
-                                "Cancel"
+                                tr(content_locale, "cancel")
                             } else {
-                                "Process meeting"
+                                tr(content_locale, "process")
                             })
                             .on_click(cx.listener(RootView::process_or_cancel)),
                     )
@@ -1274,7 +1519,7 @@ fn main_panel(
                             .rounded_md()
                             .bg(rgb(0x263142))
                             .text_sm()
-                            .child("Open detail")
+                            .child(tr(content_locale, "open_detail"))
                             .on_click(cx.listener(RootView::open_detail)),
                     ),
             );
@@ -1295,7 +1540,7 @@ fn main_panel(
                         .rounded_md()
                         .bg(rgb(0x263142))
                         .text_sm()
-                        .child("Merge speaker-1 into speaker-0")
+                        .child(tr(content_locale, "merge_speaker"))
                         .on_click(cx.listener(RootView::merge_speaker)),
                 );
             }
@@ -1315,7 +1560,7 @@ fn main_panel(
                             } else {
                                 rgb(0x263142)
                             })
-                            .child("Summary")
+                            .child(tr(content_locale, "summary"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.set_content_mode(ContentMode::Summary, cx)
                             })),
@@ -1332,7 +1577,7 @@ fn main_panel(
                             } else {
                                 rgb(0x263142)
                             })
-                            .child("Original")
+                            .child(tr(content_locale, "original"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.set_content_mode(ContentMode::Original, cx)
                             })),
@@ -1346,9 +1591,12 @@ fn main_panel(
                         .rounded_lg()
                         .bg(rgb(0x171b22))
                         .text_sm()
-                        .child(project.summary.clone().unwrap_or_else(|| {
-                            "No summary yet. Use the Assistant to organize this project.".into()
-                        })),
+                        .child(
+                            project
+                                .summary
+                                .clone()
+                                .unwrap_or_else(|| tr(content_locale, "no_summary").into()),
+                        ),
                 );
             } else {
                 panel = panel.child(
@@ -1387,21 +1635,23 @@ fn main_panel(
                     .bg(rgb(0x171b22))
                     .p_5()
                     .text_color(rgb(0x8992a3))
-                    .child("Run processing to generate a speaker-labelled transcript."),
+                    .child(tr(content_locale, "need_process")),
             );
         }
     } else {
-        panel = panel.child(div().text_2xl().child("Your meetings")).child(
-            div()
-                .flex_1()
-                .rounded_lg()
-                .bg(rgb(0x171b22))
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(rgb(0x8992a3))
-                .child("Import an audio file to start a project."),
-        );
+        panel = panel
+            .child(div().text_2xl().child(tr(content_locale, "meetings")))
+            .child(
+                div()
+                    .flex_1()
+                    .rounded_lg()
+                    .bg(rgb(0x171b22))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(rgb(0x8992a3))
+                    .child(tr(content_locale, "empty_meetings")),
+            );
     }
     panel.child(
         div()
@@ -1416,7 +1666,7 @@ fn main_panel(
                 backend_ids(&inventory.asr),
                 backend_ids(&inventory.diarization)
             ))
-            .child(format!("Models: {model_status}")),
+            .child(format!("{}: {model_status}", tr(content_locale, "models"))),
     )
 }
 
@@ -1428,13 +1678,8 @@ fn backend_ids(descriptors: &[application::BackendDescriptor]) -> String {
         .join(", ")
 }
 
-fn status_label(status: ProjectStatus) -> &'static str {
-    match status {
-        ProjectStatus::Imported => "Ready to process",
-        ProjectStatus::Processing => "Processing",
-        ProjectStatus::Ready => "Ready",
-        ProjectStatus::Failed => "Failed",
-    }
+fn status_label(locale: Locale, status: ProjectStatus) -> &'static str {
+    i18n::status(locale, status)
 }
 
 fn status_color(status: ProjectStatus) -> gpui::Rgba {
@@ -1459,14 +1704,30 @@ fn timestamp(milliseconds: u64) -> String {
 }
 
 pub fn run(inventory: BackendInventory, services: DesktopServices) {
+    let initial_locale = services
+        .settings
+        .snapshot()
+        .map(|settings| Locale::from_code(&settings.ui_locale))
+        .unwrap_or(Locale::ZhCn);
     application().run(move |cx: &mut App| {
+        cx.bind_keys([
+            KeyBinding::new("backspace", text_input::Backspace, None),
+            KeyBinding::new("delete", text_input::Delete, None),
+            KeyBinding::new("left", text_input::Left, None),
+            KeyBinding::new("right", text_input::Right, None),
+            KeyBinding::new("cmd-a", text_input::SelectAll, None),
+        ]);
         let bounds = Bounds::centered(None, size(px(1_180.), px(760.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| RootView::new(inventory.clone(), services.clone())),
+            |_, cx| {
+                let assistant_input =
+                    cx.new(|cx| TextInput::new(cx, tr(initial_locale, "ask_placeholder")));
+                cx.new(|_| RootView::new(inventory.clone(), services.clone(), assistant_input))
+            },
         )
         .expect("failed to open meetnote window");
         cx.activate(true);
@@ -1523,7 +1784,14 @@ mod tests {
                 artifact_path: "missing-bundle".into(),
             },
         };
-        let view = cx.new(|_| RootView::new(BackendInventory::new(vec![], vec![]), services));
+        let assistant_input = cx.new(|cx| TextInput::new(cx, "Ask…"));
+        let view = cx.new(|_| {
+            RootView::new(
+                BackendInventory::new(vec![], vec![]),
+                services,
+                assistant_input,
+            )
+        });
 
         assert_eq!(view.read_with(cx, |view, _| view.projects.len()), 0);
     }

@@ -3,7 +3,10 @@ use crate::{
     DiarizationBackendProvider, PipelineResult,
 };
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
-use domain::{reparent_project, MeetingProject, ProjectId, ProjectStatus, SpeakerTaggedSegment};
+use domain::{
+    reorder_project, reparent_project, MeetingProject, ProjectId, ProjectStatus,
+    SpeakerTaggedSegment,
+};
 use futures::channel::mpsc::UnboundedReceiver;
 use runtime::{JobContext, JobEvent, JobRuntime};
 use std::fs;
@@ -241,6 +244,21 @@ impl WorkspaceService {
         let mut projects = self.repository.list()?;
         reparent_project(&mut projects, project_id, new_parent_id, sibling_order)
             .map_err(|error| format!("cannot move project: {error:?}"))?;
+        for project in projects.iter().cloned() {
+            self.repository.save(project)?;
+        }
+        Ok(projects)
+    }
+
+    pub fn reorder_project(
+        &self,
+        project_id: &ProjectId,
+        target_id: &ProjectId,
+        before: bool,
+    ) -> Result<Vec<MeetingProject>, String> {
+        let mut projects = self.repository.list()?;
+        reorder_project(&mut projects, project_id, target_id, before)
+            .map_err(|error| format!("cannot reorder project: {error:?}"))?;
         for project in projects.iter().cloned() {
             self.repository.save(project)?;
         }
