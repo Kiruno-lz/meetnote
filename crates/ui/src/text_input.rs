@@ -267,7 +267,7 @@ impl Element for TextElement {
     ) -> TextPrepaint {
         let input = self.input.read(cx);
         let (text, color) = if input.content.is_empty() {
-            (input.placeholder.clone(), hsla(0., 0., 0., 0.45))
+            (input.placeholder.clone(), hsla(220., 0.12, 0.68, 1.))
         } else {
             (input.content.clone().into(), window.text_style().color)
         };

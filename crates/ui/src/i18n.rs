@@ -53,6 +53,26 @@ pub const KEYS: &[&str] = &[
     "model_status",
     "ask_notice",
     "choose_audio",
+    "missing",
+    "interface_description",
+    "transcription_description",
+    "speaker_description",
+    "runtime_description",
+    "settings_description",
+    "saved_automatically",
+    "models_count",
+    "download_queue",
+    "pause",
+    "resume",
+    "empty_request",
+    "language_changed",
+    "hierarchy_updated",
+    "order_updated",
+    "download_updated",
+    "speaker_merged",
+    "cancellation_requested",
+    "select_project_first",
+    "project_missing",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +150,26 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "model_status") => "模型状态",
         (Locale::ZhCn, "ask_notice") => "助手输入已就绪；不会保存对话历史。",
         (Locale::ZhCn, "choose_audio") => "选择音频",
+        (Locale::ZhCn, "missing") => "缺失",
+        (Locale::ZhCn, "interface_description") => "界面偏好与本地化选项",
+        (Locale::ZhCn, "transcription_description") => "选择语音识别后端、模型和转录语言",
+        (Locale::ZhCn, "speaker_description") => "选择说话人分离后端、模型和人数提示",
+        (Locale::ZhCn, "runtime_description") => "控制本地推理使用的计算设备",
+        (Locale::ZhCn, "settings_description") => "后端、模型、运行设备和界面语言",
+        (Locale::ZhCn, "saved_automatically") => "设置会在选择后自动保存",
+        (Locale::ZhCn, "models_count") => "个模型",
+        (Locale::ZhCn, "download_queue") => "下载任务",
+        (Locale::ZhCn, "pause") => "暂停",
+        (Locale::ZhCn, "resume") => "继续",
+        (Locale::ZhCn, "empty_request") => "发送前请输入内容。",
+        (Locale::ZhCn, "language_changed") => "界面语言已切换为中文。",
+        (Locale::ZhCn, "hierarchy_updated") => "项目层级已更新。",
+        (Locale::ZhCn, "order_updated") => "项目顺序已更新。",
+        (Locale::ZhCn, "download_updated") => "下载任务已更新。",
+        (Locale::ZhCn, "speaker_merged") => "已将 speaker-1 合并到 speaker-0，并更新 Markdown。",
+        (Locale::ZhCn, "cancellation_requested") => "已请求取消……",
+        (Locale::ZhCn, "select_project_first") => "请先选择一个项目。",
+        (Locale::ZhCn, "project_missing") => "选中的项目已不存在。",
         (Locale::EnUs, "assistant") => "Assistant",
         (Locale::EnUs, "meetings") => "Meetings",
         (Locale::EnUs, "models") => "Models",
@@ -186,6 +226,34 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
             "Assistant input is ready; no conversation history is stored."
         }
         (Locale::EnUs, "choose_audio") => "Choose audio",
+        (Locale::EnUs, "missing") => "Missing",
+        (Locale::EnUs, "interface_description") => "Interface preferences and localization",
+        (Locale::EnUs, "transcription_description") => {
+            "Choose the speech recognition backend, model, and language"
+        }
+        (Locale::EnUs, "speaker_description") => {
+            "Choose the speaker separation backend, model, and speaker hint"
+        }
+        (Locale::EnUs, "runtime_description") => {
+            "Control the compute device used for local inference"
+        }
+        (Locale::EnUs, "settings_description") => {
+            "Backends, models, compute device, and interface language"
+        }
+        (Locale::EnUs, "saved_automatically") => "Settings are saved automatically after selection",
+        (Locale::EnUs, "models_count") => "models",
+        (Locale::EnUs, "download_queue") => "Download tasks",
+        (Locale::EnUs, "pause") => "Pause",
+        (Locale::EnUs, "resume") => "Resume",
+        (Locale::EnUs, "empty_request") => "Type a request before sending it.",
+        (Locale::EnUs, "language_changed") => "Interface language changed to English.",
+        (Locale::EnUs, "hierarchy_updated") => "Project hierarchy updated.",
+        (Locale::EnUs, "order_updated") => "Project order updated.",
+        (Locale::EnUs, "download_updated") => "Download task updated.",
+        (Locale::EnUs, "speaker_merged") => "Merged speaker-1 into speaker-0 and updated Markdown.",
+        (Locale::EnUs, "cancellation_requested") => "Cancellation requested…",
+        (Locale::EnUs, "select_project_first") => "Select a project first.",
+        (Locale::EnUs, "project_missing") => "Selected project no longer exists.",
         _ => "",
     }
 }
@@ -262,6 +330,80 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         }
         (Locale::ZhCn, "model_not_ready") => format!("模型尚未就绪：{value}"),
         (Locale::EnUs, "model_not_ready") => format!("Model is not ready: {value}"),
+        (Locale::ZhCn, "move_failed") => format!("无法移动项目：{value}"),
+        (Locale::EnUs, "move_failed") => format!("Cannot move project: {value}"),
+        (Locale::ZhCn, "reorder_failed") => format!("无法调整项目顺序：{value}"),
+        (Locale::EnUs, "reorder_failed") => format!("Cannot reorder project: {value}"),
+        (Locale::ZhCn, "speaker_edit_failed") => format!("说话人编辑失败：{value}"),
+        (Locale::EnUs, "speaker_edit_failed") => format!("Speaker edit failed: {value}"),
+        (Locale::ZhCn, "asr_model_required") => {
+            format!("请先为 {value} 选择已安装的 ASR 模型。")
+        }
+        (Locale::EnUs, "asr_model_required") => {
+            format!("Select an installed ASR model for {value} first.")
+        }
+        (Locale::ZhCn, "diarization_model_required") => {
+            format!("请先为 {value} 选择已安装的说话人分离模型。")
+        }
+        (Locale::EnUs, "diarization_model_required") => {
+            format!("Select an installed diarization model for {value} first.")
+        }
+        (Locale::ZhCn, "job_started") => format!("{value} 已开始……"),
+        (Locale::EnUs, "job_started") => format!("{value} started…"),
+        (Locale::ZhCn, "job_completed") => format!("{value} 已完成……"),
+        (Locale::EnUs, "job_completed") => format!("{value} completed…"),
+        (Locale::ZhCn, "job_cancelled") => format!("{value} 已取消……"),
+        (Locale::EnUs, "job_cancelled") => format!("{value} cancelled…"),
+        (Locale::ZhCn, "job_failed") => {
+            let mut parts = value.splitn(2, '|');
+            format!(
+                "{} 失败：{}",
+                parts.next().unwrap_or("Job"),
+                parts.next().unwrap_or(value)
+            )
+        }
+        (Locale::EnUs, "job_failed") => {
+            let mut parts = value.splitn(2, '|');
+            format!(
+                "{} failed: {}",
+                parts.next().unwrap_or("Job"),
+                parts.next().unwrap_or(value)
+            )
+        }
+        (Locale::ZhCn, "job_progress_total") => {
+            let mut parts = value.splitn(3, '|');
+            format!(
+                "{} 进度：{}/{}",
+                parts.next().unwrap_or("Job"),
+                parts.next().unwrap_or("0"),
+                parts.next().unwrap_or("0")
+            )
+        }
+        (Locale::EnUs, "job_progress_total") => {
+            let mut parts = value.splitn(3, '|');
+            format!(
+                "{} progress: {}/{}",
+                parts.next().unwrap_or("Job"),
+                parts.next().unwrap_or("0"),
+                parts.next().unwrap_or("0")
+            )
+        }
+        (Locale::ZhCn, "job_progress") => {
+            let mut parts = value.splitn(2, '|');
+            format!(
+                "{} 进度：{}",
+                parts.next().unwrap_or("Job"),
+                parts.next().unwrap_or("0")
+            )
+        }
+        (Locale::EnUs, "job_progress") => {
+            let mut parts = value.splitn(2, '|');
+            format!(
+                "{} progress: {}",
+                parts.next().unwrap_or("Job"),
+                parts.next().unwrap_or("0")
+            )
+        }
         _ => value.to_string(),
     }
 }

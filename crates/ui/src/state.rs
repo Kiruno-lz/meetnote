@@ -20,6 +20,7 @@ pub struct UiState {
     pub detail_overlay: Option<Overlay>,
     pub content_mode: ContentMode,
     pub expanded_projects: BTreeSet<ProjectId>,
+    pub expanded_model_families: BTreeSet<String>,
     pub assistant_query: String,
     pub notice: String,
     pub processing: bool,
@@ -39,8 +40,9 @@ impl UiState {
                 .filter(|project| project.parent_id.is_none())
                 .map(|project| project.id.clone())
                 .collect(),
+            expanded_model_families: BTreeSet::new(),
             assistant_query: String::new(),
-            notice: "Ask your voice library, or import an audio project.".into(),
+            notice: super::i18n::text(locale, "ask_notice").into(),
             processing: false,
             downloading: false,
         }
