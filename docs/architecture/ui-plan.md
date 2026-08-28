@@ -235,7 +235,38 @@ Meeting detail 保留为完整的详情视图，但不作为页面跳转目标�
 
 ## Settings
 
-设置页编辑 `AppSettings`，保存通过 `SettingsService::update` 完成。
+设置页是单列、表单式的应用配置页，不使用模型卡片、横向按钮组或说明卡片承载设置项。页面使用与主窗口相同的深色背景，内容从窗口顶部标题栏下方开始，标题为 `Settings`，标题下方不追加页面说明段落。
+
+每个设置分组由一个左对齐的分组标题、若干设置行和分组底部分隔线组成。设置行必须保持同一高度和同一左右内边距：设置名称左对齐，当前值位于右侧固定宽度的选择器内，选择器显示当前值和向下箭头。未打开选择器时，所有分组只显示当前值；点击选择器后，在当前行下方展开选项，选项宽度与选择器一致，点击选项后立即收起。
+
+页面的精确排列顺序如下，不得因为后端是否可用而改变分组顺序：
+
+1. `Interface`
+   - `Language / Interface locale`
+2. `Transcription`
+   - `ASR backend`
+   - `ASR model`
+   - `Transcription language`
+3. `Speaker separation`
+   - `Diarization backend`
+   - `Diarization model`
+   - `Expected speakers`
+4. `Runtime`
+   - `Compute device`
+
+页面底部固定显示操作栏：左侧为 `Reset`，右侧为 `Save settings`。选择器修改的是页面内的 `AppSettings` 草稿，不得在每次点击选项时直接写入持久化存储；点击 `Save settings` 才调用 `SettingsService::update`。`Reset` 将草稿恢复为 `AppSettings::default()` 并同步界面显示，但仍通过操作栏明确保存结果。
+
+页面内容超过窗口可视区域时，只有设置内容区滚动，标题和底部操作栏保持可见。滚动区域必须使用独立的 GPUI `ScrollHandle`，不能依赖窗口整体溢出。
+
+组件验收标准：
+
+- `Settings` 标题、四个分组和操作栏在所有语言下保持相同顺序。
+- 每一行的标签左对齐，选择器右对齐且宽度一致；不允许用多行说明文字改变行高。
+- 关闭状态下每个选择器只显示“当前值 + 向下箭头”。
+- ASR 与 diarization 后端选择器只展示各自任务支持的 backend；模型选择器只展示当前 backend 已安装且兼容的模型。
+- 语言选择器至少提供 `简体中文` 与 `English`，并区分 UI 语言与 ASR 转录语言。
+- 修改后未保存时必须有可见的未保存状态；保存成功或重置成功后必须有可见反馈。
+- 在 1180×760 的窗口中，页面首屏应显示标题、`Interface`、`Transcription` 和 `Speaker separation` 的开头；继续滚动可以看到 `Runtime` 与操作栏。
 
 ```text
 ┌──────────────────────────────────────────────────────────────┐
