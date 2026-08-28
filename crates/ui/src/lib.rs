@@ -484,8 +484,14 @@ impl RootView {
                     Ok(project) => {
                         this.projects = this.services.workspace.list_projects().unwrap_or_default();
                         this.ui.selected_project = Some(project.id);
-                        this.ui.notice =
-                            "Merged speaker-1 into speaker-0 and updated Markdown.".into();
+                        this.ui.notice = match this.ui.locale {
+                            Locale::ZhCn => {
+                                "已将 speaker-1 合并到 speaker-0，并更新 Markdown。".into()
+                            }
+                            Locale::EnUs => {
+                                "Merged speaker-1 into speaker-0 and updated Markdown.".into()
+                            }
+                        };
                     }
                     Err(error) => {
                         this.ui.notice = match this.ui.locale {
@@ -518,14 +524,20 @@ impl RootView {
         if let Some((asr_context, diarization_context)) = &self.cancel_contexts {
             asr_context.cancel();
             diarization_context.cancel();
-            self.ui.notice = "Cancellation requested…".into();
+            self.ui.notice = match self.ui.locale {
+                Locale::ZhCn => "已请求取消……".into(),
+                Locale::EnUs => "Cancellation requested…".into(),
+            };
             cx.notify();
         }
     }
 
     fn process_selected(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(project_id) = self.ui.selected_project.clone() else {
-            self.ui.notice = "Select a project first.".into();
+            self.ui.notice = match self.ui.locale {
+                Locale::ZhCn => "请先选择一个项目。".into(),
+                Locale::EnUs => "Select a project first.".into(),
+            };
             cx.notify();
             return;
         };
@@ -538,7 +550,10 @@ impl RootView {
             .find(|project| project.id == project_id)
             .cloned()
         else {
-            self.ui.notice = "Selected project no longer exists.".into();
+            self.ui.notice = match self.ui.locale {
+                Locale::ZhCn => "选中的项目已不存在。".into(),
+                Locale::EnUs => "Selected project no longer exists.".into(),
+            };
             cx.notify();
             return;
         };
@@ -549,7 +564,12 @@ impl RootView {
         let asr_model = match (settings.asr_backend_id, settings.asr_model) {
             (Some(_), Some(model)) => model,
             (Some(backend_id), None) => {
-                self.ui.notice = format!("Select an installed ASR model for {backend_id} first.");
+                self.ui.notice = match self.ui.locale {
+                    Locale::ZhCn => format!("请先为 {backend_id} 选择已安装的 ASR 模型。"),
+                    Locale::EnUs => {
+                        format!("Select an installed ASR model for {backend_id} first.")
+                    }
+                };
                 self.ui.processing = false;
                 cx.notify();
                 return;
@@ -561,8 +581,12 @@ impl RootView {
         {
             (Some(_), Some(model)) => model,
             (Some(backend_id), None) => {
-                self.ui.notice =
-                    format!("Select an installed diarization model for {backend_id} first.");
+                self.ui.notice = match self.ui.locale {
+                    Locale::ZhCn => format!("请先为 {backend_id} 选择已安装的说话人分离模型。"),
+                    Locale::EnUs => {
+                        format!("Select an installed diarization model for {backend_id} first.")
+                    }
+                };
                 self.ui.processing = false;
                 cx.notify();
                 return;
