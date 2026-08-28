@@ -1,6 +1,6 @@
 use crate::{controller::RootView, i18n, state::ContentMode};
 use domain::{MeetingProject, ProjectId, ProjectStatus};
-use gpui::{div, prelude::*, px, rgb, Context, Render, SharedString, Window};
+use gpui::{div, prelude::*, rgb, Context, Render, SharedString, Window};
 
 #[derive(Clone)]
 pub(crate) struct ProjectDrag {
@@ -37,37 +37,30 @@ pub(crate) fn empty_card(message: impl Into<SharedString>) -> impl IntoElement {
 
 pub(crate) fn settings_section(
     title: impl Into<SharedString>,
-    description: impl Into<SharedString>,
     rows: Vec<gpui::AnyElement>,
 ) -> impl IntoElement {
     div()
-        .p_5()
-        .rounded_lg()
-        .bg(rgb(0x171b22))
+        .pb_4()
+        .border_b_1()
+        .border_color(rgb(0x2b303b))
         .child(div().text_lg().child(title.into()))
-        .child(
-            div()
-                .mt_1()
-                .text_sm()
-                .text_color(rgb(0x8992a3))
-                .child(description.into()),
-        )
         .children(rows)
 }
 
-pub(crate) fn setting_row(
+pub(crate) fn setting_control_row(
     label: impl Into<SharedString>,
-    value: impl Into<SharedString>,
+    control: gpui::AnyElement,
 ) -> impl IntoElement {
     div()
-        .mt_4()
+        .mt_3()
+        .py_2()
         .flex()
         .items_center()
         .justify_between()
         .gap_4()
         .text_sm()
         .child(div().text_color(rgb(0x8992a3)).child(label.into()))
-        .child(div().max_w(px(360.)).text_right().child(value.into()))
+        .child(control)
 }
 
 pub(crate) fn mode_button(

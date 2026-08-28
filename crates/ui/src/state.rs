@@ -21,6 +21,7 @@ pub struct UiState {
     pub content_mode: ContentMode,
     pub expanded_projects: BTreeSet<ProjectId>,
     pub expanded_model_families: BTreeSet<String>,
+    pub open_setting: Option<String>,
     pub assistant_query: String,
     pub notice: String,
     pub processing: bool,
@@ -41,6 +42,7 @@ impl UiState {
                 .map(|project| project.id.clone())
                 .collect(),
             expanded_model_families: BTreeSet::new(),
+            open_setting: None,
             assistant_query: String::new(),
             notice: super::i18n::text(locale, "ask_notice").into(),
             processing: false,

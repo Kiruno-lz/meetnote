@@ -15,7 +15,7 @@ use gpui::{
 use gpui_platform::application;
 use models::manager::{DownloadEvent, DownloadState};
 use runtime::{JobContext, JobEvent};
-use settings::SettingsService;
+use settings::{AppSettings, SettingsService};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -45,6 +45,7 @@ impl DesktopServices {
 pub(crate) struct RootView {
     pub(crate) inventory: BackendInventory,
     pub(crate) services: DesktopServices,
+    pub(crate) settings_draft: AppSettings,
     pub(crate) projects: Vec<MeetingProject>,
     pub(crate) ui: UiState,
     pub(crate) assistant_input: gpui::Entity<TextInput>,
@@ -72,6 +73,7 @@ impl RootView {
             .snapshot()
             .map(|settings| i18n::Locale::from_code(&settings.ui_locale))
             .unwrap_or(i18n::Locale::ZhCn);
+        let settings_draft = services.settings.snapshot().unwrap_or_default();
         let mut ui = UiState::from_projects(&projects, locale);
         ui.expanded_model_families.extend(
             services
@@ -84,6 +86,7 @@ impl RootView {
         Self {
             inventory,
             services,
+            settings_draft,
             projects,
             ui,
             assistant_input,
@@ -142,21 +145,43 @@ impl RootView {
     }
 
     pub(crate) fn set_locale(&mut self, locale: i18n::Locale, cx: &mut Context<Self>) {
-        let mut settings = self.services.settings.snapshot().unwrap_or_default();
-        settings.ui_locale = locale.code().into();
-        match self.services.settings.update(settings) {
-            Ok(_) => {
-                self.ui.locale = locale;
-                self.assistant_input.update(cx, |input, _| {
-                    input.set_placeholder(i18n::text(locale, "ask_placeholder"));
-                });
-                self.ui.notice = i18n::text(locale, "language_changed").into();
+        self.settings_draft.ui_locale = locale.code().into();
+        self.ui.locale = locale;
+        self.ui.open_setting = None;
+        self.assistant_input.update(cx, |input, _| {
+            input.set_placeholder(i18n::text(locale, "ask_placeholder"));
+        });
+        self.ui.notice = i18n::text(locale, "settings_unsaved").into();
+        cx.notify();
+    }
+
+    pub(crate) fn save_settings(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        match self.services.settings.update(self.settings_draft.clone()) {
+            Ok(settings) => {
+                self.settings_draft = settings;
+                self.ui.notice = i18n::text(self.ui.locale, "settings_saved").into();
             }
             Err(error) => {
                 self.ui.notice =
                     i18n::message(self.ui.locale, "settings_failed", &error.to_string())
             }
         }
+        cx.notify();
+    }
+
+    pub(crate) fn reset_settings(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_draft = AppSettings::default();
+        self.ui.locale = i18n::Locale::ZhCn;
+        self.ui.open_setting = None;
+        self.assistant_input.update(cx, |input, _| {
+            input.set_placeholder(i18n::text(i18n::Locale::ZhCn, "ask_placeholder"));
+        });
+        self.ui.notice = i18n::text(self.ui.locale, "settings_reset").into();
         cx.notify();
     }
 
@@ -203,6 +228,15 @@ impl RootView {
     pub(crate) fn toggle_model_family(&mut self, family: String, cx: &mut Context<Self>) {
         if !self.ui.expanded_model_families.insert(family.clone()) {
             self.ui.expanded_model_families.remove(&family);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_setting(&mut self, key: String, cx: &mut Context<Self>) {
+        if self.ui.open_setting.as_deref() == Some(key.as_str()) {
+            self.ui.open_setting = None;
+        } else {
+            self.ui.open_setting = Some(key);
         }
         cx.notify();
     }
@@ -269,24 +303,25 @@ impl RootView {
     }
 
     pub(crate) fn select_asr_backend(&mut self, backend_id: String, cx: &mut Context<Self>) {
-        if let Ok(mut settings) = self.services.settings.snapshot() {
-            settings.asr_backend_id = Some(backend_id.clone());
-            if settings
-                .asr_model
-                .as_ref()
-                .is_some_and(|model| model.backend_id != backend_id)
-            {
-                settings.asr_model = None;
-            }
-            self.ui.notice = match self.services.settings.update(settings) {
-                Ok(_) => i18n::message(
-                    self.ui.locale,
-                    "backend_selected",
-                    &format!("ASR {backend_id}"),
-                ),
-                Err(error) => i18n::message(self.ui.locale, "settings_failed", &error.to_string()),
-            };
+        self.settings_draft.asr_backend_id = Some(backend_id.clone());
+        if self
+            .settings_draft
+            .asr_model
+            .as_ref()
+            .is_some_and(|model| model.backend_id != backend_id)
+        {
+            self.settings_draft.asr_model = None;
         }
+        self.ui.notice = format!(
+            "{} {}",
+            i18n::message(
+                self.ui.locale,
+                "backend_selected",
+                &format!("ASR {backend_id}")
+            ),
+            i18n::text(self.ui.locale, "settings_unsaved")
+        );
+        self.ui.open_setting = None;
         cx.notify();
     }
 
@@ -295,24 +330,25 @@ impl RootView {
         backend_id: String,
         cx: &mut Context<Self>,
     ) {
-        if let Ok(mut settings) = self.services.settings.snapshot() {
-            settings.diarization_backend_id = Some(backend_id.clone());
-            if settings
-                .diarization_model
-                .as_ref()
-                .is_some_and(|model| model.backend_id != backend_id)
-            {
-                settings.diarization_model = None;
-            }
-            self.ui.notice = match self.services.settings.update(settings) {
-                Ok(_) => i18n::message(
-                    self.ui.locale,
-                    "backend_selected",
-                    &format!("Diarization {backend_id}"),
-                ),
-                Err(error) => i18n::message(self.ui.locale, "settings_failed", &error.to_string()),
-            };
+        self.settings_draft.diarization_backend_id = Some(backend_id.clone());
+        if self
+            .settings_draft
+            .diarization_model
+            .as_ref()
+            .is_some_and(|model| model.backend_id != backend_id)
+        {
+            self.settings_draft.diarization_model = None;
         }
+        self.ui.notice = format!(
+            "{} {}",
+            i18n::message(
+                self.ui.locale,
+                "backend_selected",
+                &format!("Diarization {backend_id}"),
+            ),
+            i18n::text(self.ui.locale, "settings_unsaved")
+        );
+        self.ui.open_setting = None;
         cx.notify();
     }
 
@@ -329,7 +365,7 @@ impl RootView {
             .model_ref(&model_id, &backend_id);
         match model {
             Ok(model) => {
-                let mut settings = self.services.settings.snapshot().unwrap_or_default();
+                let mut settings = self.settings_draft.clone();
                 if task == "asr" {
                     settings.asr_backend_id = Some(backend_id);
                     settings.asr_model = Some(model);
@@ -337,12 +373,13 @@ impl RootView {
                     settings.diarization_backend_id = Some(backend_id);
                     settings.diarization_model = Some(model);
                 }
-                self.ui.notice = match self.services.settings.update(settings) {
-                    Ok(_) => i18n::message(self.ui.locale, "model_selected", &model_id),
-                    Err(error) => {
-                        i18n::message(self.ui.locale, "settings_failed", &error.to_string())
-                    }
-                };
+                self.settings_draft = settings;
+                self.ui.open_setting = None;
+                self.ui.notice = format!(
+                    "{} {}",
+                    i18n::message(self.ui.locale, "model_selected", &model_id),
+                    i18n::text(self.ui.locale, "settings_unsaved")
+                );
             }
             Err(error) => {
                 self.ui.notice =
@@ -516,7 +553,7 @@ impl RootView {
         self.ui.processing = true;
         self.ui.notice = i18n::message(self.ui.locale, "processing", &project.title);
         let workspace = self.services.workspace.clone();
-        let settings = self.services.settings.snapshot().unwrap_or_default();
+        let settings = self.settings_draft.clone();
         let asr_model = match (settings.asr_backend_id, settings.asr_model) {
             (Some(_), Some(model)) => model,
             (Some(backend_id), None) => {

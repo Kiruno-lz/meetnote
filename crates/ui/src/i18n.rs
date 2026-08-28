@@ -73,6 +73,11 @@ pub const KEYS: &[&str] = &[
     "cancellation_requested",
     "select_project_first",
     "project_missing",
+    "reset_settings",
+    "save_settings",
+    "settings_unsaved",
+    "settings_saved",
+    "settings_reset",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +175,11 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "cancellation_requested") => "已请求取消……",
         (Locale::ZhCn, "select_project_first") => "请先选择一个项目。",
         (Locale::ZhCn, "project_missing") => "选中的项目已不存在。",
+        (Locale::ZhCn, "reset_settings") => "重置",
+        (Locale::ZhCn, "save_settings") => "保存设置",
+        (Locale::ZhCn, "settings_unsaved") => "设置尚未保存。",
+        (Locale::ZhCn, "settings_saved") => "设置已保存。",
+        (Locale::ZhCn, "settings_reset") => "设置已重置。",
         (Locale::EnUs, "assistant") => "Assistant",
         (Locale::EnUs, "meetings") => "Meetings",
         (Locale::EnUs, "models") => "Models",
@@ -254,6 +264,11 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "cancellation_requested") => "Cancellation requested…",
         (Locale::EnUs, "select_project_first") => "Select a project first.",
         (Locale::EnUs, "project_missing") => "Selected project no longer exists.",
+        (Locale::EnUs, "reset_settings") => "Reset",
+        (Locale::EnUs, "save_settings") => "Save settings",
+        (Locale::EnUs, "settings_unsaved") => "Settings have unsaved changes.",
+        (Locale::EnUs, "settings_saved") => "Settings saved.",
+        (Locale::EnUs, "settings_reset") => "Settings reset.",
         _ => "",
     }
 }
@@ -330,6 +345,8 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         }
         (Locale::ZhCn, "model_not_ready") => format!("模型尚未就绪：{value}"),
         (Locale::EnUs, "model_not_ready") => format!("Model is not ready: {value}"),
+        (Locale::ZhCn, "model_selected") => format!("已选择模型：{value}。"),
+        (Locale::EnUs, "model_selected") => format!("Model selected: {value}."),
         (Locale::ZhCn, "move_failed") => format!("无法移动项目：{value}"),
         (Locale::EnUs, "move_failed") => format!("Cannot move project: {value}"),
         (Locale::ZhCn, "reorder_failed") => format!("无法调整项目顺序：{value}"),
