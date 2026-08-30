@@ -4,6 +4,8 @@
 
 旧实现中可保留的主要资产是模型清单、来源信息和下载生命周期协议。新实现不保留 Python library-managed 下载路径；所有下载、校验和安装由 Rust `models` crate 负责。
 
+模型目录和安装状态属于 MeetNote 运行时资产，不属于文档项目结构。目标目录中的文档 JSON 仍是三层项目树的唯一事实来源；模型 manifest、下载任务和 cache 不得保存项目父子关系，也不得被 Assistant 或外部 Agent 当作文档数据库。
+
 模型目录位于：
 
 ```text
@@ -38,8 +40,8 @@ cancelled
 ```
 
 运行时任务状态由 Rust `ModelManager` 管理；取消或进程中断会保留 `.part`，下一次下载
-自动通过 HTTP Range 继续。项目不引入 SQLite；后续如需跨进程恢复，只能增加独立的
-JSON 下载任务清单，不改变模型安装协议。
+自动通过 HTTP Range 继续。项目不引入 SQLite；后续如需跨进程恢复，只能增加独立、可重建的
+JSON 下载任务清单，不改变模型安装协议，也不与文档项目树状态混用。
 
 ## HTTP 下载流程
 
@@ -71,6 +73,8 @@ v0.2 已落地 `models::download`：单文件支持 HTTP Range 续传、`.part` 
 v0.2.1 已落地 `models::manager::ModelManager`：提供 catalog 按 task/backend 浏览、模型安装状态查询、
 下载任务事件订阅，以及 `pause`、`resume`、`cancel` 控制。下载控制与文件写入解耦，
 不会要求 UI 参与模型协议。
+
+Assistant 与外部 Agent 都只能通过 application 暴露的稳定能力读取模型 readiness；它们不能直接修改 catalog、安装目录或下载任务内部状态。
 
 ## library-managed 的新含义
 

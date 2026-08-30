@@ -12,6 +12,8 @@ Candle ASR + custom ONNX diarization
 
 新增后端只增加实现 crate、模型 catalog 条目和注册 factory，不修改 domain、application 或 GPUI UI。
 
+后端只产生完整音频的标准化转录、speaker 段和可追溯元数据。输出先由 application 对齐并写入目标目录文档，再由 MeetNote 从文档 JSON 实时更新最多三层的项目树。Assistant、外部 Agent 和 Skill 不进入 ASR/diarization backend，也不能改变后端原始结果。
+
 ## ASR 接口
 
 ```rust
@@ -107,6 +109,8 @@ InferenceRuntime
 
 当前后端统一返回 `BackendError { code, message }`；GPUI 只消费错误码和用户可读消息。
 
+文档项目树错误不属于推理后端错误。第四层、循环、缺失父节点和跨音频来源关系由 document/domain 层处理；backend 不读取或维护项目结构。
+
 ## 任务事件
 
 ```rust
@@ -119,4 +123,4 @@ pub enum JobEvent {
 }
 ```
 
-不使用字符串事件，不让具体 backend 直接更新 GPUI Entity。
+不使用字符串事件，不让具体 backend 直接更新 GPUI Entity、Assistant、外部 Agent 或项目树。处理完成后由 application 写入文档事实，再触发文档扫描/项目树刷新事件。
