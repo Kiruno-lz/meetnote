@@ -9,8 +9,8 @@ use contracts::ModelRef;
 use domain::{MeetingProject, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
-    prelude::*, App, Bounds, ClickEvent, Context, KeyBinding, PathPromptOptions, ScrollHandle,
-    Window, WindowBounds, WindowOptions,
+    prelude::*, App, Bounds, ClickEvent, Context, Entity, KeyBinding, PathPromptOptions, Window,
+    WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use models::manager::{DownloadEvent, DownloadState};
@@ -18,6 +18,24 @@ use runtime::{JobContext, JobEvent};
 use settings::{AppSettings, SettingsService};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+
+use gpui_component::{
+    select::{SelectEvent, SelectState},
+    IndexPath,
+};
+
+type StringSelect = SelectState<Vec<String>>;
+
+pub(crate) struct SettingsSelectors {
+    pub(crate) language: Entity<StringSelect>,
+    pub(crate) asr_backend: Entity<StringSelect>,
+    pub(crate) asr_model: Entity<StringSelect>,
+    pub(crate) transcription_language: Entity<StringSelect>,
+    pub(crate) diarization_backend: Entity<StringSelect>,
+    pub(crate) diarization_model: Entity<StringSelect>,
+    pub(crate) expected_speakers: Entity<StringSelect>,
+    pub(crate) compute_device: Entity<StringSelect>,
+}
 
 #[derive(Clone)]
 pub struct DesktopServices {
@@ -50,8 +68,7 @@ pub(crate) struct RootView {
     pub(crate) ui: UiState,
     pub(crate) assistant_input: gpui::Entity<TextInput>,
     pub(crate) cancel_contexts: Option<(JobContext, JobContext)>,
-    pub(crate) models_scroll_handle: ScrollHandle,
-    pub(crate) settings_scroll_handle: ScrollHandle,
+    pub(crate) settings_selectors: Option<SettingsSelectors>,
 }
 
 #[derive(Clone, Copy)]
@@ -91,8 +108,358 @@ impl RootView {
             ui,
             assistant_input,
             cancel_contexts: None,
-            models_scroll_handle: ScrollHandle::new(),
-            settings_scroll_handle: ScrollHandle::new(),
+            settings_selectors: None,
+        }
+    }
+
+    pub(crate) fn ensure_settings_selectors(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.settings_selectors.is_some() {
+            return;
+        }
+
+        let settings = self.settings_draft.clone();
+        let language_items = vec!["简体中文".into(), "English".into()];
+        let asr_backend_items = self
+            .inventory
+            .asr
+            .iter()
+            .map(|descriptor| descriptor.id.clone())
+            .collect::<Vec<_>>();
+        let diarization_backend_items = self
+            .inventory
+            .diarization
+            .iter()
+            .map(|descriptor| descriptor.id.clone())
+            .collect::<Vec<_>>();
+        let asr_model_items = self.installed_model_ids("asr", settings.asr_backend_id.as_deref());
+        let diarization_model_items =
+            self.installed_model_ids("diarization", settings.diarization_backend_id.as_deref());
+        let transcription_language_items = vec!["自动".into(), "English".into(), "中文".into()];
+        let expected_speakers_items = vec![
+            "自动".into(),
+            "1".into(),
+            "2".into(),
+            "3".into(),
+            "4".into(),
+        ];
+        let compute_device_items = vec![
+            "自动".into(),
+            "CPU".into(),
+            "Metal".into(),
+            "Core ML".into(),
+        ];
+        let expected_speakers_value = settings.expected_speakers.map(|value| value.to_string());
+
+        let language = cx.new(|cx| {
+            SelectState::new(
+                language_items.clone(),
+                selected_index(
+                    &language_items,
+                    Some(if self.ui.locale == i18n::Locale::EnUs {
+                        "English"
+                    } else {
+                        "简体中文"
+                    }),
+                ),
+                window,
+                cx,
+            )
+        });
+        let asr_backend = cx.new(|cx| {
+            SelectState::new(
+                asr_backend_items.clone(),
+                selected_index(&asr_backend_items, settings.asr_backend_id.as_deref()),
+                window,
+                cx,
+            )
+        });
+        let asr_model = cx.new(|cx| {
+            SelectState::new(
+                asr_model_items.clone(),
+                selected_index(
+                    &asr_model_items,
+                    settings
+                        .asr_model
+                        .as_ref()
+                        .map(|model| model.model_id.as_str()),
+                ),
+                window,
+                cx,
+            )
+        });
+        let transcription_language = cx.new(|cx| {
+            SelectState::new(
+                transcription_language_items.clone(),
+                selected_index(
+                    &transcription_language_items,
+                    Some(match settings.language.as_deref() {
+                        Some("en") | Some("en-US") => "English",
+                        Some("zh") | Some("zh-CN") => "中文",
+                        _ => "自动",
+                    }),
+                ),
+                window,
+                cx,
+            )
+        });
+        let diarization_backend = cx.new(|cx| {
+            SelectState::new(
+                diarization_backend_items.clone(),
+                selected_index(
+                    &diarization_backend_items,
+                    settings.diarization_backend_id.as_deref(),
+                ),
+                window,
+                cx,
+            )
+        });
+        let diarization_model = cx.new(|cx| {
+            SelectState::new(
+                diarization_model_items.clone(),
+                selected_index(
+                    &diarization_model_items,
+                    settings
+                        .diarization_model
+                        .as_ref()
+                        .map(|model| model.model_id.as_str()),
+                ),
+                window,
+                cx,
+            )
+        });
+        let expected_speakers = cx.new(|cx| {
+            SelectState::new(
+                expected_speakers_items.clone(),
+                selected_index(
+                    &expected_speakers_items,
+                    Some(expected_speakers_value.as_deref().unwrap_or("自动")),
+                ),
+                window,
+                cx,
+            )
+        });
+        let compute_device = cx.new(|cx| {
+            SelectState::new(
+                compute_device_items.clone(),
+                selected_index(
+                    &compute_device_items,
+                    Some(i18n::device(self.ui.locale, settings.compute_device)),
+                ),
+                window,
+                cx,
+            )
+        });
+
+        cx.subscribe_in(&language, window, Self::on_language_selected)
+            .detach();
+        cx.subscribe_in(&asr_backend, window, Self::on_asr_backend_selected)
+            .detach();
+        cx.subscribe_in(&asr_model, window, Self::on_asr_model_selected)
+            .detach();
+        cx.subscribe_in(
+            &transcription_language,
+            window,
+            Self::on_transcription_language_selected,
+        )
+        .detach();
+        cx.subscribe_in(
+            &diarization_backend,
+            window,
+            Self::on_diarization_backend_selected,
+        )
+        .detach();
+        cx.subscribe_in(
+            &diarization_model,
+            window,
+            Self::on_diarization_model_selected,
+        )
+        .detach();
+        cx.subscribe_in(
+            &expected_speakers,
+            window,
+            Self::on_expected_speakers_selected,
+        )
+        .detach();
+        cx.subscribe_in(&compute_device, window, Self::on_compute_device_selected)
+            .detach();
+
+        self.settings_selectors = Some(SettingsSelectors {
+            language,
+            asr_backend,
+            asr_model,
+            transcription_language,
+            diarization_backend,
+            diarization_model,
+            expected_speakers,
+            compute_device,
+        });
+    }
+
+    fn installed_model_ids(&self, task: &str, backend_id: Option<&str>) -> Vec<String> {
+        self.services
+            .model_manager
+            .browse(Some(task), backend_id)
+            .into_iter()
+            .filter(|entry| entry.install_state == models::ModelInstallState::Installed)
+            .map(|entry| entry.model.id)
+            .collect()
+    }
+
+    fn persist_settings(&mut self, cx: &mut Context<Self>) {
+        match self.services.settings.update(self.settings_draft.clone()) {
+            Ok(settings) => {
+                self.settings_draft = settings;
+                self.ui.notice = i18n::text(self.ui.locale, "settings_saved").into();
+            }
+            Err(error) => {
+                self.ui.notice =
+                    i18n::message(self.ui.locale, "settings_failed", &error.to_string());
+            }
+        }
+        cx.notify();
+    }
+
+    fn refresh_model_selector(
+        &mut self,
+        task: &'static str,
+        backend_id: Option<&str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let items = self.installed_model_ids(task, backend_id);
+        let selector = match (task, self.settings_selectors.as_ref()) {
+            ("asr", Some(selectors)) => selectors.asr_model.clone(),
+            ("diarization", Some(selectors)) => selectors.diarization_model.clone(),
+            _ => return,
+        };
+        selector.update(cx, |state, cx| {
+            state.set_items(items, window, cx);
+            state.set_selected_index(None, window, cx);
+        });
+    }
+
+    fn on_language_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            self.set_locale(
+                if value == "English" {
+                    i18n::Locale::EnUs
+                } else {
+                    i18n::Locale::ZhCn
+                },
+                cx,
+            );
+        }
+    }
+
+    fn on_asr_backend_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            self.select_asr_backend(value.clone(), cx);
+            self.refresh_model_selector("asr", Some(value), window, cx);
+        }
+    }
+
+    fn on_asr_model_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            if let Some(backend_id) = self.settings_draft.asr_backend_id.clone() {
+                self.use_model(value.clone(), "asr".into(), backend_id, cx);
+            }
+        }
+    }
+
+    fn on_transcription_language_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            self.settings_draft.language = match value.as_str() {
+                "English" => Some("en".into()),
+                "中文" => Some("zh".into()),
+                _ => None,
+            };
+            self.persist_settings(cx);
+        }
+    }
+
+    fn on_diarization_backend_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            self.select_diarization_backend(value.clone(), cx);
+            self.refresh_model_selector("diarization", Some(value), window, cx);
+        }
+    }
+
+    fn on_diarization_model_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            if let Some(backend_id) = self.settings_draft.diarization_backend_id.clone() {
+                self.use_model(value.clone(), "diarization".into(), backend_id, cx);
+            }
+        }
+    }
+
+    fn on_expected_speakers_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            self.settings_draft.expected_speakers = value.parse().ok();
+            self.persist_settings(cx);
+        }
+    }
+
+    fn on_compute_device_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            self.settings_draft.compute_device = match value.as_str() {
+                "CPU" => contracts::ComputeDevice::Cpu,
+                "Metal" => contracts::ComputeDevice::Metal,
+                "Core ML" => contracts::ComputeDevice::CoreMl,
+                _ => contracts::ComputeDevice::Auto,
+            };
+            self.persist_settings(cx);
         }
     }
 
@@ -147,41 +514,18 @@ impl RootView {
     pub(crate) fn set_locale(&mut self, locale: i18n::Locale, cx: &mut Context<Self>) {
         self.settings_draft.ui_locale = locale.code().into();
         self.ui.locale = locale;
-        self.ui.open_setting = None;
         self.assistant_input.update(cx, |input, _| {
             input.set_placeholder(i18n::text(locale, "ask_placeholder"));
         });
-        self.ui.notice = i18n::text(locale, "settings_unsaved").into();
-        cx.notify();
-    }
-
-    pub(crate) fn save_settings(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         match self.services.settings.update(self.settings_draft.clone()) {
             Ok(settings) => {
                 self.settings_draft = settings;
-                self.ui.notice = i18n::text(self.ui.locale, "settings_saved").into();
+                self.ui.notice = i18n::text(locale, "language_changed").into();
             }
             Err(error) => {
-                self.ui.notice =
-                    i18n::message(self.ui.locale, "settings_failed", &error.to_string())
+                self.ui.notice = i18n::message(locale, "settings_failed", &error.to_string());
             }
         }
-        cx.notify();
-    }
-
-    pub(crate) fn reset_settings(
-        &mut self,
-        _: &ClickEvent,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.settings_draft = AppSettings::default();
-        self.ui.locale = i18n::Locale::ZhCn;
-        self.ui.open_setting = None;
-        self.assistant_input.update(cx, |input, _| {
-            input.set_placeholder(i18n::text(i18n::Locale::ZhCn, "ask_placeholder"));
-        });
-        self.ui.notice = i18n::text(self.ui.locale, "settings_reset").into();
         cx.notify();
     }
 
@@ -228,15 +572,6 @@ impl RootView {
     pub(crate) fn toggle_model_family(&mut self, family: String, cx: &mut Context<Self>) {
         if !self.ui.expanded_model_families.insert(family.clone()) {
             self.ui.expanded_model_families.remove(&family);
-        }
-        cx.notify();
-    }
-
-    pub(crate) fn toggle_setting(&mut self, key: String, cx: &mut Context<Self>) {
-        if self.ui.open_setting.as_deref() == Some(key.as_str()) {
-            self.ui.open_setting = None;
-        } else {
-            self.ui.open_setting = Some(key);
         }
         cx.notify();
     }
@@ -312,16 +647,12 @@ impl RootView {
         {
             self.settings_draft.asr_model = None;
         }
-        self.ui.notice = format!(
-            "{} {}",
-            i18n::message(
-                self.ui.locale,
-                "backend_selected",
-                &format!("ASR {backend_id}")
-            ),
-            i18n::text(self.ui.locale, "settings_unsaved")
+        self.ui.notice = i18n::message(
+            self.ui.locale,
+            "backend_selected",
+            &format!("ASR {backend_id}"),
         );
-        self.ui.open_setting = None;
+        self.persist_settings(cx);
         cx.notify();
     }
 
@@ -339,16 +670,12 @@ impl RootView {
         {
             self.settings_draft.diarization_model = None;
         }
-        self.ui.notice = format!(
-            "{} {}",
-            i18n::message(
-                self.ui.locale,
-                "backend_selected",
-                &format!("Diarization {backend_id}"),
-            ),
-            i18n::text(self.ui.locale, "settings_unsaved")
+        self.ui.notice = i18n::message(
+            self.ui.locale,
+            "backend_selected",
+            &format!("Diarization {backend_id}"),
         );
-        self.ui.open_setting = None;
+        self.persist_settings(cx);
         cx.notify();
     }
 
@@ -374,12 +701,8 @@ impl RootView {
                     settings.diarization_model = Some(model);
                 }
                 self.settings_draft = settings;
-                self.ui.open_setting = None;
-                self.ui.notice = format!(
-                    "{} {}",
-                    i18n::message(self.ui.locale, "model_selected", &model_id),
-                    i18n::text(self.ui.locale, "settings_unsaved")
-                );
+                self.ui.notice = i18n::message(self.ui.locale, "model_selected", &model_id);
+                self.persist_settings(cx);
             }
             Err(error) => {
                 self.ui.notice =
@@ -395,6 +718,7 @@ impl RootView {
                 self.ui.downloading = true;
                 self.ui.notice = i18n::message(self.ui.locale, "download_started", &model_id);
                 let events = Arc::new(Mutex::new(task.events));
+                cx.notify();
                 cx.spawn(async move |this, cx| loop {
                     let events = events.clone();
                     let event = runtime::spawn_blocking(move || {
@@ -655,8 +979,15 @@ impl RootView {
     }
 }
 
+fn selected_index(items: &[String], value: Option<&str>) -> Option<IndexPath> {
+    value
+        .and_then(|value| items.iter().position(|item| item == value))
+        .map(|row| IndexPath::default().row(row))
+}
+
 impl Render for RootView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.ensure_settings_selectors(window, cx);
         let selected = self
             .ui
             .selected_project
@@ -692,27 +1023,32 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
         .snapshot()
         .map(|settings| i18n::Locale::from_code(&settings.ui_locale))
         .unwrap_or(i18n::Locale::ZhCn);
-    application().run(move |cx: &mut App| {
-        cx.bind_keys([
-            KeyBinding::new("backspace", crate::text_input::Backspace, None),
-            KeyBinding::new("delete", crate::text_input::Delete, None),
-            KeyBinding::new("left", crate::text_input::Left, None),
-            KeyBinding::new("right", crate::text_input::Right, None),
-            KeyBinding::new("cmd-a", crate::text_input::SelectAll, None),
-        ]);
-        let bounds = Bounds::centered(None, gpui::size(gpui::px(1_180.), gpui::px(760.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            |_, cx| {
-                let assistant_input =
-                    cx.new(|cx| TextInput::new(cx, i18n::text(initial_locale, "ask_placeholder")));
-                cx.new(|_| RootView::new(inventory.clone(), services.clone(), assistant_input))
-            },
-        )
-        .expect("failed to open meetnote window");
-        cx.activate(true);
-    });
+    application()
+        .with_assets(gpui_component_assets::Assets)
+        .run(move |cx: &mut App| {
+            gpui_component::init(cx);
+            gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+            cx.bind_keys([
+                KeyBinding::new("backspace", crate::text_input::Backspace, None),
+                KeyBinding::new("delete", crate::text_input::Delete, None),
+                KeyBinding::new("left", crate::text_input::Left, None),
+                KeyBinding::new("right", crate::text_input::Right, None),
+                KeyBinding::new("cmd-a", crate::text_input::SelectAll, None),
+            ]);
+            let bounds = Bounds::centered(None, gpui::size(gpui::px(1_180.), gpui::px(760.)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..Default::default()
+                },
+                |_, cx| {
+                    let assistant_input = cx.new(|cx| {
+                        TextInput::new(cx, i18n::text(initial_locale, "ask_placeholder"))
+                    });
+                    cx.new(|_| RootView::new(inventory.clone(), services.clone(), assistant_input))
+                },
+            )
+            .expect("failed to open meetnote window");
+            cx.activate(true);
+        });
 }

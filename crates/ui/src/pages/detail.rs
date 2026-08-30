@@ -5,6 +5,10 @@ use crate::{
 };
 use domain::MeetingProject;
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
+use gpui_component::{
+    button::{Button, ButtonVariants},
+    scroll::ScrollableElement as _,
+};
 
 pub(crate) fn render(
     project: Option<&MeetingProject>,
@@ -16,7 +20,7 @@ pub(crate) fn render(
             let transcript = div()
                 .id("detail-transcript")
                 .flex_1()
-                .overflow_scroll()
+                .overflow_y_scrollbar()
                 .children(project.speaker_segments.iter().map(|segment| {
                     div()
                         .pb_3()
@@ -71,10 +75,10 @@ pub(crate) fn render(
                         .child(tr(locale, "project_detail")),
                 )
                 .child(
-                    div()
-                        .id("close-detail")
-                        .cursor_pointer()
-                        .child("×")
+                    Button::new("close-detail")
+                        .ghost()
+                        .compact()
+                        .label("×")
                         .on_click(cx.listener(RootView::close_detail)),
                 ),
         )

@@ -1,5 +1,6 @@
 use crate::{controller::RootView, i18n::text as tr};
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
+use gpui_component::button::{Button, ButtonVariants};
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let notice = if root.ui.notice.is_empty() {
@@ -46,14 +47,9 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .flex()
                 .gap_3()
                 .child(
-                    div()
-                        .id("assistant-submit")
-                        .cursor_pointer()
-                        .px_4()
-                        .py_2()
-                        .rounded_md()
-                        .bg(rgb(0x2563eb))
-                        .child(tr(root.ui.locale, "send"))
+                    Button::new("assistant-submit")
+                        .primary()
+                        .label(tr(root.ui.locale, "send"))
                         .on_click(cx.listener(RootView::assistant_action)),
                 )
                 .child(action_button(tr(root.ui.locale, "organize_library")))
@@ -70,11 +66,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
 }
 
 fn action_button(label: &'static str) -> impl IntoElement {
-    div()
-        .px_3()
-        .py_2()
-        .rounded_md()
-        .bg(rgb(0x1f2937))
-        .text_sm()
-        .child(label)
+    Button::new(format!("assistant-action-{label}"))
+        .secondary()
+        .label(label)
 }

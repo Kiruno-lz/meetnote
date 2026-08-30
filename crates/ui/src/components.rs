@@ -1,6 +1,8 @@
 use crate::{controller::RootView, i18n, state::ContentMode};
 use domain::{MeetingProject, ProjectId, ProjectStatus};
 use gpui::{div, prelude::*, rgb, Context, Render, SharedString, Window};
+use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::separator::Separator;
 
 #[derive(Clone)]
 pub(crate) struct ProjectDrag {
@@ -41,10 +43,10 @@ pub(crate) fn settings_section(
 ) -> impl IntoElement {
     div()
         .pb_4()
-        .border_b_1()
-        .border_color(rgb(0x2b303b))
+        .flex_shrink_0()
         .child(div().text_lg().child(title.into()))
         .children(rows)
+        .child(Separator::horizontal())
 }
 
 pub(crate) fn setting_control_row(
@@ -70,19 +72,15 @@ pub(crate) fn mode_button(
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     let label = label.into();
-    div()
-        .id(format!("content-mode-{}", label))
-        .cursor_pointer()
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .bg(if mode == active {
-            rgb(0x2563eb)
-        } else {
-            rgb(0x263142)
-        })
-        .child(label)
-        .on_click(cx.listener(move |this, _, _, cx| this.set_content_mode(mode, cx)))
+    let button = Button::new(format!("content-mode-{}", label))
+        .compact()
+        .label(label);
+    let button = if mode == active {
+        button.primary()
+    } else {
+        button.secondary()
+    };
+    button.on_click(cx.listener(move |this, _, _, cx| this.set_content_mode(mode, cx)))
 }
 
 pub(crate) fn ordered_projects(

@@ -9,6 +9,10 @@ use crate::{
 };
 use domain::{MeetingProject, ProjectStatus};
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
+use gpui_component::{
+    button::{Button, ButtonVariants},
+    scroll::ScrollableElement as _,
+};
 
 pub(crate) fn render(
     root: &mut RootView,
@@ -26,7 +30,7 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
     let mut tree = div()
         .id("project-tree")
         .flex_1()
-        .overflow_scroll()
+        .overflow_y_scrollbar()
         .flex()
         .flex_col()
         .gap_1();
@@ -179,7 +183,7 @@ fn main_panel(
         let mut content = div()
             .id("meeting-content")
             .flex_1()
-            .overflow_scroll()
+            .overflow_y_scrollbar()
             .p_5()
             .rounded_lg()
             .bg(rgb(0x171b22));
@@ -242,14 +246,10 @@ fn main_panel(
                             .child(status_label(locale, project.status)),
                     )
                     .child(
-                        div()
-                            .id("process-project")
-                            .cursor_pointer()
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .bg(rgb(0x2563eb))
-                            .child(if root.ui.processing {
+                        Button::new("process-project")
+                            .primary()
+                            .compact()
+                            .label(if root.ui.processing {
                                 tr(locale, "cancel")
                             } else {
                                 tr(locale, "process")
@@ -257,15 +257,10 @@ fn main_panel(
                             .on_click(cx.listener(RootView::process_or_cancel)),
                     )
                     .child(
-                        div()
-                            .id("open-project-detail")
-                            .cursor_pointer()
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .bg(rgb(0x263142))
-                            .text_sm()
-                            .child(tr(locale, "open_detail"))
+                        Button::new("open-project-detail")
+                            .secondary()
+                            .compact()
+                            .label(tr(locale, "open_detail"))
                             .on_click(cx.listener(RootView::open_detail)),
                     ),
             );
@@ -290,16 +285,10 @@ fn main_panel(
                 ));
             if has_second_speaker {
                 controls = controls.child(
-                    div()
-                        .id("merge-speaker")
-                        .cursor_pointer()
-                        .ml_2()
-                        .px_3()
-                        .py_1()
-                        .rounded_md()
-                        .bg(rgb(0x263142))
-                        .text_sm()
-                        .child(tr(locale, "merge_speaker"))
+                    Button::new("merge-speaker")
+                        .secondary()
+                        .compact()
+                        .label(tr(locale, "merge_speaker"))
                         .on_click(cx.listener(RootView::merge_speaker)),
                 );
             }

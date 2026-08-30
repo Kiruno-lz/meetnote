@@ -1,5 +1,6 @@
 use crate::{controller::RootView, i18n::text as tr, route::Route};
 use gpui::{div, prelude::*, Context, IntoElement};
+use gpui_component::button::{Button, ButtonVariants};
 
 pub(crate) fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     div()
@@ -51,27 +52,18 @@ pub(crate) fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                     cx,
                 ))
                 .child(
-                    div()
-                        .id("import-audio")
-                        .cursor_pointer()
-                        .px_4()
-                        .py_2()
-                        .rounded_md()
-                        .bg(gpui::rgb(0x3b82f6))
-                        .child(tr(root.ui.locale, "import_audio"))
+                    Button::new("import-audio")
+                        .primary()
+                        .label(tr(root.ui.locale, "import_audio"))
                         .on_click(cx.listener(RootView::import_audio)),
                 ),
         )
 }
 
 fn nav_button(label: &'static str, route: Route, cx: &mut Context<RootView>) -> impl IntoElement {
-    div()
-        .id(format!("nav-{route:?}"))
-        .cursor_pointer()
-        .px_2()
-        .py_2()
-        .rounded_md()
-        .text_sm()
-        .child(label)
+    Button::new(format!("nav-{route:?}"))
+        .ghost()
+        .compact()
+        .label(label)
         .on_click(cx.listener(move |this, _, _, cx| this.navigate(route, cx)))
 }

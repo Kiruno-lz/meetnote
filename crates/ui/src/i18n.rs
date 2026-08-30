@@ -29,7 +29,10 @@ pub const KEYS: &[&str] = &[
     "project_detail",
     "catalog_description",
     "download",
-    "use_settings",
+    "downloaded",
+    "not_downloaded",
+    "model_size",
+    "vram_estimate",
     "no_models",
     "interface",
     "language",
@@ -73,11 +76,7 @@ pub const KEYS: &[&str] = &[
     "cancellation_requested",
     "select_project_first",
     "project_missing",
-    "reset_settings",
-    "save_settings",
-    "settings_unsaved",
     "settings_saved",
-    "settings_reset",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,7 +130,10 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "project_detail") => "项目详情",
         (Locale::ZhCn, "catalog_description") => "模型目录、安装状态和下载任务",
         (Locale::ZhCn, "download") => "下载",
-        (Locale::ZhCn, "use_settings") => "用于设置",
+        (Locale::ZhCn, "downloaded") => "已下载",
+        (Locale::ZhCn, "not_downloaded") => "未下载",
+        (Locale::ZhCn, "model_size") => "权重大小",
+        (Locale::ZhCn, "vram_estimate") => "显存预估",
         (Locale::ZhCn, "no_models") => "模型目录中没有可用模型。",
         (Locale::ZhCn, "interface") => "界面",
         (Locale::ZhCn, "language") => "界面语言",
@@ -175,11 +177,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "cancellation_requested") => "已请求取消……",
         (Locale::ZhCn, "select_project_first") => "请先选择一个项目。",
         (Locale::ZhCn, "project_missing") => "选中的项目已不存在。",
-        (Locale::ZhCn, "reset_settings") => "重置",
-        (Locale::ZhCn, "save_settings") => "保存设置",
-        (Locale::ZhCn, "settings_unsaved") => "设置尚未保存。",
         (Locale::ZhCn, "settings_saved") => "设置已保存。",
-        (Locale::ZhCn, "settings_reset") => "设置已重置。",
         (Locale::EnUs, "assistant") => "Assistant",
         (Locale::EnUs, "meetings") => "Meetings",
         (Locale::EnUs, "models") => "Models",
@@ -210,7 +208,10 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "project_detail") => "PROJECT DETAIL",
         (Locale::EnUs, "catalog_description") => "Catalog, installation state, and download tasks",
         (Locale::EnUs, "download") => "Download",
-        (Locale::EnUs, "use_settings") => "Use in settings",
+        (Locale::EnUs, "downloaded") => "Downloaded",
+        (Locale::EnUs, "not_downloaded") => "Not downloaded",
+        (Locale::EnUs, "model_size") => "Weight size",
+        (Locale::EnUs, "vram_estimate") => "VRAM estimate",
         (Locale::EnUs, "no_models") => "No models are available in the catalog.",
         (Locale::EnUs, "interface") => "Interface",
         (Locale::EnUs, "language") => "Language / Interface locale",
@@ -264,11 +265,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "cancellation_requested") => "Cancellation requested…",
         (Locale::EnUs, "select_project_first") => "Select a project first.",
         (Locale::EnUs, "project_missing") => "Selected project no longer exists.",
-        (Locale::EnUs, "reset_settings") => "Reset",
-        (Locale::EnUs, "save_settings") => "Save settings",
-        (Locale::EnUs, "settings_unsaved") => "Settings have unsaved changes.",
         (Locale::EnUs, "settings_saved") => "Settings saved.",
-        (Locale::EnUs, "settings_reset") => "Settings reset.",
         _ => "",
     }
 }
@@ -283,23 +280,6 @@ pub fn status(locale: Locale, status: ProjectStatus) -> &'static str {
             ProjectStatus::Failed => "failed",
         },
     )
-}
-
-pub fn install_state(locale: Locale, state: models::ModelInstallState) -> &'static str {
-    match state {
-        models::ModelInstallState::Missing => match locale {
-            Locale::ZhCn => "缺失",
-            Locale::EnUs => "Missing",
-        },
-        models::ModelInstallState::Partial => match locale {
-            Locale::ZhCn => "部分安装",
-            Locale::EnUs => "Partial",
-        },
-        models::ModelInstallState::Installed => match locale {
-            Locale::ZhCn => "已安装",
-            Locale::EnUs => "Installed",
-        },
-    }
 }
 
 pub fn device(locale: Locale, device: ComputeDevice) -> &'static str {
