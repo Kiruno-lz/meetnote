@@ -371,6 +371,8 @@ pub struct ModelCatalogEntry {
     pub source_format: String,
     pub source: String,
     pub size_bytes: Option<u64>,
+    #[serde(default)]
+    pub estimated_vram_bytes: Option<u64>,
     pub sha256: Option<String>,
     pub license: String,
     pub requires_auth: bool,

@@ -318,8 +318,12 @@ name = "asr-sherpa-onnx"
 version = "0.1.0"
 dependencies = [
  "application",
+ "audio",
  "contracts",
+ "domain",
+ "futures",
  "runtime",
+ "sherpa-onnx",
 ]
 
 [[package]]
@@ -3920,6 +3924,7 @@ version = "0.1.0"
 dependencies = [
  "application",
  "asr",
+ "asr-sherpa-onnx",
  "asr-whisper-rs",
  "contracts",
  "diarization",

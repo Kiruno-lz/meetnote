@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 application = { path = "../../crates/application" }
 asr = { path = "../../crates/asr" }
+asr-sherpa-onnx = { path = "../../crates/asr-sherpa-onnx" }
 asr-whisper-rs = { path = "../../crates/asr-whisper-rs" }
 contracts = { path = "../../crates/contracts" }
 diarization = { path = "../../crates/diarization" }

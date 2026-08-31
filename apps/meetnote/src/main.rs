@@ -3,6 +3,7 @@ use application::{
     WorkspaceService,
 };
 use asr::{AsrBackendManager, AsrBackendRegistry};
+use asr_sherpa_onnx::SherpaOnnxAsrBackend;
 use asr_whisper_rs::WhisperRsBackend;
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use diarization::{DiarizationBackendManager, DiarizationBackendRegistry};
@@ -21,10 +22,12 @@ use ui::DesktopServices;
 
 fn main() {
     let whisper_backend = Arc::new(WhisperRsBackend::default());
+    let sherpa_asr_backend = Arc::new(SherpaOnnxAsrBackend::default());
     let diarization_backend = Arc::new(SherpaOnnxDiarizationBackend::default());
 
     let mut asr_registry = AsrBackendRegistry::default();
     asr_registry.register(whisper_backend.clone());
+    asr_registry.register(sherpa_asr_backend);
     let asr_manager = AsrBackendManager::new(asr_registry);
 
     let mut diarization_registry = DiarizationBackendRegistry::default();
