@@ -575,6 +575,24 @@ mod tests {
     }
 
     #[test]
+    fn native_diarization_bundle_pins_every_required_artifact() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/models/catalog.json");
+        let catalog = ModelCatalog::from_path(path).unwrap();
+        let model = catalog.find("speakrs-community-1-cpu").unwrap();
+
+        assert_eq!(model.candidate_backends, vec!["diarization-native"]);
+        assert_eq!(model.artifact_files.len(), 10);
+        assert_eq!(model.artifacts.len(), 10);
+        assert!(model.artifacts.iter().all(|artifact| {
+            artifact
+                .sha256
+                .as_ref()
+                .is_some_and(|checksum| checksum.len() == 64)
+        }));
+    }
+
+    #[test]
     fn rejects_non_http_model_sources_before_writing() {
         let result = download::download_file(
             "local/model.bin",

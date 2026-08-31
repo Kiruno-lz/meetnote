@@ -1,29 +1,33 @@
-use application::{diarization_descriptor, BackendFuture, DiarizationBackend};
-use contracts::{BackendDescriptor, BackendError, DiarizationRequest, DiarizationResult, ModelRef};
-use runtime::JobContext;
+//! Observable Rust-native speaker diarization with persistent speaker identity.
+//!
+//! The crate keeps inference, three-stage orchestration, identity matching, and
+//! persistence in separate modules. `NativeDiarizationBackend` implements the
+//! application contract, while its `analyze` method exposes the richer
+//! embedding observations needed for enrollment and diagnostics.
 
-pub struct NativeDiarizationBackend;
+mod backend;
+mod engine;
+mod error;
+mod identity;
+mod library;
+mod model;
+mod store;
+mod types;
 
-impl DiarizationBackend for NativeDiarizationBackend {
-    fn descriptor(&self) -> BackendDescriptor {
-        diarization_descriptor("diarization-native", &["offline", "coreml", "onnx"])
-    }
-
-    fn probe(&self, _model: &ModelRef) -> Result<(), BackendError> {
-        Err(BackendError::not_implemented(
-            "diarization crate integration is scheduled after v0.1",
-        ))
-    }
-
-    fn diarize(
-        &self,
-        _request: DiarizationRequest,
-        _context: JobContext,
-    ) -> BackendFuture<DiarizationResult> {
-        Box::pin(async {
-            Err(BackendError::not_implemented(
-                "diarization crate integration is scheduled after v0.1",
-            ))
-        })
-    }
-}
+pub use backend::{NativeBackendFuture, NativeDiarizationBackend, NativeDiarizationConfig};
+pub use engine::{
+    ClusterAssignment, ClusteringAdapter, ClusteringOutput, EmbeddingAdapter, EmbeddingOutput,
+    EngineOutput, EngineSegment, NativeDiarizationEngine, SegmentationAdapter, SegmentationOutput,
+    SegmentedTrack, SpeakrsEngine, StagePipelineEngine, UnclusteredEmbedding, SPEAKRS_MODEL_ID,
+    SPEAKRS_MODEL_REVISION,
+};
+pub use error::{NativeDiarizationError, SpeakerLibraryError};
+pub use identity::{cosine_similarity, ClusterIdentityResolver, IdentityResolverConfig};
+pub use library::SpeakerLibraryService;
+pub use model::{NativeModelBundle, REQUIRED_CPU_ARTIFACTS};
+pub use store::{InMemorySpeakerProfileStore, JsonSpeakerProfileStore, SpeakerProfileStore};
+pub use types::{
+    EmbeddingNormalization, EmbeddingSpace, IdentityMatch, NativeDiarizationOutput,
+    SpeakerEmbeddingObservation, SpeakerEmbeddingSample, SpeakerLibraryDocument, SpeakerProfile,
+    SpeakerSampleSource,
+};

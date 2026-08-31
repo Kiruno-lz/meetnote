@@ -309,6 +309,10 @@ pub struct TranscriptSegment {
 pub struct DiarizationSegment {
     pub id: String,
     pub speaker_id: String,
+    #[serde(default)]
+    pub speaker_profile_id: Option<String>,
+    #[serde(default)]
+    pub speaker_label: Option<String>,
     pub start_ms: u64,
     pub end_ms: u64,
     pub confidence: Option<f32>,
@@ -318,6 +322,10 @@ pub struct DiarizationSegment {
 pub struct SpeakerTaggedSegment {
     pub transcript_segment_id: String,
     pub speaker_id: String,
+    #[serde(default)]
+    pub speaker_profile_id: Option<String>,
+    #[serde(default)]
+    pub speaker_label: Option<String>,
     pub start_ms: u64,
     pub end_ms: u64,
     pub text: String,
@@ -330,7 +338,7 @@ pub fn align_transcript_and_speakers(
     transcript
         .iter()
         .map(|segment| {
-            let speaker_id = diarization
+            let speaker = diarization
                 .iter()
                 .filter_map(|candidate| {
                     let overlap_start = segment.start_ms.max(candidate.start_ms);
@@ -344,12 +352,16 @@ pub fn align_transcript_and_speakers(
                 .max_by_key(|(overlap, candidate)| {
                     (*overlap, std::cmp::Reverse(candidate.start_ms))
                 })
-                .map(|(_, candidate)| candidate.speaker_id.clone())
-                .unwrap_or_else(|| "unknown".to_string());
+                .map(|(_, candidate)| candidate);
 
             SpeakerTaggedSegment {
                 transcript_segment_id: segment.id.clone(),
-                speaker_id,
+                speaker_id: speaker
+                    .map(|candidate| candidate.speaker_id.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                speaker_profile_id: speaker
+                    .and_then(|candidate| candidate.speaker_profile_id.clone()),
+                speaker_label: speaker.and_then(|candidate| candidate.speaker_label.clone()),
                 start_ms: segment.start_ms,
                 end_ms: segment.end_ms,
                 text: segment.text.clone(),
@@ -374,6 +386,8 @@ mod tests {
             DiarizationSegment {
                 id: "d1".into(),
                 speaker_id: "speaker-a".into(),
+                speaker_profile_id: None,
+                speaker_label: None,
                 start_ms: 0,
                 end_ms: 300,
                 confidence: None,
@@ -381,6 +395,8 @@ mod tests {
             DiarizationSegment {
                 id: "d2".into(),
                 speaker_id: "speaker-b".into(),
+                speaker_profile_id: Some("profile-b".into()),
+                speaker_label: Some("Bob".into()),
                 start_ms: 250,
                 end_ms: 1_000,
                 confidence: None,
@@ -390,6 +406,8 @@ mod tests {
         let result = align_transcript_and_speakers(&transcript, &diarization);
 
         assert_eq!(result[0].speaker_id, "speaker-b");
+        assert_eq!(result[0].speaker_profile_id.as_deref(), Some("profile-b"));
+        assert_eq!(result[0].speaker_label.as_deref(), Some("Bob"));
     }
 
     #[test]
@@ -403,6 +421,8 @@ mod tests {
         let diarization = vec![DiarizationSegment {
             id: "d1".into(),
             speaker_id: "speaker-a".into(),
+            speaker_profile_id: None,
+            speaker_label: None,
             start_ms: 2_000,
             end_ms: 3_000,
             confidence: None,
@@ -414,11 +434,25 @@ mod tests {
     }
 
     #[test]
+    fn old_diarization_json_defaults_new_identity_fields() {
+        let segment: DiarizationSegment = serde_json::from_str(
+            r#"{"id":"d1","speaker_id":"speaker-0","start_ms":0,"end_ms":1000,"confidence":null}"#,
+        )
+        .unwrap();
+
+        assert_eq!(segment.speaker_id, "speaker-0");
+        assert!(segment.speaker_profile_id.is_none());
+        assert!(segment.speaker_label.is_none());
+    }
+
+    #[test]
     fn merges_speaker_labels_without_touching_transcript_text() {
         let mut project = MeetingProject::new(ProjectId::new("p1"), "Meeting", "a.wav");
         project.diarization.push(DiarizationSegment {
             id: "d1".into(),
             speaker_id: "speaker-1".into(),
+            speaker_profile_id: None,
+            speaker_label: None,
             start_ms: 0,
             end_ms: 1_000,
             confidence: None,
@@ -426,6 +460,8 @@ mod tests {
         project.speaker_segments.push(SpeakerTaggedSegment {
             transcript_segment_id: "t1".into(),
             speaker_id: "speaker-1".into(),
+            speaker_profile_id: None,
+            speaker_label: None,
             start_ms: 0,
             end_ms: 1_000,
             text: "keep this text".into(),

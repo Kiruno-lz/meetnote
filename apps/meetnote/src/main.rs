@@ -7,6 +7,7 @@ use asr_sherpa_onnx::SherpaOnnxAsrBackend;
 use asr_whisper_rs::WhisperRsBackend;
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use diarization::{DiarizationBackendManager, DiarizationBackendRegistry};
+use diarization_native::NativeDiarizationBackend;
 use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
 use domain::SpeakerTaggedSegment;
 use models::{ModelCatalog, ModelManager};
@@ -24,6 +25,7 @@ fn main() {
     let whisper_backend = Arc::new(WhisperRsBackend::default());
     let sherpa_asr_backend = Arc::new(SherpaOnnxAsrBackend::default());
     let diarization_backend = Arc::new(SherpaOnnxDiarizationBackend::default());
+    let native_diarization_backend = Arc::new(NativeDiarizationBackend::default());
 
     let mut asr_registry = AsrBackendRegistry::default();
     asr_registry.register(whisper_backend.clone());
@@ -32,6 +34,7 @@ fn main() {
 
     let mut diarization_registry = DiarizationBackendRegistry::default();
     diarization_registry.register(diarization_backend.clone());
+    diarization_registry.register(native_diarization_backend);
     let diarization_manager = DiarizationBackendManager::new(diarization_registry);
     let asr_inventory = asr_manager.available_backends();
     let diarization_inventory = diarization_manager.available_backends();

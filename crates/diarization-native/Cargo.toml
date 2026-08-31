@@ -3,7 +3,22 @@ name = "diarization-native"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+default = []
+coreml = ["speakrs/coreml"]
+
 [dependencies]
 application = { path = "../application" }
+audio = { path = "../audio" }
 contracts = { path = "../contracts" }
+domain = { path = "../domain" }
 runtime = { path = "../runtime" }
+serde.workspace = true
+serde_json.workspace = true
+speakrs = { version = "=0.5.0", default-features = false, features = ["openblas-static"] }
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+hound.workspace = true
