@@ -146,7 +146,7 @@
       "id": "pyannote-speaker-diarization-3.1",
       "task": "diarization",
       "modelFamily": "pyannote-segmentation",
-      "candidateBackends": ["diarization-native"],
+      "candidateBackends": [],
       "sourceFormat": "gated-model-family-repository",
       "source": "pyannote/speaker-diarization-3.1",
       "sizeBytes": null,
@@ -154,7 +154,85 @@
       "sha256": null,
       "license": "mit-gated-hugging-face",
       "requiresAuth": true,
-      "status": "candidate-source"
+      "status": "requires-native-adapter"
+    },
+    {
+      "id": "speakrs-community-1-cpu",
+      "task": "diarization",
+      "modelFamily": "pyannote-community-1-vbx",
+      "candidateBackends": ["diarization-native"],
+      "sourceFormat": "onnx-plda-bundle",
+      "source": "avencera/speakrs-models@5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f",
+      "sizeBytes": 59751799,
+      "estimatedVramBytes": 1073741824,
+      "sha256": null,
+      "license": "apache-2.0-and-mit-and-cc-by-4.0-model-notices-required",
+      "requiresAuth": false,
+      "status": "ready",
+      "artifactFiles": [
+        "segmentation-3.0.onnx",
+        "wespeaker-voxceleb-resnet34.onnx",
+        "wespeaker-voxceleb-resnet34.onnx.data",
+        "plda_lda.npy",
+        "plda_tr.npy",
+        "plda_mu.npy",
+        "plda_psi.npy",
+        "plda_mean1.npy",
+        "plda_mean2.npy",
+        "wespeaker-voxceleb-resnet34.min_num_samples.txt"
+      ],
+      "artifacts": [
+        {
+          "filename": "segmentation-3.0.onnx",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/segmentation-3.0.onnx",
+          "sha256": "038b971741ed623af9773ecafdefa4b7bc523520099c2a68f8568b24189e8ad9"
+        },
+        {
+          "filename": "wespeaker-voxceleb-resnet34.onnx",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/wespeaker-voxceleb-resnet34.onnx",
+          "sha256": "203a4c67112167580ab1fcb62f4568c633499fb283805890aebe1c48564fcc0f"
+        },
+        {
+          "filename": "wespeaker-voxceleb-resnet34.onnx.data",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/wespeaker-voxceleb-resnet34.onnx.data",
+          "sha256": "dc105e7857156611381b95cc961b277d8e1e098e7af1c919a77c68c7257ce956"
+        },
+        {
+          "filename": "plda_lda.npy",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/plda_lda.npy",
+          "sha256": "e20c9b012bebd1aabda5a38a127e63a43cf35debdc502715fc143e2fb6bc3c4b"
+        },
+        {
+          "filename": "plda_tr.npy",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/plda_tr.npy",
+          "sha256": "e700b68cb319de3fafb5fa093eb9222c23c447084741f8d3a533640d425510ee"
+        },
+        {
+          "filename": "plda_mu.npy",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/plda_mu.npy",
+          "sha256": "d286d48acf99bbc1ed1502fed0a3e361ae5626ce1870c8be9f7397c5e47886c6"
+        },
+        {
+          "filename": "plda_psi.npy",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/plda_psi.npy",
+          "sha256": "d7128c9ed2f28a9781971805131129f077c04f948e2df12e52dcdb99f2b4e5f5"
+        },
+        {
+          "filename": "plda_mean1.npy",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/plda_mean1.npy",
+          "sha256": "e424c0c352182aa8e0f555dec1f3b30e29a20b9ed6b25d339f112af92e51e36f"
+        },
+        {
+          "filename": "plda_mean2.npy",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/plda_mean2.npy",
+          "sha256": "6f6fb708a2037197b5b84ffeaa8f140cb878088fbecd6ab042ad26a7691bd2cf"
+        },
+        {
+          "filename": "wespeaker-voxceleb-resnet34.min_num_samples.txt",
+          "source": "https://huggingface.co/avencera/speakrs-models/resolve/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f/wespeaker-voxceleb-resnet34.min_num_samples.txt",
+          "sha256": "e4df891c484d7abb985dadf539fa1883a646dab6337af5cae4159c587b7050cc"
+        }
+      ]
     },
     {
       "id": "whisper-large-v3-ggml",

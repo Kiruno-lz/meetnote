@@ -143,12 +143,16 @@ sherpa-onnx diarization
 
 ## 阶段 4：替换后端验证
 
-加入：
+已加入：
 
 - sherpa-onnx ASR
-- `diarization` crate backend
+- `diarization-native`：Pyannote powerset segmentation、WeSpeaker embedding、
+  AHC/PLDA/VBx clustering、embedding observation、原子 JSON speaker profile 和自动身份标注。
 
-验收：同一个 application pipeline 可以切换 backend；UI 不修改。
+验收：同一个 application pipeline 可以在 `sherpa-onnx` 和 `diarization-native` 间切换；
+backend registry、application pipeline 和 UI 选择接口不需要按模型族增加分支。native backend 已通过
+fake 三阶段测试、持久化/identity 测试和本地真实模型 M4A 验收。模型与算法选择依据见
+[Diarization 三阶段研究](../reserch/diarization-native-three-stage.md)。
 
 ## 产品核心：AI 可读文档后端
 

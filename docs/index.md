@@ -4,6 +4,7 @@
 
 - [系统架构总览](architecture/overview.md)
 - [ASR 与 diarization 后端管理层](architecture/backend-system.md)
+- [Diarization 三阶段模型、Rust 实现与 native backend](reserch/diarization-native-three-stage.md)
 - [模型目录与下载协议](architecture/model-management.md)
 - [工程实施计划](architecture/implementation-plan.md)
 - [架构决策](architecture/decisions.md)

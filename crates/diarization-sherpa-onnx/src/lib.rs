@@ -147,6 +147,8 @@ fn diarize_sync(
         .map(|(index, segment)| domain::DiarizationSegment {
             id: format!("sherpa-diarization-segment-{index}"),
             speaker_id: format!("speaker-{}", segment.speaker),
+            speaker_profile_id: None,
+            speaker_label: None,
             start_ms: (segment.start.max(0.0) * 1_000.0) as u64,
             end_ms: (segment.end.max(0.0) * 1_000.0) as u64,
             confidence: None,

@@ -204,7 +204,10 @@ fn main_panel(
                         .child(div().text_xs().text_color(rgb(0x60a5fa)).child(format!(
                             "{}  {}",
                             timestamp(segment.start_ms),
-                            segment.speaker_id
+                            segment
+                                .speaker_label
+                                .as_deref()
+                                .unwrap_or(&segment.speaker_id)
                         )))
                         .child(div().text_sm().child(segment.text.clone()))
                 }));

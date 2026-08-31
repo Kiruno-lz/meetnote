@@ -184,6 +184,8 @@ mod tests {
                     segments: vec![DiarizationSegment {
                         id: "d1".into(),
                         speaker_id: "speaker-1".into(),
+                        speaker_profile_id: None,
+                        speaker_label: None,
                         start_ms: 0,
                         end_ms: 1_000,
                         confidence: Some(1.0),
