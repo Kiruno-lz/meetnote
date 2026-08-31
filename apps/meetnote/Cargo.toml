@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 application = { path = "../../crates/application" }
 asr = { path = "../../crates/asr" }
+asr-sherpa-onnx = { path = "../../crates/asr-sherpa-onnx" }
 asr-whisper-rs = { path = "../../crates/asr-whisper-rs" }
 contracts = { path = "../../crates/contracts" }
 diarization = { path = "../../crates/diarization" }
@@ -18,3 +19,4 @@ serde_json.workspace = true
 persistence = { path = "../../crates/persistence" }
 models = { path = "../../crates/models" }
 ui = { path = "../../crates/ui" }
+settings = { path = "../../crates/settings" }

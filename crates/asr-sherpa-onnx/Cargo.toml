@@ -5,5 +5,11 @@ edition.workspace = true
 
 [dependencies]
 application = { path = "../application" }
+audio = { path = "../audio" }
 contracts = { path = "../contracts" }
+domain = { path = "../domain" }
 runtime = { path = "../runtime" }
+sherpa-onnx = "1.13.6"
+
+[dev-dependencies]
+futures.workspace = true

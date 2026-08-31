@@ -34,7 +34,11 @@ symphonia = { version = "0.5", default-features = false, features = ["aac", "ala
 sha2 = "0.10"
 tar = "0.4"
 ureq = "2.12"
+uuid = { version = "1", features = ["v4", "serde"] }
 
-# GPUI is still pre-1.0. Keep the UI and platform crates on one exact revision.
-gpui = { git = "https://github.com/zed-industries/zed.git", rev = "38c5dd7c98b20826cf6f8da24d4116a58c3a6a75", package = "gpui", default-features = false }
-gpui_platform = { git = "https://github.com/zed-industries/zed.git", rev = "38c5dd7c98b20826cf6f8da24d4116a58c3a6a75", package = "gpui_platform", default-features = false, features = ["font-kit", "runtime_shaders"] }
+# GPUI is still pre-1.0. Keep the UI, platform, and gpui-component crates on one
+# exact revision; Cargo.lock records the resolved Zed commit.
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", default-features = false }
+gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component.git", rev = "1081d2b272c653a90b92184521c224d1200b6f72" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component.git", rev = "1081d2b272c653a90b92184521c224d1200b6f72" }

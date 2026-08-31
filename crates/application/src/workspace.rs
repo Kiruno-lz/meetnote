@@ -3,7 +3,10 @@ use crate::{
     DiarizationBackendProvider, PipelineResult,
 };
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
-use domain::{MeetingProject, ProjectId, ProjectStatus, SpeakerTaggedSegment};
+use domain::{
+    reorder_project, reparent_project, MeetingProject, ProjectId, ProjectStatus,
+    SpeakerTaggedSegment,
+};
 use futures::channel::mpsc::UnboundedReceiver;
 use runtime::{JobContext, JobEvent, JobRuntime};
 use std::fs;
@@ -230,6 +233,74 @@ impl WorkspaceService {
 
     pub fn project(&self, project_id: &ProjectId) -> Result<Option<MeetingProject>, String> {
         self.repository.get(project_id)
+    }
+
+    pub fn reparent_project(
+        &self,
+        project_id: &ProjectId,
+        new_parent_id: Option<&ProjectId>,
+        sibling_order: u32,
+    ) -> Result<Vec<MeetingProject>, String> {
+        let mut projects = self.repository.list()?;
+        reparent_project(&mut projects, project_id, new_parent_id, sibling_order)
+            .map_err(|error| format!("cannot move project: {error:?}"))?;
+        for project in projects.iter().cloned() {
+            self.repository.save(project)?;
+        }
+        Ok(projects)
+    }
+
+    pub fn reorder_project(
+        &self,
+        project_id: &ProjectId,
+        target_id: &ProjectId,
+        before: bool,
+    ) -> Result<Vec<MeetingProject>, String> {
+        let mut projects = self.repository.list()?;
+        reorder_project(&mut projects, project_id, target_id, before)
+            .map_err(|error| format!("cannot reorder project: {error:?}"))?;
+        for project in projects.iter().cloned() {
+            self.repository.save(project)?;
+        }
+        Ok(projects)
+    }
+
+    pub fn create_semantic_child(
+        &self,
+        parent_id: &ProjectId,
+        title: impl Into<String>,
+        start_ms: u64,
+        end_ms: u64,
+        tags: Vec<String>,
+    ) -> Result<MeetingProject, String> {
+        let projects = self.repository.list()?;
+        let parent = projects
+            .iter()
+            .find(|project| &project.id == parent_id)
+            .ok_or_else(|| "project does not exist".to_string())?;
+        if parent.depth >= 2 {
+            return Err("project tree cannot exceed three levels".into());
+        }
+        if start_ms >= end_ms {
+            return Err("semantic project range must be non-empty".into());
+        }
+        let child = parent.semantic_child(ProjectId::new_uuid(), title, start_ms, end_ms, tags);
+        self.repository.save(child.clone())?;
+        Ok(child)
+    }
+
+    pub fn update_summary(
+        &self,
+        project_id: &ProjectId,
+        summary: impl Into<String>,
+    ) -> Result<MeetingProject, String> {
+        let mut project = self
+            .repository
+            .get(project_id)?
+            .ok_or_else(|| "project does not exist".to_string())?;
+        project.summary = Some(summary.into());
+        self.repository.save(project.clone())?;
+        Ok(project)
     }
 
     pub fn merge_speaker(
@@ -500,8 +571,14 @@ mod tests {
             std::env::temp_dir().join(format!("meetnote-workspace-{}", unique_suffix())),
         );
         let project = workspace.import_audio("fixture.wav").unwrap();
-        let model = ModelRef {
-            backend_id: "fake".into(),
+        let asr_model = ModelRef {
+            backend_id: "fake-asr".into(),
+            model_id: "fixture".into(),
+            revision: None,
+            artifact_path: "fixture-model".into(),
+        };
+        let diarization_model = ModelRef {
+            backend_id: "fake-diarization".into(),
             model_id: "fixture".into(),
             revision: None,
             artifact_path: "fixture-model".into(),
@@ -509,8 +586,8 @@ mod tests {
 
         let result = futures::executor::block_on(workspace.process_project(
             project.id.clone(),
-            model.clone(),
-            model,
+            asr_model,
+            diarization_model,
         ))
         .unwrap();
 

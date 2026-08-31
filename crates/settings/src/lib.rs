@@ -6,6 +6,10 @@ use std::sync::{Arc, RwLock};
 
 const SETTINGS_SCHEMA_VERSION: &str = "meetnote.settings.v1";
 
+fn default_ui_locale() -> String {
+    "zh-CN".into()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -14,6 +18,8 @@ pub struct AppSettings {
     pub asr_model: Option<ModelRef>,
     pub diarization_backend_id: Option<String>,
     pub diarization_model: Option<ModelRef>,
+    #[serde(default = "default_ui_locale")]
+    pub ui_locale: String,
     pub compute_device: ComputeDevice,
     pub language: Option<String>,
     pub expected_speakers: Option<u32>,
@@ -27,6 +33,7 @@ impl Default for AppSettings {
             asr_model: None,
             diarization_backend_id: None,
             diarization_model: None,
+            ui_locale: "zh-CN".into(),
             compute_device: ComputeDevice::Auto,
             language: None,
             expected_speakers: None,
@@ -69,6 +76,9 @@ impl AppSettings {
             return Err(SettingsError::Invalid(
                 "expected speakers must be greater than zero".into(),
             ));
+        }
+        if self.ui_locale.trim().is_empty() {
+            return Err(SettingsError::Invalid("UI locale must not be empty".into()));
         }
         Ok(())
     }

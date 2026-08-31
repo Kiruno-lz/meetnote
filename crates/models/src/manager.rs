@@ -398,6 +398,7 @@ mod tests {
                 source_format: "bin".into(),
                 source: "local/fixture.bin".into(),
                 size_bytes: Some(4),
+                estimated_vram_bytes: None,
                 sha256: None,
                 license: "test".into(),
                 requires_auth: false,
