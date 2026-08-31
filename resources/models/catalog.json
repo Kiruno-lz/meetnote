@@ -146,7 +146,7 @@
       "id": "pyannote-speaker-diarization-3.1",
       "task": "diarization",
       "modelFamily": "pyannote-segmentation",
-      "candidateBackends": ["diarization-native"],
+      "candidateBackends": [],
       "sourceFormat": "gated-model-family-repository",
       "source": "pyannote/speaker-diarization-3.1",
       "sizeBytes": null,
