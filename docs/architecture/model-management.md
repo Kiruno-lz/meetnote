@@ -103,6 +103,9 @@ v0.1 的 backend artifact 约定：
 
 - `whisper-rs` 接收一个已解析的 GGML/GGUF 文件路径，例如 `ggml-large-v3.bin`；OpenAI Whisper 的 PyTorch `.pt` 文件不能直接加载。
 - `sherpa-onnx` diarization 接收一个目录路径，目录至少包含 catalog `artifactFiles` 声明的 `segmentation.onnx` 和 `embedding.onnx`。
+- `diarization-native` CPU bundle 接收一个目录，包含固定 revision 的 Pyannote segmentation ONNX、
+  WeSpeaker ONNX/external data、六个 PLDA/VBx `.npy` 参数文件和最短样本配置。catalog 对十个 artifact
+  分别固定 URL 与 SHA-256；backend 不调用上游在线下载器。
 - `ModelRef.artifact_path` 是安装完成后的解析路径，不是下载 URL；文件模型指向文件，bundle 模型指向目录。
 
 ## 安全与可追溯

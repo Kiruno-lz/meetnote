@@ -64,7 +64,26 @@ pub trait DiarizationBackend: Send + Sync {
 第一批实现：
 
 - `diarization-sherpa-onnx`：segmentation、speaker embedding 和 clustering。
-- `diarization-native`：接入 `diarization` crate，保留 ONNX/CoreML provider 选择能力。
+- `diarization-native`：默认接入 `speakrs` 的 Pyannote powerset segmentation、
+  WeSpeaker embedding、AHC/PLDA/VBx 完整 pipeline，并通过独立 stage trait 保留模型替换能力。
+  该 backend 暴露中间 embedding observation，使用原子 JSON speaker library 完成跨项目
+  profile matching；最终结果同时保留项目内 cluster ID、稳定 profile ID 和可读 speaker label。
+
+`diarization-native` 的模块边界固定为：
+
+```text
+backend
+  -> engine
+       -> SegmentationAdapter
+       -> EmbeddingAdapter
+       -> ClusteringAdapter
+  -> identity resolver
+  -> speaker profile store
+```
+
+融合 provider 可以在 `engine` 内复用已经校准的 overlap-add、masked embedding 和 VBx，
+但不得绕过统一 observation、identity 和 persistence contract。模型下载仍由 `models` crate 负责，
+backend 不调用上游 package 的在线下载器。
 
 `DiarizationBackendManager` 以同样方式实现 `DiarizationBackendProvider`。ASR 和
 diarization 可以独立选择，application 只接收两个统一的 `ModelRef`。
