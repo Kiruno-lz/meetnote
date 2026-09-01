@@ -5212,6 +5212,7 @@ name = "persistence"
 version = "0.1.0"
 dependencies = [
  "application",
+ "contracts",
  "domain",
  "notify 8.2.0",
  "serde_json",
