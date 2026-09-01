@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const DOCUMENT_STATE_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct ProjectId(String);
 
@@ -18,8 +20,14 @@ impl ProjectId {
     }
 }
 
+pub type DocumentId = ProjectId;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AudioProject {
+pub struct DocumentState {
+    #[serde(default = "default_document_state_schema_version")]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub revision: u64,
     pub id: ProjectId,
     pub title: String,
     pub audio_path: String,
@@ -50,7 +58,8 @@ pub struct AudioProject {
     pub markdown_path: Option<String>,
 }
 
-pub type MeetingProject = AudioProject;
+pub type AudioProject = DocumentState;
+pub type MeetingProject = DocumentState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectStatus {
@@ -60,13 +69,16 @@ pub enum ProjectStatus {
     Failed,
 }
 
-impl AudioProject {
+impl DocumentState {
     pub fn new(id: ProjectId, title: impl Into<String>, audio_path: impl Into<String>) -> Self {
+        let timestamp = now_ms();
         Self {
+            schema_version: DOCUMENT_STATE_SCHEMA_VERSION,
+            revision: 0,
             id,
             title: title.into(),
             audio_path: audio_path.into(),
-            created_at_ms: now_ms(),
+            created_at_ms: timestamp,
             recorded_at_ms: None,
             audio_start_ms: 0,
             audio_end_ms: None,
@@ -82,6 +94,16 @@ impl AudioProject {
             speaker_segments: Vec::new(),
             markdown_path: None,
         }
+    }
+
+    pub fn validate_schema(&self) -> Result<(), DocumentStateError> {
+        if self.schema_version != DOCUMENT_STATE_SCHEMA_VERSION {
+            return Err(DocumentStateError::UnsupportedSchema {
+                actual: self.schema_version,
+                expected: DOCUMENT_STATE_SCHEMA_VERSION,
+            });
+        }
+        Ok(())
     }
 
     pub fn is_root(&self) -> bool {
@@ -145,6 +167,15 @@ impl AudioProject {
         }
         changed
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentStateError {
+    UnsupportedSchema { actual: u32, expected: u32 },
+}
+
+fn default_document_state_schema_version() -> u32 {
+    DOCUMENT_STATE_SCHEMA_VERSION
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
