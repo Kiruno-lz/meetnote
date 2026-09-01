@@ -11,26 +11,25 @@ pub use controller::{run, DesktopServices};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use application::{BackendInventory, ProcessingService, WorkspaceService};
+    use application::{BackendInventory, DocumentService, ProcessingService, WorkspaceService};
     use asr_whisper_rs::WhisperRsBackend;
     use contracts::ModelRef;
     use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
     use gpui::{AppContext, TestAppContext};
     use models::{ModelCatalog, ModelManager};
-    use persistence::InMemoryProjectRepository;
+    use persistence::InMemoryDocumentRepository;
     use settings::{JsonSettingsRepository, SettingsService};
     use std::sync::Arc;
 
     #[gpui::test]
     fn boots_an_empty_desktop_workspace(cx: &mut TestAppContext) {
-        let repository = Arc::new(InMemoryProjectRepository::default());
+        let repository = Arc::new(InMemoryDocumentRepository::default());
         let workspace = WorkspaceService::new(
             ProcessingService::new(
                 Arc::new(WhisperRsBackend::default()),
                 Arc::new(SherpaOnnxDiarizationBackend::default()),
             ),
-            repository,
-            std::env::temp_dir().join("meetnote-ui-test-markdown"),
+            DocumentService::new(repository),
         );
         let services = DesktopServices {
             workspace,

@@ -1,6 +1,6 @@
 use crate::{
     run_pipeline, AsrBackend, AsrBackendProvider, BackendFuture, DiarizationBackend,
-    DiarizationBackendProvider, PipelineResult,
+    DiarizationBackendProvider, DocumentService, PipelineResult,
 };
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use domain::{
@@ -9,8 +9,7 @@ use domain::{
 };
 use futures::channel::mpsc::UnboundedReceiver;
 use runtime::{JobContext, JobEvent, JobRuntime};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -189,8 +188,7 @@ impl DiarizationBackendProvider for SingleDiarizationBackendProvider {
 #[derive(Clone)]
 pub struct WorkspaceService {
     processing: ProcessingService,
-    repository: Arc<dyn crate::ProjectRepository>,
-    markdown_directory: PathBuf,
+    documents: DocumentService,
 }
 
 pub struct ProjectProcessingJob {
@@ -202,20 +200,19 @@ pub struct ProjectProcessingJob {
 }
 
 impl WorkspaceService {
-    pub fn new(
-        processing: ProcessingService,
-        repository: Arc<dyn crate::ProjectRepository>,
-        markdown_directory: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn new(processing: ProcessingService, documents: DocumentService) -> Self {
         Self {
             processing,
-            repository,
-            markdown_directory: markdown_directory.into(),
+            documents,
         }
     }
 
     pub fn list_projects(&self) -> Result<Vec<MeetingProject>, String> {
-        self.repository.list()
+        self.documents.list()
+    }
+
+    pub fn document_snapshot(&self) -> Result<crate::DocumentSnapshot, String> {
+        self.documents.snapshot()
     }
 
     pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<MeetingProject, String> {
@@ -229,12 +226,15 @@ impl WorkspaceService {
             .to_string();
         let id = ProjectId::new(format!("project-{}", unique_suffix()));
         let project = MeetingProject::new(id, title, audio_path);
-        self.repository.save(project.clone())?;
+        self.documents.save_with_markdown(
+            project.clone(),
+            render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
+        )?;
         Ok(project)
     }
 
     pub fn project(&self, project_id: &ProjectId) -> Result<Option<MeetingProject>, String> {
-        self.repository.get(project_id)
+        self.documents.get(project_id)
     }
 
     pub fn reparent_project(
@@ -243,11 +243,11 @@ impl WorkspaceService {
         new_parent_id: Option<&ProjectId>,
         sibling_order: u32,
     ) -> Result<Vec<MeetingProject>, String> {
-        let mut projects = self.repository.list()?;
+        let mut projects = self.documents.list()?;
         reparent_project(&mut projects, project_id, new_parent_id, sibling_order)
             .map_err(|error| format!("cannot move project: {error:?}"))?;
         for project in projects.iter().cloned() {
-            self.repository.save(project)?;
+            self.documents.save(project)?;
         }
         Ok(projects)
     }
@@ -258,11 +258,11 @@ impl WorkspaceService {
         target_id: &ProjectId,
         before: bool,
     ) -> Result<Vec<MeetingProject>, String> {
-        let mut projects = self.repository.list()?;
+        let mut projects = self.documents.list()?;
         reorder_project(&mut projects, project_id, target_id, before)
             .map_err(|error| format!("cannot reorder project: {error:?}"))?;
         for project in projects.iter().cloned() {
-            self.repository.save(project)?;
+            self.documents.save(project)?;
         }
         Ok(projects)
     }
@@ -275,7 +275,7 @@ impl WorkspaceService {
         end_ms: u64,
         tags: Vec<String>,
     ) -> Result<MeetingProject, String> {
-        let projects = self.repository.list()?;
+        let projects = self.documents.list()?;
         let parent = projects
             .iter()
             .find(|project| &project.id == parent_id)
@@ -287,7 +287,10 @@ impl WorkspaceService {
             return Err("semantic project range must be non-empty".into());
         }
         let child = parent.semantic_child(ProjectId::new_uuid(), title, start_ms, end_ms, tags);
-        self.repository.save(child.clone())?;
+        self.documents.save_with_markdown(
+            child.clone(),
+            render_markdown(Path::new(&child.audio_path), &child.speaker_segments),
+        )?;
         Ok(child)
     }
 
@@ -297,11 +300,11 @@ impl WorkspaceService {
         summary: impl Into<String>,
     ) -> Result<MeetingProject, String> {
         let mut project = self
-            .repository
+            .documents
             .get(project_id)?
             .ok_or_else(|| "project does not exist".to_string())?;
         project.summary = Some(summary.into());
-        self.repository.save(project.clone())?;
+        self.documents.save(project.clone())?;
         Ok(project)
     }
 
@@ -312,24 +315,17 @@ impl WorkspaceService {
         into: &str,
     ) -> Result<MeetingProject, String> {
         let mut project = self
-            .repository
+            .documents
             .get(project_id)?
             .ok_or_else(|| "project does not exist".to_string())?;
         let changed = project.merge_speaker(from, into);
         if changed == 0 {
             return Ok(project);
         }
-        let markdown_path = self
-            .markdown_directory
-            .join(format!("{}.md", project.id.as_str()));
-        fs::create_dir_all(&self.markdown_directory).map_err(|error| error.to_string())?;
-        fs::write(
-            &markdown_path,
+        self.documents.save_with_markdown(
+            project.clone(),
             render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
-        )
-        .map_err(|error| error.to_string())?;
-        project.markdown_path = Some(markdown_path.display().to_string());
-        self.repository.save(project.clone())?;
+        )?;
         Ok(project)
     }
 
@@ -355,12 +351,12 @@ impl WorkspaceService {
         speaker_library_path: Option<String>,
     ) -> Result<ProjectProcessingJob, contracts::BackendError> {
         let mut project = self
-            .repository
+            .documents
             .get(&project_id)
             .map_err(persistence_error)?
             .ok_or_else(|| persistence_error("project does not exist"))?;
         project.status = ProjectStatus::Processing;
-        self.repository
+        self.documents
             .save(project.clone())
             .map_err(persistence_error)?;
 
@@ -375,7 +371,7 @@ impl WorkspaceService {
         };
         self.processing.probe(&request).map_err(|error| {
             project.status = ProjectStatus::Failed;
-            let _ = self.repository.save(project.clone());
+            let _ = self.documents.save(project.clone());
             error
         })?;
 
@@ -403,7 +399,7 @@ impl WorkspaceService {
                         diarization_status_context.failed(error.message.clone());
                     }
                     project.status = ProjectStatus::Failed;
-                    let _ = workspace.repository.save(project);
+                    let _ = workspace.documents.save(project);
                     return Err(error);
                 }
             };
@@ -415,20 +411,12 @@ impl WorkspaceService {
             project.transcript = result.asr.segments.clone();
             project.diarization = result.diarization.segments.clone();
             project.speaker_segments = result.aligned.clone();
-            let markdown_path = workspace
-                .markdown_directory
-                .join(format!("{}.md", project.id.as_str()));
-            fs::create_dir_all(&workspace.markdown_directory)
-                .map_err(|error| persistence_error(error.to_string()))?;
-            fs::write(
-                &markdown_path,
-                render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
-            )
-            .map_err(|error| persistence_error(error.to_string()))?;
-            project.markdown_path = Some(markdown_path.display().to_string());
             workspace
-                .repository
-                .save(project.clone())
+                .documents
+                .save_with_markdown(
+                    project.clone(),
+                    render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
+                )
                 .map_err(persistence_error)?;
             Ok(project)
         });
@@ -493,7 +481,10 @@ pub fn render_markdown(audio_path: &Path, segments: &[SpeakerTaggedSegment]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{asr_descriptor, diarization_descriptor, ProjectRepository};
+    use crate::{
+        asr_descriptor, diarization_descriptor, DocumentRepository, DocumentService,
+        DocumentSnapshot,
+    };
     use contracts::{AsrResult, BackendDescriptor, BackendError, DiarizationResult};
     use domain::{DiarizationSegment, TranscriptSegment};
     use std::collections::BTreeMap;
@@ -504,8 +495,15 @@ mod tests {
         projects: RwLock<BTreeMap<String, MeetingProject>>,
     }
 
-    impl ProjectRepository for MemoryRepository {
-        fn save(&self, project: MeetingProject) -> Result<(), String> {
+    impl DocumentRepository for MemoryRepository {
+        fn snapshot(&self) -> Result<DocumentSnapshot, String> {
+            Ok(DocumentSnapshot {
+                documents: self.projects.read().unwrap().values().cloned().collect(),
+                issues: Vec::new(),
+            })
+        }
+
+        fn save(&self, project: MeetingProject, _markdown: Option<String>) -> Result<(), String> {
             self.projects
                 .write()
                 .unwrap()
@@ -515,10 +513,6 @@ mod tests {
 
         fn get(&self, id: &ProjectId) -> Result<Option<MeetingProject>, String> {
             Ok(self.projects.read().unwrap().get(id.as_str()).cloned())
-        }
-
-        fn list(&self) -> Result<Vec<MeetingProject>, String> {
-            Ok(self.projects.read().unwrap().values().cloned().collect())
         }
     }
 
@@ -591,8 +585,7 @@ mod tests {
         let repository = Arc::new(MemoryRepository::default());
         let workspace = WorkspaceService::new(
             ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
-            repository.clone(),
-            std::env::temp_dir().join(format!("meetnote-workspace-{}", unique_suffix())),
+            DocumentService::new(repository.clone()),
         );
         let project = workspace.import_audio("fixture.wav").unwrap();
         let asr_model = ModelRef {
@@ -617,14 +610,7 @@ mod tests {
 
         assert_eq!(result.status, ProjectStatus::Ready);
         assert_eq!(result.speaker_segments[0].speaker_id, "speaker-1");
-        assert!(result.markdown_path.is_some());
         assert_eq!(repository.get(&project.id).unwrap(), Some(result.clone()));
-        if let Some(markdown_path) = result.markdown_path {
-            let _ = fs::remove_file(markdown_path);
-            if let Some(parent) = Path::new(&result.audio_path).parent() {
-                let _ = parent;
-            }
-        }
     }
 }
 

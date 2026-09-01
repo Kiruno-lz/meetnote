@@ -1,8 +1,10 @@
-use application::ProjectRepository;
-use domain::{DocumentId, DocumentState, MeetingProject, ProjectId, ProjectStatus};
+use application::{DocumentIssue, DocumentRepository, DocumentSnapshot};
+use domain::{DocumentId, DocumentState};
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, RwLock};
 
 pub const DOCUMENT_MARKDOWN_FILENAME: &str = "document.md";
@@ -368,104 +370,164 @@ fn reaches(
 }
 
 #[derive(Clone, Default)]
-pub struct InMemoryProjectRepository {
-    projects: Arc<RwLock<BTreeMap<String, MeetingProject>>>,
+pub struct InMemoryDocumentRepository {
+    documents: Arc<RwLock<BTreeMap<String, DocumentState>>>,
 }
 
-impl ProjectRepository for InMemoryProjectRepository {
-    fn save(&self, project: MeetingProject) -> Result<(), String> {
-        self.projects
-            .write()
-            .map_err(|_| "project repository lock poisoned".to_string())?
-            .insert(project.id.as_str().to_string(), project);
-        Ok(())
+impl DocumentRepository for InMemoryDocumentRepository {
+    fn snapshot(&self) -> Result<DocumentSnapshot, String> {
+        Ok(DocumentSnapshot {
+            documents: self
+                .documents
+                .read()
+                .map_err(|_| "document repository lock poisoned".to_string())?
+                .values()
+                .cloned()
+                .collect(),
+            issues: Vec::new(),
+        })
     }
 
-    fn get(&self, project_id: &ProjectId) -> Result<Option<MeetingProject>, String> {
+    fn get(&self, document_id: &DocumentId) -> Result<Option<DocumentState>, String> {
         Ok(self
-            .projects
+            .documents
             .read()
-            .map_err(|_| "project repository lock poisoned".to_string())?
-            .get(project_id.as_str())
+            .map_err(|_| "document repository lock poisoned".to_string())?
+            .get(document_id.as_str())
             .cloned())
     }
 
-    fn list(&self) -> Result<Vec<MeetingProject>, String> {
-        Ok(self
-            .projects
-            .read()
-            .map_err(|_| "project repository lock poisoned".to_string())?
-            .values()
-            .cloned()
-            .collect())
+    fn save(&self, document: DocumentState, _markdown: Option<String>) -> Result<(), String> {
+        self.documents
+            .write()
+            .map_err(|_| "document repository lock poisoned".to_string())?
+            .insert(document.id.as_str().to_string(), document);
+        Ok(())
     }
 }
 
 #[derive(Clone)]
-pub struct JsonProjectRepository {
-    path: PathBuf,
-    projects: Arc<RwLock<BTreeMap<String, MeetingProject>>>,
+pub struct FileDocumentRepository {
+    scanner: DocumentScanner,
 }
 
-impl JsonProjectRepository {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
-        let path = path.as_ref().to_path_buf();
-        let projects = if path.is_file() {
-            let content = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-            serde_json::from_str::<Vec<MeetingProject>>(&content)
-                .map_err(|error| error.to_string())?
-                .into_iter()
-                .map(|mut project| {
-                    if project.status == ProjectStatus::Processing {
-                        project.status = ProjectStatus::Failed;
-                    }
-                    (project.id.as_str().to_string(), project)
-                })
-                .collect()
-        } else {
-            BTreeMap::new()
-        };
+impl FileDocumentRepository {
+    pub fn open(root: impl AsRef<Path>) -> Result<Self, String> {
+        let root = root.as_ref().to_path_buf();
+        fs::create_dir_all(&root).map_err(|error| error.to_string())?;
         Ok(Self {
-            path,
-            projects: Arc::new(RwLock::new(projects)),
+            scanner: DocumentScanner::new(root),
         })
     }
 
-    fn flush(&self, projects: &BTreeMap<String, MeetingProject>) -> Result<(), String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        let values: Vec<_> = projects.values().cloned().collect();
-        let content = serde_json::to_vec_pretty(&values).map_err(|error| error.to_string())?;
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, content).map_err(|error| error.to_string())?;
-        fs::rename(temporary, &self.path).map_err(|error| error.to_string())
+    pub fn root(&self) -> &Path {
+        self.scanner.root()
+    }
+
+    pub fn watch(&self) -> Result<DocumentWatcher, String> {
+        DocumentWatcher::new(self.root())
     }
 }
 
-impl ProjectRepository for JsonProjectRepository {
-    fn save(&self, project: MeetingProject) -> Result<(), String> {
-        let mut projects = self
-            .projects
-            .write()
-            .map_err(|_| "project repository lock poisoned".to_string())?;
-        projects.insert(project.id.as_str().to_string(), project);
-        self.flush(&projects)
+pub struct DocumentWatcher {
+    receiver: Receiver<Result<DocumentWatchEvent, String>>,
+    _watcher: RecommendedWatcher,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentWatchEvent {
+    Changed,
+}
+
+impl DocumentWatcher {
+    fn new(root: &Path) -> Result<Self, String> {
+        let (sender, receiver) = mpsc::channel();
+        let mut watcher = RecommendedWatcher::new(
+            move |result: Result<Event, notify::Error>| {
+                let event = result
+                    .map(|_| DocumentWatchEvent::Changed)
+                    .map_err(|error| error.to_string());
+                let _ = sender.send(event);
+            },
+            Config::default(),
+        )
+        .map_err(|error| error.to_string())?;
+        watcher
+            .watch(root, RecursiveMode::Recursive)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            receiver,
+            _watcher: watcher,
+        })
     }
 
-    fn get(&self, project_id: &ProjectId) -> Result<Option<MeetingProject>, String> {
-        self.projects
-            .read()
-            .map_err(|_| "project repository lock poisoned".to_string())
-            .map(|projects| projects.get(project_id.as_str()).cloned())
+    pub fn try_recv(&self) -> Option<Result<DocumentWatchEvent, String>> {
+        self.receiver.try_recv().ok()
     }
 
-    fn list(&self) -> Result<Vec<MeetingProject>, String> {
-        self.projects
-            .read()
-            .map_err(|_| "project repository lock poisoned".to_string())
-            .map(|projects| projects.values().cloned().collect())
+    pub fn recv(&self) -> Result<DocumentWatchEvent, String> {
+        self.receiver.recv().map_err(|error| error.to_string())?
     }
+
+    pub fn recv_timeout(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Option<DocumentWatchEvent>, String> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(event) => event.map(Some),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err("document watcher disconnected".into())
+            }
+        }
+    }
+}
+
+impl DocumentRepository for FileDocumentRepository {
+    fn snapshot(&self) -> Result<DocumentSnapshot, String> {
+        let scan = self.scanner.scan().map_err(|error| error.to_string())?;
+        let documents = scan.documents();
+        let issues = scan
+            .errors
+            .into_iter()
+            .map(|error| DocumentIssue {
+                path: self.root().display().to_string(),
+                message: format!("{error:?}"),
+            })
+            .collect();
+        Ok(DocumentSnapshot { documents, issues })
+    }
+
+    fn get(&self, document_id: &DocumentId) -> Result<Option<DocumentState>, String> {
+        Ok(self
+            .snapshot()?
+            .documents
+            .into_iter()
+            .find(|document| &document.id == document_id))
+    }
+
+    fn save(&self, mut document: DocumentState, markdown: Option<String>) -> Result<(), String> {
+        let directory = self.root().join(document.id.as_str());
+        let existing = DocumentPackage::load(&directory).ok();
+        if let Some(existing) = &existing {
+            document.revision = existing.state.revision.saturating_add(1);
+        }
+        document.updated_at_ms = now_ms();
+        let markdown = markdown
+            .or_else(|| existing.map(|package| package.markdown))
+            .unwrap_or_else(|| format!("# {}\n\n", document.title));
+        DocumentPackage::new(directory, document, markdown)
+            .map_err(|error| error.to_string())?
+            .save()
+            .map_err(|error| error.to_string())
+    }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -477,38 +539,18 @@ mod tests {
     }
 
     #[test]
-    fn stores_and_lists_projects_without_a_database() {
-        let repository = InMemoryProjectRepository::default();
-        let project = MeetingProject::new(
-            ProjectId::new("project-1"),
+    fn stores_and_lists_documents_without_a_database() {
+        let repository = InMemoryDocumentRepository::default();
+        let project = DocumentState::new(
+            DocumentId::new("project-1"),
             "Fixture meeting",
             "fixture.wav",
         );
 
-        repository.save(project.clone()).unwrap();
+        repository.save(project.clone(), None).unwrap();
 
         assert_eq!(repository.get(&project.id).unwrap(), Some(project.clone()));
-        assert_eq!(repository.list().unwrap(), vec![project]);
-    }
-
-    #[test]
-    fn persists_projects_as_json() {
-        let path = std::env::temp_dir().join(format!(
-            "meetnote-projects-{}-{}.json",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let repository = JsonProjectRepository::open(&path).unwrap();
-        let project = MeetingProject::new(ProjectId::new("project-2"), "Saved meeting", "a.wav");
-
-        repository.save(project.clone()).unwrap();
-
-        let reopened = JsonProjectRepository::open(&path).unwrap();
-        assert_eq!(reopened.get(&project.id).unwrap(), Some(project));
-        std::fs::remove_file(path).unwrap();
+        assert_eq!(repository.snapshot().unwrap().documents, vec![project]);
     }
 
     #[test]
@@ -599,6 +641,75 @@ mod tests {
             DocumentScanError::InvalidPackage { path, .. } if path == &directory
         ));
         assert!(scan.packages.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_repository_reopens_documents_and_preserves_markdown() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-file-repository-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        let document = DocumentState::new(
+            DocumentId::new("persistent"),
+            "Persistent document",
+            "recording.m4a",
+        );
+        repository
+            .save(document.clone(), Some("# Persistent document\n".into()))
+            .unwrap();
+
+        let reopened = FileDocumentRepository::open(&root).unwrap();
+        let loaded = reopened
+            .get(&DocumentId::new("persistent"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.id, document.id);
+        assert_eq!(loaded.title, document.title);
+        assert_eq!(loaded.revision, 0);
+        reopened
+            .save(
+                DocumentState {
+                    title: "Renamed document".into(),
+                    ..loaded.clone()
+                },
+                None,
+            )
+            .unwrap();
+        let final_scan = reopened.scanner.scan().unwrap();
+        assert_eq!(final_scan.packages[0].markdown, "# Persistent document\n");
+        assert_eq!(final_scan.packages[0].state.revision, 1);
+        assert_eq!(final_scan.packages[0].state.title, "Renamed document");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_repository_can_watch_its_document_root() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-document-watcher-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        let watcher = repository.watch().unwrap();
+
+        repository
+            .save(
+                DocumentState::new(
+                    DocumentId::new("watched"),
+                    "Watched document",
+                    "recording.m4a",
+                ),
+                None,
+            )
+            .unwrap();
+
+        assert!(watcher
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap()
+            .is_some());
         std::fs::remove_dir_all(root).unwrap();
     }
 

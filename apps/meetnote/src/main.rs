@@ -1,6 +1,6 @@
 use application::{
-    run_pipeline, AsrBackend, BackendInventory, DiarizationBackend, ProcessingService,
-    WorkspaceService,
+    run_pipeline, AsrBackend, BackendInventory, DiarizationBackend, DocumentService,
+    ProcessingService, WorkspaceService,
 };
 use asr::{AsrBackendManager, AsrBackendRegistry};
 use asr_sherpa_onnx::SherpaOnnxAsrBackend;
@@ -11,7 +11,7 @@ use diarization_native::{NativeDiarizationBackend, NativeDiarizationConfig};
 use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
 use domain::SpeakerTaggedSegment;
 use models::{ModelCatalog, ModelManager};
-use persistence::JsonProjectRepository;
+use persistence::FileDocumentRepository;
 use runtime::JobRuntime;
 use serde::Serialize;
 use settings::{JsonSettingsRepository, SettingsService};
@@ -53,13 +53,11 @@ fn main() {
     let diarization_inventory = diarization_manager.available_backends();
 
     let repository = Arc::new(
-        JsonProjectRepository::open("data/projects/projects.json")
-            .expect("failed to open project repository"),
+        FileDocumentRepository::open("data/documents").expect("failed to open document repository"),
     );
     let workspace = WorkspaceService::new(
         ProcessingService::new_with_providers(Arc::new(asr_manager), Arc::new(diarization_manager)),
-        repository,
-        "data/markdown",
+        DocumentService::new(repository),
     );
     let catalog = ModelCatalog::from_path("resources/models/catalog.json")
         .expect("failed to open model catalog");

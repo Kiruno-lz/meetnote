@@ -28,6 +28,8 @@ pub struct DocumentState {
     pub schema_version: u32,
     #[serde(default)]
     pub revision: u64,
+    #[serde(default)]
+    pub updated_at_ms: u64,
     pub id: ProjectId,
     pub title: String,
     pub audio_path: String,
@@ -75,6 +77,7 @@ impl DocumentState {
         Self {
             schema_version: DOCUMENT_STATE_SCHEMA_VERSION,
             revision: 0,
+            updated_at_ms: timestamp,
             id,
             title: title.into(),
             audio_path: audio_path.into(),

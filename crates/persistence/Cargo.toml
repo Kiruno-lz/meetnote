@@ -8,3 +8,4 @@ application = { path = "../application" }
 domain = { path = "../domain" }
 serde_json.workspace = true
 thiserror.workspace = true
+notify.workspace = true

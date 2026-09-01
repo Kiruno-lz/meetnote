@@ -73,11 +73,64 @@ pub trait DiarizationBackendProvider: Send + Sync {
     fn backend(&self, backend_id: &str) -> Result<Arc<dyn DiarizationBackend>, BackendError>;
 }
 
-pub trait ProjectRepository: Send + Sync {
-    fn save(&self, project: domain::MeetingProject) -> Result<(), String>;
-    fn get(&self, project_id: &domain::ProjectId)
-        -> Result<Option<domain::MeetingProject>, String>;
-    fn list(&self) -> Result<Vec<domain::MeetingProject>, String>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentIssue {
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DocumentSnapshot {
+    pub documents: Vec<domain::DocumentState>,
+    pub issues: Vec<DocumentIssue>,
+}
+
+pub trait DocumentRepository: Send + Sync {
+    fn snapshot(&self) -> Result<DocumentSnapshot, String>;
+    fn get(
+        &self,
+        document_id: &domain::DocumentId,
+    ) -> Result<Option<domain::DocumentState>, String>;
+    fn save(&self, document: domain::DocumentState, markdown: Option<String>)
+        -> Result<(), String>;
+}
+
+#[derive(Clone)]
+pub struct DocumentService {
+    repository: Arc<dyn DocumentRepository>,
+}
+
+impl DocumentService {
+    pub fn new(repository: Arc<dyn DocumentRepository>) -> Self {
+        Self { repository }
+    }
+
+    pub fn snapshot(&self) -> Result<DocumentSnapshot, String> {
+        self.repository.snapshot()
+    }
+
+    pub fn list(&self) -> Result<Vec<domain::DocumentState>, String> {
+        Ok(self.snapshot()?.documents)
+    }
+
+    pub fn get(
+        &self,
+        document_id: &domain::DocumentId,
+    ) -> Result<Option<domain::DocumentState>, String> {
+        self.repository.get(document_id)
+    }
+
+    pub fn save(&self, document: domain::DocumentState) -> Result<(), String> {
+        self.repository.save(document, None)
+    }
+
+    pub fn save_with_markdown(
+        &self,
+        document: domain::DocumentState,
+        markdown: impl Into<String>,
+    ) -> Result<(), String> {
+        self.repository.save(document, Some(markdown.into()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

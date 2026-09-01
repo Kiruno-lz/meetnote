@@ -35,6 +35,7 @@ sha2 = "0.10"
 tar = "0.4"
 ureq = "2.12"
 uuid = { version = "1", features = ["v4", "serde"] }
+notify = "8"
 
 # GPUI is still pre-1.0. Keep the UI, platform, and gpui-component crates on one
 # exact revision; Cargo.lock records the resolved Zed commit.
