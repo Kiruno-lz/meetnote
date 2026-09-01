@@ -1,4 +1,4 @@
-use domain::{MeetingProject, ProjectId};
+use domain::{DocumentState, ProjectId};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,7 +28,7 @@ pub struct UiState {
 }
 
 impl UiState {
-    pub fn from_projects(projects: &[MeetingProject], locale: super::i18n::Locale) -> Self {
+    pub fn from_projects(projects: &[DocumentState], locale: super::i18n::Locale) -> Self {
         Self {
             route: super::route::Route::Assistant,
             locale,

@@ -3,7 +3,7 @@ use crate::{
     controller::RootView,
     i18n::{text as tr, Locale},
 };
-use domain::MeetingProject;
+use domain::DocumentState;
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -11,7 +11,7 @@ use gpui_component::{
 };
 
 pub(crate) fn render(
-    project: Option<&MeetingProject>,
+    project: Option<&DocumentState>,
     locale: Locale,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {

@@ -4,7 +4,7 @@ use crate::{
 };
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use domain::{
-    reorder_project, reparent_project, MeetingProject, ProjectId, ProjectStatus,
+    reorder_project, reparent_project, DocumentState, ProjectId, ProjectStatus,
     SpeakerTaggedSegment,
 };
 use futures::channel::mpsc::UnboundedReceiver;
@@ -192,7 +192,7 @@ pub struct WorkspaceService {
 }
 
 pub struct ProjectProcessingJob {
-    pub future: BackendFuture<MeetingProject>,
+    pub future: BackendFuture<DocumentState>,
     pub asr_context: JobContext,
     pub diarization_context: JobContext,
     pub asr_events: UnboundedReceiver<JobEvent>,
@@ -207,7 +207,7 @@ impl WorkspaceService {
         }
     }
 
-    pub fn list_projects(&self) -> Result<Vec<MeetingProject>, String> {
+    pub fn list_projects(&self) -> Result<Vec<DocumentState>, String> {
         self.documents.list()
     }
 
@@ -221,7 +221,7 @@ impl WorkspaceService {
         self.documents.watch()
     }
 
-    pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<MeetingProject, String> {
+    pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<DocumentState, String> {
         let audio_path = audio_path.into();
         let path = Path::new(&audio_path);
         let title = path
@@ -231,7 +231,7 @@ impl WorkspaceService {
             .unwrap_or("Untitled meeting")
             .to_string();
         let id = ProjectId::new(format!("project-{}", unique_suffix()));
-        let project = MeetingProject::new(id, title, audio_path);
+        let project = DocumentState::new(id, title, audio_path);
         let project = self.documents.save_with_markdown(
             project.clone(),
             render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
@@ -239,7 +239,7 @@ impl WorkspaceService {
         Ok(project)
     }
 
-    pub fn project(&self, project_id: &ProjectId) -> Result<Option<MeetingProject>, String> {
+    pub fn project(&self, project_id: &ProjectId) -> Result<Option<DocumentState>, String> {
         self.documents.get(project_id)
     }
 
@@ -248,7 +248,7 @@ impl WorkspaceService {
         project_id: &ProjectId,
         new_parent_id: Option<&ProjectId>,
         sibling_order: u32,
-    ) -> Result<Vec<MeetingProject>, String> {
+    ) -> Result<Vec<DocumentState>, String> {
         let mut projects = self.documents.list()?;
         reparent_project(&mut projects, project_id, new_parent_id, sibling_order)
             .map_err(|error| format!("cannot move project: {error:?}"))?;
@@ -263,7 +263,7 @@ impl WorkspaceService {
         project_id: &ProjectId,
         target_id: &ProjectId,
         before: bool,
-    ) -> Result<Vec<MeetingProject>, String> {
+    ) -> Result<Vec<DocumentState>, String> {
         let mut projects = self.documents.list()?;
         reorder_project(&mut projects, project_id, target_id, before)
             .map_err(|error| format!("cannot reorder project: {error:?}"))?;
@@ -280,7 +280,7 @@ impl WorkspaceService {
         start_ms: u64,
         end_ms: u64,
         tags: Vec<String>,
-    ) -> Result<MeetingProject, String> {
+    ) -> Result<DocumentState, String> {
         let projects = self.documents.list()?;
         let parent = projects
             .iter()
@@ -304,7 +304,7 @@ impl WorkspaceService {
         &self,
         project_id: &ProjectId,
         summary: impl Into<String>,
-    ) -> Result<MeetingProject, String> {
+    ) -> Result<DocumentState, String> {
         let mut project = self
             .documents
             .get(project_id)?
@@ -319,7 +319,7 @@ impl WorkspaceService {
         project_id: &ProjectId,
         from: &str,
         into: &str,
-    ) -> Result<MeetingProject, String> {
+    ) -> Result<DocumentState, String> {
         let mut project = self
             .documents
             .get(project_id)?
@@ -443,7 +443,7 @@ impl WorkspaceService {
         project_id: ProjectId,
         asr_model: ModelRef,
         diarization_model: ModelRef,
-    ) -> BackendFuture<MeetingProject> {
+    ) -> BackendFuture<DocumentState> {
         let workspace = self.clone();
         Box::pin(async move {
             let job =
@@ -515,7 +515,7 @@ mod tests {
 
     #[derive(Default)]
     struct MemoryRepository {
-        projects: RwLock<BTreeMap<String, MeetingProject>>,
+        projects: RwLock<BTreeMap<String, DocumentState>>,
     }
 
     impl DocumentRepository for MemoryRepository {
@@ -526,7 +526,7 @@ mod tests {
             })
         }
 
-        fn save(&self, project: MeetingProject, _markdown: Option<String>) -> Result<(), String> {
+        fn save(&self, project: DocumentState, _markdown: Option<String>) -> Result<(), String> {
             self.projects
                 .write()
                 .unwrap()
@@ -534,7 +534,7 @@ mod tests {
             Ok(())
         }
 
-        fn get(&self, id: &ProjectId) -> Result<Option<MeetingProject>, String> {
+        fn get(&self, id: &ProjectId) -> Result<Option<DocumentState>, String> {
             Ok(self.projects.read().unwrap().get(id.as_str()).cloned())
         }
 

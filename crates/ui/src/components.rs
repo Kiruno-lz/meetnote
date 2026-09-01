@@ -1,5 +1,5 @@
 use crate::{controller::RootView, i18n, state::ContentMode};
-use domain::{MeetingProject, ProjectId, ProjectStatus};
+use domain::{DocumentState, ProjectId, ProjectStatus};
 use gpui::{div, prelude::*, rgb, Context, Render, SharedString, Window};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::separator::Separator;
@@ -84,15 +84,15 @@ pub(crate) fn mode_button(
 }
 
 pub(crate) fn ordered_projects(
-    projects: &[MeetingProject],
+    projects: &[DocumentState],
     expanded: &std::collections::BTreeSet<ProjectId>,
-) -> Vec<(MeetingProject, u8)> {
+) -> Vec<(DocumentState, u8)> {
     fn append(
-        projects: &[MeetingProject],
+        projects: &[DocumentState],
         parent: Option<&ProjectId>,
         depth: u8,
         expanded: &std::collections::BTreeSet<ProjectId>,
-        output: &mut Vec<(MeetingProject, u8)>,
+        output: &mut Vec<(DocumentState, u8)>,
     ) {
         let mut children: Vec<_> = projects
             .iter()

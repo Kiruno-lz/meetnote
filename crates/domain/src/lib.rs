@@ -62,9 +62,6 @@ pub struct DocumentState {
     pub markdown_path: Option<String>,
 }
 
-pub type AudioProject = DocumentState;
-pub type MeetingProject = DocumentState;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectStatus {
     Imported,
@@ -194,7 +191,7 @@ pub enum ProjectTreeError {
 }
 
 pub fn reparent_project(
-    projects: &mut [AudioProject],
+    projects: &mut [DocumentState],
     project_id: &ProjectId,
     new_parent_id: Option<&ProjectId>,
     sibling_order: u32,
@@ -249,7 +246,7 @@ pub fn reparent_project(
 }
 
 pub fn reorder_project(
-    projects: &mut [AudioProject],
+    projects: &mut [DocumentState],
     project_id: &ProjectId,
     target_id: &ProjectId,
     before: bool,
@@ -297,7 +294,7 @@ fn overlaps(left_start: u64, left_end: u64, right_start: u64, right_end: u64) ->
     left_start < right_end && right_start < left_end
 }
 
-fn is_descendant(projects: &[AudioProject], candidate: &ProjectId, ancestor: &ProjectId) -> bool {
+fn is_descendant(projects: &[DocumentState], candidate: &ProjectId, ancestor: &ProjectId) -> bool {
     let mut current = Some(candidate);
     while let Some(id) = current {
         if id == ancestor {
@@ -311,7 +308,7 @@ fn is_descendant(projects: &[AudioProject], candidate: &ProjectId, ancestor: &Pr
     false
 }
 
-fn collect_subtree_ids(projects: &[AudioProject], root: &ProjectId) -> Vec<ProjectId> {
+fn collect_subtree_ids(projects: &[DocumentState], root: &ProjectId) -> Vec<ProjectId> {
     let mut ids = vec![root.clone()];
     let mut cursor = 0;
     while cursor < ids.len() {
@@ -484,7 +481,7 @@ mod tests {
 
     #[test]
     fn merges_speaker_labels_without_touching_transcript_text() {
-        let mut project = MeetingProject::new(ProjectId::new("p1"), "Meeting", "a.wav");
+        let mut project = DocumentState::new(ProjectId::new("p1"), "Meeting", "a.wav");
         project.diarization.push(DiarizationSegment {
             id: "d1".into(),
             speaker_id: "speaker-1".into(),
@@ -511,7 +508,7 @@ mod tests {
 
     #[test]
     fn reparenting_rejects_cycles_and_keeps_tree_depth_bounded() {
-        let root = MeetingProject::new(ProjectId::new("root"), "Root", "a.wav");
+        let root = DocumentState::new(ProjectId::new("root"), "Root", "a.wav");
         let mut child = root.semantic_child(ProjectId::new("child"), "Child", 0, 1_000, Vec::new());
         child.depth = 1;
         let mut grandchild = child.semantic_child(
@@ -538,9 +535,9 @@ mod tests {
 
     #[test]
     fn reordering_updates_sibling_order_before_or_after_a_target() {
-        let mut first = MeetingProject::new(ProjectId::new("first"), "First", "a.wav");
-        let mut second = MeetingProject::new(ProjectId::new("second"), "Second", "b.wav");
-        let mut third = MeetingProject::new(ProjectId::new("third"), "Third", "c.wav");
+        let mut first = DocumentState::new(ProjectId::new("first"), "First", "a.wav");
+        let mut second = DocumentState::new(ProjectId::new("second"), "Second", "b.wav");
+        let mut third = DocumentState::new(ProjectId::new("third"), "Third", "c.wav");
         first.sibling_order = 0;
         second.sibling_order = 1;
         third.sibling_order = 2;

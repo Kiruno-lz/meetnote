@@ -6,7 +6,7 @@ use crate::{
 };
 use application::{BackendInventory, DocumentCommandService, WorkspaceService};
 use contracts::{DocumentCommand, DocumentCommandEnvelope, DocumentCommandResult, ModelRef};
-use domain::{MeetingProject, ProjectId};
+use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
     prelude::*, App, Bounds, ClickEvent, Context, Entity, KeyBinding, PathPromptOptions,
@@ -113,7 +113,7 @@ pub(crate) struct RootView {
     pub(crate) inventory: BackendInventory,
     pub(crate) services: DesktopServices,
     pub(crate) settings_draft: AppSettings,
-    pub(crate) projects: Vec<MeetingProject>,
+    pub(crate) projects: Vec<DocumentState>,
     pub(crate) ui: UiState,
     pub(crate) assistant_input: gpui::Entity<TextInput>,
     pub(crate) cancel_contexts: Option<(JobContext, JobContext)>,

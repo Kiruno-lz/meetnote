@@ -7,7 +7,7 @@ use crate::{
     i18n::text as tr,
     state::ContentMode,
 };
-use domain::{MeetingProject, ProjectStatus};
+use domain::{DocumentState, ProjectStatus};
 use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
 use gpui_component::{
     button::{Button, ButtonVariants},
@@ -16,7 +16,7 @@ use gpui_component::{
 
 pub(crate) fn render(
     root: &mut RootView,
-    selected: Option<&MeetingProject>,
+    selected: Option<&DocumentState>,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     div()
@@ -174,7 +174,7 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
 
 fn main_panel(
     root: &mut RootView,
-    project: Option<&MeetingProject>,
+    project: Option<&DocumentState>,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     let locale = root.ui.locale;
