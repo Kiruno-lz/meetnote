@@ -370,10 +370,9 @@ impl WorkspaceService {
             device: ComputeDevice::Auto,
             speaker_library_path,
         };
-        self.processing.probe(&request).map_err(|error| {
+        self.processing.probe(&request).inspect_err(|_| {
             project.status = ProjectStatus::Failed;
             let _ = self.documents.save(project.clone());
-            error
         })?;
 
         let contexts = self.processing.contexts();
@@ -477,6 +476,18 @@ pub fn render_markdown(audio_path: &Path, segments: &[SpeakerTaggedSegment]) -> 
         ));
     }
     output
+}
+
+fn timestamp(milliseconds: u64) -> String {
+    let seconds = milliseconds / 1_000;
+    let total_minutes = seconds / 60;
+    let hours = total_minutes / 60;
+    let minutes = total_minutes % 60;
+    let seconds = seconds % 60;
+    format!(
+        "{hours:02}:{minutes:02}:{seconds:02}.{:03}",
+        milliseconds % 1_000
+    )
 }
 
 #[cfg(test)]
@@ -622,16 +633,4 @@ mod tests {
         assert_eq!(result.speaker_segments[0].speaker_id, "speaker-1");
         assert_eq!(repository.get(&project.id).unwrap(), Some(result.clone()));
     }
-}
-
-fn timestamp(milliseconds: u64) -> String {
-    let seconds = milliseconds / 1_000;
-    let total_minutes = seconds / 60;
-    let hours = total_minutes / 60;
-    let minutes = total_minutes % 60;
-    let seconds = seconds % 60;
-    format!(
-        "{hours:02}:{minutes:02}:{seconds:02}.{:03}",
-        milliseconds % 1_000
-    )
 }

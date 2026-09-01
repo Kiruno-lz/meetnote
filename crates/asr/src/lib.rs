@@ -4,16 +4,9 @@ use runtime::JobContext;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[derive(Default)]
 pub struct AsrBackendRegistry {
     backends: BTreeMap<String, Arc<dyn AsrBackend>>,
-}
-
-impl Default for AsrBackendRegistry {
-    fn default() -> Self {
-        Self {
-            backends: BTreeMap::new(),
-        }
-    }
 }
 
 impl AsrBackendRegistry {

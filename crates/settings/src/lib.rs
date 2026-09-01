@@ -245,8 +245,10 @@ mod tests {
 
     #[test]
     fn rejects_zero_expected_speakers() {
-        let mut settings = AppSettings::default();
-        settings.expected_speakers = Some(0);
+        let settings = AppSettings {
+            expected_speakers: Some(0),
+            ..AppSettings::default()
+        };
         assert!(matches!(
             settings.validate(),
             Err(SettingsError::Invalid(message)) if message.contains("greater than zero")

@@ -62,8 +62,10 @@ fn transcribe_sync(
         code: BackendErrorCode::InvalidAudio,
         message: error.to_string(),
     })?;
-    let mut context_parameters = WhisperContextParameters::default();
-    context_parameters.use_gpu = !matches!(request.device, ComputeDevice::Cpu);
+    let context_parameters = WhisperContextParameters {
+        use_gpu: !matches!(request.device, ComputeDevice::Cpu),
+        ..WhisperContextParameters::default()
+    };
 
     let whisper_context =
         WhisperContext::new_with_params(&request.model.artifact_path, context_parameters).map_err(

@@ -10,3 +10,6 @@ contracts = { path = "../contracts" }
 domain = { path = "../domain" }
 runtime = { path = "../runtime" }
 whisper-rs = { version = "0.16.0", default-features = false, features = ["metal"] }
+
+[dev-dependencies]
+futures.workspace = true

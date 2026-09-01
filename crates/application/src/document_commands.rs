@@ -24,6 +24,16 @@ pub struct DocumentCommandService {
     documents: DocumentService,
 }
 
+struct SemanticChildRequest {
+    parent_id: DocumentId,
+    expected_parent_revision: u64,
+    title: String,
+    start_ms: u64,
+    end_ms: u64,
+    tags: Vec<String>,
+    markdown: String,
+}
+
 impl DocumentCommandService {
     pub fn new(documents: DocumentService) -> Self {
         Self { documents }
@@ -63,15 +73,15 @@ impl DocumentCommandService {
                 end_ms,
                 tags,
                 markdown,
-            } => self.create_semantic_child(
-                &parent_id,
+            } => self.create_semantic_child(SemanticChildRequest {
+                parent_id,
                 expected_parent_revision,
                 title,
                 start_ms,
                 end_ms,
                 tags,
                 markdown,
-            ),
+            }),
             DocumentCommand::Reparent {
                 document_id,
                 expected_revision,
@@ -160,35 +170,32 @@ impl DocumentCommandService {
 
     fn create_semantic_child(
         &self,
-        parent_id: &DocumentId,
-        expected_parent_revision: u64,
-        title: String,
-        start_ms: u64,
-        end_ms: u64,
-        tags: Vec<String>,
-        markdown: String,
+        request: SemanticChildRequest,
     ) -> Result<DocumentCommandResult, DocumentCommandError> {
         let parent = self
-            .read(parent_id)?
-            .ok_or_else(|| DocumentCommandError::NotFound(parent_id.clone()))?;
-        ensure_revision(&parent.state, expected_parent_revision)?;
+            .read(&request.parent_id)?
+            .ok_or_else(|| DocumentCommandError::NotFound(request.parent_id.clone()))?;
+        ensure_revision(&parent.state, request.expected_parent_revision)?;
         if parent.state.depth >= 2 {
             return Err(DocumentCommandError::Invalid(
                 "document tree cannot exceed three levels".into(),
             ));
         }
-        if start_ms >= end_ms {
+        if request.start_ms >= request.end_ms {
             return Err(DocumentCommandError::Invalid(
                 "document range must be non-empty".into(),
             ));
         }
-        let child =
-            parent
-                .state
-                .semantic_child(DocumentId::new_uuid(), title, start_ms, end_ms, tags);
+        let child = parent.state.semantic_child(
+            DocumentId::new_uuid(),
+            request.title,
+            request.start_ms,
+            request.end_ms,
+            request.tags,
+        );
         let child_id = child.id.clone();
         self.documents
-            .save_with_markdown(child, markdown)
+            .save_with_markdown(child, request.markdown)
             .map_err(ServiceError::from)?;
         Ok(DocumentCommandResult::Document(self.read(&child_id)?))
     }

@@ -4,16 +4,9 @@ use runtime::JobContext;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[derive(Default)]
 pub struct DiarizationBackendRegistry {
     backends: BTreeMap<String, Arc<dyn DiarizationBackend>>,
-}
-
-impl Default for DiarizationBackendRegistry {
-    fn default() -> Self {
-        Self {
-            backends: BTreeMap::new(),
-        }
-    }
 }
 
 impl DiarizationBackendRegistry {

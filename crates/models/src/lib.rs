@@ -17,7 +17,7 @@ pub mod download {
         #[error("model source is not an HTTP URL: {0}")]
         UnsupportedSource(String),
         #[error("model download request failed: {0}")]
-        Request(#[from] ureq::Error),
+        Request(#[source] Box<ureq::Error>),
         #[error("model download IO failed: {0}")]
         Io(#[from] std::io::Error),
         #[error("model archive error: {0}")]
@@ -30,6 +30,12 @@ pub mod download {
         },
         #[error("model download cancelled")]
         Cancelled,
+    }
+
+    impl From<ureq::Error> for DownloadError {
+        fn from(error: ureq::Error) -> Self {
+            Self::Request(Box::new(error))
+        }
     }
 
     #[derive(Clone, Default)]
@@ -449,8 +455,8 @@ impl ModelCatalog {
     ) -> Vec<ModelAvailability> {
         self.models
             .iter()
-            .filter(|model| task.map_or(true, |task| model.task == task))
-            .filter(|model| backend_id.map_or(true, |backend| model.supports_backend(backend)))
+            .filter(|model| task.is_none_or(|task| model.task == task))
+            .filter(|model| backend_id.is_none_or(|backend| model.supports_backend(backend)))
             .map(|model| model.availability(model_root.as_ref()))
             .collect()
     }

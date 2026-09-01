@@ -69,9 +69,15 @@ pub enum ModelManagerError {
     #[error("download task is not active: {0:?}")]
     TaskNotActive(DownloadId),
     #[error("model download failed: {0}")]
-    Download(#[from] DownloadError),
+    Download(Box<DownloadError>),
     #[error("download task lock poisoned")]
     LockPoisoned,
+}
+
+impl From<DownloadError> for ModelManagerError {
+    fn from(error: DownloadError) -> Self {
+        Self::Download(Box::new(error))
+    }
 }
 
 struct TaskRecord {
@@ -396,7 +402,7 @@ impl ModelManager {
         std::thread::Builder::new()
             .name(format!("meetnote-download-{}", id.0))
             .spawn(move || manager.run(id, model, record))
-            .map_err(|error| ModelManagerError::Download(DownloadError::Io(error)))?;
+            .map_err(|error| ModelManagerError::Download(Box::new(DownloadError::Io(error))))?;
         Ok(())
     }
 
@@ -539,16 +545,16 @@ impl ModelManager {
             .collect::<Result<Vec<_>, _>>()?;
         if let Some(parent) = self.task_state_path.parent() {
             fs::create_dir_all(parent)
-                .map_err(|error| ModelManagerError::Download(DownloadError::Io(error)))?;
+                .map_err(|error| ModelManagerError::Download(Box::new(DownloadError::Io(error))))?;
         }
         let content = serde_json::to_vec_pretty(&progress).map_err(|error| {
-            ModelManagerError::Download(DownloadError::Io(std::io::Error::other(error)))
+            ModelManagerError::Download(Box::new(DownloadError::Io(std::io::Error::other(error))))
         })?;
         let temporary = self.task_state_path.with_extension("json.tmp");
         fs::write(&temporary, content)
-            .map_err(|error| ModelManagerError::Download(DownloadError::Io(error)))?;
+            .map_err(|error| ModelManagerError::Download(Box::new(DownloadError::Io(error))))?;
         fs::rename(&temporary, &self.task_state_path)
-            .map_err(|error| ModelManagerError::Download(DownloadError::Io(error)))
+            .map_err(|error| ModelManagerError::Download(Box::new(DownloadError::Io(error))))
     }
 }
 
