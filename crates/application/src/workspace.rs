@@ -226,7 +226,7 @@ impl WorkspaceService {
             .to_string();
         let id = ProjectId::new(format!("project-{}", unique_suffix()));
         let project = MeetingProject::new(id, title, audio_path);
-        self.documents.save_with_markdown(
+        let project = self.documents.save_with_markdown(
             project.clone(),
             render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
         )?;
@@ -322,7 +322,7 @@ impl WorkspaceService {
         if changed == 0 {
             return Ok(project);
         }
-        self.documents.save_with_markdown(
+        project = self.documents.save_with_markdown(
             project.clone(),
             render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
         )?;
@@ -356,7 +356,8 @@ impl WorkspaceService {
             .map_err(persistence_error)?
             .ok_or_else(|| persistence_error("project does not exist"))?;
         project.status = ProjectStatus::Processing;
-        self.documents
+        project = self
+            .documents
             .save(project.clone())
             .map_err(persistence_error)?;
 
@@ -411,7 +412,7 @@ impl WorkspaceService {
             project.transcript = result.asr.segments.clone();
             project.diarization = result.diarization.segments.clone();
             project.speaker_segments = result.aligned.clone();
-            workspace
+            project = workspace
                 .documents
                 .save_with_markdown(
                     project.clone(),
@@ -485,7 +486,9 @@ mod tests {
         asr_descriptor, diarization_descriptor, DocumentRepository, DocumentService,
         DocumentSnapshot,
     };
-    use contracts::{AsrResult, BackendDescriptor, BackendError, DiarizationResult};
+    use contracts::{
+        AsrResult, BackendDescriptor, BackendError, DiarizationResult, DocumentRecord,
+    };
     use domain::{DiarizationSegment, TranscriptSegment};
     use std::collections::BTreeMap;
     use std::sync::RwLock;
@@ -513,6 +516,13 @@ mod tests {
 
         fn get(&self, id: &ProjectId) -> Result<Option<MeetingProject>, String> {
             Ok(self.projects.read().unwrap().get(id.as_str()).cloned())
+        }
+
+        fn read(&self, id: &ProjectId) -> Result<Option<DocumentRecord>, String> {
+            Ok(self.get(id)?.map(|state| DocumentRecord {
+                markdown: format!("# {}\n\n", state.title),
+                state,
+            }))
         }
     }
 

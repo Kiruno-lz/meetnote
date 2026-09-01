@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 application = { path = "../application" }
+contracts = { path = "../contracts" }
 domain = { path = "../domain" }
 serde_json.workspace = true
 thiserror.workspace = true

@@ -1,4 +1,5 @@
 use application::{DocumentIssue, DocumentRepository, DocumentSnapshot};
+use contracts::DocumentRecord;
 use domain::{DocumentId, DocumentState};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::BTreeMap;
@@ -372,6 +373,7 @@ fn reaches(
 #[derive(Clone, Default)]
 pub struct InMemoryDocumentRepository {
     documents: Arc<RwLock<BTreeMap<String, DocumentState>>>,
+    markdown: Arc<RwLock<BTreeMap<String, String>>>,
 }
 
 impl DocumentRepository for InMemoryDocumentRepository {
@@ -397,11 +399,32 @@ impl DocumentRepository for InMemoryDocumentRepository {
             .cloned())
     }
 
-    fn save(&self, document: DocumentState, _markdown: Option<String>) -> Result<(), String> {
+    fn read(&self, document_id: &DocumentId) -> Result<Option<DocumentRecord>, String> {
+        let Some(state) = self.get(document_id)? else {
+            return Ok(None);
+        };
+        let markdown = self
+            .markdown
+            .read()
+            .map_err(|_| "document markdown lock poisoned".to_string())?
+            .get(document_id.as_str())
+            .cloned()
+            .unwrap_or_else(|| format!("# {}\n\n", state.title));
+        Ok(Some(DocumentRecord { markdown, state }))
+    }
+
+    fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
+        let document_id = document.id.as_str().to_string();
         self.documents
             .write()
             .map_err(|_| "document repository lock poisoned".to_string())?
-            .insert(document.id.as_str().to_string(), document);
+            .insert(document_id.clone(), document);
+        if let Some(markdown) = markdown {
+            self.markdown
+                .write()
+                .map_err(|_| "document markdown lock poisoned".to_string())?
+                .insert(document_id, markdown);
+        }
         Ok(())
     }
 }
@@ -504,6 +527,25 @@ impl DocumentRepository for FileDocumentRepository {
             .documents
             .into_iter()
             .find(|document| &document.id == document_id))
+    }
+
+    fn read(&self, document_id: &DocumentId) -> Result<Option<DocumentRecord>, String> {
+        let directory = self.root().join(document_id.as_str());
+        DocumentPackage::load(directory)
+            .map(Some)
+            .or_else(|error| {
+                if matches!(error, DocumentPackageError::NotDirectory(_)) {
+                    Ok(None)
+                } else {
+                    Err(error.to_string())
+                }
+            })
+            .map(|package| {
+                package.map(|package| DocumentRecord {
+                    state: package.state,
+                    markdown: package.markdown,
+                })
+            })
     }
 
     fn save(&self, mut document: DocumentState, markdown: Option<String>) -> Result<(), String> {

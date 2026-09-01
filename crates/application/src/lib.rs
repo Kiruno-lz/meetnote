@@ -1,5 +1,6 @@
 use contracts::{
     AsrRequest, AsrResult, BackendError, BackendTask, DiarizationRequest, DiarizationResult,
+    DocumentRecord,
 };
 use domain::{align_transcript_and_speakers, SpeakerTaggedSegment};
 use runtime::JobContext;
@@ -9,10 +10,12 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
+mod document_commands;
 mod speaker_identity;
 mod workspace;
 
 pub use contracts::BackendDescriptor;
+pub use document_commands::{DocumentCommandError, DocumentCommandService};
 pub use speaker_identity::{
     apply_identity_matches, cosine_similarity, ClusterIdentityResolver, IdentityResolverConfig,
     InMemorySpeakerProfileStore, JsonSpeakerProfileStore, SpeakerLibraryError,
@@ -91,6 +94,7 @@ pub trait DocumentRepository: Send + Sync {
         &self,
         document_id: &domain::DocumentId,
     ) -> Result<Option<domain::DocumentState>, String>;
+    fn read(&self, document_id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String>;
     fn save(&self, document: domain::DocumentState, markdown: Option<String>)
         -> Result<(), String>;
 }
@@ -120,17 +124,67 @@ impl DocumentService {
         self.repository.get(document_id)
     }
 
-    pub fn save(&self, document: domain::DocumentState) -> Result<(), String> {
-        self.repository.save(document, None)
+    pub fn read(&self, document_id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String> {
+        self.repository.read(document_id)
+    }
+
+    pub fn save(&self, document: domain::DocumentState) -> Result<domain::DocumentState, String> {
+        let document = self.prepare(document)?;
+        self.repository.save(document.clone(), None)?;
+        Ok(document)
     }
 
     pub fn save_with_markdown(
         &self,
         document: domain::DocumentState,
         markdown: impl Into<String>,
-    ) -> Result<(), String> {
-        self.repository.save(document, Some(markdown.into()))
+    ) -> Result<domain::DocumentState, String> {
+        let document = self.prepare(document)?;
+        self.repository
+            .save(document.clone(), Some(markdown.into()))?;
+        Ok(document)
     }
+
+    pub fn save_versioned(
+        &self,
+        mut document: domain::DocumentState,
+        expected_revision: u64,
+        markdown: impl Into<String>,
+    ) -> Result<DocumentRecord, String> {
+        let current = self
+            .read(&document.id)?
+            .ok_or_else(|| "document does not exist".to_string())?;
+        if current.state.revision != expected_revision {
+            return Err(format!(
+                "document revision conflict: expected {}, found {}",
+                expected_revision, current.state.revision
+            ));
+        }
+        document.revision = expected_revision.saturating_add(1);
+        document.updated_at_ms = now_ms();
+        self.repository
+            .save(document.clone(), Some(markdown.into()))?;
+        self.read(&document.id)?
+            .ok_or_else(|| "document disappeared after save".to_string())
+    }
+
+    fn prepare(
+        &self,
+        mut document: domain::DocumentState,
+    ) -> Result<domain::DocumentState, String> {
+        if let Some(current) = self.read(&document.id)? {
+            document.revision = current.state.revision.saturating_add(1);
+        }
+        document.updated_at_ms = now_ms();
+        Ok(document)
+    }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

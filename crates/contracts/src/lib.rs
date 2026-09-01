@@ -1,6 +1,103 @@
 use domain::{DiarizationSegment, TranscriptSegment};
 use serde::{Deserialize, Serialize};
 
+pub const DOCUMENT_COMMAND_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentRecord {
+    pub state: domain::DocumentState,
+    pub markdown: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentCommandEnvelope {
+    pub schema_version: u32,
+    pub request_id: String,
+    pub command: DocumentCommand,
+}
+
+impl DocumentCommandEnvelope {
+    pub fn new(request_id: impl Into<String>, command: DocumentCommand) -> Self {
+        Self {
+            schema_version: DOCUMENT_COMMAND_SCHEMA_VERSION,
+            request_id: request_id.into(),
+            command,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type", content = "payload")]
+pub enum DocumentCommand {
+    List,
+    Read {
+        document_id: domain::DocumentId,
+    },
+    Create {
+        title: String,
+        audio_path: String,
+        markdown: String,
+        #[serde(default)]
+        tags: Vec<String>,
+    },
+    Update {
+        document_id: domain::DocumentId,
+        expected_revision: u64,
+        patch: DocumentPatch,
+    },
+    CreateSemanticChild {
+        parent_id: domain::DocumentId,
+        expected_parent_revision: u64,
+        title: String,
+        start_ms: u64,
+        end_ms: u64,
+        #[serde(default)]
+        tags: Vec<String>,
+        markdown: String,
+    },
+    Reparent {
+        document_id: domain::DocumentId,
+        expected_revision: u64,
+        new_parent_id: Option<domain::DocumentId>,
+        sibling_order: u32,
+    },
+    Reorder {
+        document_id: domain::DocumentId,
+        expected_revision: u64,
+        target_id: domain::DocumentId,
+        before: bool,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentPatch {
+    pub title: Option<String>,
+    pub tags: Option<Vec<String>>,
+    pub summary: Option<Option<String>>,
+    pub markdown: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "type", content = "payload")]
+pub enum DocumentCommandResult {
+    Snapshot {
+        documents: Vec<domain::DocumentState>,
+        issues: Vec<DocumentCommandIssue>,
+    },
+    Document(Option<DocumentRecord>),
+    Updated(DocumentRecord),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentCommandIssue {
+    pub path: String,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ModelRef {
     pub backend_id: String,
