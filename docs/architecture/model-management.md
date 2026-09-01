@@ -40,8 +40,8 @@ cancelled
 ```
 
 运行时任务状态由 Rust `ModelManager` 管理；取消或进程中断会保留 `.part`，下一次下载
-自动通过 HTTP Range 继续。项目不引入 SQLite；后续如需跨进程恢复，只能增加独立、可重建的
-JSON 下载任务清单，不改变模型安装协议，也不与文档项目树状态混用。
+自动通过 HTTP Range 继续。`.download-tasks.json` 保存可重建的下载进度，应用重启时将中断
+任务恢复为 `Paused`，调用 `resume` 后重新创建 worker。项目不引入 SQLite，下载状态不与文档项目树混用。
 
 ## HTTP 下载流程
 
@@ -85,10 +85,11 @@ Assistant 与外部 Agent 都只能通过 application 暴露的稳定能力读�
 不同后端的模型文件可以有不同目录，但安装协议统一：
 
 ```text
-<model-cache>/<backend>/<model-id>/<revision>/
-├── artifacts/
-├── manifest.json
-└── install-state.json
+<model-cache>/<task>/<model-id>/
+├── artifact files
+└── .part files during download
+
+<model-cache>/.download-tasks.json
 ```
 
 ## 模型兼容性
@@ -117,5 +118,5 @@ v0.1 的 backend artifact 约定：
 - SHA-256 必须来自可信的固定 manifest。
 - 下载完成前不得覆盖已安装版本。
 - gated 模型的 token 不写入 catalog、日志或命令行。
-- 每次推理记录 backend、模型 id、revision、artifact checksum 和运行参数。
+- 每次推理记录 backend、模型 id、revision、artifact checksum 和运行参数；当前 `ModelRef` 的 artifact 路径由 catalog 和设置解析，不由 UI 或入口硬编码。
 - 模型 license 和原始来源必须随安装记录保留。

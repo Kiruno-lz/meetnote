@@ -40,7 +40,7 @@ crates/
 - 独立的 diarization backend registry/manager。
 - JobRuntime 的 job id、取消状态、进度事件和测试。
 - Rust 读取并校验 `resources/models/catalog.json`。
-- `persistence` 的文档文件读写与可重建扫描索引；不实现独立项目数据库或 SQLite。
+- `persistence` 的文档包文件读写、目录扫描和可重建项目索引；不实现独立项目数据库或 SQLite。
 - `whisper-rs` 的真实 ASR adapter，支持 GGML/GGUF 文件、CPU/Metal 设备选择和时间戳结果。
 - `sherpa-onnx` 的真实 diarization adapter，支持 ONNX bundle、CPU/CoreML provider 和 speaker clustering。
 - 应用入口注册 `whisper-rs + sherpa-onnx`，GPUI 读取并展示两个 backend descriptor。
@@ -77,6 +77,8 @@ cargo build -p meetnote
 - catalog 中的模型来源、格式和状态已能被 Rust 读取。
 
 ## 阶段 0：架构冻结
+
+当前状态：已完成。后端 trait、文档包 schema、三层树派生规则和统一 document command contract 已冻结并有测试覆盖。
 
 产物：
 
@@ -117,7 +119,7 @@ cargo build -p meetnote
 - atomic install
 - backend probe
 
-验收：应用重启后能恢复下载状态；错误模型不会进入 installed。
+验收：应用重启后能恢复下载状态；错误模型不会进入 installed。当前通过 `.download-tasks.json` 恢复中断任务为可继续的 `Paused` 状态。
 
 ## 阶段 3：第一个真实纵向流程
 
@@ -184,20 +186,20 @@ Agent 接入必须是模型、厂商和 Skill 无关的机器可读文档读写�
 - GPUI 项目列表和项目详情窗口（当前仍是文档管理迁移前的 MVP UI）。
 - 系统音频文件选择器，支持导入 WAV、MP3、M4A、FLAC 等 Symphonia 可解码格式。
 - `WorkspaceService` 连接项目导入、模型 probe、后台 pipeline 和项目状态。
-- 当前仍使用全局 JSON project repository 和 Markdown 输出；迁移为“每份文档自身 JSON 为事实来源、列表索引可扫描重建”尚未完成。
+- 当前使用每份文档自身的 `state.json` 和 `document.md`；列表索引与三层项目树通过目标目录扫描重建，不使用全局 project repository。
 - 真实 ASR/diarization 结果在 GPUI 中按 speaker 展示。
 
 仍需完成：
 
-- JobRuntime 事件订阅、取消和 ASR/diarization 状态展示已完成；仍需补充更细的阶段百分比和恢复策略。
+- JobRuntime 事件订阅、取消、ASR/diarization 状态展示和文档处理中断恢复已完成；后续可继续细化阶段百分比。
 - 完整 diarization bundle 的多文件下载、archive member 提取和 readiness 检查已完成。
-- speaker 合并和 Markdown 回写已完成；文档 JSON 状态作为事实来源、文档版本和 Agent 读写边界仍需实现。
+- speaker 合并和 Markdown 回写、文档 JSON 状态、文档 revision 和 Agent 读写边界已完成。
 
-验收目标：GPUI 可导入音频、创建文档、执行 pipeline、重启后从目标目录恢复三层项目树，并显示 speaker-labelled transcript。当前 `MeetingProject` 命名和全局 JSON repository 仍是 MVP 实现；三层项目树本身是正式产品特性，迁移时必须保留。
+验收目标：GPUI 可导入音频、创建文档、执行 pipeline、重启后从目标目录恢复三层项目树，并显示 speaker-labelled transcript。当前项目状态已满足该目标；三层项目树是从文档 JSON 派生的正式产品特性。
 
 ## v0.2.1：后端能力层
 
-UI 暂不绑定本阶段新增接口；所有能力先在 Rust crate 中可测试、可独立调用。
+本阶段接口已在 Rust crate 中可测试、可独立调用，并已由 GPUI 设置和模型页面绑定。
 
 已完成：
 
@@ -215,8 +217,8 @@ cargo check --workspace
 cargo test --workspace
 ```
 
-GPUI 页面后续只需要订阅 `DownloadTask.events`，调用 `ModelManager::pause/resume/cancel`，
-并将 `AppSettings` 绑定到设置表单；不需要修改下载器或 application pipeline。
+GPUI 页面已订阅 `DownloadTask.events`，调用 `ModelManager::pause/resume/cancel`，并将 `AppSettings`
+绑定到设置表单；下载器和 application pipeline 不依赖 UI 逻辑。
 
 ## 阶段 5：GPUI UI 实施状态与后续顺序
 
@@ -229,19 +231,19 @@ GPUI 页面后续只需要订阅 `DownloadTask.events`，调用 `ModelManager::p
 5. 绑定设置、UI locale 和 i18n 基础能力。
 6. 绑定模型浏览、下载队列和 ASR/diarization 处理状态。
 
-当前已实现 Assistant、Meetings、Models、Settings 四个工作区入口、三层项目树、Summary/Original 展示、悬浮详情、模型下载任务绑定和 backend 设置选择。Assistant 作为长期保留的内置 Agent 客户端，目前仍是占位；它与外部 Agent 共用同一 document service。GPUI View 不得直接执行领域算法、文件 IO、模型下载、语义分析或 Agent 调用。
+当前已实现 Assistant、Meetings、Models、Settings 四个工作区入口、三层项目树、Summary/Original 展示、悬浮详情、模型下载任务绑定、backend 设置选择和文件变化刷新。Assistant 作为长期保留的内置 Agent 客户端，已通过共享 document command service 读取文档；具体 LLM/provider 仍保持可选适配边界。GPUI View 不得直接执行领域算法、文件 IO、模型下载、语义分析或 Agent 调用。
 
 仍需完成：
 
-- 正式拆分音频资产、处理结果和中性的 `Document` 领域类型，移除 `MeetingProject` 对产品定义的约束。
-- 以目标目录文档自身 JSON 状态替代独立项目数据库，支持监听/扫描恢复、内容版本、处理状态写回和项目树实时刷新。
-- 保留三层项目树和 `create_semantic_child` 的结构能力，将语义边界判断交给 Skill/Agent，并补充外部无效文档关系的错误状态。
-- 暴露无 UI 的文档读取、创建、编辑、状态更新和项目树查询 service，供 Assistant 与任意外部 Agent 使用。
+- 继续将 `DocumentState` 中的处理结果字段按需拆分为更细的 `AudioAsset`、原始转录和对齐结果值对象；当前状态已能保留这些信息并从文档包重建。
+- 将更多语义字段纳入 Agent/Skill 的结构化 patch；当前已支持标题、标签、总结、正文和树关系的版本化写回。
 
 ## 阶段 6：生产化
 
-- 崩溃恢复
-- 模型安装恢复
+当前已完成文档扫描性能基线、文档处理中断恢复和模型下载任务恢复；发布相关工作暂缓，不在当前重构范围内。
+
+仍暂缓：
+
 - Metal/CoreML 性能评测
 - WER/CER/DER 基准
 - macOS 打包、签名和第三方 license

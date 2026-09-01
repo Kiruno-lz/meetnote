@@ -542,7 +542,7 @@ impl DocumentRepository for FileDocumentRepository {
             .errors
             .into_iter()
             .map(|error| DocumentIssue {
-                path: self.root().display().to_string(),
+                path: issue_path(self.root(), &error),
                 message: format!("{error:?}"),
             })
             .collect();
@@ -611,6 +611,20 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
+}
+
+fn issue_path(root: &Path, error: &DocumentScanError) -> String {
+    match error {
+        DocumentScanError::InvalidPackage { path, .. }
+        | DocumentScanError::DuplicateDocumentId { path, .. } => path.display().to_string(),
+        DocumentScanError::MissingParent { document_id, .. }
+        | DocumentScanError::Cycle { document_id }
+        | DocumentScanError::MaximumDepth { document_id }
+        | DocumentScanError::CrossAudioAsset { document_id }
+        | DocumentScanError::DepthMismatch { document_id, .. } => {
+            root.join(document_id.as_str()).display().to_string()
+        }
+    }
 }
 
 #[cfg(test)]
