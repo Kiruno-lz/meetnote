@@ -163,19 +163,20 @@ impl DocumentService {
         markdown: impl Into<String>,
     ) -> Result<DocumentRecord, String> {
         let current = self
-            .read(&document.id)?
+            .read(document.id())?
             .ok_or_else(|| "document does not exist".to_string())?;
-        if current.state.revision != expected_revision {
+        if current.state.revision() != expected_revision {
             return Err(format!(
                 "document revision conflict: expected {}, found {}",
-                expected_revision, current.state.revision
+                expected_revision,
+                current.state.revision()
             ));
         }
-        document.revision = expected_revision.saturating_add(1);
-        document.updated_at_ms = now_ms();
+        document.schema.revision = expected_revision.saturating_add(1);
+        document.schema.updated_at_ms = now_ms();
         self.repository
             .save(document.clone(), Some(markdown.into()))?;
-        self.read(&document.id)?
+        self.read(document.id())?
             .ok_or_else(|| "document disappeared after save".to_string())
     }
 
@@ -183,10 +184,10 @@ impl DocumentService {
         &self,
         mut document: domain::DocumentState,
     ) -> Result<domain::DocumentState, String> {
-        if let Some(current) = self.read(&document.id)? {
-            document.revision = current.state.revision.saturating_add(1);
+        if let Some(current) = self.read(document.id())? {
+            document.schema.revision = current.state.revision().saturating_add(1);
         }
-        document.updated_at_ms = now_ms();
+        document.schema.updated_at_ms = now_ms();
         Ok(document)
     }
 }

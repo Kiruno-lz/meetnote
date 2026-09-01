@@ -140,8 +140,8 @@ impl DocumentCommandService {
             ));
         }
         let mut state = DocumentState::new(DocumentId::new_uuid(), title, audio_path);
-        state.tags = tags;
-        let document_id = state.id.clone();
+        state.content.tags = tags;
+        let document_id = state.id().clone();
         self.documents
             .save_with_markdown(state, markdown)
             .map_err(ServiceError::from)?;
@@ -176,7 +176,7 @@ impl DocumentCommandService {
             .read(&request.parent_id)?
             .ok_or_else(|| DocumentCommandError::NotFound(request.parent_id.clone()))?;
         ensure_revision(&parent.state, request.expected_parent_revision)?;
-        if parent.state.depth >= 2 {
+        if parent.state.hierarchy.depth >= 2 {
             return Err(DocumentCommandError::Invalid(
                 "document tree cannot exceed three levels".into(),
             ));
@@ -193,7 +193,7 @@ impl DocumentCommandService {
             request.end_ms,
             request.tags,
         );
-        let child_id = child.id.clone();
+        let child_id = child.id().clone();
         self.documents
             .save_with_markdown(child, request.markdown)
             .map_err(ServiceError::from)?;
@@ -249,13 +249,13 @@ impl DocumentCommandService {
 
 fn apply_patch(state: &mut DocumentState, patch: &DocumentPatch) {
     if let Some(title) = &patch.title {
-        state.title = title.clone();
+        state.content.title = title.clone();
     }
     if let Some(tags) = &patch.tags {
-        state.tags = tags.clone();
+        state.content.tags = tags.clone();
     }
     if let Some(summary) = &patch.summary {
-        state.summary = summary.clone();
+        state.content.summary = summary.clone();
     }
 }
 
@@ -263,10 +263,10 @@ fn ensure_revision(
     state: &DocumentState,
     expected_revision: u64,
 ) -> Result<(), DocumentCommandError> {
-    if state.revision != expected_revision {
+    if state.revision() != expected_revision {
         return Err(DocumentCommandError::RevisionConflict {
             expected: expected_revision,
-            actual: state.revision,
+            actual: state.revision(),
         });
     }
     Ok(())
@@ -278,7 +278,7 @@ fn find_document<'a>(
 ) -> Result<&'a DocumentState, DocumentCommandError> {
     documents
         .iter()
-        .find(|document| &document.id == document_id)
+        .find(|document| document.id() == document_id)
         .ok_or_else(|| DocumentCommandError::NotFound(document_id.clone()))
 }
 
@@ -346,12 +346,12 @@ mod tests {
             let markdown = markdown
                 .or_else(|| {
                     documents
-                        .get(document.id.as_str())
+                        .get(document.id().as_str())
                         .map(|record| record.markdown.clone())
                 })
                 .unwrap_or_default();
             documents.insert(
-                document.id.as_str().into(),
+                document.id().as_str().into(),
                 DocumentRecord {
                     state: document,
                     markdown,
@@ -385,8 +385,8 @@ mod tests {
             .execute(contracts::DocumentCommandEnvelope::new(
                 "update-1",
                 DocumentCommand::Update {
-                    document_id: record.state.id.clone(),
-                    expected_revision: record.state.revision,
+                    document_id: record.state.id().clone(),
+                    expected_revision: record.state.revision(),
                     patch: DocumentPatch {
                         title: Some("Updated note".into()),
                         summary: Some(Some("A short summary".into())),
@@ -399,14 +399,14 @@ mod tests {
             contracts::DocumentCommandResult::Updated(record) => record,
             other => panic!("unexpected update result: {other:?}"),
         };
-        assert_eq!(updated_record.state.title, "Updated note");
-        assert_eq!(updated_record.state.revision, 1);
+        assert_eq!(updated_record.state.title(), "Updated note");
+        assert_eq!(updated_record.state.revision(), 1);
         assert_eq!(updated_record.markdown, "# Daily note\n");
 
         let stale = service.execute(contracts::DocumentCommandEnvelope::new(
             "update-stale",
             DocumentCommand::Update {
-                document_id: updated_record.state.id,
+                document_id: updated_record.state.id().clone(),
                 expected_revision: 0,
                 patch: DocumentPatch::default(),
             },

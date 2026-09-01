@@ -96,12 +96,12 @@ pub(crate) fn ordered_projects(
     ) {
         let mut children: Vec<_> = projects
             .iter()
-            .filter(|project| project.parent_id.as_ref() == parent)
+            .filter(|project| project.hierarchy.parent_id.as_ref() == parent)
             .cloned()
             .collect();
-        children.sort_by_key(|project| project.sibling_order);
+        children.sort_by_key(|project| project.hierarchy.sibling_order);
         for child in children {
-            let id = child.id.clone();
+            let id = child.id().clone();
             output.push((child, depth));
             if expanded.contains(&id) {
                 append(

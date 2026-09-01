@@ -1,6 +1,6 @@
 use application::{DocumentChange, DocumentIssue, DocumentRepository, DocumentSnapshot};
 use contracts::DocumentRecord;
-use domain::{DocumentId, DocumentState, ProjectStatus};
+use domain::{DocumentId, DocumentState};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::BTreeMap;
 use std::fs;
@@ -40,17 +40,23 @@ impl DocumentPackage {
         }
         let state_path = directory.join(DOCUMENT_STATE_FILENAME);
         let markdown_path = directory.join(DOCUMENT_MARKDOWN_FILENAME);
-        let state =
-            serde_json::from_slice::<DocumentState>(&fs::read(&state_path).map_err(|source| {
-                DocumentPackageError::Read {
-                    path: state_path.clone(),
-                    source,
-                }
-            })?)
+        let state_bytes = fs::read(&state_path).map_err(|source| DocumentPackageError::Read {
+            path: state_path.clone(),
+            source,
+        })?;
+        let legacy = serde_json::from_slice::<serde_json::Value>(&state_bytes)
             .map_err(|source| DocumentPackageError::InvalidState {
                 path: state_path.clone(),
                 source,
-            })?;
+            })?
+            .get("schema")
+            .is_none();
+        let state = serde_json::from_slice::<DocumentState>(&state_bytes).map_err(|source| {
+            DocumentPackageError::InvalidState {
+                path: state_path.clone(),
+                source,
+            }
+        })?;
         let markdown =
             fs::read_to_string(&markdown_path).map_err(|source| DocumentPackageError::Read {
                 path: markdown_path,
@@ -62,6 +68,9 @@ impl DocumentPackage {
             markdown,
         };
         package.validate()?;
+        if legacy {
+            package.save()?;
+        }
         Ok(package)
     }
 
@@ -70,7 +79,7 @@ impl DocumentPackage {
     }
 
     pub fn document_id(&self) -> &DocumentId {
-        &self.state.id
+        self.state.id()
     }
 
     pub fn state_path(&self) -> PathBuf {
@@ -103,10 +112,10 @@ impl DocumentPackage {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| DocumentPackageError::InvalidDirectory(self.directory.clone()))?;
-        if directory_name != self.state.id.as_str() {
+        if directory_name != self.state.id().as_str() {
             return Err(DocumentPackageError::DirectoryIdMismatch {
                 directory: self.directory.clone(),
-                document_id: self.state.id.clone(),
+                document_id: self.state.id().clone(),
             });
         }
         Ok(())
@@ -270,7 +279,7 @@ impl DocumentScanner {
                 }),
             }
         }
-        packages.sort_by_key(|package| package.state.sibling_order);
+        packages.sort_by_key(|package| package.state.hierarchy.sibling_order);
         errors.extend(validate_relations(&packages));
         Ok(DocumentScan { packages, errors })
     }
@@ -292,9 +301,9 @@ fn validate_relations(packages: &[DocumentPackage]) -> Vec<DocumentScanError> {
     let mut errors = Vec::new();
     let mut by_id = BTreeMap::new();
     for package in packages {
-        if by_id.insert(package.state.id.clone(), package).is_some() {
+        if by_id.insert(package.state.id().clone(), package).is_some() {
             errors.push(DocumentScanError::DuplicateDocumentId {
-                document_id: package.state.id.clone(),
+                document_id: package.state.id().clone(),
                 path: package.directory().to_path_buf(),
             });
         }
@@ -302,11 +311,11 @@ fn validate_relations(packages: &[DocumentPackage]) -> Vec<DocumentScanError> {
 
     for package in packages {
         let state = &package.state;
-        let Some(parent_id) = state.parent_id.as_ref() else {
-            if state.depth != 0 {
+        let Some(parent_id) = state.hierarchy.parent_id.as_ref() else {
+            if state.hierarchy.depth != 0 {
                 errors.push(DocumentScanError::DepthMismatch {
-                    document_id: state.id.clone(),
-                    declared: state.depth,
+                    document_id: state.id().clone(),
+                    declared: state.hierarchy.depth,
                     actual: 0,
                 });
             }
@@ -314,38 +323,39 @@ fn validate_relations(packages: &[DocumentPackage]) -> Vec<DocumentScanError> {
         };
         let Some(parent) = by_id.get(parent_id) else {
             errors.push(DocumentScanError::MissingParent {
-                document_id: state.id.clone(),
+                document_id: state.id().clone(),
                 parent_id: parent_id.clone(),
             });
             continue;
         };
-        if parent.state.id == state.id || reaches(parent, &state.id, &by_id) {
+        if parent.state.id() == state.id() || reaches(parent, state.id(), &by_id) {
             errors.push(DocumentScanError::Cycle {
-                document_id: state.id.clone(),
+                document_id: state.id().clone(),
             });
             continue;
         }
-        let state_asset = state.audio_asset_id.as_ref().unwrap_or(&state.id);
+        let state_asset = state.source.audio_asset_id.as_ref().unwrap_or(state.id());
         let parent_asset = parent
             .state
+            .source
             .audio_asset_id
             .as_ref()
-            .unwrap_or(&parent.state.id);
+            .unwrap_or(parent.state.id());
         if state_asset != parent_asset {
             errors.push(DocumentScanError::CrossAudioAsset {
-                document_id: state.id.clone(),
+                document_id: state.id().clone(),
             });
         }
-        let actual_depth = parent.state.depth.saturating_add(1);
+        let actual_depth = parent.state.hierarchy.depth.saturating_add(1);
         if actual_depth > 2 {
             errors.push(DocumentScanError::MaximumDepth {
-                document_id: state.id.clone(),
+                document_id: state.id().clone(),
             });
         }
-        if state.depth != actual_depth {
+        if state.hierarchy.depth != actual_depth {
             errors.push(DocumentScanError::DepthMismatch {
-                document_id: state.id.clone(),
-                declared: state.depth,
+                document_id: state.id().clone(),
+                declared: state.hierarchy.depth,
                 actual: actual_depth,
             });
         }
@@ -358,14 +368,14 @@ fn reaches(
     target: &DocumentId,
     by_id: &BTreeMap<DocumentId, &DocumentPackage>,
 ) -> bool {
-    let mut current = start.state.parent_id.as_ref();
+    let mut current = start.state.hierarchy.parent_id.as_ref();
     while let Some(id) = current {
         if id == target {
             return true;
         }
         current = by_id
             .get(id)
-            .and_then(|package| package.state.parent_id.as_ref());
+            .and_then(|package| package.state.hierarchy.parent_id.as_ref());
     }
     false
 }
@@ -409,7 +419,7 @@ impl DocumentRepository for InMemoryDocumentRepository {
             .map_err(|_| "document markdown lock poisoned".to_string())?
             .get(document_id.as_str())
             .cloned()
-            .unwrap_or_else(|| format!("# {}\n\n", state.title));
+            .unwrap_or_else(|| format!("# {}\n\n", state.title()));
         Ok(Some(DocumentRecord { markdown, state }))
     }
 
@@ -419,7 +429,7 @@ impl DocumentRepository for InMemoryDocumentRepository {
     }
 
     fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
-        let document_id = document.id.as_str().to_string();
+        let document_id = document.id().as_str().to_string();
         self.documents
             .write()
             .map_err(|_| "document repository lock poisoned".to_string())?
@@ -446,7 +456,6 @@ impl FileDocumentRepository {
         let repository = Self {
             scanner: DocumentScanner::new(root),
         };
-        repository.recover_interrupted_processing()?;
         Ok(repository)
     }
 
@@ -456,27 +465,6 @@ impl FileDocumentRepository {
 
     pub fn create_watcher(&self) -> Result<DocumentWatcher, String> {
         DocumentWatcher::new(self.root())
-    }
-
-    fn recover_interrupted_processing(&self) -> Result<(), String> {
-        let scan = self.scanner.scan().map_err(|error| error.to_string())?;
-        for package in scan.packages {
-            if package.state.status != ProjectStatus::Processing {
-                continue;
-            }
-            let directory = package.directory().to_path_buf();
-            let mut state = package.state;
-            let markdown = package.markdown;
-            state.status = ProjectStatus::Failed;
-            state.processing_error = Some("processing interrupted before completion".into());
-            state.revision = state.revision.saturating_add(1);
-            state.updated_at_ms = now_ms();
-            DocumentPackage::new(directory, state, markdown)
-                .map_err(|error| error.to_string())?
-                .save()
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(())
     }
 }
 
@@ -554,7 +542,7 @@ impl DocumentRepository for FileDocumentRepository {
             .snapshot()?
             .documents
             .into_iter()
-            .find(|document| &document.id == document_id))
+            .find(|document| document.id() == document_id))
     }
 
     fn read(&self, document_id: &DocumentId) -> Result<Option<DocumentRecord>, String> {
@@ -590,15 +578,15 @@ impl DocumentRepository for FileDocumentRepository {
     }
 
     fn save(&self, mut document: DocumentState, markdown: Option<String>) -> Result<(), String> {
-        let directory = self.root().join(document.id.as_str());
+        let directory = self.root().join(document.id().as_str());
         let existing = DocumentPackage::load(&directory).ok();
         if let Some(existing) = &existing {
-            document.revision = existing.state.revision.saturating_add(1);
+            document.schema.revision = existing.state.revision().saturating_add(1);
         }
-        document.updated_at_ms = now_ms();
+        document.schema.updated_at_ms = now_ms();
         let markdown = markdown
             .or_else(|| existing.map(|package| package.markdown))
-            .unwrap_or_else(|| format!("# {}\n\n", document.title));
+            .unwrap_or_else(|| format!("# {}\n\n", document.title()));
         DocumentPackage::new(directory, document, markdown)
             .map_err(|error| error.to_string())?
             .save()
@@ -646,7 +634,7 @@ mod tests {
 
         repository.save(project.clone(), None).unwrap();
 
-        assert_eq!(repository.get(&project.id).unwrap(), Some(project.clone()));
+        assert_eq!(repository.get(project.id()).unwrap(), Some(project.clone()));
         assert_eq!(repository.snapshot().unwrap().documents, vec![project]);
     }
 
@@ -681,13 +669,13 @@ mod tests {
         ));
         let first = DocumentState::new(DocumentId::new("root"), "Root", "recording.m4a");
         let mut child = DocumentState::new(DocumentId::new("child"), "Child", "recording.m4a");
-        child.parent_id = Some(DocumentId::new("root"));
-        child.audio_asset_id = Some(DocumentId::new("root"));
-        child.depth = 1;
+        child.hierarchy.parent_id = Some(DocumentId::new("root"));
+        child.source.audio_asset_id = Some(DocumentId::new("root"));
+        child.hierarchy.depth = 1;
         let mut invalid =
             DocumentState::new(DocumentId::new("invalid"), "Invalid", "recording.m4a");
-        invalid.parent_id = Some(DocumentId::new("missing"));
-        invalid.depth = 1;
+        invalid.hierarchy.parent_id = Some(DocumentId::new("missing"));
+        invalid.hierarchy.depth = 1;
 
         DocumentPackage::new(package_directory(&root, "root"), first, "# Root\n")
             .unwrap()
@@ -723,7 +711,7 @@ mod tests {
         let directory = package_directory(&root, "future");
         std::fs::create_dir_all(&directory).unwrap();
         let mut state = DocumentState::new(DocumentId::new("future"), "Future", "recording.m4a");
-        state.schema_version += 1;
+        state.schema.schema_version += 1;
         std::fs::write(
             directory.join(DOCUMENT_STATE_FILENAME),
             serde_json::to_vec(&state).unwrap(),
@@ -738,6 +726,59 @@ mod tests {
             DocumentScanError::InvalidPackage { path, .. } if path == &directory
         ));
         assert!(scan.packages.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_repository_migrates_a_legacy_flat_state_when_loaded() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-document-migration-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let directory = package_directory(&root, "legacy");
+        std::fs::create_dir_all(&directory).unwrap();
+        let legacy = serde_json::json!({
+            "schema_version": 1,
+            "revision": 0,
+            "updated_at_ms": 20,
+            "id": "legacy",
+            "title": "Legacy",
+            "audio_path": "recording.m4a",
+            "created_at_ms": 10,
+            "recorded_at_ms": null,
+            "audio_start_ms": 0,
+            "audio_end_ms": null,
+            "parent_id": null,
+            "audio_asset_id": null,
+            "depth": 0,
+            "sibling_order": 0,
+            "tags": [],
+            "summary": null,
+            "processing_error": null,
+            "status": "Imported",
+            "transcript": [],
+            "diarization": [],
+            "speaker_segments": [],
+            "markdown_path": null
+        });
+        std::fs::write(
+            directory.join(DOCUMENT_STATE_FILENAME),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(directory.join(DOCUMENT_MARKDOWN_FILENAME), "# Legacy\n").unwrap();
+
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        let migrated = repository.get(&DocumentId::new("legacy")).unwrap().unwrap();
+        let stored: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(directory.join(DOCUMENT_STATE_FILENAME)).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(migrated.title(), "Legacy");
+        assert!(stored.get("identity").is_some());
+        assert!(stored.get("title").is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -763,13 +804,16 @@ mod tests {
             .get(&DocumentId::new("persistent"))
             .unwrap()
             .unwrap();
-        assert_eq!(loaded.id, document.id);
-        assert_eq!(loaded.title, document.title);
-        assert_eq!(loaded.revision, 0);
+        assert_eq!(loaded.id(), document.id());
+        assert_eq!(loaded.title(), document.title());
+        assert_eq!(loaded.revision(), 0);
         reopened
             .save(
                 DocumentState {
-                    title: "Renamed document".into(),
+                    content: domain::DocumentContent {
+                        title: "Renamed document".into(),
+                        ..loaded.content.clone()
+                    },
                     ..loaded.clone()
                 },
                 None,
@@ -777,8 +821,8 @@ mod tests {
             .unwrap();
         let final_scan = reopened.scanner.scan().unwrap();
         assert_eq!(final_scan.packages[0].markdown, "# Persistent document\n");
-        assert_eq!(final_scan.packages[0].state.revision, 1);
-        assert_eq!(final_scan.packages[0].state.title, "Renamed document");
+        assert_eq!(final_scan.packages[0].state.revision(), 1);
+        assert_eq!(final_scan.packages[0].state.title(), "Renamed document");
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -811,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn file_repository_marks_interrupted_processing_as_failed_on_open() {
+    fn file_repository_does_not_reprocess_a_completed_document_on_open() {
         let root = std::env::temp_dir().join(format!(
             "meetnote-document-recovery-{}-{}",
             std::process::id(),
@@ -823,7 +867,7 @@ mod tests {
             "Interrupted document",
             "recording.m4a",
         );
-        state.status = ProjectStatus::Processing;
+        state.processing.last_error = Some("processing interrupted before completion".into());
         DocumentPackage::new(directory, state, "# Interrupted document\n")
             .unwrap()
             .save()
@@ -835,12 +879,12 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(recovered.status, ProjectStatus::Failed);
+        assert_eq!(recovered.processing_status(), domain::ProjectStatus::Failed);
         assert_eq!(
-            recovered.processing_error.as_deref(),
+            recovered.processing.last_error.as_deref(),
             Some("processing interrupted before completion")
         );
-        assert_eq!(recovered.revision, 1);
+        assert_eq!(recovered.revision(), 0);
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -4,11 +4,14 @@ use crate::{
 };
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use domain::{
-    reorder_project, reparent_project, DocumentState, ProjectId, ProjectStatus,
+    reorder_project, reparent_project, AlgorithmProvenance, DiarizationProvenance, DocumentState,
+    IdentityMatchingProvenance, ModelProvenance, ProcessingRecord, ProjectId, RuntimeProvenance,
     SpeakerTaggedSegment,
 };
 use futures::channel::mpsc::UnboundedReceiver;
 use runtime::{JobContext, JobEvent, JobRuntime};
+use sha2::{Digest, Sha256};
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -234,7 +237,10 @@ impl WorkspaceService {
         let project = DocumentState::new(id, title, audio_path);
         let project = self.documents.save_with_markdown(
             project.clone(),
-            render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
+            render_markdown(
+                Path::new(project.audio_path()),
+                &project.results.speaker_segments,
+            ),
         )?;
         Ok(project)
     }
@@ -284,9 +290,9 @@ impl WorkspaceService {
         let projects = self.documents.list()?;
         let parent = projects
             .iter()
-            .find(|project| &project.id == parent_id)
+            .find(|project| project.id() == parent_id)
             .ok_or_else(|| "project does not exist".to_string())?;
-        if parent.depth >= 2 {
+        if parent.hierarchy.depth >= 2 {
             return Err("project tree cannot exceed three levels".into());
         }
         if start_ms >= end_ms {
@@ -295,7 +301,10 @@ impl WorkspaceService {
         let child = parent.semantic_child(ProjectId::new_uuid(), title, start_ms, end_ms, tags);
         self.documents.save_with_markdown(
             child.clone(),
-            render_markdown(Path::new(&child.audio_path), &child.speaker_segments),
+            render_markdown(
+                Path::new(child.audio_path()),
+                &child.results.speaker_segments,
+            ),
         )?;
         Ok(child)
     }
@@ -309,7 +318,7 @@ impl WorkspaceService {
             .documents
             .get(project_id)?
             .ok_or_else(|| "project does not exist".to_string())?;
-        project.summary = Some(summary.into());
+        project.content.summary = Some(summary.into());
         self.documents.save(project.clone())?;
         Ok(project)
     }
@@ -330,7 +339,10 @@ impl WorkspaceService {
         }
         project = self.documents.save_with_markdown(
             project.clone(),
-            render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
+            render_markdown(
+                Path::new(project.audio_path()),
+                &project.results.speaker_segments,
+            ),
         )?;
         Ok(project)
     }
@@ -361,14 +373,8 @@ impl WorkspaceService {
             .get(&project_id)
             .map_err(persistence_error)?
             .ok_or_else(|| persistence_error("project does not exist"))?;
-        project.status = ProjectStatus::Processing;
-        project = self
-            .documents
-            .save(project.clone())
-            .map_err(persistence_error)?;
-
         let request = ProcessingRequest {
-            audio_path: project.audio_path.clone(),
+            audio_path: project.audio_path().to_string(),
             asr_model,
             diarization_model,
             language: None,
@@ -377,8 +383,7 @@ impl WorkspaceService {
             speaker_library_path,
         };
         self.processing.probe(&request).inspect_err(|error| {
-            project.status = ProjectStatus::Failed;
-            project.processing_error = Some(error.message.clone());
+            project.set_processing_error(error.message.clone());
             let _ = self.documents.save(project.clone());
         })?;
 
@@ -390,6 +395,7 @@ impl WorkspaceService {
         let asr_status_context = contexts.asr_context.clone();
         let diarization_status_context = contexts.diarization_context.clone();
         let workspace = self.clone();
+        let request_for_record = request.clone();
         let future = Box::pin(async move {
             let result = workspace
                 .processing
@@ -405,8 +411,7 @@ impl WorkspaceService {
                         asr_status_context.failed(error.message.clone());
                         diarization_status_context.failed(error.message.clone());
                     }
-                    project.status = ProjectStatus::Failed;
-                    project.processing_error = Some(error.message.clone());
+                    project.set_processing_error(error.message.clone());
                     let _ = workspace.documents.save(project);
                     return Err(error);
                 }
@@ -415,16 +420,28 @@ impl WorkspaceService {
             asr_status_context.completed();
             diarization_status_context.completed();
 
-            project.status = ProjectStatus::Ready;
-            project.processing_error = None;
-            project.transcript = result.asr.segments.clone();
-            project.diarization = result.diarization.segments.clone();
-            project.speaker_segments = result.aligned.clone();
+            project.results.transcript = result.asr.segments.clone();
+            project.results.diarization = result.diarization.segments.clone();
+            project.results.speaker_segments = result.aligned.clone();
+            let processing_revision = project
+                .processing
+                .latest
+                .as_ref()
+                .map(|record| record.processing_revision.saturating_add(1))
+                .unwrap_or(1);
+            project.record_processing(processing_record(
+                &request_for_record,
+                &result,
+                processing_revision,
+            ));
             project = workspace
                 .documents
                 .save_with_markdown(
                     project.clone(),
-                    render_markdown(Path::new(&project.audio_path), &project.speaker_segments),
+                    render_markdown(
+                        Path::new(project.audio_path()),
+                        &project.results.speaker_segments,
+                    ),
                 )
                 .map_err(persistence_error)?;
             Ok(project)
@@ -460,10 +477,117 @@ fn persistence_error(message: impl Into<String>) -> contracts::BackendError {
     }
 }
 
+fn processing_record(
+    request: &ProcessingRequest,
+    result: &PipelineResult,
+    processing_revision: u64,
+) -> ProcessingRecord {
+    let identity_matching = result
+        .diarization
+        .embedding_observations
+        .first()
+        .map(|observation| IdentityMatchingProvenance {
+            embedding_space: Some(observation.embedding_space.model_id.clone()),
+            profile_library_schema_version: request
+                .speaker_library_path
+                .as_ref()
+                .map(|_| contracts::SPEAKER_LIBRARY_SCHEMA_VERSION),
+            threshold_milli: None,
+        });
+    ProcessingRecord {
+        processing_revision,
+        completed_at_ms: now_ms(),
+        input_audio_checksum: file_sha256(&request.audio_path),
+        asr: model_provenance(&result.asr.model),
+        diarization: DiarizationProvenance {
+            backend_id: result.diarization.backend.id.clone(),
+            model_revision: result.diarization.model.revision.clone(),
+            segmentation: Some(model_provenance(&result.diarization.model)),
+            embedding: Some(model_provenance(&result.diarization.model)),
+            clustering: AlgorithmProvenance {
+                id: "backend-clustering".into(),
+                revision: Some(result.diarization.backend.id.clone()),
+                parameters: None,
+            },
+            identity_matching,
+        },
+        alignment: AlgorithmProvenance {
+            id: "max-overlap-speaker-alignment".into(),
+            revision: Some("1".into()),
+            parameters: None,
+        },
+        runtime: RuntimeProvenance {
+            device: format!("{:?}", request.device),
+            language: result
+                .asr
+                .language
+                .clone()
+                .or_else(|| request.language.clone()),
+            sample_rate_hz: Some(16_000),
+            threads: None,
+        },
+    }
+}
+
+fn model_provenance(model: &ModelRef) -> ModelProvenance {
+    ModelProvenance {
+        backend_id: model.backend_id.clone(),
+        model_id: model.model_id.clone(),
+        revision: model.revision.clone(),
+        artifact_sha256: artifact_sha256(&model.artifact_path),
+        artifact_path: model.artifact_path.clone(),
+    }
+}
+
+fn file_sha256(path: &str) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    let digest = Sha256::digest(bytes);
+    Some(format!("{digest:x}"))
+}
+
+fn artifact_sha256(path: &str) -> Option<String> {
+    let root = Path::new(path);
+    if root.is_file() {
+        return file_sha256(path);
+    }
+    if !root.is_dir() {
+        return None;
+    }
+    let mut files = Vec::new();
+    collect_files(root, &mut files).ok()?;
+    files.sort();
+    let mut hasher = Sha256::new();
+    for file in files {
+        let relative = file.strip_prefix(root).ok()?;
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hasher.update(fs::read(file).ok()?);
+    }
+    Some(format!("{:x}", hasher.finalize()))
+}
+
+fn collect_files(root: &Path, files: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+    for entry in fs::read_dir(root)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_files(&path, files)?;
+        } else if path.is_file() {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
 fn unique_suffix() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
 }
 
@@ -530,7 +654,7 @@ mod tests {
             self.projects
                 .write()
                 .unwrap()
-                .insert(project.id.as_str().into(), project);
+                .insert(project.id().as_str().into(), project);
             Ok(())
         }
 
@@ -540,7 +664,7 @@ mod tests {
 
         fn read(&self, id: &ProjectId) -> Result<Option<DocumentRecord>, String> {
             Ok(self.get(id)?.map(|state| DocumentRecord {
-                markdown: format!("# {}\n\n", state.title),
+                markdown: format!("# {}\n\n", state.title()),
                 state,
             }))
         }
@@ -637,14 +761,19 @@ mod tests {
         };
 
         let result = futures::executor::block_on(workspace.process_project(
-            project.id.clone(),
+            project.id().clone(),
             asr_model,
             diarization_model,
         ))
         .unwrap();
 
-        assert_eq!(result.status, ProjectStatus::Ready);
-        assert_eq!(result.speaker_segments[0].speaker_id, "speaker-1");
-        assert_eq!(repository.get(&project.id).unwrap(), Some(result.clone()));
+        assert_eq!(result.processing_status(), domain::ProjectStatus::Ready);
+        assert_eq!(result.results.speaker_segments[0].speaker_id, "speaker-1");
+        let processing = result.processing.latest.as_ref().unwrap();
+        assert_eq!(processing.asr.backend_id, "fake-asr");
+        assert_eq!(processing.diarization.backend_id, "fake-diarization");
+        assert_eq!(processing.alignment.id, "max-overlap-speaker-alignment");
+        assert_eq!(processing.runtime.sample_rate_hz, Some(16_000));
+        assert_eq!(repository.get(project.id()).unwrap(), Some(result.clone()));
     }
 }

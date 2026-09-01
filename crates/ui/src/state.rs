@@ -32,13 +32,13 @@ impl UiState {
         Self {
             route: super::route::Route::Assistant,
             locale,
-            selected_project: projects.first().map(|project| project.id.clone()),
+            selected_project: projects.first().map(|project| project.id().clone()),
             detail_overlay: None,
             content_mode: ContentMode::Summary,
             expanded_projects: projects
                 .iter()
-                .filter(|project| project.parent_id.is_none())
-                .map(|project| project.id.clone())
+                .filter(|project| project.hierarchy.parent_id.is_none())
+                .map(|project| project.id().clone())
                 .collect(),
             expanded_model_families: BTreeSet::new(),
             assistant_query: String::new(),

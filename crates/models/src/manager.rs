@@ -383,6 +383,9 @@ impl ModelManager {
             Err(DownloadError::Cancelled) => {
                 let _ = self.update(id, |progress| progress.state = DownloadState::Cancelled);
             }
+            Err(_error) if record.control.is_cancelled() => {
+                let _ = self.update(id, |progress| progress.state = DownloadState::Cancelled);
+            }
             Err(error) => {
                 let _ = self.update(id, |progress| {
                     progress.state = DownloadState::Failed(error.to_string())

@@ -21,7 +21,7 @@ pub(crate) fn render(
                 .id("detail-transcript")
                 .flex_1()
                 .overflow_y_scrollbar()
-                .children(project.speaker_segments.iter().map(|segment| {
+                .children(project.results.speaker_segments.iter().map(|segment| {
                     div()
                         .pb_3()
                         .child(format!(
@@ -32,20 +32,20 @@ pub(crate) fn render(
                         .child(div().text_sm().child(segment.text.clone()))
                 }));
             div()
-                .child(div().text_xl().child(project.title.clone()))
+                .child(div().text_xl().child(project.title().to_string()))
                 .child(
                     div()
                         .mt_2()
                         .text_sm()
                         .text_color(rgb(0x8992a3))
-                        .child(format!("UUID: {}", project.id.as_str())),
+                        .child(format!("UUID: {}", project.id().as_str())),
                 )
                 .child(
                     div()
                         .mt_2()
                         .text_sm()
                         .text_color(rgb(0x8992a3))
-                        .child(project.audio_path.clone()),
+                        .child(project.audio_path().to_string()),
                 )
                 .child(transcript)
                 .into_any_element()

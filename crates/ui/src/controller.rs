@@ -546,9 +546,9 @@ impl RootView {
                     .import_audio(path.display().to_string())
                 {
                     Ok(project) => {
-                        this.ui.selected_project = Some(project.id.clone());
+                        this.ui.selected_project = Some(project.id().clone());
                         this.projects = this.services.workspace.list_projects().unwrap_or_default();
-                        this.ui.notice = i18n::message(this.ui.locale, "imported", &project.title);
+                        this.ui.notice = i18n::message(this.ui.locale, "imported", project.title());
                     }
                     Err(error) => {
                         this.ui.notice = i18n::message(this.ui.locale, "import_failed", &error)
@@ -1011,7 +1011,7 @@ impl RootView {
                 match result {
                     Ok(project) => {
                         this.projects = this.services.workspace.list_projects().unwrap_or_default();
-                        this.ui.selected_project = Some(project.id);
+                        this.ui.selected_project = Some(project.id().clone());
                         this.ui.notice = i18n::text(this.ui.locale, "speaker_merged").into();
                     }
                     Err(error) => {
@@ -1070,7 +1070,7 @@ impl RootView {
         let Some(project) = self
             .projects
             .iter()
-            .find(|project| project.id == project_id)
+            .find(|project| project.id() == &project_id)
             .cloned()
         else {
             self.ui.notice = i18n::text(self.ui.locale, "project_missing").into();
@@ -1078,7 +1078,7 @@ impl RootView {
             return;
         };
         self.ui.processing = true;
-        self.ui.notice = i18n::message(self.ui.locale, "processing", &project.title);
+        self.ui.notice = i18n::message(self.ui.locale, "processing", project.title());
         let workspace = self.services.workspace.clone();
         let settings = self.settings_draft.clone();
         let asr_model = match (settings.asr_backend_id, settings.asr_model) {
@@ -1145,8 +1145,8 @@ impl RootView {
                         this.projects = this.services.workspace.list_projects().unwrap_or_default();
                         match result {
                             Ok(project) => {
-                                this.ui.selected_project = Some(project.id.clone());
-                                this.ui.notice = i18n::message(this.ui.locale, "finished", &project.title);
+                                this.ui.selected_project = Some(project.id().clone());
+                                this.ui.notice = i18n::message(this.ui.locale, "finished", project.title());
                             }
                             Err(error) => {
                                 this.ui.notice = i18n::message(this.ui.locale, "processing_failed", &error.message)
@@ -1205,7 +1205,7 @@ impl Render for RootView {
             .ui
             .selected_project
             .as_ref()
-            .and_then(|id| self.projects.iter().find(|project| &project.id == id))
+            .and_then(|id| self.projects.iter().find(|project| project.id() == id))
             .cloned();
         let body = match self.ui.route {
             Route::Assistant => pages::assistant::render(self, cx).into_any_element(),
