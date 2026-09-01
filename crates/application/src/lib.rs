@@ -8,6 +8,7 @@ use std::fs;
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 mod document_commands;
@@ -88,6 +89,11 @@ pub struct DocumentSnapshot {
     pub issues: Vec<DocumentIssue>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentChange {
+    Changed,
+}
+
 pub trait DocumentRepository: Send + Sync {
     fn snapshot(&self) -> Result<DocumentSnapshot, String>;
     fn get(
@@ -95,6 +101,7 @@ pub trait DocumentRepository: Send + Sync {
         document_id: &domain::DocumentId,
     ) -> Result<Option<domain::DocumentState>, String>;
     fn read(&self, document_id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String>;
+    fn watch(&self) -> Result<Receiver<DocumentChange>, String>;
     fn save(&self, document: domain::DocumentState, markdown: Option<String>)
         -> Result<(), String>;
 }
@@ -126,6 +133,10 @@ impl DocumentService {
 
     pub fn read(&self, document_id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String> {
         self.repository.read(document_id)
+    }
+
+    pub fn watch(&self) -> Result<Receiver<DocumentChange>, String> {
+        self.repository.watch()
     }
 
     pub fn save(&self, document: domain::DocumentState) -> Result<domain::DocumentState, String> {

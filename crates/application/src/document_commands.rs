@@ -336,6 +336,11 @@ mod tests {
             Ok(self.documents.lock().unwrap().get(id.as_str()).cloned())
         }
 
+        fn watch(&self) -> Result<std::sync::mpsc::Receiver<crate::DocumentChange>, String> {
+            let (_sender, receiver) = std::sync::mpsc::channel();
+            Ok(receiver)
+        }
+
         fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
             let mut documents = self.documents.lock().unwrap();
             let markdown = markdown

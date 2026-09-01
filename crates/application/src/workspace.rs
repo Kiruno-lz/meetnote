@@ -215,6 +215,12 @@ impl WorkspaceService {
         self.documents.snapshot()
     }
 
+    pub fn watch_documents(
+        &self,
+    ) -> Result<std::sync::mpsc::Receiver<crate::DocumentChange>, String> {
+        self.documents.watch()
+    }
+
     pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<MeetingProject, String> {
         let audio_path = audio_path.into();
         let path = Path::new(&audio_path);
@@ -537,6 +543,11 @@ mod tests {
                 markdown: format!("# {}\n\n", state.title),
                 state,
             }))
+        }
+
+        fn watch(&self) -> Result<std::sync::mpsc::Receiver<crate::DocumentChange>, String> {
+            let (_sender, receiver) = std::sync::mpsc::channel();
+            Ok(receiver)
         }
     }
 

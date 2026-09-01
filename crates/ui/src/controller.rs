@@ -1258,7 +1258,34 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
                     let assistant_input = cx.new(|cx| {
                         TextInput::new(cx, i18n::text(initial_locale, "ask_placeholder"))
                     });
-                    cx.new(|_| RootView::new(inventory.clone(), services.clone(), assistant_input))
+                    let workspace = services.workspace.clone();
+                    let view = cx.new(|_| {
+                        RootView::new(inventory.clone(), services.clone(), assistant_input)
+                    });
+                    if let Ok(receiver) = workspace.watch_documents() {
+                        let receiver = Arc::new(Mutex::new(receiver));
+                        let watched_view = view.clone();
+                        cx.spawn(async move |cx| loop {
+                            let receiver = receiver.clone();
+                            let changed = runtime::spawn_blocking(move || {
+                                receiver
+                                    .lock()
+                                    .ok()
+                                    .and_then(|receiver| receiver.recv().ok())
+                            })
+                            .await;
+                            if changed.is_none() {
+                                break;
+                            }
+                            let workspace = workspace.clone();
+                            watched_view.update(cx, |view, cx| {
+                                view.projects = workspace.list_projects().unwrap_or_default();
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                    }
+                    view
                 },
             )
             .expect("failed to open meetnote window");

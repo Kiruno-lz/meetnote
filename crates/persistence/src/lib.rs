@@ -1,4 +1,4 @@
-use application::{DocumentIssue, DocumentRepository, DocumentSnapshot};
+use application::{DocumentChange, DocumentIssue, DocumentRepository, DocumentSnapshot};
 use contracts::DocumentRecord;
 use domain::{DocumentId, DocumentState, ProjectStatus};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -413,6 +413,11 @@ impl DocumentRepository for InMemoryDocumentRepository {
         Ok(Some(DocumentRecord { markdown, state }))
     }
 
+    fn watch(&self) -> Result<Receiver<DocumentChange>, String> {
+        let (_sender, receiver) = mpsc::channel();
+        Ok(receiver)
+    }
+
     fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
         let document_id = document.id.as_str().to_string();
         self.documents
@@ -449,7 +454,7 @@ impl FileDocumentRepository {
         self.scanner.root()
     }
 
-    pub fn watch(&self) -> Result<DocumentWatcher, String> {
+    pub fn create_watcher(&self) -> Result<DocumentWatcher, String> {
         DocumentWatcher::new(self.root())
     }
 
@@ -569,6 +574,19 @@ impl DocumentRepository for FileDocumentRepository {
                     markdown: package.markdown,
                 })
             })
+    }
+
+    fn watch(&self) -> Result<Receiver<DocumentChange>, String> {
+        let watcher = self.create_watcher()?;
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            while watcher.recv().is_ok() {
+                if sender.send(DocumentChange::Changed).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(receiver)
     }
 
     fn save(&self, mut document: DocumentState, markdown: Option<String>) -> Result<(), String> {
@@ -758,7 +776,7 @@ mod tests {
             unique_suffix()
         ));
         let repository = FileDocumentRepository::open(&root).unwrap();
-        let watcher = repository.watch().unwrap();
+        let watcher = repository.create_watcher().unwrap();
 
         repository
             .save(
