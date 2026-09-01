@@ -115,13 +115,15 @@ fn transcribe_sync(
             })?
             .trim()
             .to_string();
-        if text.is_empty() {
+        let start_ms = (segment.start_timestamp().max(0) as u64) * 10;
+        let end_ms = (segment.end_timestamp().max(0) as u64) * 10;
+        if text.is_empty() || end_ms <= start_ms {
             continue;
         }
         segments.push(domain::TranscriptSegment {
             id: format!("whisper-segment-{index}"),
-            start_ms: (segment.start_timestamp().max(0) as u64) * 10,
-            end_ms: (segment.end_timestamp().max(0) as u64) * 10,
+            start_ms,
+            end_ms,
             text,
         });
     }
