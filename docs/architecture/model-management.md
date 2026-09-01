@@ -19,12 +19,22 @@ resources/models/catalog.json
 - `candidateBackends`
 - `modelFamily`
 - `sourceFormat`
-- `sources`
+- `source`
+- `artifacts`（多文件 bundle 的逐文件来源、SHA-256 和可选 archive member）
 - `sha256`
 - `sizeBytes`
 - `license`
 - `requiresAuth`
-- `supportedDevices`
+- `estimatedVramBytes`
+- `status`
+
+`source` 是单文件模型的直接下载地址，或 bundle 的主来源地址；它不是必然可下载的网页说明。多来源 bundle 必须把每个文件写入 `artifacts`。`candidateBackends` 只允许填写当前已注册且能 probe 该格式的 backend；没有 Rust-native adapter 的模型必须使用 `reference-only` 或 `requires-native-adapter`，不能伪装为可下载模型。
+
+当前目录只保留当前 Rust backend 可识别的 Whisper GGML 条目；OpenAI Whisper PyTorch 条目和没有 Rust-native backend 的 Mimo ASR 已被清除。gated Pyannote 仍作为明确标记为 `requires-native-adapter` 的后续来源保留。
+
+Qwen 条目已改为官方 sherpa-onnx 的 `0.6B int8` ONNX archive 直接地址；这不是原先的 Qwen 1.7B Transformers 仓库。该 archive 内含 `conv_frontend.onnx`、`encoder.int8.onnx`、`decoder.int8.onnx`、`tokenizer` 目录和 `tokens.txt`。catalog v1 不能表达嵌套目录 manifest，因此在实现目录成员下载前只能保持 `candidate-source`，不得显示为 ready 或把 archive 当作单一可 probe 模型。
+
+sherpa-onnx speaker bundle 是由 segmentation archive 和 embedding 文件组成的多来源 bundle，主 `source` 现在指向有效的 segmentation archive；真正的逐文件来源仍以 `artifacts` 为准。上游 release 的 `speaker-recongition-models` 拼写虽然看起来像错误，但该地址是有效的官方路径，不能擅自改成其他 URL。
 
 ## 下载状态
 
@@ -52,7 +62,7 @@ cancelled
   -> 流式写入
   -> 发送进度事件
   -> 校验文件大小
-  -> 校验 SHA-256
+  -> 校验 archive 或 artifact SHA-256
   -> 原子 rename
   -> backend probe
   -> 写入 installed 状态
@@ -104,6 +114,15 @@ Assistant 与外部 Agent 都只能通过 application 暴露的稳定能力读�
 
 没有完成转换和校验的条目不能显示为已安装。
 
+### Archive checksum 与成员 checksum
+
+`artifacts[].sha256` 的含义必须由来源类型决定：
+
+- 直接文件：校验下载文件本身。
+- `archiveMember`：优先校验整个 archive 的 `archiveSha256`，再提取成员；如果上游提供成员 checksum，再额外填写 `artifactSha256`。
+
+当前 catalog v1 只有一个 `sha256` 字段，旧的 archive bundle 条目可能将 archive checksum 重复写在每个 artifact 上。迁移到 catalog v2 时必须拆为 `archiveSha256` 与 `artifactSha256`，并增加目录成员/嵌套文件的 manifest 表达能力；在此之前不得把 archive checksum 误标成提取后文件 checksum。
+
 v0.1 的 backend artifact 约定：
 
 - `whisper-rs` 接收一个已解析的 GGML/GGUF 文件路径，例如 `ggml-large-v3.bin`；OpenAI Whisper 的 PyTorch `.pt` 文件不能直接加载。
@@ -118,5 +137,5 @@ v0.1 的 backend artifact 约定：
 - SHA-256 必须来自可信的固定 manifest。
 - 下载完成前不得覆盖已安装版本。
 - gated 模型的 token 不写入 catalog、日志或命令行。
-- 每次推理记录 backend、模型 id、revision、artifact checksum 和运行参数；当前 `ModelRef` 的 artifact 路径由 catalog 和设置解析，不由 UI 或入口硬编码。
+- 每次推理记录 backend、模型 id、revision、artifact checksum 和运行参数；当前 `ModelRef` 的 artifact 路径由 catalog 和设置解析，不由 UI 或入口硬编码。处理 provenance 的完整写回由 document model 迁移任务完成，见[文档模型与处理记录](document-model.md)。
 - 模型 license 和原始来源必须随安装记录保留。

@@ -26,7 +26,7 @@ MeetNote 是一个本地优先的音频处理与 AI 可读文档后端。它不�
 │ built-in client    │   │ Skill-driven client│
 └─────────┬──────────┘   └─────────┬──────────┘
           └────────────┬───────────┘
-                       │ same document commands/events
+                       │ same document service and events
              ┌─────────▼──────────┐
              │ Rust application   │
              │ processing/docs/tree│
@@ -127,12 +127,12 @@ ASR segments + diarization segments
 MeetNote 的知识后端能力分为“文档管理/写回”和“实时项目树”两部分：
 
 - 查询：Assistant 或外部 Agent 可以按文档 ID、项目树位置、文档 JSON 字段、时间范围和来源信息读取文档元数据、原始转录、说话人对齐结果和 Markdown 内容；MeetNote 不为 Skill 定义固定的语义字段。
-- 编辑：Assistant 或外部 Agent 可以通过相同接口写回标题、标签、正文、状态、父子关系、内部链接和人工 speaker 修正。
+- 编辑：Assistant 或外部 Agent 可以按 Skill 约定写回标题、标签、正文、文档状态、父子关系、内部链接和人工 speaker 修正。
 - 拆分：Agent/Skill 自行决定是否拆分、拆成什么文档以及语义项目树如何记录；MeetNote 提供文档创建、原子保存、三层约束校验和树刷新，不提供自动语义拆分算法。
 - 实时维护：目标目录发生新增、修改、移动或删除后，MeetNote 必须刷新派生项目树；通过 MeetNote 写入时拒绝超过三层、循环或跨音频来源的结构，外部无效修改在扫描后显示可定位错误。
 - 追溯：MeetNote 保存文档版本、原始资料引用和处理结果；原始音频、原始 ASR 和原始 diarization 结果不可被覆盖。
 
-Agent 接入不绑定某个模型、厂商或 Skill。首个机器接入边界应提供稳定的无 UI document read/write 合约，CLI、IPC 或其他传输方式都只能是该合约的适配层。GPUI Assistant 与外部 Agent 必须复用同一 document service，不拥有额外权限。语义字段和拆分规则属于 Skill；三层上限和结构一致性属于 MeetNote domain contract。
+Agent 接入不绑定某个模型、厂商或 Skill，也不把某个 command enum 作为外部 Agent 的强制 ABI。首要边界是 Skill 指导下的 Markdown/JSON 文档包读写；CLI、IPC 或其他适配器都必须复用同一 document service，不拥有额外权限。当前 `DocumentCommandService` 只是 application 内部的版本校验与用例入口。语义字段和拆分规则属于 Skill；三层上限和结构一致性属于 MeetNote domain contract。详细字段分层见[文档模型与处理记录](document-model.md)。
 
 ## 文档包与事实来源
 
@@ -144,7 +144,7 @@ documents/<document-id>/
 └── state.json        # 该文档的权威状态
 ```
 
-`state.json` 至少区分 MeetNote 写入的处理状态、原始资料引用和 Agent/Skill 写入的文档状态。父子关系、拆分关系、标签、总结和其他语义字段由 Skill 定义并记录在这里；MeetNote 解析这些字段，维护最多三层的项目树，但不为它们建立第二份权威持久化结构。
+`state.json` 按 `schema`、`identity`、`source`、`hierarchy`、`document_status`、`content`、`processing` 和 `results` 分层。父子关系、拆分关系、标签、总结和其他语义字段由 Skill 定义并记录在这里；MeetNote 解析这些字段，维护最多三层的项目树，但不为它们建立第二份权威持久化结构。当前代码使用分层 v2 `DocumentState`，旧扁平 v1 只存在于读取时的兼容迁移逻辑中。
 
 文档管理服务必须扫描或监听 `documents/`，生成文档列表、过滤、查询索引和最多三层的项目树。索引或树丢失、过期、或被 Assistant/外部 Agent 修改后，必须通过增量刷新或完整重扫恢复；任何缓存都不能成为文档状态的事实来源。
 
@@ -152,19 +152,21 @@ documents/<document-id>/
 
 系统处理状态与知识文档状态必须分开：
 
-- `processing_state`：由 MeetNote 管理，表示音频导入、ASR、diarization、对齐、完成、失败或取消。
-- `document_status`：由外部 Agent 或用户写入文档自身 JSON/结构化状态，表示文档处于收件、编辑、复核、定稿或归档等知识工作流阶段；MeetNote 负责保存和展示，但不解释这些语义值。
+- `processing_state`：由 `JobRuntime` 管理，表示一次音频任务的排队、运行、完成、失败或取消。任务成功后不作为长期项目状态保留。
+- `processing`：处理完成后写入文档 JSON，保存完成时间、输入指纹、ASR 模型、diarization segmentation/embedding 模型、clustering 算法、identity matching 和运行参数。重处理追加历史记录。
+- `document_status`：由外部 Agent 或用户按 Skill 写入文档自身 JSON，表示文档处于收件、编辑、复核、定稿或归档等知识工作流阶段；MeetNote 负责保存和展示，但不解释这些语义值。
 
-Agent 写入文档状态不得伪造或覆盖 MeetNote 的 `processing_state`；处理失败也不得删除 Agent 已经编辑的文档内容。
+Agent 写入文档状态不得伪造或覆盖 MeetNote 的 `processing` 记录；处理失败也不得删除 Agent 已经编辑的文档内容或改变 `document_status`。当前 `ProjectStatus` 只作为旧 UI 的兼容投影，不能继续承载新的持久化语义。
 
 ## 持久化原则
 
-文档是面向 Agent 的知识单元，Markdown 是稳定、可读、可迁移的内容表达，文档自身 JSON/结构化状态是该文档的管理事实来源。MeetNote 不维护独立的权威项目数据库；文档列表、筛选、查询和最多三层的项目树只能从目标目录文档生成。文档可以代表一天、一次会议或其他任意语义单元。文档之间的父子关系、标签和内部链接由 Assistant 或外部 Agent 写入文档状态，MeetNote 负责校验、保存并实时更新派生树。每次处理或写回时记录：
+文档是面向 Agent 的知识单元，Markdown 是稳定、可读、可迁移的内容表达，文档自身 JSON/结构化状态是该文档的管理事实来源。MeetNote 不维护独立的权威项目数据库；文档列表、筛选、查询和最多三层的项目树只能从目标目录文档生成。文档可以代表一天、一次会议或其他任意语义单元。文档之间的父子关系、标签和内部链接由 Assistant 或外部 Agent 按 Skill 写入文档状态，MeetNote 负责校验、保存并实时更新派生树。完整 pipeline 成功后写入处理记录：
 
 - 使用的 ASR backend、model 和 revision
-- 使用的 diarization backend、model 和 revision
+- 使用的 diarization backend、segmentation/embedding model 和 revision
+- clustering 算法或模型、identity matching embedding space、阈值和 profile library schema
 - speaker 修正版本
 - 外部 Agent/Skill 标识及变更说明（如果由 Agent 写入）
 - 原始转录和最终文档之间的来源关系
 
-不可逆处理不得覆盖原始转录；语义结果由 Agent 作为文档内容、JSON 状态或新的文档文件保存。
+不可逆处理不得覆盖原始转录；语义结果由 Agent 作为文档内容、JSON 状态或新的文档文件保存。当前 pipeline 已将 `processing.latest`、处理历史、ASR/diarization backend 与 model、对齐算法、运行参数和可计算的输入/artifact checksum 写回 `state.json`；catalog 提供的固定 checksum 传播和更细的 backend stage provenance 仍是后续补强项。

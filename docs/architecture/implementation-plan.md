@@ -78,7 +78,7 @@ cargo build -p meetnote
 
 ## 阶段 0：架构冻结
 
-当前状态：已完成。后端 trait、文档包 schema、三层树派生规则和统一 document command contract 已冻结并有测试覆盖。
+当前状态：基础边界和分层文档模型已完成。后端 trait、文档包目录、旧状态兼容迁移、三层树派生规则、处理 provenance 和内部 document service 已有测试覆盖；外部 Agent 的 Skill-first 边界已冻结，固定 command contract 不再作为外部协议。
 
 产物：
 
@@ -88,9 +88,9 @@ cargo build -p meetnote
 - ASR/Diarization trait
 - JobRuntime 事件模型
 - 模型 catalog schema
-- 文档包与 `state.json` schema
+- 文档包目录与目标 `state.json` schema
 - 固定三层项目树派生规则
-- Assistant/外部 Agent 统一文档命令
+- Assistant/外部 Agent 共用 document service；外部 Agent 采用 Skill-first 文档包读写
 
 验收：新增 backend 不需要修改 application 和 UI 接口。
 
@@ -173,11 +173,11 @@ AudioAsset
 
 文档不携带固定内容类型。它可以代表一天、一次会议、一次访谈或其他由 Assistant/外部 Agent 定义的知识单元。音频必须先完成完整转录和说话人对齐，之后 Agent 才能基于这些资料决定是否创建子文档、如何命名和如何总结。
 
-MeetNote 提供文档管理原语：扫描/监听目标目录，读取文档内容和 JSON 状态，创建文档，编辑文档，更新处理状态，保存版本，以及按照文档自身字段提供列表和查询。MeetNote 主动解析父子关系并实时维护最多三层的项目树。文档 JSON 是事实来源；不维护独立的权威数据库，任何内存索引和项目树都必须能够从文档重新生成。
+MeetNote 提供文档管理原语：扫描/监听目标目录，读取文档内容和 JSON 状态，创建文档，编辑文档，保存版本，以及按照文档自身字段提供列表和查询。MeetNote 主动解析父子关系并实时维护最多三层的项目树。文档 JSON 是事实来源；不维护独立的权威数据库，任何内存索引和项目树都必须能够从文档重新生成。处理任务状态属于 JobRuntime；处理完成后只把 provenance 写入文档状态。
 
 Skill 指导 Assistant 或外部 Agent 决定是否拆分、拆成什么文档、如何命名和如何建立关系，并把结果写入相关文档。MeetNote domain 负责把这些声明解析为项目树、校验三层上限/循环/来源一致性并实时刷新，但不实现自动语义拆分、自动总结或自动标签。
 
-Agent 接入必须是模型、厂商和 Skill 无关的机器可读文档读写合约。GPUI Assistant、CLI、IPC 或其他外部 Agent 适配器都复用同一个 document service、相同权限和三层树规则，不允许绕过服务破坏原始音频、ASR、diarization 和对齐结果。
+Agent 接入必须是模型、厂商和 Skill 无关的文档包读写边界。Skill 提供语义指导，GPUI Assistant、CLI、IPC 或其他外部 Agent 适配器都复用同一个 document service、相同权限和三层树规则，不允许绕过校验破坏原始音频、ASR、diarization 和对齐结果。`DocumentCommandService` 只作为内部 application API。
 
 ## v0.2：桌面工作区与文档管理
 
@@ -191,15 +191,15 @@ Agent 接入必须是模型、厂商和 Skill 无关的机器可读文档读写�
 
 仍需完成：
 
-- JobRuntime 事件订阅、取消、ASR/diarization 状态展示和文档处理中断恢复已完成；后续可继续细化阶段百分比。
+- JobRuntime 事件订阅、取消和 ASR/diarization 状态展示已完成；处理任务不再写入持久化 `ProjectStatus`，文档只保存完成记录或失败原因，UI 通过 runtime 事件和兼容投影展示当前状态。
 - 完整 diarization bundle 的多文件下载、archive member 提取和 readiness 检查已完成。
-- speaker 合并和 Markdown 回写、文档 JSON 状态、文档 revision 和 Agent 读写边界已完成。
+- speaker 合并和 Markdown 回写、文档 revision、三层关系校验和内部 document service 已完成；分层 `DocumentState`、旧扁平状态兼容迁移、处理失败记录和完整 pipeline 的基础 provenance 写回已完成；catalog 固定 checksum 传播、更细的 backend stage metadata 和外部 Skill 文档规范仍需补齐。
 
 验收目标：GPUI 可导入音频、创建文档、执行 pipeline、重启后从目标目录恢复三层项目树，并显示 speaker-labelled transcript。当前项目状态已满足该目标；三层项目树是从文档 JSON 派生的正式产品特性。
 
 ## v0.2.1：后端能力层
 
-本阶段接口已在 Rust crate 中可测试、可独立调用，并已由 GPUI 设置和模型页面绑定。
+本阶段接口已在 Rust crate 中可测试、可独立调用，并已由 GPUI 设置和模型页面绑定。模型目录只展示有明确 backend 兼容性的条目；候选源必须通过格式、checksum 和 backend probe 后才能标为 ready。
 
 已完成：
 
@@ -231,12 +231,14 @@ GPUI 页面已订阅 `DownloadTask.events`，调用 `ModelManager::pause/resume/
 5. 绑定设置、UI locale 和 i18n 基础能力。
 6. 绑定模型浏览、下载队列和 ASR/diarization 处理状态。
 
-当前已实现 Assistant、Meetings、Models、Settings 四个工作区入口、三层项目树、Summary/Original 展示、悬浮详情、模型下载任务绑定、backend 设置选择和文件变化刷新。Assistant 作为长期保留的内置 Agent 客户端，已通过共享 document command service 读取文档；具体 LLM/provider 仍保持可选适配边界。GPUI View 不得直接执行领域算法、文件 IO、模型下载、语义分析或 Agent 调用。
+当前已实现 Assistant、Meetings、Models、Settings 四个工作区入口、三层项目树、Summary/Original 展示、悬浮详情、模型下载任务绑定、backend 设置选择和文件变化刷新。Assistant 作为长期保留的内置 Agent 客户端，目前只通过内部 document service 读取文档并展示占位状态；具体 LLM/provider 仍保持可选适配边界。GPUI View 不得直接执行领域算法、文件 IO、模型下载、语义分析或 Agent 调用。当前 UI 是可运行的功能脚手架，不是最终高品位视觉方案。
 
 仍需完成：
 
-- 继续将 `DocumentState` 中的处理结果字段按需拆分为更细的 `AudioAsset`、原始转录和对齐结果值对象；当前状态已能保留这些信息并从文档包重建。
-- 将更多语义字段纳入 Agent/Skill 的结构化 patch；当前已支持标题、标签、总结、正文和树关系的版本化写回。
+- 将 catalog 固定 checksum 传播到 `ModelProvenance`，并为各 backend 提供准确的 segmentation/embedding stage metadata。
+- 将 `ProjectStatus` 的 UI 展示继续收敛到从 `processing` 派生的文档读取模型；运行时任务状态已由 JobRuntime 事件提供，不能重新写回文档状态。
+- 完善 processing history、原始结果版本引用和外部 Skill 文档规范。
+- 发布 Skill-first 文档包规范；保留内部 command service，不把它作为外部 Agent 的固定协议。
 
 ## 阶段 6：生产化
 

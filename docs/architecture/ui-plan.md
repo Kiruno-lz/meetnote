@@ -21,8 +21,8 @@ MeetNote 文档管理需要读取和保存：
 
 - 文档稳定标识、来源音频和时间范围。
 - Markdown 或其他 AI 可读内容。
-- 文档自身 JSON 状态，包括 Agent/Skill 定义的语义字段、父子关系和同级顺序。
-- MeetNote 管理的处理状态、版本和原始结果引用。
+- 文档自身 JSON 状态，包括 Agent/Skill 定义的语义字段、父子关系和同级顺序，以及 MeetNote 写入的处理完成 provenance。
+- JobRuntime 管理的短生命周期处理任务状态；处理完成后不把运行状态继续当作文档字段。
 
 文档目录和文档 JSON 是事实来源，不建立独立的项目数据库。UI 使用从目标目录实时派生的三层项目树；关闭、索引丢失或应用重启后必须能够从文档恢复。
 
@@ -32,7 +32,7 @@ UI 只负责：
 
 - 展示最多三层的项目树、文档内容和文档自身 JSON 状态。
 - 在原始文与总结文之间切换。
-- 将拖动、编辑和状态操作转换为文档 JSON 写回 command。
+- 将拖动、编辑和状态操作转换为经过 controller/application 校验的文档 JSON 写回操作。
 - 管理悬浮详情、设置表单和保留的 Assistant 客户端。
 
 UI 不负责音频解码、语义切分、LLM 推理、模型下载或 Agent 决策。三层限制、循环和来源一致性由 domain/application 校验，UI 只显示结果。
@@ -71,7 +71,7 @@ Assistant 页面长期保留，但自身不拥有特殊的 LLM 业务层。它�
 └──────────────────────────────────────────────────────────────┘
 ```
 
-输入请求只能通过统一 Agent/document command 映射为文档读取、编辑、状态更新或 Skill 驱动的拆分建议。Agent 写回文档后，MeetNote 从目标目录实时刷新三层项目树；Assistant 不维护自己的项目副本。
+输入请求先由 Skill 指导 Agent 判断意图和语义边界，再通过 document service 读取或写回 Markdown/JSON 文档包。内部 command 只是 controller/application 的实现细节，不是外部 Agent 的强制协议。Agent 写回文档后，MeetNote 从目标目录实时刷新三层项目树；Assistant 不维护自己的项目副本。
 
 ## Meetings/Documents 工作区
 
@@ -336,7 +336,7 @@ SettingsChanged(AppSettings)
 ServiceError(UiError)
 ```
 
-GPUI action handler 只创建 command 或调用 controller；controller 负责调用 service、启动后台订阅，并将结果回送到 `WorkspaceUiState`。
+GPUI action handler 只创建内部 command 或调用 controller；controller 负责调用 service、启动后台订阅，并将结果回送到 `WorkspaceUiState`。外部 Agent 不要求使用这些 UI command，而是按 Skill 操作文档包并接受同一套 application/persistence 校验。
 
 ## 目标代码拆分
 
@@ -383,7 +383,7 @@ crates/ui/src/
 
 ### UI-2：实时三层项目树与内容
 
-现有代码已实现三层项目树、展开折叠、重排和内容卡片；后续将树的数据源改为目标目录文档扫描/监听，并展示文档内容和 JSON 状态。
+现有代码已实现三层项目树、展开折叠、重排和内容卡片，数据源已经来自目标目录文档扫描/监听；文档 JSON 的完整分层展示、处理 provenance 展示和非法外部关系反馈仍需补齐。
 
 验收：文档可打开、编辑、保存和重新扫描恢复；项目树实时更新、最多三层，外部非法关系有明确错误。
 
@@ -401,7 +401,7 @@ crates/ui/src/
 
 ### UI-5：Models 与处理状态
 
-已绑定模型目录、下载队列、暂停/继续/取消；后续只补充 ASR/diarization 处理状态和文档写回结果，不接入内置 LLM。
+已绑定模型目录、下载队列、暂停/继续/取消；后续补充处理完成记录、模型 provenance 和文档写回结果，不接入内置 LLM。Assistant 继续保留占位页，最终 UI 视觉方案另行设计。
 
 验收：模型任务全局持续；文档 JSON 是状态事实来源；Assistant 或外部 Agent 写回后，三层项目树可以实时刷新并展示。
 
@@ -413,4 +413,4 @@ crates/ui/src/
 - 不在 MeetNote 内实现 LLM、自动拆分、自动总结、自动标签或语音库索引。
 - 不在 UI 中直接调用 backend、repository、模型文件或网络客户端。
 - 不在本规划确认前修改 `crates/ui` 实现。
-- Assistant 与外部 Agent 写入的项目结构必须保存在文档自身 JSON/结构化内容中，UI 负责通过统一接口读取、预览、确认和保存。
+- Assistant 与外部 Agent 写入的项目结构必须保存在文档自身 JSON/结构化内容中；UI 通过 document service 读取、预览、确认和保存，外部 Agent 通过 Skill 获得语义指导，不依赖固定 command ABI。

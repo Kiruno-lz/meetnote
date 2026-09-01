@@ -12,7 +12,7 @@ Candle ASR + custom ONNX diarization
 
 新增后端只增加实现 crate、模型 catalog 条目和注册 factory，不修改 domain、application 或 GPUI UI。
 
-后端只产生完整音频的标准化转录、speaker 段和可追溯元数据。输出先由 application 对齐并写入目标目录文档，再由 MeetNote 从文档 JSON 实时更新最多三层的项目树。Assistant、外部 Agent 和 Skill 不进入 ASR/diarization backend，也不能改变后端原始结果。
+后端只产生完整音频的标准化转录、speaker 段和运行时元数据。输出先由 application 对齐，再由 application/persistence 将原始结果与 processing provenance 写入目标目录文档，最后由 MeetNote 从文档 JSON 实时更新最多三层的项目树。当前 pipeline 已写入 backend/model/revision、可计算的输入与 artifact checksum、对齐算法和运行参数；catalog 固定 checksum 传播及更细的 segmentation/embedding stage metadata 仍需补强。Assistant、外部 Agent 和 Skill 不进入 ASR/diarization backend，也不能改变后端原始结果。
 
 ## ASR 接口
 
@@ -142,4 +142,4 @@ pub enum JobEvent {
 }
 ```
 
-不使用字符串事件，不让具体 backend 直接更新 GPUI Entity、Assistant、外部 Agent 或项目树。处理完成后由 application 写入文档事实，再触发文档扫描/项目树刷新事件。
+不使用字符串事件，不让具体 backend 直接更新 GPUI Entity、Assistant、外部 Agent 或项目树。处理完成后由 application 写入文档事实、`processing.latest` 和 `processing_history`，再触发文档扫描/项目树刷新事件。外部 Agent 通过 Skill 写回语义内容，不需要绑定内部 command enum。
