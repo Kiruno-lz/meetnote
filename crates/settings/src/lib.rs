@@ -35,9 +35,9 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             schema_version: SETTINGS_SCHEMA_VERSION.into(),
-            asr_backend_id: None,
+            asr_backend_id: Some("whisper-rs".into()),
             asr_model: None,
-            diarization_backend_id: None,
+            diarization_backend_id: Some("sherpa-onnx".into()),
             diarization_model: None,
             ui_locale: "zh-CN".into(),
             compute_device: ComputeDevice::Auto,

@@ -3,17 +3,19 @@ use crate::download::{
     DownloadError,
 };
 use crate::{ModelCatalog, ModelCatalogEntry};
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct DownloadId(pub u64);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DownloadState {
     Queued,
     Downloading,
@@ -23,7 +25,7 @@ pub enum DownloadState {
     Failed(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DownloadProgress {
     pub id: DownloadId,
     pub model_id: String,
@@ -76,23 +78,54 @@ struct TaskRecord {
     control: DownloadControl,
     progress: Mutex<DownloadProgress>,
     subscribers: Mutex<Vec<Sender<DownloadEvent>>>,
+    worker_started: AtomicBool,
 }
 
 #[derive(Clone)]
 pub struct ModelManager {
     catalog: Arc<ModelCatalog>,
     model_root: PathBuf,
+    task_state_path: PathBuf,
     next_id: Arc<AtomicU64>,
     tasks: Arc<Mutex<BTreeMap<DownloadId, Arc<TaskRecord>>>>,
 }
 
 impl ModelManager {
     pub fn new(catalog: ModelCatalog, model_root: impl AsRef<Path>) -> Self {
+        let model_root = model_root.as_ref().to_path_buf();
+        let task_state_path = model_root.join(".download-tasks.json");
+        let persisted = load_task_progress(&task_state_path);
+        let next_id = persisted
+            .iter()
+            .map(|progress| progress.id.0)
+            .max()
+            .unwrap_or(0);
+        let tasks = persisted
+            .into_iter()
+            .map(|mut progress| {
+                if matches!(
+                    progress.state,
+                    DownloadState::Queued | DownloadState::Downloading
+                ) {
+                    progress.state = DownloadState::Paused;
+                }
+                (
+                    progress.id,
+                    Arc::new(TaskRecord {
+                        control: DownloadControl::default(),
+                        progress: Mutex::new(progress),
+                        subscribers: Mutex::new(Vec::new()),
+                        worker_started: AtomicBool::new(false),
+                    }),
+                )
+            })
+            .collect();
         Self {
             catalog: Arc::new(catalog),
-            model_root: model_root.as_ref().to_path_buf(),
-            next_id: Arc::new(AtomicU64::new(0)),
-            tasks: Arc::new(Mutex::new(BTreeMap::new())),
+            model_root,
+            task_state_path,
+            next_id: Arc::new(AtomicU64::new(next_id)),
+            tasks: Arc::new(Mutex::new(tasks)),
         }
     }
 
@@ -140,17 +173,15 @@ impl ModelManager {
                 artifact_count,
             }),
             subscribers: Mutex::new(Vec::new()),
+            worker_started: AtomicBool::new(false),
         });
         self.tasks
             .lock()
             .map_err(|_| ModelManagerError::LockPoisoned)?
             .insert(id, record.clone());
+        self.persist_tasks()?;
         let receiver = self.subscribe(id)?;
-        let manager = self.clone();
-        std::thread::Builder::new()
-            .name(format!("meetnote-download-{}", id.0))
-            .spawn(move || manager.run(id, model, record))
-            .map_err(|error| ModelManagerError::Download(DownloadError::Io(error)))?;
+        self.spawn_worker(id, model, record)?;
         Ok(DownloadTask {
             id,
             events: receiver,
@@ -233,6 +264,68 @@ impl ModelManager {
         })
     }
 
+    pub fn configured_model_ref(
+        &self,
+        task: &str,
+        backend_id: &str,
+        preferred: Option<&contracts::ModelRef>,
+    ) -> Result<contracts::ModelRef, ModelManagerError> {
+        if let Some(preferred) = preferred {
+            if preferred.backend_id == backend_id
+                && self
+                    .catalog
+                    .find(&preferred.model_id)
+                    .is_some_and(|model| model.task == task && model.supports_backend(backend_id))
+            {
+                return self.model_ref_from_catalog(&preferred.model_id, backend_id);
+            }
+        }
+        let model = self
+            .catalog
+            .browse(&self.model_root, Some(task), Some(backend_id))
+            .into_iter()
+            .find(|availability| availability.install_state == crate::ModelInstallState::Installed)
+            .or_else(|| {
+                self.catalog
+                    .browse(&self.model_root, Some(task), Some(backend_id))
+                    .into_iter()
+                    .next()
+            })
+            .ok_or_else(|| ModelManagerError::BackendNotSupported {
+                model_id: task.into(),
+                backend_id: backend_id.into(),
+            })?;
+        self.model_ref_from_catalog(&model.model.id, backend_id)
+    }
+
+    fn model_ref_from_catalog(
+        &self,
+        model_id: &str,
+        backend_id: &str,
+    ) -> Result<contracts::ModelRef, ModelManagerError> {
+        let model = self
+            .catalog
+            .find(model_id)
+            .ok_or_else(|| ModelManagerError::ModelNotFound(model_id.into()))?;
+        if !model.supports_backend(backend_id) {
+            return Err(ModelManagerError::BackendNotSupported {
+                model_id: model_id.into(),
+                backend_id: backend_id.into(),
+            });
+        }
+        let artifact_path = if model.artifacts.is_empty() {
+            model.artifact_paths(&self.model_root)[0].clone()
+        } else {
+            model.install_directory(&self.model_root)
+        };
+        Ok(contracts::ModelRef {
+            backend_id: backend_id.into(),
+            model_id: model.id.clone(),
+            revision: None,
+            artifact_path: artifact_path.display().to_string(),
+        })
+    }
+
     pub fn pause(&self, id: DownloadId) -> Result<(), ModelManagerError> {
         let record = self.record(id)?;
         self.ensure_active(&record, id)?;
@@ -243,8 +336,23 @@ impl ModelManager {
     pub fn resume(&self, id: DownloadId) -> Result<(), ModelManagerError> {
         let record = self.record(id)?;
         self.ensure_active(&record, id)?;
+        let model_id = record
+            .progress
+            .lock()
+            .map_err(|_| ModelManagerError::LockPoisoned)?
+            .model_id
+            .clone();
         record.control.resume();
-        self.update(id, |progress| progress.state = DownloadState::Downloading)
+        self.update(id, |progress| progress.state = DownloadState::Downloading)?;
+        if !record.worker_started.swap(true, Ordering::AcqRel) {
+            let model = self
+                .catalog
+                .find(&model_id)
+                .cloned()
+                .ok_or(ModelManagerError::ModelNotFound(model_id))?;
+            self.spawn_worker(id, model, record)?;
+        }
+        Ok(())
     }
 
     pub fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError> {
@@ -275,6 +383,21 @@ impl ModelManager {
                 });
             }
         }
+    }
+
+    fn spawn_worker(
+        &self,
+        id: DownloadId,
+        model: ModelCatalogEntry,
+        record: Arc<TaskRecord>,
+    ) -> Result<(), ModelManagerError> {
+        record.worker_started.store(true, Ordering::Release);
+        let manager = self.clone();
+        std::thread::Builder::new()
+            .name(format!("meetnote-download-{}", id.0))
+            .spawn(move || manager.run(id, model, record))
+            .map_err(|error| ModelManagerError::Download(DownloadError::Io(error)))?;
+        Ok(())
     }
 
     fn download_model(
@@ -361,7 +484,8 @@ impl ModelManager {
             .lock()
             .map_err(|_| ModelManagerError::LockPoisoned)?;
         subscribers.retain(|sender| sender.send(event.clone()).is_ok());
-        Ok(())
+        drop(subscribers);
+        self.persist_tasks()
     }
 
     fn has_active_download(&self, model_id: &str) -> Result<bool, ModelManagerError> {
@@ -397,6 +521,42 @@ impl ModelManager {
             .cloned()
             .ok_or(ModelManagerError::TaskNotFound(id))
     }
+
+    fn persist_tasks(&self) -> Result<(), ModelManagerError> {
+        let tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| ModelManagerError::LockPoisoned)?;
+        let progress = tasks
+            .values()
+            .map(|record| {
+                record
+                    .progress
+                    .lock()
+                    .map_err(|_| ModelManagerError::LockPoisoned)
+                    .map(|progress| progress.clone())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if let Some(parent) = self.task_state_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| ModelManagerError::Download(DownloadError::Io(error)))?;
+        }
+        let content = serde_json::to_vec_pretty(&progress).map_err(|error| {
+            ModelManagerError::Download(DownloadError::Io(std::io::Error::other(error)))
+        })?;
+        let temporary = self.task_state_path.with_extension("json.tmp");
+        fs::write(&temporary, content)
+            .map_err(|error| ModelManagerError::Download(DownloadError::Io(error)))?;
+        fs::rename(&temporary, &self.task_state_path)
+            .map_err(|error| ModelManagerError::Download(DownloadError::Io(error)))
+    }
+}
+
+fn load_task_progress(path: &Path) -> Vec<DownloadProgress> {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
 }
 
 #[derive(Debug)]
@@ -468,6 +628,59 @@ mod tests {
             manager.status(task.id).unwrap().state,
             DownloadState::Cancelled
         );
+    }
+
+    #[test]
+    fn restores_interrupted_downloads_as_resumable_paused_tasks() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-model-manager-restore-{}",
+            unique_suffix()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let progress = vec![DownloadProgress {
+            id: DownloadId(9),
+            model_id: "fixture".into(),
+            state: DownloadState::Downloading,
+            completed_bytes: 12,
+            speed_bytes_per_second: Some(3),
+            total_bytes: Some(100),
+            artifact_index: 1,
+            artifact_count: 1,
+        }];
+        std::fs::write(
+            root.join(".download-tasks.json"),
+            serde_json::to_vec(&progress).unwrap(),
+        )
+        .unwrap();
+
+        let manager = ModelManager::new(fixture_catalog(), &root);
+
+        let restored = manager.status(DownloadId(9)).unwrap();
+        assert_eq!(restored.state, DownloadState::Paused);
+        assert_eq!(restored.completed_bytes, 12);
+        assert!(matches!(
+            manager.start("fixture"),
+            Err(ModelManagerError::AlreadyActive(model_id)) if model_id == "fixture"
+        ));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolves_a_model_ref_from_catalog_without_hardcoded_artifact_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-model-manager-resolve-{}",
+            unique_suffix()
+        ));
+        let manager = ModelManager::new(fixture_catalog(), &root);
+
+        let model = manager.configured_model_ref("asr", "fake", None).unwrap();
+
+        assert_eq!(model.model_id, "fixture");
+        assert_eq!(
+            model.artifact_path,
+            root.join("asr/fixture/fixture.bin").display().to_string()
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

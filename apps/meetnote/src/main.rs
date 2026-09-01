@@ -62,22 +62,41 @@ fn main() {
     let catalog = ModelCatalog::from_path("resources/models/catalog.json")
         .expect("failed to open model catalog");
     let model_manager = ModelManager::new(catalog, "models");
+    let settings_snapshot = settings.snapshot().unwrap_or_default();
+    let asr_backend_id = settings_snapshot
+        .asr_backend_id
+        .as_deref()
+        .unwrap_or("whisper-rs");
+    let diarization_backend_id = settings_snapshot
+        .diarization_backend_id
+        .as_deref()
+        .unwrap_or("sherpa-onnx");
+    let asr_model = model_manager
+        .configured_model_ref("asr", asr_backend_id, settings_snapshot.asr_model.as_ref())
+        .unwrap_or_else(|_| ModelRef {
+            backend_id: asr_backend_id.into(),
+            model_id: "unconfigured".into(),
+            revision: None,
+            artifact_path: String::new(),
+        });
+    let diarization_model = model_manager
+        .configured_model_ref(
+            "diarization",
+            diarization_backend_id,
+            settings_snapshot.diarization_model.as_ref(),
+        )
+        .unwrap_or_else(|_| ModelRef {
+            backend_id: diarization_backend_id.into(),
+            model_id: "unconfigured".into(),
+            revision: None,
+            artifact_path: String::new(),
+        });
     let desktop_services = DesktopServices {
         workspace,
         settings,
         model_manager,
-        asr_model: ModelRef {
-            backend_id: "whisper-rs".into(),
-            model_id: "whisper-base-en-ggml".into(),
-            revision: None,
-            artifact_path: "models/asr/whisper-large-v3-ggml/ggml-base.en.bin".into(),
-        },
-        diarization_model: ModelRef {
-            backend_id: "sherpa-onnx".into(),
-            model_id: "sherpa-onnx-speaker-diarization-bundle".into(),
-            revision: None,
-            artifact_path: "models/diarization/sherpa-onnx-speaker-diarization-bundle".into(),
-        },
+        asr_model,
+        diarization_model,
     };
 
     let args: Vec<String> = env::args().collect();
