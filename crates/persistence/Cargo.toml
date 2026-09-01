@@ -10,3 +10,7 @@ domain = { path = "../domain" }
 serde_json.workspace = true
 thiserror.workspace = true
 notify.workspace = true
+
+[[bench]]
+name = "document_scan"
+harness = false

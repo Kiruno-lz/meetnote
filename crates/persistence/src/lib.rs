@@ -1,6 +1,6 @@
 use application::{DocumentIssue, DocumentRepository, DocumentSnapshot};
 use contracts::DocumentRecord;
-use domain::{DocumentId, DocumentState};
+use domain::{DocumentId, DocumentState, ProjectStatus};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::BTreeMap;
 use std::fs;
@@ -438,9 +438,11 @@ impl FileDocumentRepository {
     pub fn open(root: impl AsRef<Path>) -> Result<Self, String> {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root).map_err(|error| error.to_string())?;
-        Ok(Self {
+        let repository = Self {
             scanner: DocumentScanner::new(root),
-        })
+        };
+        repository.recover_interrupted_processing()?;
+        Ok(repository)
     }
 
     pub fn root(&self) -> &Path {
@@ -449,6 +451,27 @@ impl FileDocumentRepository {
 
     pub fn watch(&self) -> Result<DocumentWatcher, String> {
         DocumentWatcher::new(self.root())
+    }
+
+    fn recover_interrupted_processing(&self) -> Result<(), String> {
+        let scan = self.scanner.scan().map_err(|error| error.to_string())?;
+        for package in scan.packages {
+            if package.state.status != ProjectStatus::Processing {
+                continue;
+            }
+            let directory = package.directory().to_path_buf();
+            let mut state = package.state;
+            let markdown = package.markdown;
+            state.status = ProjectStatus::Failed;
+            state.processing_error = Some("processing interrupted before completion".into());
+            state.revision = state.revision.saturating_add(1);
+            state.updated_at_ms = now_ms();
+            DocumentPackage::new(directory, state, markdown)
+                .map_err(|error| error.to_string())?
+                .save()
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
     }
 }
 
@@ -752,6 +775,40 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(2))
             .unwrap()
             .is_some());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_repository_marks_interrupted_processing_as_failed_on_open() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-document-recovery-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let directory = package_directory(&root, "interrupted");
+        let mut state = DocumentState::new(
+            DocumentId::new("interrupted"),
+            "Interrupted document",
+            "recording.m4a",
+        );
+        state.status = ProjectStatus::Processing;
+        DocumentPackage::new(directory, state, "# Interrupted document\n")
+            .unwrap()
+            .save()
+            .unwrap();
+
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        let recovered = repository
+            .get(&DocumentId::new("interrupted"))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(recovered.status, ProjectStatus::Failed);
+        assert_eq!(
+            recovered.processing_error.as_deref(),
+            Some("processing interrupted before completion")
+        );
+        assert_eq!(recovered.revision, 1);
         std::fs::remove_dir_all(root).unwrap();
     }
 

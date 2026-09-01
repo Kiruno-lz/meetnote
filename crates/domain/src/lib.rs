@@ -53,6 +53,8 @@ pub struct DocumentState {
     pub tags: Vec<String>,
     #[serde(default)]
     pub summary: Option<String>,
+    #[serde(default)]
+    pub processing_error: Option<String>,
     pub status: ProjectStatus,
     pub transcript: Vec<TranscriptSegment>,
     pub diarization: Vec<DiarizationSegment>,
@@ -91,6 +93,7 @@ impl DocumentState {
             sibling_order: 0,
             tags: Vec::new(),
             summary: None,
+            processing_error: None,
             status: ProjectStatus::Imported,
             transcript: Vec::new(),
             diarization: Vec::new(),

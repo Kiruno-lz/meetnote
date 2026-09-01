@@ -370,8 +370,9 @@ impl WorkspaceService {
             device: ComputeDevice::Auto,
             speaker_library_path,
         };
-        self.processing.probe(&request).inspect_err(|_| {
+        self.processing.probe(&request).inspect_err(|error| {
             project.status = ProjectStatus::Failed;
+            project.processing_error = Some(error.message.clone());
             let _ = self.documents.save(project.clone());
         })?;
 
@@ -399,6 +400,7 @@ impl WorkspaceService {
                         diarization_status_context.failed(error.message.clone());
                     }
                     project.status = ProjectStatus::Failed;
+                    project.processing_error = Some(error.message.clone());
                     let _ = workspace.documents.save(project);
                     return Err(error);
                 }
@@ -408,6 +410,7 @@ impl WorkspaceService {
             diarization_status_context.completed();
 
             project.status = ProjectStatus::Ready;
+            project.processing_error = None;
             project.transcript = result.asr.segments.clone();
             project.diarization = result.diarization.segments.clone();
             project.speaker_segments = result.aligned.clone();

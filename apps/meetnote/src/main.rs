@@ -1,6 +1,6 @@
 use application::{
-    run_pipeline, AsrBackend, BackendInventory, DiarizationBackend, DocumentService,
-    ProcessingService, WorkspaceService,
+    run_pipeline, AsrBackend, BackendInventory, DiarizationBackend, DocumentCommandService,
+    DocumentService, ProcessingService, WorkspaceService,
 };
 use asr::{AsrBackendManager, AsrBackendRegistry};
 use asr_sherpa_onnx::SherpaOnnxAsrBackend;
@@ -55,9 +55,11 @@ fn main() {
     let repository = Arc::new(
         FileDocumentRepository::open("data/documents").expect("failed to open document repository"),
     );
+    let documents = DocumentService::new(repository);
+    let document_commands = DocumentCommandService::new(documents.clone());
     let workspace = WorkspaceService::new(
         ProcessingService::new_with_providers(Arc::new(asr_manager), Arc::new(diarization_manager)),
-        DocumentService::new(repository),
+        documents,
     );
     let catalog = ModelCatalog::from_path("resources/models/catalog.json")
         .expect("failed to open model catalog");
@@ -93,6 +95,7 @@ fn main() {
         });
     let desktop_services = DesktopServices {
         workspace,
+        document_commands,
         settings,
         model_manager,
         asr_model,

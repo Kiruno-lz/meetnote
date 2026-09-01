@@ -4,8 +4,8 @@ use crate::{
     state::{ContentMode, Overlay, UiState},
     text_input::TextInput,
 };
-use application::{BackendInventory, WorkspaceService};
-use contracts::ModelRef;
+use application::{BackendInventory, DocumentCommandService, WorkspaceService};
+use contracts::{DocumentCommand, DocumentCommandEnvelope, DocumentCommandResult, ModelRef};
 use domain::{MeetingProject, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
@@ -88,6 +88,7 @@ pub(crate) struct SettingsSelectors {
 #[derive(Clone)]
 pub struct DesktopServices {
     pub workspace: WorkspaceService,
+    pub document_commands: DocumentCommandService,
     pub settings: SettingsService,
     pub model_manager: models::manager::ModelManager,
     pub asr_model: ModelRef,
@@ -737,7 +738,28 @@ impl RootView {
         self.ui.notice = if query.trim().is_empty() {
             i18n::text(self.ui.locale, "empty_request").into()
         } else {
-            i18n::message(self.ui.locale, "request_received", &query)
+            match self
+                .services
+                .document_commands
+                .execute(DocumentCommandEnvelope::new(
+                    format!("assistant-{}", self.ui.assistant_query.len()),
+                    DocumentCommand::List,
+                )) {
+                Ok(DocumentCommandResult::Snapshot { documents, issues }) => {
+                    let suffix = if issues.is_empty() {
+                        format!(" ({} documents available)", documents.len())
+                    } else {
+                        format!(" ({} document issues)", issues.len())
+                    };
+                    i18n::message(
+                        self.ui.locale,
+                        "request_received",
+                        &format!("{query}{suffix}"),
+                    )
+                }
+                Ok(_) => i18n::message(self.ui.locale, "request_received", &query),
+                Err(error) => error.to_string(),
+            }
         };
         cx.notify();
     }
