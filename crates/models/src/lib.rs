@@ -575,7 +575,14 @@ mod tests {
         assert!(catalog
             .models
             .iter()
-            .any(|model| model.id == "whisper-large-v3"));
+            .any(|model| model.id == "whisper-large-v3-ggml"));
+        assert!(!catalog
+            .models
+            .iter()
+            .any(|model| model.id == "mimo-v2.5-asr"));
+        assert!(!catalog.models.iter().any(|model| {
+            model.model_family == "whisper" && model.candidate_backends.is_empty()
+        }));
         assert!(catalog
             .models
             .iter()
