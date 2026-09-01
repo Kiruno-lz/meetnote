@@ -206,6 +206,15 @@ fn model_card(
                     "{}: {}",
                     tr(root.ui.locale, "vram_estimate"),
                     format_bytes(entry.model.estimated_vram_bytes)
+                ))
+                .child(format!(
+                    "{}: {}",
+                    tr(root.ui.locale, "applicable_backends"),
+                    if entry.model.candidate_backends.is_empty() {
+                        "—".into()
+                    } else {
+                        entry.model.candidate_backends.join(", ")
+                    }
                 )),
         )
         .children(progress_view)
@@ -263,6 +272,7 @@ fn download_progress_view(
                             progress.artifact_index,
                             progress.artifact_count,
                             progress.completed_bytes,
+                            progress.speed_bytes_per_second,
                         )),
                 ),
         )

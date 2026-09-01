@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct DownloadId(pub u64);
@@ -28,6 +29,7 @@ pub struct DownloadProgress {
     pub model_id: String,
     pub state: DownloadState,
     pub completed_bytes: u64,
+    pub speed_bytes_per_second: Option<u64>,
     pub total_bytes: Option<u64>,
     pub artifact_index: usize,
     pub artifact_count: usize,
@@ -132,6 +134,7 @@ impl ModelManager {
                 model_id: model.id.clone(),
                 state: DownloadState::Queued,
                 completed_bytes: 0,
+                speed_bytes_per_second: None,
                 total_bytes: model.size_bytes,
                 artifact_index: 0,
                 artifact_count,
@@ -207,7 +210,7 @@ impl ModelManager {
             .catalog
             .find(model_id)
             .ok_or_else(|| ModelManagerError::ModelNotFound(model_id.into()))?;
-        if !model.candidate_backends.iter().any(|id| id == backend_id) {
+        if !model.supports_backend(backend_id) {
             return Err(ModelManagerError::BackendNotSupported {
                 model_id: model_id.into(),
                 backend_id: backend_id.into(),
@@ -280,18 +283,22 @@ impl ModelManager {
         model: &ModelCatalogEntry,
         record: &TaskRecord,
     ) -> Result<(), DownloadError> {
+        record.control.checkpoint()?;
         self.update(id, |progress| progress.state = DownloadState::Downloading)
             .map_err(|_| DownloadError::Io(std::io::Error::other("download task lock poisoned")))?;
         let paths = model.artifact_paths(&self.model_root);
         if model.artifacts.is_empty() {
+            let rate = TransferRate::default();
             download_file_controlled(
                 &model.source,
                 &paths[0],
                 model.sha256.as_deref(),
                 &record.control,
                 |completed, total| {
+                    let speed = rate.sample(completed);
                     let _ = self.update(id, |progress| {
                         progress.completed_bytes = completed;
+                        progress.speed_bytes_per_second = speed;
                         progress.total_bytes = total.or(model.size_bytes);
                         progress.artifact_index = 1;
                     });
@@ -312,13 +319,23 @@ impl ModelManager {
                 &artifacts,
                 model.install_directory(&self.model_root),
                 &record.control,
-                |index, count, completed, total| {
-                    let _ = self.update(id, |progress| {
-                        progress.completed_bytes = completed;
-                        progress.total_bytes = total;
-                        progress.artifact_index = index.max(1);
-                        progress.artifact_count = count;
-                    });
+                {
+                    let mut rate = TransferRate::default();
+                    let mut rate_artifact = usize::MAX;
+                    move |index, count, completed, total| {
+                        if index != rate_artifact {
+                            rate = TransferRate::default();
+                            rate_artifact = index;
+                        }
+                        let speed = rate.sample(completed);
+                        let _ = self.update(id, |progress| {
+                            progress.completed_bytes = completed;
+                            progress.speed_bytes_per_second = speed;
+                            progress.total_bytes = total;
+                            progress.artifact_index = index.max(1);
+                            progress.artifact_count = count;
+                        });
+                    }
                 },
             )?;
         }
@@ -382,6 +399,26 @@ impl ModelManager {
     }
 }
 
+#[derive(Debug)]
+struct TransferRate {
+    started_at: Instant,
+}
+
+impl Default for TransferRate {
+    fn default() -> Self {
+        Self {
+            started_at: Instant::now(),
+        }
+    }
+}
+
+impl TransferRate {
+    fn sample(&self, completed_bytes: u64) -> Option<u64> {
+        let elapsed = self.started_at.elapsed().as_secs_f64();
+        (elapsed > 0.0).then_some((completed_bytes as f64 / elapsed) as u64)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +468,13 @@ mod tests {
             manager.status(task.id).unwrap().state,
             DownloadState::Cancelled
         );
+    }
+
+    #[test]
+    fn transfer_rate_reports_a_byte_rate_for_download_progress() {
+        let rate = TransferRate::default();
+
+        assert!(rate.sample(1_000_000).is_some());
     }
 
     #[test]

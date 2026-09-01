@@ -1,6 +1,6 @@
 use crate::{
-    EmbeddingNormalization, EmbeddingSpace, NativeDiarizationError, NativeModelBundle,
-    SpeakerEmbeddingObservation,
+    EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
+    NativeDiarizationError, NativeModelBundle, SpeakerEmbeddingObservation,
 };
 use contracts::{ComputeDevice, ModelRef};
 use speakrs::{ExecutionMode, OwnedDiarizationPipeline};
@@ -264,7 +264,16 @@ impl NativeDiarizationEngine for SpeakrsEngine {
                 .or_else(|| Some(SPEAKRS_MODEL_REVISION.into())),
             dimension: result.embeddings.shape().get(2).copied().unwrap_or(0),
             sample_rate_hz: 16_000,
-            feature_config: "80-bin-kaldi-fbank; masked-overlap-aware".into(),
+            frontend: EmbeddingFrontend {
+                extractor: EmbeddingFeatureExtractor::KaldiFbank,
+                mel_bins: 80,
+                frame_length_ms: 25,
+                frame_shift_ms: 10,
+                mean_normalization: false,
+                dither: true,
+                overlap_aware: true,
+            },
+            legacy_feature_config: None,
             normalization: EmbeddingNormalization::L2,
         };
         let audio_end_ms = (samples.len() as u64).saturating_mul(1_000) / 16_000;
@@ -440,7 +449,16 @@ mod tests {
                     model_revision: Some("1".into()),
                     dimension: 2,
                     sample_rate_hz: 16_000,
-                    feature_config: "fake".into(),
+                    frontend: EmbeddingFrontend {
+                        extractor: EmbeddingFeatureExtractor::KaldiFbank,
+                        mel_bins: 80,
+                        frame_length_ms: 25,
+                        frame_shift_ms: 10,
+                        mean_normalization: false,
+                        dither: false,
+                        overlap_aware: false,
+                    },
+                    legacy_feature_config: None,
                     normalization: EmbeddingNormalization::L2,
                 }),
                 embeddings: vec![UnclusteredEmbedding {

@@ -30,6 +30,174 @@ pub struct BackendDescriptor {
     pub capabilities: Vec<String>,
 }
 
+pub const SPEAKER_LIBRARY_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EmbeddingNormalization {
+    L2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EmbeddingFeatureExtractor {
+    KaldiFbank,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingFrontend {
+    pub extractor: EmbeddingFeatureExtractor,
+    pub mel_bins: u16,
+    pub frame_length_ms: u16,
+    pub frame_shift_ms: u16,
+    pub mean_normalization: bool,
+    pub dither: bool,
+    pub overlap_aware: bool,
+}
+
+impl Default for EmbeddingFrontend {
+    fn default() -> Self {
+        Self {
+            extractor: EmbeddingFeatureExtractor::KaldiFbank,
+            mel_bins: 0,
+            frame_length_ms: 0,
+            frame_shift_ms: 0,
+            mean_normalization: false,
+            dither: false,
+            overlap_aware: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmbeddingSpace {
+    /// Runtime provenance. It is deliberately excluded from compatibility checks.
+    pub backend_id: String,
+    pub model_id: String,
+    pub model_revision: Option<String>,
+    pub dimension: usize,
+    pub sample_rate_hz: u32,
+    #[serde(default)]
+    pub frontend: EmbeddingFrontend,
+    /// Legacy v1 description. New records use `frontend` instead.
+    #[serde(
+        rename = "featureConfig",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_feature_config: Option<String>,
+    pub normalization: EmbeddingNormalization,
+}
+
+impl EmbeddingSpace {
+    pub fn compatible_with(&self, other: &Self) -> bool {
+        self.model_id == other.model_id
+            && self.model_revision == other.model_revision
+            && self.dimension == other.dimension
+            && self.sample_rate_hz == other.sample_rate_hz
+            && self.normalization == other.normalization
+            && match (&self.legacy_feature_config, &other.legacy_feature_config) {
+                (Some(left), Some(right)) => left == right,
+                (Some(legacy), None) => {
+                    legacy_frontend(legacy).is_some_and(|frontend| frontend == other.frontend)
+                }
+                (None, Some(legacy)) => {
+                    legacy_frontend(legacy).is_some_and(|frontend| self.frontend == frontend)
+                }
+                (None, None) => self.frontend == other.frontend,
+            }
+    }
+}
+
+fn legacy_frontend(description: &str) -> Option<EmbeddingFrontend> {
+    match description {
+        "80-bin-kaldi-fbank; masked-overlap-aware" => Some(EmbeddingFrontend {
+            extractor: EmbeddingFeatureExtractor::KaldiFbank,
+            mel_bins: 80,
+            frame_length_ms: 25,
+            frame_shift_ms: 10,
+            mean_normalization: false,
+            dither: true,
+            overlap_aware: true,
+        }),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakerSampleSource {
+    pub project_id: Option<String>,
+    pub source_segment_id: Option<String>,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakerEmbeddingSample {
+    pub id: String,
+    pub vector: Vec<f32>,
+    pub quality: f32,
+    pub source: SpeakerSampleSource,
+    pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakerProfile {
+    pub id: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    pub embedding_space: EmbeddingSpace,
+    pub samples: Vec<SpeakerEmbeddingSample>,
+    pub match_threshold: f32,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakerLibraryDocument {
+    pub schema_version: u32,
+    #[serde(default)]
+    pub profiles: Vec<SpeakerProfile>,
+}
+
+impl Default for SpeakerLibraryDocument {
+    fn default() -> Self {
+        Self {
+            schema_version: SPEAKER_LIBRARY_SCHEMA_VERSION,
+            profiles: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakerEmbeddingObservation {
+    pub id: String,
+    pub cluster_id: u32,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub vector: Vec<f32>,
+    pub quality: f32,
+    pub embedding_space: EmbeddingSpace,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityMatch {
+    pub cluster_id: u32,
+    pub profile_id: String,
+    pub display_name: String,
+    pub score: f32,
+    pub threshold: f32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AsrRequest {
     pub audio_path: String,
@@ -52,6 +220,8 @@ pub struct DiarizationRequest {
     pub model: ModelRef,
     pub expected_speakers: Option<u32>,
     pub device: ComputeDevice,
+    #[serde(default)]
+    pub speaker_library_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -60,6 +230,8 @@ pub struct DiarizationResult {
     pub model: ModelRef,
     pub segments: Vec<DiarizationSegment>,
     pub speaker_count: Option<u32>,
+    #[serde(default)]
+    pub embedding_observations: Vec<SpeakerEmbeddingObservation>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,5 +261,77 @@ impl BackendError {
             code: BackendErrorCode::NotImplemented,
             message: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frontend() -> EmbeddingFrontend {
+        EmbeddingFrontend {
+            extractor: EmbeddingFeatureExtractor::KaldiFbank,
+            mel_bins: 80,
+            frame_length_ms: 25,
+            frame_shift_ms: 10,
+            mean_normalization: false,
+            dither: true,
+            overlap_aware: false,
+        }
+    }
+
+    fn space(backend_id: &str) -> EmbeddingSpace {
+        EmbeddingSpace {
+            backend_id: backend_id.into(),
+            model_id: "resnet34".into(),
+            model_revision: Some("rev-1".into()),
+            dimension: 256,
+            sample_rate_hz: 16_000,
+            frontend: frontend(),
+            legacy_feature_config: None,
+            normalization: EmbeddingNormalization::L2,
+        }
+    }
+
+    #[test]
+    fn compatibility_ignores_runtime_wrapper_but_rejects_model_or_frontend_changes() {
+        assert!(space("native").compatible_with(&space("sherpa-onnx")));
+
+        let mut different_model = space("native");
+        different_model.model_id = "eres2net".into();
+        assert!(!space("native").compatible_with(&different_model));
+
+        let mut different_frontend = space("native");
+        different_frontend.frontend.mean_normalization = true;
+        assert!(!space("native").compatible_with(&different_frontend));
+    }
+
+    #[test]
+    fn known_legacy_feature_config_matches_its_structured_space() {
+        let legacy: EmbeddingSpace = serde_json::from_str(
+            r#"{
+                "backendId":"native",
+                "modelId":"resnet34",
+                "modelRevision":"rev-1",
+                "dimension":256,
+                "sampleRateHz":16000,
+                "featureConfig":"80-bin-kaldi-fbank; masked-overlap-aware",
+                "normalization":"l2"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            legacy.legacy_feature_config.as_deref(),
+            Some("80-bin-kaldi-fbank; masked-overlap-aware")
+        );
+        let mut structured = space("native");
+        structured.frontend.overlap_aware = true;
+        structured.frontend.dither = true;
+        assert!(legacy.compatible_with(&structured));
+
+        let mut unknown = legacy;
+        unknown.legacy_feature_config = Some("unknown-feature-config".into());
+        assert!(!unknown.compatible_with(&structured));
     }
 }

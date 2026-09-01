@@ -26,6 +26,7 @@ fn real_model_produces_valid_segments_and_observations() {
             model,
             expected_speakers: Some(2),
             device: ComputeDevice::Cpu,
+            speaker_library_path: None,
         },
         context,
     ))
@@ -36,7 +37,7 @@ fn real_model_produces_valid_segments_and_observations() {
         output.result.segments.len(),
         output.result.speaker_count,
         output.observations.len(),
-        output.identity_matches.len()
+        output.anonymous_clusters.len()
     );
 
     assert!(!output.result.segments.is_empty());

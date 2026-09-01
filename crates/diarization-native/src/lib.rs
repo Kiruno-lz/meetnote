@@ -8,12 +8,14 @@
 mod backend;
 mod engine;
 mod error;
-mod identity;
-mod library;
 mod model;
-mod store;
 mod types;
 
+pub use application::{
+    cosine_similarity, ClusterIdentityResolver, IdentityResolverConfig,
+    InMemorySpeakerProfileStore, JsonSpeakerProfileStore, SpeakerLibraryService,
+    SpeakerProfileStore,
+};
 pub use backend::{NativeBackendFuture, NativeDiarizationBackend, NativeDiarizationConfig};
 pub use engine::{
     ClusterAssignment, ClusteringAdapter, ClusteringOutput, EmbeddingAdapter, EmbeddingOutput,
@@ -22,12 +24,9 @@ pub use engine::{
     SPEAKRS_MODEL_REVISION,
 };
 pub use error::{NativeDiarizationError, SpeakerLibraryError};
-pub use identity::{cosine_similarity, ClusterIdentityResolver, IdentityResolverConfig};
-pub use library::SpeakerLibraryService;
 pub use model::{NativeModelBundle, REQUIRED_CPU_ARTIFACTS};
-pub use store::{InMemorySpeakerProfileStore, JsonSpeakerProfileStore, SpeakerProfileStore};
 pub use types::{
-    EmbeddingNormalization, EmbeddingSpace, IdentityMatch, NativeDiarizationOutput,
-    SpeakerEmbeddingObservation, SpeakerEmbeddingSample, SpeakerLibraryDocument, SpeakerProfile,
-    SpeakerSampleSource,
+    EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
+    IdentityMatch, NativeDiarizationOutput, SpeakerEmbeddingObservation, SpeakerEmbeddingSample,
+    SpeakerLibraryDocument, SpeakerProfile, SpeakerSampleSource,
 };

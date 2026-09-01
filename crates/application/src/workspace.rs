@@ -21,6 +21,7 @@ pub struct ProcessingRequest {
     pub language: Option<String>,
     pub expected_speakers: Option<u32>,
     pub device: ComputeDevice,
+    pub speaker_library_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -130,6 +131,7 @@ impl ProcessingService {
                     model: request.diarization_model,
                     expected_speakers: request.expected_speakers,
                     device: request.device,
+                    speaker_library_path: request.speaker_library_path,
                 },
                 asr_context,
                 diarization_context,
@@ -337,6 +339,21 @@ impl WorkspaceService {
         asr_model: ModelRef,
         diarization_model: ModelRef,
     ) -> Result<ProjectProcessingJob, contracts::BackendError> {
+        self.start_project_processing_with_speaker_library(
+            project_id,
+            asr_model,
+            diarization_model,
+            None,
+        )
+    }
+
+    pub fn start_project_processing_with_speaker_library(
+        &self,
+        project_id: ProjectId,
+        asr_model: ModelRef,
+        diarization_model: ModelRef,
+        speaker_library_path: Option<String>,
+    ) -> Result<ProjectProcessingJob, contracts::BackendError> {
         let mut project = self
             .repository
             .get(&project_id)
@@ -354,6 +371,7 @@ impl WorkspaceService {
             language: None,
             expected_speakers: None,
             device: ComputeDevice::Auto,
+            speaker_library_path,
         };
         self.processing.probe(&request).map_err(|error| {
             project.status = ProjectStatus::Failed;
@@ -562,6 +580,7 @@ mod tests {
                         confidence: Some(1.0),
                     }],
                     speaker_count: Some(1),
+                    embedding_observations: Vec::new(),
                 })
             })
         }

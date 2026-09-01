@@ -10,6 +10,10 @@ fn default_ui_locale() -> String {
     "zh-CN".into()
 }
 
+fn default_speaker_library_path() -> String {
+    "data/speakers/library.json".into()
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -23,6 +27,8 @@ pub struct AppSettings {
     pub compute_device: ComputeDevice,
     pub language: Option<String>,
     pub expected_speakers: Option<u32>,
+    #[serde(default = "default_speaker_library_path")]
+    pub speaker_library_path: String,
 }
 
 impl Default for AppSettings {
@@ -37,6 +43,7 @@ impl Default for AppSettings {
             compute_device: ComputeDevice::Auto,
             language: None,
             expected_speakers: None,
+            speaker_library_path: default_speaker_library_path(),
         }
     }
 }
@@ -79,6 +86,11 @@ impl AppSettings {
         }
         if self.ui_locale.trim().is_empty() {
             return Err(SettingsError::Invalid("UI locale must not be empty".into()));
+        }
+        if self.speaker_library_path.trim().is_empty() {
+            return Err(SettingsError::Invalid(
+                "speaker library path must not be empty".into(),
+            ));
         }
         Ok(())
     }
@@ -239,6 +251,35 @@ mod tests {
             settings.validate(),
             Err(SettingsError::Invalid(message)) if message.contains("greater than zero")
         ));
+    }
+
+    #[test]
+    fn legacy_settings_use_the_default_speaker_library_path() {
+        let path = std::env::temp_dir().join(format!(
+            "meetnote-legacy-settings-{}-{}.json",
+            std::process::id(),
+            unique_suffix()
+        ));
+        fs::write(
+            &path,
+            r#"{
+                "schemaVersion": "meetnote.settings.v1",
+                "asrBackendId": null,
+                "asrModel": null,
+                "diarizationBackendId": null,
+                "diarizationModel": null,
+                "uiLocale": "zh-CN",
+                "computeDevice": "Auto",
+                "language": null,
+                "expectedSpeakers": null
+            }"#,
+        )
+        .unwrap();
+
+        let settings = JsonSettingsRepository::open(&path).load().unwrap();
+
+        assert_eq!(settings.speaker_library_path, "data/speakers/library.json");
+        fs::remove_file(path).unwrap();
     }
 
     fn unique_suffix() -> u128 {

@@ -60,6 +60,12 @@ pub const KEYS: &[&str] = &[
     "interface_description",
     "transcription_description",
     "speaker_description",
+    "speaker_library_path",
+    "choose_directory",
+    "speaker_library_migration_title",
+    "speaker_library_migration_description",
+    "migrate",
+    "use_new_path",
     "runtime_description",
     "settings_description",
     "saved_automatically",
@@ -134,6 +140,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "not_downloaded") => "未下载",
         (Locale::ZhCn, "model_size") => "权重大小",
         (Locale::ZhCn, "vram_estimate") => "显存预估",
+        (Locale::ZhCn, "applicable_backends") => "适用后端",
         (Locale::ZhCn, "no_models") => "模型目录中没有可用模型。",
         (Locale::ZhCn, "interface") => "界面",
         (Locale::ZhCn, "language") => "界面语言",
@@ -161,6 +168,14 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "interface_description") => "界面偏好与本地化选项",
         (Locale::ZhCn, "transcription_description") => "选择语音识别后端、模型和转录语言",
         (Locale::ZhCn, "speaker_description") => "选择说话人分离后端、模型和人数提示",
+        (Locale::ZhCn, "speaker_library_path") => "声纹库地址",
+        (Locale::ZhCn, "choose_directory") => "选择目录",
+        (Locale::ZhCn, "speaker_library_migration_title") => "是否迁移现有声纹库？",
+        (Locale::ZhCn, "speaker_library_migration_description") => {
+            "检测到现有声纹库。迁移会将副本写入新位置，原文件会保留。"
+        }
+        (Locale::ZhCn, "migrate") => "迁移并使用",
+        (Locale::ZhCn, "use_new_path") => "仅使用新位置",
         (Locale::ZhCn, "runtime_description") => "控制本地推理使用的计算设备",
         (Locale::ZhCn, "settings_description") => "后端、模型、运行设备和界面语言",
         (Locale::ZhCn, "saved_automatically") => "设置会在选择后自动保存",
@@ -212,6 +227,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "not_downloaded") => "Not downloaded",
         (Locale::EnUs, "model_size") => "Weight size",
         (Locale::EnUs, "vram_estimate") => "VRAM estimate",
+        (Locale::EnUs, "applicable_backends") => "Applicable backends",
         (Locale::EnUs, "no_models") => "No models are available in the catalog.",
         (Locale::EnUs, "interface") => "Interface",
         (Locale::EnUs, "language") => "Language / Interface locale",
@@ -245,6 +261,16 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "speaker_description") => {
             "Choose the speaker separation backend, model, and speaker hint"
         }
+        (Locale::EnUs, "speaker_library_path") => "Speaker library path",
+        (Locale::EnUs, "choose_directory") => "Choose directory",
+        (Locale::EnUs, "speaker_library_migration_title") => {
+            "Migrate the existing speaker library?"
+        }
+        (Locale::EnUs, "speaker_library_migration_description") => {
+            "An existing speaker library was found. Migration copies it to the new location and keeps the original file."
+        }
+        (Locale::EnUs, "migrate") => "Migrate and use",
+        (Locale::EnUs, "use_new_path") => "Use new path only",
         (Locale::EnUs, "runtime_description") => {
             "Control the compute device used for local inference"
         }
@@ -311,6 +337,32 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::EnUs, "backend_selected") => format!("Backend selected: {value}"),
         (Locale::ZhCn, "settings_failed") => format!("设置更新失败：{value}"),
         (Locale::EnUs, "settings_failed") => format!("Settings update failed: {value}"),
+        (Locale::ZhCn, "speaker_library_updated") => format!("声纹库地址已更新：{value}"),
+        (Locale::EnUs, "speaker_library_updated") => {
+            format!("Speaker library path updated: {value}")
+        }
+        (Locale::ZhCn, "speaker_library_migration_failed") => {
+            format!("声纹库迁移失败：{value}")
+        }
+        (Locale::EnUs, "speaker_library_migration_failed") => {
+            format!("Speaker library migration failed: {value}")
+        }
+        (Locale::ZhCn, "speaker_library_migration_title") => {
+            "是否迁移现有声纹库？".into()
+        }
+        (Locale::EnUs, "speaker_library_migration_title") => {
+            "Migrate the existing speaker library?".into()
+        }
+        (Locale::ZhCn, "speaker_library_migration_description") => {
+            "检测到现有声纹库。迁移会将副本写入新位置，原文件会保留。".into()
+        }
+        (Locale::EnUs, "speaker_library_migration_description") => {
+            "An existing speaker library was found. Migration copies it to the new location and keeps the original file.".into()
+        }
+        (Locale::ZhCn, "migrate") => "迁移并使用".into(),
+        (Locale::EnUs, "migrate") => "Migrate and use".into(),
+        (Locale::ZhCn, "use_new_path") => "仅使用新位置".into(),
+        (Locale::EnUs, "use_new_path") => "Use new path only".into(),
         (Locale::ZhCn, "download_started") => format!("正在下载 {value}……"),
         (Locale::EnUs, "download_started") => format!("Downloading {value}…"),
         (Locale::ZhCn, "download_failed") => format!("下载失败：{value}"),
@@ -411,13 +463,18 @@ pub fn download_progress(
     artifact_index: usize,
     artifact_count: usize,
     completed_bytes: u64,
+    speed_bytes_per_second: Option<u64>,
 ) -> String {
+    let completed_mb = completed_bytes as f64 / 1_000_000.0;
+    let speed = speed_bytes_per_second
+        .map(|bytes| format!("{:.1} MB/s", bytes as f64 / 1_000_000.0))
+        .unwrap_or_else(|| "— MB/s".into());
     match locale {
         Locale::ZhCn => format!(
-            "{model_id} · 文件 {artifact_index}/{artifact_count}：已下载 {completed_bytes} 字节"
+            "{model_id} · 文件 {artifact_index}/{artifact_count}：已下载 {completed_mb:.1} MB · 速度 {speed}"
         ),
         Locale::EnUs => format!(
-            "{model_id} · artifact {artifact_index}/{artifact_count}: {completed_bytes} bytes"
+            "{model_id} · artifact {artifact_index}/{artifact_count}: {completed_mb:.1} MB · speed {speed}"
         ),
     }
 }

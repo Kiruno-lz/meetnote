@@ -3,19 +3,49 @@ use contracts::{
 };
 use domain::{align_transcript_and_speakers, SpeakerTaggedSegment};
 use runtime::JobContext;
+use std::fs;
 use std::future::Future;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
+mod speaker_identity;
 mod workspace;
 
 pub use contracts::BackendDescriptor;
+pub use speaker_identity::{
+    apply_identity_matches, cosine_similarity, ClusterIdentityResolver, IdentityResolverConfig,
+    InMemorySpeakerProfileStore, JsonSpeakerProfileStore, SpeakerLibraryError,
+    SpeakerLibraryService, SpeakerProfileStore,
+};
 pub use workspace::{
     render_markdown, ProcessingContexts, ProcessingRequest, ProcessingService,
     ProjectProcessingJob, WorkspaceService,
 };
 
 pub type BackendFuture<T> = Pin<Box<dyn Future<Output = Result<T, BackendError>> + Send>>;
+
+pub fn migrate_file(source: &Path, destination: &Path) -> Result<(), String> {
+    if source == destination {
+        return Ok(());
+    }
+    if destination.exists() {
+        return Err(format!(
+            "migration destination already exists: {}",
+            destination.display()
+        ));
+    }
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let temporary = destination.with_extension("migration.tmp");
+    let bytes = fs::read(source).map_err(|error| error.to_string())?;
+    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    if let Err(error) = fs::rename(&temporary, destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    Ok(())
+}
 
 pub trait AsrBackend: Send + Sync {
     fn descriptor(&self) -> BackendDescriptor;
@@ -76,11 +106,22 @@ pub async fn run_pipeline(
     asr_context: JobContext,
     diarization_context: JobContext,
 ) -> Result<PipelineResult, BackendError> {
+    let speaker_library_path = diarization_request.speaker_library_path.clone();
     let asr_future = asr_backend.transcribe(asr_request, asr_context);
     let diarization_future = diarization_backend.diarize(diarization_request, diarization_context);
     let (asr, diarization) = futures::join!(asr_future, diarization_future);
     let asr = asr?;
-    let diarization = diarization?;
+    let mut diarization = diarization?;
+    if let Some(path) = speaker_library_path.as_deref() {
+        let library = SpeakerLibraryService::new(Arc::new(JsonSpeakerProfileStore::new(path)));
+        let resolver = ClusterIdentityResolver::new(IdentityResolverConfig::default());
+        apply_identity_matches(&mut diarization, &library, &resolver).map_err(|error| {
+            BackendError {
+                code: contracts::BackendErrorCode::PersistenceFailed,
+                message: error.to_string(),
+            }
+        })?;
+    }
     let aligned = align_transcript_and_speakers(&asr.segments, &diarization.segments);
 
     Ok(PipelineResult {
@@ -191,6 +232,7 @@ mod tests {
                         confidence: Some(1.0),
                     }],
                     speaker_count: Some(1),
+                    embedding_observations: Vec::new(),
                 })
             })
         }
@@ -221,6 +263,7 @@ mod tests {
                 model: request_model,
                 expected_speakers: Some(1),
                 device: ComputeDevice::Cpu,
+                speaker_library_path: None,
             },
             asr_context,
             diarization_context,
@@ -228,5 +271,29 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.aligned[0].speaker_id, "speaker-1");
+    }
+
+    #[test]
+    fn migrate_file_copies_the_library_and_keeps_the_source() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-migration-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = root.join("old/library.json");
+        let destination = root.join("new/library.json");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, br#"{"profiles":[]}"#).unwrap();
+
+        migrate_file(&source, &destination).unwrap();
+
+        assert_eq!(
+            std::fs::read(&source).unwrap(),
+            std::fs::read(&destination).unwrap()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

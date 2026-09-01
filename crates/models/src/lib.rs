@@ -450,11 +450,7 @@ impl ModelCatalog {
         self.models
             .iter()
             .filter(|model| task.map_or(true, |task| model.task == task))
-            .filter(|model| {
-                backend_id.map_or(true, |backend| {
-                    model.candidate_backends.iter().any(|id| id == backend)
-                })
-            })
+            .filter(|model| backend_id.map_or(true, |backend| model.supports_backend(backend)))
             .map(|model| model.availability(model_root.as_ref()))
             .collect()
     }
@@ -505,6 +501,12 @@ impl ModelCatalog {
 }
 
 impl ModelCatalogEntry {
+    pub fn supports_backend(&self, backend_id: &str) -> bool {
+        self.candidate_backends
+            .iter()
+            .any(|candidate| candidate == backend_id)
+    }
+
     pub fn install_directory(&self, model_root: impl AsRef<Path>) -> std::path::PathBuf {
         model_root.as_ref().join(&self.task).join(&self.id)
     }
@@ -590,6 +592,31 @@ mod tests {
                 .as_ref()
                 .is_some_and(|checksum| checksum.len() == 64)
         }));
+    }
+
+    #[test]
+    fn browse_uses_catalog_backend_compatibility() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/models/catalog.json");
+        let catalog = ModelCatalog::from_path(path).unwrap();
+
+        let whisper_models =
+            catalog.browse("/tmp/meetnote-models", Some("asr"), Some("whisper-rs"));
+        assert!(!whisper_models.is_empty());
+        assert!(whisper_models
+            .iter()
+            .all(|availability| availability.model.supports_backend("whisper-rs")));
+        assert!(whisper_models
+            .iter()
+            .all(|availability| availability.model.source_format == "ggml"));
+
+        let native_models = catalog.browse(
+            "/tmp/meetnote-models",
+            Some("diarization"),
+            Some("diarization-native"),
+        );
+        assert_eq!(native_models.len(), 1);
+        assert_eq!(native_models[0].model.id, "speakrs-community-1-cpu");
     }
 
     #[test]

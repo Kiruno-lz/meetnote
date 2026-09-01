@@ -1,21 +1,7 @@
 use contracts::{BackendError, BackendErrorCode};
 use thiserror::Error;
 
-#[derive(Debug, Error)]
-pub enum SpeakerLibraryError {
-    #[error("speaker library I/O failed: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("speaker library JSON is invalid: {0}")]
-    Json(#[from] serde_json::Error),
-    #[error("speaker profile is invalid: {0}")]
-    InvalidProfile(String),
-    #[error("speaker profile was not found: {0}")]
-    ProfileNotFound(String),
-    #[error("speaker embedding space is incompatible")]
-    IncompatibleEmbeddingSpace,
-    #[error("speaker library lock is poisoned")]
-    LockPoisoned,
-}
+pub use application::SpeakerLibraryError;
 
 #[derive(Debug, Error)]
 pub enum NativeDiarizationError {

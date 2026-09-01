@@ -9,30 +9,78 @@ use contracts::ModelRef;
 use domain::{MeetingProject, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
-    prelude::*, App, Bounds, ClickEvent, Context, Entity, KeyBinding, PathPromptOptions, Window,
-    WindowBounds, WindowOptions,
+    prelude::*, App, Bounds, ClickEvent, Context, Entity, KeyBinding, PathPromptOptions,
+    SharedString, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use models::manager::{DownloadEvent, DownloadState};
+use models::{ModelAvailability, ModelInstallState};
 use runtime::{JobContext, JobEvent};
 use settings::{AppSettings, SettingsService};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use gpui_component::{
-    select::{SelectEvent, SelectState},
-    IndexPath,
+    dialog::DialogButtonProps,
+    select::{SelectEvent, SelectItem, SelectState},
+    IndexPath, WindowExt,
 };
 
 type StringSelect = SelectState<Vec<String>>;
+type ModelSelect = SelectState<Vec<ModelOption>>;
+
+#[derive(Debug, Clone)]
+pub(crate) struct ModelOption {
+    id: String,
+    installed: bool,
+}
+
+impl ModelOption {
+    fn from_availability(availability: &ModelAvailability) -> Self {
+        Self {
+            id: availability.model.id.clone(),
+            installed: availability.install_state == ModelInstallState::Installed,
+        }
+    }
+}
+
+impl SelectItem for ModelOption {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.id.clone().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        gpui::div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(self.id.clone())
+            .child(if self.installed {
+                "已下载"
+            } else {
+                "未下载"
+            })
+    }
+
+    fn disabled(&self) -> bool {
+        !self.installed
+    }
+}
 
 pub(crate) struct SettingsSelectors {
     pub(crate) language: Entity<StringSelect>,
     pub(crate) asr_backend: Entity<StringSelect>,
-    pub(crate) asr_model: Entity<StringSelect>,
+    pub(crate) asr_model: Entity<ModelSelect>,
     pub(crate) transcription_language: Entity<StringSelect>,
     pub(crate) diarization_backend: Entity<StringSelect>,
-    pub(crate) diarization_model: Entity<StringSelect>,
+    pub(crate) diarization_model: Entity<ModelSelect>,
     pub(crate) expected_speakers: Entity<StringSelect>,
     pub(crate) compute_device: Entity<StringSelect>,
 }
@@ -135,9 +183,9 @@ impl RootView {
             .iter()
             .map(|descriptor| descriptor.id.clone())
             .collect::<Vec<_>>();
-        let asr_model_items = self.installed_model_ids("asr", settings.asr_backend_id.as_deref());
+        let asr_model_items = self.model_options("asr", settings.asr_backend_id.as_deref());
         let diarization_model_items =
-            self.installed_model_ids("diarization", settings.diarization_backend_id.as_deref());
+            self.model_options("diarization", settings.diarization_backend_id.as_deref());
         let transcription_language_items = vec!["自动".into(), "English".into(), "中文".into()];
         let expected_speakers_items = vec![
             "自动".into(),
@@ -180,7 +228,7 @@ impl RootView {
         let asr_model = cx.new(|cx| {
             SelectState::new(
                 asr_model_items.clone(),
-                selected_index(
+                selected_model_index(
                     &asr_model_items,
                     settings
                         .asr_model
@@ -220,7 +268,7 @@ impl RootView {
         let diarization_model = cx.new(|cx| {
             SelectState::new(
                 diarization_model_items.clone(),
-                selected_index(
+                selected_model_index(
                     &diarization_model_items,
                     settings
                         .diarization_model
@@ -299,13 +347,12 @@ impl RootView {
         });
     }
 
-    fn installed_model_ids(&self, task: &str, backend_id: Option<&str>) -> Vec<String> {
+    fn model_options(&self, task: &str, backend_id: Option<&str>) -> Vec<ModelOption> {
         self.services
             .model_manager
             .browse(Some(task), backend_id)
             .into_iter()
-            .filter(|entry| entry.install_state == models::ModelInstallState::Installed)
-            .map(|entry| entry.model.id)
+            .map(|entry| ModelOption::from_availability(&entry))
             .collect()
     }
 
@@ -330,7 +377,21 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let items = self.installed_model_ids(task, backend_id);
+        let items = self.model_options(task, backend_id);
+        let selected_model_id = match task {
+            "asr" => self
+                .settings_draft
+                .asr_model
+                .as_ref()
+                .map(|model| model.model_id.as_str()),
+            "diarization" => self
+                .settings_draft
+                .diarization_model
+                .as_ref()
+                .map(|model| model.model_id.as_str()),
+            _ => None,
+        };
+        let selected_index = selected_model_index(&items, selected_model_id);
         let selector = match (task, self.settings_selectors.as_ref()) {
             ("asr", Some(selectors)) => selectors.asr_model.clone(),
             ("diarization", Some(selectors)) => selectors.diarization_model.clone(),
@@ -338,7 +399,7 @@ impl RootView {
         };
         selector.update(cx, |state, cx| {
             state.set_items(items, window, cx);
-            state.set_selected_index(None, window, cx);
+            state.set_selected_index(selected_index, window, cx);
         });
     }
 
@@ -376,8 +437,8 @@ impl RootView {
 
     fn on_asr_model_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
+        _: &Entity<ModelSelect>,
+        event: &SelectEvent<Vec<ModelOption>>,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -420,8 +481,8 @@ impl RootView {
 
     fn on_diarization_model_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
+        _: &Entity<ModelSelect>,
+        event: &SelectEvent<Vec<ModelOption>>,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -497,6 +558,125 @@ impl RootView {
             .ok();
         })
         .detach();
+    }
+
+    pub(crate) fn choose_speaker_library_directory(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(i18n::text(self.ui.locale, "choose_directory").into()),
+        });
+        let current_path = self.settings_draft.speaker_library_path.clone();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(directory) = paths.into_iter().next() else {
+                return;
+            };
+            let destination = directory.join("library.json");
+            this.update_in(cx, move |this, window, cx| {
+                this.handle_speaker_library_path_change(
+                    std::path::PathBuf::from(current_path),
+                    destination,
+                    window,
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn handle_speaker_library_path_change(
+        &mut self,
+        source: std::path::PathBuf,
+        destination: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if source == destination {
+            return;
+        }
+        if destination.is_file() || !source.is_file() {
+            self.commit_speaker_library_path(destination, cx);
+            return;
+        }
+
+        let source_for_migration = source.clone();
+        let destination_for_migration = destination.clone();
+        let source_for_description = source.display().to_string();
+        let destination_for_description = destination.display().to_string();
+        let locale = self.ui.locale;
+        let root = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |dialog, _, _| {
+            let root_for_migration = root.clone();
+            let root_for_switch = root.clone();
+            let source_for_migration = source_for_migration.clone();
+            let destination_for_migration = destination_for_migration.clone();
+            let destination_for_switch = destination.clone();
+            dialog
+                .confirm()
+                .title(i18n::text(locale, "speaker_library_migration_title"))
+                .description(format!(
+                    "{}\n{}\n{}",
+                    i18n::text(locale, "speaker_library_migration_description"),
+                    source_for_description,
+                    destination_for_description
+                ))
+                .button_props(
+                    DialogButtonProps::default()
+                        .ok_text(i18n::text(locale, "migrate"))
+                        .cancel_text(i18n::text(locale, "use_new_path"))
+                        .show_cancel(true),
+                )
+                .on_ok(move |_, _, cx| {
+                    let result = application::migrate_file(
+                        &source_for_migration,
+                        &destination_for_migration,
+                    );
+                    root_for_migration
+                        .update(cx, |this, cx| match result {
+                            Ok(()) => this
+                                .commit_speaker_library_path(destination_for_migration.clone(), cx),
+                            Err(error) => {
+                                this.ui.notice = i18n::message(
+                                    this.ui.locale,
+                                    "speaker_library_migration_failed",
+                                    &error,
+                                );
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                    true
+                })
+                .on_cancel(move |_, _, cx| {
+                    root_for_switch
+                        .update(cx, |this, cx| {
+                            this.commit_speaker_library_path(destination_for_switch.clone(), cx)
+                        })
+                        .ok();
+                    true
+                })
+        });
+    }
+
+    fn commit_speaker_library_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        self.settings_draft.speaker_library_path = path.display().to_string();
+        self.persist_settings(cx);
+        self.ui.notice = i18n::message(
+            self.ui.locale,
+            "speaker_library_updated",
+            &self.settings_draft.speaker_library_path,
+        );
+        cx.notify();
     }
 
     pub(crate) fn select_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
@@ -751,6 +931,7 @@ impl RootView {
                                 progress.artifact_index,
                                 progress.artifact_count,
                                 progress.completed_bytes,
+                                progress.speed_bytes_per_second,
                             ),
                         };
                         if terminal {
@@ -902,8 +1083,12 @@ impl RootView {
             (None, None) => self.services.diarization_model.clone(),
             (None, Some(model)) => model,
         };
-        let job = match workspace.start_project_processing(project_id, asr_model, diarization_model)
-        {
+        let job = match workspace.start_project_processing_with_speaker_library(
+            project_id,
+            asr_model,
+            diarization_model,
+            Some(settings.speaker_library_path),
+        ) {
             Ok(job) => job,
             Err(error) => {
                 self.ui.processing = false;
@@ -982,6 +1167,12 @@ impl RootView {
 fn selected_index(items: &[String], value: Option<&str>) -> Option<IndexPath> {
     value
         .and_then(|value| items.iter().position(|item| item == value))
+        .map(|row| IndexPath::default().row(row))
+}
+
+fn selected_model_index(items: &[ModelOption], value: Option<&str>) -> Option<IndexPath> {
+    value
+        .and_then(|value| items.iter().position(|item| item.id == value))
         .map(|row| IndexPath::default().row(row))
 }
 

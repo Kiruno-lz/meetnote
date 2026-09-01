@@ -7,7 +7,7 @@ use asr_sherpa_onnx::SherpaOnnxAsrBackend;
 use asr_whisper_rs::WhisperRsBackend;
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
 use diarization::{DiarizationBackendManager, DiarizationBackendRegistry};
-use diarization_native::NativeDiarizationBackend;
+use diarization_native::{NativeDiarizationBackend, NativeDiarizationConfig};
 use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
 use domain::SpeakerTaggedSegment;
 use models::{ModelCatalog, ModelManager};
@@ -22,10 +22,23 @@ use std::sync::Arc;
 use ui::DesktopServices;
 
 fn main() {
+    let settings = SettingsService::open(Arc::new(JsonSettingsRepository::open(
+        "data/settings/settings.json",
+    )))
+    .expect("failed to open settings repository");
+    let speaker_library_path = settings
+        .snapshot()
+        .map(|settings| PathBuf::from(settings.speaker_library_path))
+        .unwrap_or_else(|_| PathBuf::from("data/speakers/library.json"));
+
     let whisper_backend = Arc::new(WhisperRsBackend::default());
     let sherpa_asr_backend = Arc::new(SherpaOnnxAsrBackend::default());
     let diarization_backend = Arc::new(SherpaOnnxDiarizationBackend::default());
-    let native_diarization_backend = Arc::new(NativeDiarizationBackend::default());
+    let native_diarization_backend =
+        Arc::new(NativeDiarizationBackend::new(NativeDiarizationConfig {
+            speaker_library_path,
+            ..NativeDiarizationConfig::default()
+        }));
 
     let mut asr_registry = AsrBackendRegistry::default();
     asr_registry.register(whisper_backend.clone());
@@ -48,10 +61,6 @@ fn main() {
         repository,
         "data/markdown",
     );
-    let settings = SettingsService::open(Arc::new(JsonSettingsRepository::open(
-        "data/settings/settings.json",
-    )))
-    .expect("failed to open settings repository");
     let catalog = ModelCatalog::from_path("resources/models/catalog.json")
         .expect("failed to open model catalog");
     let model_manager = ModelManager::new(catalog, "models");
@@ -158,6 +167,7 @@ fn process_audio(
             model: diarization_model.clone(),
             expected_speakers: Some(2),
             device: ComputeDevice::Auto,
+            speaker_library_path: None,
         },
         asr_context.clone(),
         diarization_context.clone(),

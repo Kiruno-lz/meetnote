@@ -2,13 +2,14 @@ use application::{diarization_descriptor, BackendFuture, DiarizationBackend};
 use audio::read_audio_mono_16k;
 use contracts::{
     BackendDescriptor, BackendError, BackendErrorCode, ComputeDevice, DiarizationRequest,
-    DiarizationResult, ModelRef,
+    DiarizationResult, EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization,
+    EmbeddingSpace, ModelRef, SpeakerEmbeddingObservation,
 };
 use runtime::{spawn_blocking, JobContext};
 use sherpa_onnx::{
     FastClusteringConfig, OfflineSpeakerDiarization, OfflineSpeakerDiarizationConfig,
     OfflineSpeakerSegmentationModelConfig, OfflineSpeakerSegmentationPyannoteModelConfig,
-    SpeakerEmbeddingExtractorConfig,
+    SpeakerEmbeddingExtractor, SpeakerEmbeddingExtractorConfig,
 };
 use std::path::{Path, PathBuf};
 
@@ -16,6 +17,8 @@ use std::path::{Path, PathBuf};
 pub struct SherpaOnnxDiarizationBackend {
     pub segmentation_filename: String,
     pub embedding_filename: String,
+    pub embedding_model_id: String,
+    pub embedding_model_revision: Option<String>,
     pub clustering_threshold: f32,
 }
 
@@ -24,6 +27,8 @@ impl Default for SherpaOnnxDiarizationBackend {
         Self {
             segmentation_filename: "segmentation.onnx".into(),
             embedding_filename: "embedding.onnx".into(),
+            embedding_model_id: "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k".into(),
+            embedding_model_revision: None,
             clustering_threshold: 0.5,
         }
     }
@@ -140,8 +145,76 @@ fn diarize_sync(
         });
     }
 
-    let segments = result
-        .sort_by_start_time()
+    let raw_segments = result.sort_by_start_time();
+    let embedding_space = EmbeddingSpace {
+        backend_id: "sherpa-onnx".into(),
+        model_id: backend.embedding_model_id.clone(),
+        model_revision: backend
+            .embedding_model_revision
+            .clone()
+            .or_else(|| request.model.revision.clone()),
+        dimension: 0,
+        sample_rate_hz: 16_000,
+        frontend: EmbeddingFrontend {
+            extractor: EmbeddingFeatureExtractor::KaldiFbank,
+            mel_bins: 80,
+            frame_length_ms: 25,
+            frame_shift_ms: 10,
+            mean_normalization: true,
+            dither: false,
+            overlap_aware: false,
+        },
+        legacy_feature_config: None,
+        normalization: EmbeddingNormalization::L2,
+    };
+    let extractor = SpeakerEmbeddingExtractor::create(&SpeakerEmbeddingExtractorConfig {
+        model: Some(path_string(directory.join(&backend.embedding_filename))),
+        provider: Some(provider_for(request.device).into()),
+        ..Default::default()
+    })
+    .ok_or_else(|| BackendError {
+        code: BackendErrorCode::ModelLoadFailed,
+        message: "sherpa-onnx failed to create the speaker embedding extractor".into(),
+    })?;
+    let embedding_space = EmbeddingSpace {
+        dimension: extractor.dim().max(0) as usize,
+        ..embedding_space
+    };
+    let embedding_observations = raw_segments
+        .iter()
+        .enumerate()
+        .filter_map(|(index, segment)| {
+            let start_ms = (segment.start.max(0.0) * 1_000.0) as u64;
+            let end_ms = (segment.end.max(0.0) * 1_000.0) as u64;
+            let start = (start_ms.saturating_mul(16) as usize).min(audio.samples.len());
+            let end = (end_ms.saturating_mul(16) as usize).min(audio.samples.len());
+            if end <= start {
+                return None;
+            }
+            let stream = extractor.create_stream()?;
+            stream.accept_waveform(16_000, &audio.samples[start..end]);
+            stream.input_finished();
+            if !extractor.is_ready(&stream) {
+                return None;
+            }
+            let vector = extractor.compute(&stream)?;
+            if vector.len() != embedding_space.dimension
+                || vector.iter().any(|value| !value.is_finite())
+            {
+                return None;
+            }
+            Some(SpeakerEmbeddingObservation {
+                id: format!("sherpa-embedding-{index}"),
+                cluster_id: segment.speaker.max(0) as u32,
+                start_ms,
+                end_ms,
+                vector,
+                quality: 1.0,
+                embedding_space: embedding_space.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let segments = raw_segments
         .into_iter()
         .enumerate()
         .map(|(index, segment)| domain::DiarizationSegment {
@@ -165,6 +238,7 @@ fn diarize_sync(
         model: request.model,
         segments,
         speaker_count,
+        embedding_observations,
     })
 }
 

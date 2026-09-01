@@ -1,13 +1,13 @@
 use crate::{
-    ClusterIdentityResolver, IdentityResolverConfig, JsonSpeakerProfileStore,
-    NativeDiarizationEngine, NativeDiarizationError, NativeDiarizationOutput,
-    SpeakerEmbeddingObservation, SpeakerLibraryService, SpeakrsEngine,
+    IdentityResolverConfig, JsonSpeakerProfileStore, NativeDiarizationEngine,
+    NativeDiarizationError, NativeDiarizationOutput, SpeakerEmbeddingObservation,
+    SpeakerLibraryService, SpeakrsEngine,
 };
 use application::{diarization_descriptor, BackendFuture, DiarizationBackend};
 use audio::read_audio_mono_16k;
 use contracts::{BackendDescriptor, BackendError, DiarizationRequest, DiarizationResult, ModelRef};
 use runtime::{spawn_blocking, JobContext, Progress};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -34,7 +34,6 @@ impl Default for NativeDiarizationConfig {
 pub struct NativeDiarizationBackend {
     engine: Arc<dyn NativeDiarizationEngine>,
     library: SpeakerLibraryService,
-    resolver: ClusterIdentityResolver,
     config: NativeDiarizationConfig,
 }
 
@@ -64,7 +63,6 @@ impl NativeDiarizationBackend {
         Self {
             engine,
             library,
-            resolver: ClusterIdentityResolver::new(config.identity),
             config,
         }
     }
@@ -118,39 +116,23 @@ impl NativeDiarizationBackend {
         });
         ensure_not_cancelled(&context)?;
 
-        let profiles = self.library.profiles()?;
-        let identity_matches = self
-            .resolver
-            .resolve(&engine_output.observations, &profiles)?;
-        let matches_by_cluster = identity_matches
-            .iter()
-            .map(|identity| (identity.cluster_id, identity))
-            .collect::<BTreeMap<_, _>>();
         let all_clusters = engine_output
             .segments
             .iter()
             .map(|segment| segment.cluster_id)
             .collect::<BTreeSet<_>>();
-        let anonymous_clusters = all_clusters
-            .iter()
-            .copied()
-            .filter(|cluster_id| !matches_by_cluster.contains_key(cluster_id))
-            .collect::<Vec<_>>();
         let segments = engine_output
             .segments
             .iter()
             .enumerate()
-            .map(|(index, segment)| {
-                let identity = matches_by_cluster.get(&segment.cluster_id).copied();
-                domain::DiarizationSegment {
-                    id: format!("native-diarization-segment-{index}"),
-                    speaker_id: format!("speaker-{}", segment.cluster_id),
-                    speaker_profile_id: identity.map(|match_| match_.profile_id.clone()),
-                    speaker_label: identity.map(|match_| match_.display_name.clone()),
-                    start_ms: segment.start_ms,
-                    end_ms: segment.end_ms,
-                    confidence: segment.confidence,
-                }
+            .map(|(index, segment)| domain::DiarizationSegment {
+                id: format!("native-diarization-segment-{index}"),
+                speaker_id: format!("speaker-{}", segment.cluster_id),
+                speaker_profile_id: None,
+                speaker_label: None,
+                start_ms: segment.start_ms,
+                end_ms: segment.end_ms,
+                confidence: segment.confidence,
             })
             .collect();
         let speaker_count = if engine_output.speaker_count == 0 && !all_clusters.is_empty() {
@@ -169,10 +151,10 @@ impl NativeDiarizationBackend {
                 model: request.model,
                 segments,
                 speaker_count,
+                embedding_observations: engine_output.observations.clone(),
             },
             observations: engine_output.observations,
-            identity_matches,
-            anonymous_clusters,
+            anonymous_clusters: all_clusters.into_iter().collect(),
         })
     }
 }
@@ -257,8 +239,8 @@ fn validate_engine_output(
 mod tests {
     use super::*;
     use crate::{
-        EmbeddingNormalization, EmbeddingSpace, EngineOutput, EngineSegment,
-        InMemorySpeakerProfileStore, SpeakerSampleSource,
+        EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
+        EngineOutput, EngineSegment, InMemorySpeakerProfileStore, SpeakerSampleSource,
     };
     use contracts::{ComputeDevice, ModelRef};
     use runtime::JobRuntime;
@@ -296,7 +278,16 @@ mod tests {
                 model_revision: Some("1".into()),
                 dimension: vector.len(),
                 sample_rate_hz: 16_000,
-                feature_config: "fbank".into(),
+                frontend: EmbeddingFrontend {
+                    extractor: EmbeddingFeatureExtractor::KaldiFbank,
+                    mel_bins: 80,
+                    frame_length_ms: 25,
+                    frame_shift_ms: 10,
+                    mean_normalization: false,
+                    dither: true,
+                    overlap_aware: true,
+                },
+                legacy_feature_config: None,
                 normalization: EmbeddingNormalization::L2,
             },
             vector,
@@ -362,7 +353,7 @@ mod tests {
         let audio_path = write_test_wav();
         let (context, _) = JobRuntime::default().create_job();
 
-        let output = futures::executor::block_on(backend.analyze(
+        let mut output = futures::executor::block_on(backend.analyze(
             DiarizationRequest {
                 audio_path: audio_path.display().to_string(),
                 model: ModelRef {
@@ -373,12 +364,23 @@ mod tests {
                 },
                 expected_speakers: Some(1),
                 device: ComputeDevice::Cpu,
+                speaker_library_path: None,
             },
             context,
         ))
         .unwrap();
 
-        assert_eq!(output.identity_matches[0].display_name, "Alice");
+        let identity_matches = application::apply_identity_matches(
+            &mut output.result,
+            backend.library(),
+            &application::ClusterIdentityResolver::new(IdentityResolverConfig {
+                default_threshold: 0.7,
+                ambiguity_margin: 0.03,
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(identity_matches[0].display_name, "Alice");
         assert_eq!(
             output.result.segments[0].speaker_label.as_deref(),
             Some("Alice")

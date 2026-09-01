@@ -1,12 +1,16 @@
 use crate::{
     components::{setting_control_row, settings_section},
-    controller::RootView,
+    controller::{ModelOption, RootView},
     i18n::text as tr,
 };
 use gpui::{div, prelude::*, px, Context, IntoElement};
-use gpui_component::{scroll::ScrollableElement as _, select::Select};
+use gpui_component::{
+    button::{Button, ButtonVariants},
+    scroll::ScrollableElement as _,
+    select::Select,
+};
 
-pub(crate) fn render(root: &mut RootView, _cx: &mut Context<RootView>) -> impl IntoElement {
+pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let Some(selectors) = root.settings_selectors.as_ref() else {
         return div().flex_1().into_any_element();
     };
@@ -37,7 +41,7 @@ pub(crate) fn render(root: &mut RootView, _cx: &mut Context<RootView>) -> impl I
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "asr_model"),
-                    select_control(&selectors.asr_model, "asr-model"),
+                    model_select_control(&selectors.asr_model, "asr-model"),
                 )
                 .into_any_element(),
                 setting_control_row(
@@ -57,12 +61,35 @@ pub(crate) fn render(root: &mut RootView, _cx: &mut Context<RootView>) -> impl I
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "diarization_model"),
-                    select_control(&selectors.diarization_model, "diarization-model"),
+                    model_select_control(&selectors.diarization_model, "diarization-model"),
                 )
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "expected_speakers"),
                     select_control(&selectors.expected_speakers, "expected-speakers"),
+                )
+                .into_any_element(),
+                setting_control_row(
+                    tr(root.ui.locale, "speaker_library_path"),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(280.))
+                                .text_xs()
+                                .text_color(gpui::rgb(0x8992a3))
+                                .child(root.settings_draft.speaker_library_path.clone()),
+                        )
+                        .child(
+                            Button::new("choose-speaker-library")
+                                .secondary()
+                                .compact()
+                                .label(tr(root.ui.locale, "choose_directory"))
+                                .on_click(cx.listener(RootView::choose_speaker_library_directory)),
+                        )
+                        .into_any_element(),
                 )
                 .into_any_element(),
             ],
@@ -96,6 +123,17 @@ pub(crate) fn render(root: &mut RootView, _cx: &mut Context<RootView>) -> impl I
 
 fn select_control(
     state: &gpui::Entity<gpui_component::select::SelectState<Vec<String>>>,
+    id: &'static str,
+) -> gpui::AnyElement {
+    Select::new(state)
+        .w(px(280.))
+        .menu_width(px(280.))
+        .accessibility_label(id)
+        .into_any_element()
+}
+
+fn model_select_control(
+    state: &gpui::Entity<gpui_component::select::SelectState<Vec<ModelOption>>>,
     id: &'static str,
 ) -> gpui::AnyElement {
     Select::new(state)

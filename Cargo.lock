@@ -216,6 +216,9 @@ dependencies = [
  "domain",
  "futures",
  "runtime",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]
@@ -1254,6 +1257,7 @@ version = "0.1.0"
 dependencies = [
  "domain",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1625,7 +1629,6 @@ dependencies = [
  "hound",
  "runtime",
  "serde",
- "serde_json",
  "speakrs",
  "thiserror 2.0.20",
  "uuid",
@@ -1639,6 +1642,7 @@ dependencies = [
  "audio",
  "contracts",
  "domain",
+ "futures",
  "runtime",
  "sherpa-onnx",
 ]
