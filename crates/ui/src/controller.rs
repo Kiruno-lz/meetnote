@@ -4,8 +4,11 @@ use crate::{
     state::{ContentMode, Overlay, UiState},
     text_input::TextInput,
 };
-use application::{BackendInventory, DocumentCommandService, WorkspaceService};
-use contracts::{DocumentCommand, DocumentCommandEnvelope, DocumentCommandResult, ModelRef};
+use application::{BackendInventory, DocumentCommandService, ProcessingOptions, WorkspaceService};
+use contracts::{
+    DiarizationStageKind, DiarizationStageOption, DocumentCommand, DocumentCommandEnvelope,
+    DocumentCommandResult, ModelRef,
+};
 use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
@@ -28,6 +31,7 @@ use gpui_component::{
 
 type StringSelect = SelectState<Vec<String>>;
 type ModelSelect = SelectState<Vec<ModelOption>>;
+type StageModelSelect = SelectState<Vec<StageModelOption>>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModelOption {
@@ -74,6 +78,42 @@ impl SelectItem for ModelOption {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct StageModelOption {
+    id: String,
+    installed: bool,
+}
+
+impl SelectItem for StageModelOption {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.id.clone().into()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+
+    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        gpui::div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(self.id.clone())
+            .child(if self.installed {
+                "已下载"
+            } else {
+                "未下载"
+            })
+    }
+
+    fn disabled(&self) -> bool {
+        !self.installed
+    }
+}
+
 pub(crate) struct SettingsSelectors {
     pub(crate) language: Entity<StringSelect>,
     pub(crate) asr_backend: Entity<StringSelect>,
@@ -81,6 +121,9 @@ pub(crate) struct SettingsSelectors {
     pub(crate) transcription_language: Entity<StringSelect>,
     pub(crate) diarization_backend: Entity<StringSelect>,
     pub(crate) diarization_model: Entity<ModelSelect>,
+    pub(crate) diarization_segmentation_model: Entity<StageModelSelect>,
+    pub(crate) diarization_embedding_model: Entity<StageModelSelect>,
+    pub(crate) diarization_clustering: Entity<StringSelect>,
     pub(crate) expected_speakers: Entity<StringSelect>,
     pub(crate) compute_device: Entity<StringSelect>,
 }
@@ -187,6 +230,17 @@ impl RootView {
         let asr_model_items = self.model_options("asr", settings.asr_backend_id.as_deref());
         let diarization_model_items =
             self.model_options("diarization", settings.diarization_backend_id.as_deref());
+        let segmentation_items = self.stage_model_options(
+            DiarizationStageKind::Segmentation,
+            settings.diarization_backend_id.as_deref(),
+            settings.diarization_model.as_ref(),
+        );
+        let embedding_items = self.stage_model_options(
+            DiarizationStageKind::Embedding,
+            settings.diarization_backend_id.as_deref(),
+            settings.diarization_model.as_ref(),
+        );
+        let clustering_items = self.clustering_options(settings.diarization_backend_id.as_deref());
         let transcription_language_items = vec!["自动".into(), "English".into(), "中文".into()];
         let expected_speakers_items = vec![
             "自动".into(),
@@ -280,6 +334,52 @@ impl RootView {
                 cx,
             )
         });
+        let diarization_segmentation_model = cx.new(|cx| {
+            SelectState::new(
+                segmentation_items.clone(),
+                selected_stage_model_index(
+                    &segmentation_items,
+                    settings
+                        .diarization_stages
+                        .segmentation_model
+                        .as_ref()
+                        .map(|model| model.model_id.as_str()),
+                ),
+                window,
+                cx,
+            )
+        });
+        let diarization_embedding_model = cx.new(|cx| {
+            SelectState::new(
+                embedding_items.clone(),
+                selected_stage_model_index(
+                    &embedding_items,
+                    settings
+                        .diarization_stages
+                        .embedding_model
+                        .as_ref()
+                        .map(|model| model.model_id.as_str()),
+                ),
+                window,
+                cx,
+            )
+        });
+        let diarization_clustering = cx.new(|cx| {
+            SelectState::new(
+                clustering_items.clone(),
+                selected_index(
+                    &clustering_items,
+                    settings
+                        .diarization_stages
+                        .clustering_algorithm
+                        .as_ref()
+                        .map(|algorithm| algorithm.id.as_str())
+                        .or_else(|| clustering_items.first().map(String::as_str)),
+                ),
+                window,
+                cx,
+            )
+        });
         let expected_speakers = cx.new(|cx| {
             SelectState::new(
                 expected_speakers_items.clone(),
@@ -328,6 +428,24 @@ impl RootView {
         )
         .detach();
         cx.subscribe_in(
+            &diarization_segmentation_model,
+            window,
+            Self::on_diarization_segmentation_model_selected,
+        )
+        .detach();
+        cx.subscribe_in(
+            &diarization_embedding_model,
+            window,
+            Self::on_diarization_embedding_model_selected,
+        )
+        .detach();
+        cx.subscribe_in(
+            &diarization_clustering,
+            window,
+            Self::on_diarization_clustering_selected,
+        )
+        .detach();
+        cx.subscribe_in(
             &expected_speakers,
             window,
             Self::on_expected_speakers_selected,
@@ -343,6 +461,9 @@ impl RootView {
             transcription_language,
             diarization_backend,
             diarization_model,
+            diarization_segmentation_model,
+            diarization_embedding_model,
+            diarization_clustering,
             expected_speakers,
             compute_device,
         });
@@ -355,6 +476,96 @@ impl RootView {
             .into_iter()
             .map(|entry| ModelOption::from_availability(&entry))
             .collect()
+    }
+
+    fn stage_model_options(
+        &self,
+        stage: DiarizationStageKind,
+        backend_id: Option<&str>,
+        model: Option<&ModelRef>,
+    ) -> Vec<StageModelOption> {
+        let Some(descriptor) = backend_id.and_then(|id| {
+            self.inventory
+                .diarization
+                .iter()
+                .find(|descriptor| descriptor.id == id)
+        }) else {
+            return Vec::new();
+        };
+        if !descriptor.configurable_diarization_stages.contains(&stage) {
+            return Vec::new();
+        }
+        descriptor
+            .diarization_stage_options
+            .iter()
+            .filter(|option| option.stage == stage)
+            .map(|option| StageModelOption {
+                id: option.id.clone(),
+                installed: model.is_some_and(|model| self.stage_option_is_installed(model, option)),
+            })
+            .collect()
+    }
+
+    fn clustering_options(&self, backend_id: Option<&str>) -> Vec<String> {
+        let Some(descriptor) = backend_id.and_then(|id| {
+            self.inventory
+                .diarization
+                .iter()
+                .find(|descriptor| descriptor.id == id)
+        }) else {
+            return Vec::new();
+        };
+        descriptor
+            .diarization_stage_options
+            .iter()
+            .filter(|option| option.stage == DiarizationStageKind::Clustering)
+            .map(|option| option.id.clone())
+            .collect()
+    }
+
+    fn stage_option_is_installed(&self, model: &ModelRef, option: &DiarizationStageOption) -> bool {
+        let root = Path::new(&model.artifact_path);
+        option
+            .artifact_files
+            .iter()
+            .all(|filename| root.join(filename).is_file())
+    }
+
+    fn selected_diarization_descriptor(&self) -> Option<&contracts::BackendDescriptor> {
+        self.settings_draft
+            .diarization_backend_id
+            .as_deref()
+            .and_then(|id| self.inventory.diarization.iter().find(|item| item.id == id))
+    }
+
+    pub(crate) fn show_diarization_stage_options(&self) -> bool {
+        self.selected_diarization_descriptor()
+            .is_some_and(|descriptor| !descriptor.configurable_diarization_stages.is_empty())
+    }
+
+    fn stage_model_ref(&self, stage: DiarizationStageKind, id: &str) -> Option<ModelRef> {
+        let descriptor = self.selected_diarization_descriptor()?;
+        let option = descriptor
+            .diarization_stage_options
+            .iter()
+            .find(|option| option.stage == stage && option.id == id)?;
+        let parent = self.settings_draft.diarization_model.as_ref()?;
+        let filename = option.artifact_files.first()?.clone();
+        Some(ModelRef {
+            backend_id: parent.backend_id.clone(),
+            model_id: option.model_id.clone().unwrap_or_else(|| option.id.clone()),
+            revision: option.revision.clone().or_else(|| parent.revision.clone()),
+            artifact_path: Path::new(&parent.artifact_path)
+                .join(filename)
+                .display()
+                .to_string(),
+            artifacts: parent
+                .artifacts
+                .iter()
+                .filter(|artifact| option.artifact_files.contains(&artifact.filename))
+                .cloned()
+                .collect(),
+        })
     }
 
     fn persist_settings(&mut self, cx: &mut Context<Self>) {
@@ -401,6 +612,66 @@ impl RootView {
         selector.update(cx, |state, cx| {
             state.set_items(items, window, cx);
             state.set_selected_index(selected_index, window, cx);
+        });
+    }
+
+    fn refresh_stage_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let backend_id = self.settings_draft.diarization_backend_id.clone();
+        let model = self.settings_draft.diarization_model.clone();
+        let segmentation_items = self.stage_model_options(
+            DiarizationStageKind::Segmentation,
+            backend_id.as_deref(),
+            model.as_ref(),
+        );
+        let embedding_items = self.stage_model_options(
+            DiarizationStageKind::Embedding,
+            backend_id.as_deref(),
+            model.as_ref(),
+        );
+        let clustering_items = self.clustering_options(backend_id.as_deref());
+        let Some(selectors) = self.settings_selectors.as_ref() else {
+            return;
+        };
+        let segmentation_selected = selected_stage_model_index(
+            &segmentation_items,
+            self.settings_draft
+                .diarization_stages
+                .segmentation_model
+                .as_ref()
+                .map(|model| model.model_id.as_str()),
+        );
+        selectors
+            .diarization_segmentation_model
+            .update(cx, |state, cx| {
+                state.set_items(segmentation_items, window, cx);
+                state.set_selected_index(segmentation_selected, window, cx);
+            });
+        let embedding_selected = selected_stage_model_index(
+            &embedding_items,
+            self.settings_draft
+                .diarization_stages
+                .embedding_model
+                .as_ref()
+                .map(|model| model.model_id.as_str()),
+        );
+        selectors
+            .diarization_embedding_model
+            .update(cx, |state, cx| {
+                state.set_items(embedding_items, window, cx);
+                state.set_selected_index(embedding_selected, window, cx);
+            });
+        let clustering_selected = selected_index(
+            &clustering_items,
+            self.settings_draft
+                .diarization_stages
+                .clustering_algorithm
+                .as_ref()
+                .map(|algorithm| algorithm.id.as_str())
+                .or_else(|| clustering_items.first().map(String::as_str)),
+        );
+        selectors.diarization_clustering.update(cx, |state, cx| {
+            state.set_items(clustering_items, window, cx);
+            state.set_selected_index(clustering_selected, window, cx);
         });
     }
 
@@ -477,6 +748,7 @@ impl RootView {
         if let SelectEvent::Confirm(Some(value)) = event {
             self.select_diarization_backend(value.clone(), cx);
             self.refresh_model_selector("diarization", Some(value), window, cx);
+            self.refresh_stage_selectors(window, cx);
         }
     }
 
@@ -484,13 +756,67 @@ impl RootView {
         &mut self,
         _: &Entity<ModelSelect>,
         event: &SelectEvent<Vec<ModelOption>>,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if let SelectEvent::Confirm(Some(value)) = event {
             if let Some(backend_id) = self.settings_draft.diarization_backend_id.clone() {
                 self.use_model(value.clone(), "diarization".into(), backend_id, cx);
+                self.refresh_stage_selectors(window, cx);
             }
+        }
+    }
+
+    fn on_diarization_segmentation_model_selected(
+        &mut self,
+        _: &Entity<StageModelSelect>,
+        event: &SelectEvent<Vec<StageModelOption>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            self.settings_draft.diarization_stages.segmentation_model =
+                self.stage_model_ref(DiarizationStageKind::Segmentation, value);
+            self.persist_settings(cx);
+        }
+    }
+
+    fn on_diarization_embedding_model_selected(
+        &mut self,
+        _: &Entity<StageModelSelect>,
+        event: &SelectEvent<Vec<StageModelOption>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            self.settings_draft.diarization_stages.embedding_model =
+                self.stage_model_ref(DiarizationStageKind::Embedding, value);
+            self.persist_settings(cx);
+        }
+    }
+
+    fn on_diarization_clustering_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            let option = self
+                .selected_diarization_descriptor()
+                .and_then(|descriptor| {
+                    descriptor.diarization_stage_options.iter().find(|option| {
+                        option.stage == DiarizationStageKind::Clustering && option.id == *value
+                    })
+                });
+            self.settings_draft.diarization_stages.clustering_algorithm =
+                option.map(|option| contracts::AlgorithmRef {
+                    id: option.id.clone(),
+                    revision: option.revision.clone(),
+                    parameters: None,
+                });
+            self.persist_settings(cx);
         }
     }
 
@@ -872,6 +1198,7 @@ impl RootView {
         {
             self.settings_draft.diarization_model = None;
         }
+        self.settings_draft.diarization_stages = Default::default();
         self.ui.notice = i18n::message(
             self.ui.locale,
             "backend_selected",
@@ -901,6 +1228,7 @@ impl RootView {
                 } else {
                     settings.diarization_backend_id = Some(backend_id);
                     settings.diarization_model = Some(model);
+                    settings.diarization_stages = Default::default();
                 }
                 self.settings_draft = settings;
                 self.ui.notice = i18n::message(self.ui.locale, "model_selected", &model_id);
@@ -1105,6 +1433,18 @@ impl RootView {
             (None, None) => self.services.diarization_model.clone(),
             (None, Some(model)) => model,
         };
+        if let Err(error) = workspace.set_processing_options(ProcessingOptions {
+            language: settings.language.clone(),
+            expected_speakers: settings.expected_speakers,
+            device: settings.compute_device,
+            speaker_library_path: Some(settings.speaker_library_path.clone()),
+            diarization_stages: settings.diarization_stages.clone(),
+        }) {
+            self.ui.processing = false;
+            self.ui.notice = i18n::message(self.ui.locale, "processing_failed", &error);
+            cx.notify();
+            return;
+        }
         let job = match workspace.start_project_processing_with_speaker_library(
             project_id,
             asr_model,
@@ -1195,6 +1535,16 @@ fn selected_index(items: &[String], value: Option<&str>) -> Option<IndexPath> {
 fn selected_model_index(items: &[ModelOption], value: Option<&str>) -> Option<IndexPath> {
     value
         .and_then(|value| items.iter().position(|item| item.id == value))
+        .map(|row| IndexPath::default().row(row))
+}
+
+fn selected_stage_model_index(
+    items: &[StageModelOption],
+    value: Option<&str>,
+) -> Option<IndexPath> {
+    value
+        .and_then(|value| items.iter().position(|item| item.id == value))
+        .or_else(|| (!items.is_empty()).then_some(0))
         .map(|row| IndexPath::default().row(row))
 }
 

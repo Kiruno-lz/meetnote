@@ -64,6 +64,39 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                     model_select_control(&selectors.diarization_model, "diarization-model"),
                 )
                 .into_any_element(),
+                if root.show_diarization_stage_options() {
+                    setting_control_row(
+                        tr(root.ui.locale, "diarization_segmentation_model"),
+                        stage_model_select_control(
+                            &selectors.diarization_segmentation_model,
+                            "diarization-segmentation-model",
+                        ),
+                    )
+                    .into_any_element()
+                } else {
+                    div().into_any_element()
+                },
+                if root.show_diarization_stage_options() {
+                    setting_control_row(
+                        tr(root.ui.locale, "diarization_embedding_model"),
+                        stage_model_select_control(
+                            &selectors.diarization_embedding_model,
+                            "diarization-embedding-model",
+                        ),
+                    )
+                    .into_any_element()
+                } else {
+                    div().into_any_element()
+                },
+                if root.show_diarization_stage_options() {
+                    setting_control_row(
+                        tr(root.ui.locale, "diarization_clustering"),
+                        select_control(&selectors.diarization_clustering, "diarization-clustering"),
+                    )
+                    .into_any_element()
+                } else {
+                    div().into_any_element()
+                },
                 setting_control_row(
                     tr(root.ui.locale, "expected_speakers"),
                     select_control(&selectors.expected_speakers, "expected-speakers"),
@@ -134,6 +167,19 @@ fn select_control(
 
 fn model_select_control(
     state: &gpui::Entity<gpui_component::select::SelectState<Vec<ModelOption>>>,
+    id: &'static str,
+) -> gpui::AnyElement {
+    Select::new(state)
+        .w(px(280.))
+        .menu_width(px(280.))
+        .accessibility_label(id)
+        .into_any_element()
+}
+
+fn stage_model_select_control(
+    state: &gpui::Entity<
+        gpui_component::select::SelectState<Vec<crate::controller::StageModelOption>>,
+    >,
     id: &'static str,
 ) -> gpui::AnyElement {
     Select::new(state)

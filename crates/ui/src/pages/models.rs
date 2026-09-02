@@ -138,12 +138,15 @@ fn model_card(
             models::manager::DownloadState::Queued
                 | models::manager::DownloadState::Downloading
                 | models::manager::DownloadState::Paused
+                | models::manager::DownloadState::Verifying
         )
     });
-    let action = if matches!(
-        entry.install_state,
-        ModelInstallState::Missing | ModelInstallState::Partial
-    ) && !downloading
+    let action = if entry.model.status == "ready"
+        && matches!(
+            entry.install_state,
+            ModelInstallState::Missing | ModelInstallState::Partial
+        )
+        && !downloading
     {
         let id = model_id.clone();
         Button::new(format!("download-{id}"))
@@ -163,6 +166,7 @@ fn model_card(
                 models::manager::DownloadState::Queued
                     | models::manager::DownloadState::Downloading
                     | models::manager::DownloadState::Paused
+                    | models::manager::DownloadState::Verifying
             )
         })
         .map(|progress| download_progress_view(root, &model_id, progress, cx));
@@ -235,9 +239,9 @@ fn download_progress_view(
     let loading = progress.total_bytes.is_none();
     let action = match progress.state {
         models::manager::DownloadState::Paused => DownloadAction::Resume,
-        models::manager::DownloadState::Queued | models::manager::DownloadState::Downloading => {
-            DownloadAction::Pause
-        }
+        models::manager::DownloadState::Queued
+        | models::manager::DownloadState::Downloading
+        | models::manager::DownloadState::Verifying => DownloadAction::Pause,
         _ => DownloadAction::Cancel,
     };
     let label = match action {

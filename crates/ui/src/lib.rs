@@ -55,12 +55,14 @@ mod tests {
                 model_id: "fixture".into(),
                 revision: None,
                 artifact_path: "missing-model".into(),
+                artifacts: Vec::new(),
             },
             diarization_model: ModelRef {
                 backend_id: "sherpa-onnx".into(),
                 model_id: "fixture".into(),
                 revision: None,
                 artifact_path: "missing-bundle".into(),
+                artifacts: Vec::new(),
             },
         };
         let assistant_input = cx.new(|cx| text_input::TextInput::new(cx, "Ask…"));
