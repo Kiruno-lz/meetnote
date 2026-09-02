@@ -1,11 +1,13 @@
-use application::{diarization_descriptor, BackendFuture, DiarizationBackend};
+use application::{
+    diarization_descriptor, BackendFuture, DiarizationBackend, DiarizationStageProvenance,
+};
 use audio::read_audio_mono_16k;
 use contracts::{
     BackendDescriptor, BackendError, BackendErrorCode, ComputeDevice, DiarizationRequest,
     DiarizationResult, EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization,
     EmbeddingSpace, ModelRef, SpeakerEmbeddingObservation,
 };
-use runtime::{spawn_blocking, JobContext};
+use runtime::JobContext;
 use sherpa_onnx::{
     FastClusteringConfig, OfflineSpeakerDiarization, OfflineSpeakerDiarizationConfig,
     OfflineSpeakerSegmentationModelConfig, OfflineSpeakerSegmentationPyannoteModelConfig,
@@ -68,16 +70,58 @@ impl DiarizationBackend for SherpaOnnxDiarizationBackend {
         Ok(())
     }
 
+    fn stage_provenance(&self, model: &ModelRef) -> DiarizationStageProvenance {
+        let directory = Path::new(&model.artifact_path);
+        DiarizationStageProvenance {
+            segmentation: Some(ModelRef {
+                backend_id: model.backend_id.clone(),
+                model_id: "pyannote-segmentation-3.0".into(),
+                revision: model.revision.clone(),
+                artifact_path: directory
+                    .join(&self.segmentation_filename)
+                    .display()
+                    .to_string(),
+                artifacts: matching_artifacts(model, &self.segmentation_filename),
+            }),
+            embedding: Some(ModelRef {
+                backend_id: model.backend_id.clone(),
+                model_id: self.embedding_model_id.clone(),
+                revision: self
+                    .embedding_model_revision
+                    .clone()
+                    .or_else(|| model.revision.clone()),
+                artifact_path: directory
+                    .join(&self.embedding_filename)
+                    .display()
+                    .to_string(),
+                artifacts: matching_artifacts(model, &self.embedding_filename),
+            }),
+            clustering: Some(domain::AlgorithmProvenance {
+                id: "sherpa-fast-clustering".into(),
+                revision: Some("sherpa-onnx-1.13.6".into()),
+                parameters: Some(format!("threshold={}", self.clustering_threshold)),
+            }),
+        }
+    }
+
     fn diarize(
         &self,
         request: DiarizationRequest,
         context: JobContext,
     ) -> BackendFuture<DiarizationResult> {
         let backend = self.clone();
-        Box::pin(spawn_blocking(move || {
-            diarize_sync(backend, request, context)
-        }))
+        let worker_context = context.clone();
+        Box::pin(context.spawn_blocking(move || diarize_sync(backend, request, worker_context)))
     }
+}
+
+fn matching_artifacts(model: &ModelRef, filename: &str) -> Vec<contracts::ModelArtifactRef> {
+    model
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.filename == filename)
+        .cloned()
+        .collect()
 }
 
 fn diarize_sync(
@@ -258,12 +302,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn descriptor_does_not_expose_stage_overrides() {
+        let descriptor = SherpaOnnxDiarizationBackend::default().descriptor();
+        assert!(descriptor.configurable_diarization_stages.is_empty());
+        assert!(descriptor.diarization_stage_options.is_empty());
+    }
+
+    #[test]
+    fn rejects_stage_overrides_instead_of_silently_ignoring_them() {
+        let backend = SherpaOnnxDiarizationBackend::default();
+        let error = application::DiarizationBackend::validate_stage_configuration(
+            &backend,
+            &ModelRef {
+                backend_id: "sherpa-onnx".into(),
+                model_id: "bundle".into(),
+                revision: None,
+                artifact_path: "bundle".into(),
+                artifacts: Vec::new(),
+            },
+            &contracts::DiarizationStageConfiguration {
+                clustering_algorithm: Some(contracts::AlgorithmRef {
+                    id: "unsupported".into(),
+                    revision: None,
+                    parameters: None,
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::ModelIncompatible);
+    }
+
+    #[test]
     fn probe_rejects_a_missing_diarization_bundle() {
         let result = SherpaOnnxDiarizationBackend::default().probe(&ModelRef {
             backend_id: "sherpa-onnx".into(),
             model_id: "sherpa-pyannote-3dspeaker".into(),
             revision: None,
             artifact_path: "/missing/diarization".into(),
+            artifacts: Vec::new(),
         });
 
         assert!(matches!(

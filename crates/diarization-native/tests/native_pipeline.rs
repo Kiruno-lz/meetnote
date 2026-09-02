@@ -1,5 +1,7 @@
 use application::DiarizationBackend;
-use contracts::{ComputeDevice, DiarizationRequest, ModelRef};
+use contracts::{
+    AlgorithmRef, ComputeDevice, DiarizationRequest, DiarizationStageConfiguration, ModelRef,
+};
 use diarization_native::NativeDiarizationBackend;
 use runtime::JobRuntime;
 
@@ -15,7 +17,35 @@ fn real_model_produces_valid_segments_and_observations() {
         backend_id: "diarization-native".into(),
         model_id: "speakrs-community-1-cpu".into(),
         revision: Some("5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f".into()),
-        artifact_path: model_dir,
+        artifact_path: model_dir.clone(),
+        artifacts: Vec::new(),
+    };
+    let stage_configuration = DiarizationStageConfiguration {
+        segmentation_model: Some(ModelRef {
+            backend_id: "diarization-native".into(),
+            model_id: "pyannote-segmentation-3.0".into(),
+            revision: Some("5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f".into()),
+            artifact_path: std::path::Path::new(&model_dir)
+                .join("segmentation-3.0.onnx")
+                .display()
+                .to_string(),
+            artifacts: Vec::new(),
+        }),
+        embedding_model: Some(ModelRef {
+            backend_id: "diarization-native".into(),
+            model_id: "wespeaker-voxceleb-resnet34".into(),
+            revision: Some("5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f".into()),
+            artifact_path: std::path::Path::new(&model_dir)
+                .join("wespeaker-voxceleb-resnet34.onnx")
+                .display()
+                .to_string(),
+            artifacts: Vec::new(),
+        }),
+        clustering_algorithm: Some(AlgorithmRef {
+            id: "speakrs-ahc-plda-vbx".into(),
+            revision: Some("speakrs-community-1-cpu".into()),
+            parameters: Some("community-1-default".into()),
+        }),
     };
     backend.probe(&model).expect("model probe should succeed");
     let (context, _) = JobRuntime::default().create_job();
@@ -27,6 +57,7 @@ fn real_model_produces_valid_segments_and_observations() {
             expected_speakers: Some(2),
             device: ComputeDevice::Cpu,
             speaker_library_path: None,
+            stage_configuration,
         },
         context,
     ))

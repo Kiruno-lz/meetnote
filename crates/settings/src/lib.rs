@@ -1,4 +1,4 @@
-use contracts::{ComputeDevice, ModelRef};
+use contracts::{ComputeDevice, DiarizationStageConfiguration, ModelRef};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,6 +29,8 @@ pub struct AppSettings {
     pub expected_speakers: Option<u32>,
     #[serde(default = "default_speaker_library_path")]
     pub speaker_library_path: String,
+    #[serde(default)]
+    pub diarization_stages: DiarizationStageConfiguration,
 }
 
 impl Default for AppSettings {
@@ -44,6 +46,7 @@ impl Default for AppSettings {
             language: None,
             expected_speakers: None,
             speaker_library_path: default_speaker_library_path(),
+            diarization_stages: DiarizationStageConfiguration::default(),
         }
     }
 }
@@ -91,6 +94,20 @@ impl AppSettings {
             return Err(SettingsError::Invalid(
                 "speaker library path must not be empty".into(),
             ));
+        }
+        if let Some(model) = &self.diarization_stages.segmentation_model {
+            if model.backend_id != "diarization-native" {
+                return Err(SettingsError::Invalid(
+                    "segmentation stage model must use diarization-native".into(),
+                ));
+            }
+        }
+        if let Some(model) = &self.diarization_stages.embedding_model {
+            if model.backend_id != "diarization-native" {
+                return Err(SettingsError::Invalid(
+                    "embedding stage model must use diarization-native".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -231,6 +248,7 @@ mod tests {
                 model_id: "whisper-base-en-ggml".into(),
                 revision: None,
                 artifact_path: "models/asr/base.bin".into(),
+                artifacts: Vec::new(),
             }),
             ..AppSettings::default()
         };

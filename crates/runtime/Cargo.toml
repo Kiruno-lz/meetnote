@@ -6,3 +6,4 @@ edition.workspace = true
 [dependencies]
 futures.workspace = true
 serde.workspace = true
+thiserror.workspace = true

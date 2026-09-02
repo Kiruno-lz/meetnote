@@ -43,6 +43,7 @@ fn sherpa_embeddings_are_matched_by_the_shared_identity_service() {
         model_id: "sherpa-onnx-speaker-diarization-bundle".into(),
         revision: None,
         artifact_path: model_dir,
+        artifacts: Vec::new(),
     };
     let runtime = JobRuntime::default();
     let (probe_context, _) = runtime.create_job();
@@ -53,6 +54,7 @@ fn sherpa_embeddings_are_matched_by_the_shared_identity_service() {
             expected_speakers: Some(2),
             device: ComputeDevice::Cpu,
             speaker_library_path: None,
+            stage_configuration: Default::default(),
         },
         probe_context,
     ))
@@ -96,6 +98,7 @@ fn sherpa_embeddings_are_matched_by_the_shared_identity_service() {
                 model_id: "fixture".into(),
                 revision: None,
                 artifact_path: "fixture".into(),
+                artifacts: Vec::new(),
             },
             language: None,
             device: ComputeDevice::Cpu,
@@ -106,6 +109,7 @@ fn sherpa_embeddings_are_matched_by_the_shared_identity_service() {
             expected_speakers: Some(2),
             device: ComputeDevice::Cpu,
             speaker_library_path: Some(library_path.display().to_string()),
+            stage_configuration: Default::default(),
         },
         asr_context,
         diarization_context,

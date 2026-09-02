@@ -20,6 +20,12 @@ pub mod download {
         Request(#[source] Box<ureq::Error>),
         #[error("model download IO failed: {0}")]
         Io(#[from] std::io::Error),
+        #[error("model size mismatch for {path}: expected {expected}, got {actual}")]
+        SizeMismatch {
+            path: String,
+            expected: u64,
+            actual: u64,
+        },
         #[error("model archive error: {0}")]
         Archive(String),
         #[error("model checksum mismatch for {path}: expected {expected}, got {actual}")]
@@ -118,6 +124,24 @@ pub mod download {
         destination: impl AsRef<Path>,
         expected_sha256: Option<&str>,
         control: &DownloadControl,
+        on_progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<(), DownloadError> {
+        download_file_controlled_with_size(
+            source,
+            destination,
+            expected_sha256,
+            None,
+            control,
+            on_progress,
+        )
+    }
+
+    pub fn download_file_controlled_with_size(
+        source: &str,
+        destination: impl AsRef<Path>,
+        expected_sha256: Option<&str>,
+        expected_size: Option<u64>,
+        control: &DownloadControl,
         mut on_progress: impl FnMut(u64, Option<u64>),
     ) -> Result<(), DownloadError> {
         if !source.starts_with("https://") && !source.starts_with("http://") {
@@ -176,6 +200,16 @@ pub mod download {
             on_progress(downloaded, total);
         }
         output.flush()?;
+        if let Some(expected) = expected_size {
+            if downloaded != expected {
+                let _ = fs::remove_file(&partial);
+                return Err(DownloadError::SizeMismatch {
+                    path: partial.display().to_string(),
+                    expected,
+                    actual: downloaded,
+                });
+            }
+        }
         let actual = format!("{:x}", hash.finalize());
         if let Some(expected) = expected_sha256 {
             if !actual.eq_ignore_ascii_case(expected) {
@@ -358,7 +392,7 @@ pub mod download {
 
 pub mod manager;
 
-pub use manager::ModelManager;
+pub use manager::{BackendProbe, ModelManager};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -374,6 +408,8 @@ pub struct ModelCatalogEntry {
     pub task: String,
     pub model_family: String,
     pub candidate_backends: Vec<String>,
+    #[serde(default)]
+    pub revision: Option<String>,
     pub source_format: String,
     pub source: String,
     pub size_bytes: Option<u64>,

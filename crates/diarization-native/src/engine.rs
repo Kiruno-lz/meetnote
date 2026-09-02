@@ -1,8 +1,9 @@
+use crate::model::prepare_model_bundle;
 use crate::{
     EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
     NativeDiarizationError, NativeModelBundle, SpeakerEmbeddingObservation,
 };
-use contracts::{ComputeDevice, ModelRef};
+use contracts::{ComputeDevice, DiarizationStageConfiguration, ModelRef};
 use speakrs::{ExecutionMode, OwnedDiarizationPipeline};
 use std::collections::BTreeMap;
 
@@ -102,6 +103,19 @@ pub struct EngineOutput {
 
 pub trait NativeDiarizationEngine: Send + Sync {
     fn probe(&self, model: &ModelRef) -> Result<(), NativeDiarizationError>;
+    fn probe_with_stages(
+        &self,
+        model: &ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), NativeDiarizationError> {
+        if configuration.is_empty() {
+            self.probe(model)
+        } else {
+            Err(NativeDiarizationError::ModelIncompatible(
+                "native engine does not support diarization stage overrides".into(),
+            ))
+        }
+    }
     fn run(
         &self,
         samples: &[f32],
@@ -109,6 +123,22 @@ pub trait NativeDiarizationEngine: Send + Sync {
         device: ComputeDevice,
         expected_speakers: Option<u32>,
     ) -> Result<EngineOutput, NativeDiarizationError>;
+    fn run_with_stages(
+        &self,
+        samples: &[f32],
+        model: &ModelRef,
+        device: ComputeDevice,
+        expected_speakers: Option<u32>,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<EngineOutput, NativeDiarizationError> {
+        if configuration.is_empty() {
+            self.run(samples, model, device, expected_speakers)
+        } else {
+            Err(NativeDiarizationError::ModelIncompatible(
+                "native engine does not support diarization stage overrides".into(),
+            ))
+        }
+    }
 }
 
 pub struct StagePipelineEngine<S, E, C> {
@@ -247,8 +277,45 @@ impl NativeDiarizationEngine for SpeakrsEngine {
                 "expected speaker count must be greater than zero".into(),
             ));
         }
-        self.probe(model)?;
-        let bundle = NativeModelBundle::from_model(model)?;
+        self.run_with_stages(
+            samples,
+            model,
+            device,
+            expected_speakers,
+            &DiarizationStageConfiguration::default(),
+        )
+    }
+
+    fn probe_with_stages(
+        &self,
+        model: &ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), NativeDiarizationError> {
+        if model.model_id != SPEAKRS_MODEL_ID {
+            return Err(NativeDiarizationError::ModelIncompatible(format!(
+                "SpeakrsEngine requires model `{SPEAKRS_MODEL_ID}`, got `{}`",
+                model.model_id
+            )));
+        }
+        let bundle = prepare_model_bundle(model, configuration)?;
+        bundle.probe_cpu()
+    }
+
+    fn run_with_stages(
+        &self,
+        samples: &[f32],
+        model: &ModelRef,
+        device: ComputeDevice,
+        expected_speakers: Option<u32>,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<EngineOutput, NativeDiarizationError> {
+        if expected_speakers == Some(0) {
+            return Err(NativeDiarizationError::InvalidOutput(
+                "expected speaker count must be greater than zero".into(),
+            ));
+        }
+        self.probe_with_stages(model, configuration)?;
+        let bundle = prepare_model_bundle(model, configuration)?;
         let mode = execution_mode(device)?;
         let mut pipeline = OwnedDiarizationPipeline::from_dir(bundle.root(), mode)
             .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
@@ -500,6 +567,7 @@ mod tests {
             model_id: "fixture".into(),
             revision: Some("1".into()),
             artifact_path: root.display().to_string(),
+            artifacts: Vec::new(),
         };
         let engine = StagePipelineEngine::new(FakeSegmentation, FakeEmbedding, FakeClustering);
 

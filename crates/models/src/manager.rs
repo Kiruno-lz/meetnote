@@ -1,6 +1,6 @@
 use crate::download::{
-    download_bundle_with_progress, download_file_controlled, BundleArtifact, DownloadControl,
-    DownloadError,
+    download_bundle_with_progress, download_file_controlled_with_size, BundleArtifact,
+    DownloadControl, DownloadError,
 };
 use crate::{ModelCatalog, ModelCatalogEntry};
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,7 @@ pub enum DownloadState {
     Queued,
     Downloading,
     Paused,
+    Verifying,
     Completed,
     Cancelled,
     Failed(String),
@@ -35,6 +36,10 @@ pub struct DownloadProgress {
     pub total_bytes: Option<u64>,
     pub artifact_index: usize,
     pub artifact_count: usize,
+    #[serde(default)]
+    pub eta_seconds: Option<u64>,
+    #[serde(default)]
+    pub retry_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +52,10 @@ pub struct DownloadTask {
     pub events: Receiver<DownloadEvent>,
 }
 
+pub trait BackendProbe: Send + Sync {
+    fn probe(&self, task: &str, model: &contracts::ModelRef) -> Result<(), String>;
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ModelManagerError {
     #[error("model not found in catalog: {0}")]
@@ -55,6 +64,8 @@ pub enum ModelManagerError {
     AuthenticationRequired(String),
     #[error("model is already installed: {0}")]
     AlreadyInstalled(String),
+    #[error("model is not ready for download: {0}")]
+    ModelNotReady(String),
     #[error("model is not installed: {0}")]
     ModelNotInstalled(String),
     #[error("model {model_id} does not support backend {backend_id}")]
@@ -70,6 +81,8 @@ pub enum ModelManagerError {
     TaskNotActive(DownloadId),
     #[error("model download failed: {0}")]
     Download(Box<DownloadError>),
+    #[error("backend probe failed: {0}")]
+    BackendProbeFailed(String),
     #[error("download task lock poisoned")]
     LockPoisoned,
 }
@@ -94,10 +107,19 @@ pub struct ModelManager {
     task_state_path: PathBuf,
     next_id: Arc<AtomicU64>,
     tasks: Arc<Mutex<BTreeMap<DownloadId, Arc<TaskRecord>>>>,
+    backend_probe: Option<Arc<dyn BackendProbe>>,
 }
 
 impl ModelManager {
     pub fn new(catalog: ModelCatalog, model_root: impl AsRef<Path>) -> Self {
+        Self::with_backend_probe(catalog, model_root, None)
+    }
+
+    pub fn with_backend_probe(
+        catalog: ModelCatalog,
+        model_root: impl AsRef<Path>,
+        backend_probe: Option<Arc<dyn BackendProbe>>,
+    ) -> Self {
         let model_root = model_root.as_ref().to_path_buf();
         let task_state_path = model_root.join(".download-tasks.json");
         let persisted = load_task_progress(&task_state_path);
@@ -111,7 +133,7 @@ impl ModelManager {
             .map(|mut progress| {
                 if matches!(
                     progress.state,
-                    DownloadState::Queued | DownloadState::Downloading
+                    DownloadState::Queued | DownloadState::Downloading | DownloadState::Verifying
                 ) {
                     progress.state = DownloadState::Paused;
                 }
@@ -132,6 +154,7 @@ impl ModelManager {
             task_state_path,
             next_id: Arc::new(AtomicU64::new(next_id)),
             tasks: Arc::new(Mutex::new(tasks)),
+            backend_probe,
         }
     }
 
@@ -156,6 +179,9 @@ impl ModelManager {
         if model.requires_auth {
             return Err(ModelManagerError::AuthenticationRequired(model.id));
         }
+        if model.status != "ready" {
+            return Err(ModelManagerError::ModelNotReady(model.id));
+        }
         if model.availability(&self.model_root).install_state == crate::ModelInstallState::Installed
         {
             return Err(ModelManagerError::AlreadyInstalled(model.id));
@@ -177,6 +203,8 @@ impl ModelManager {
                 total_bytes: model.size_bytes,
                 artifact_index: 0,
                 artifact_count,
+                eta_seconds: None,
+                retry_count: 0,
             }),
             subscribers: Mutex::new(Vec::new()),
             worker_started: AtomicBool::new(false),
@@ -265,8 +293,9 @@ impl ModelManager {
         Ok(contracts::ModelRef {
             backend_id: backend_id.into(),
             model_id: model.id.clone(),
-            revision: None,
+            revision: model.revision.clone(),
             artifact_path: artifact_path.display().to_string(),
+            artifacts: model_artifact_refs(model),
         })
     }
 
@@ -290,12 +319,15 @@ impl ModelManager {
             .catalog
             .browse(&self.model_root, Some(task), Some(backend_id))
             .into_iter()
-            .find(|availability| availability.install_state == crate::ModelInstallState::Installed)
+            .find(|availability| {
+                availability.install_state == crate::ModelInstallState::Installed
+                    && availability.model.status == "ready"
+            })
             .or_else(|| {
                 self.catalog
                     .browse(&self.model_root, Some(task), Some(backend_id))
                     .into_iter()
-                    .next()
+                    .find(|availability| availability.model.status == "ready")
             })
             .ok_or_else(|| ModelManagerError::BackendNotSupported {
                 model_id: task.into(),
@@ -327,8 +359,9 @@ impl ModelManager {
         Ok(contracts::ModelRef {
             backend_id: backend_id.into(),
             model_id: model.id.clone(),
-            revision: None,
+            revision: model.revision.clone(),
             artifact_path: artifact_path.display().to_string(),
+            artifacts: model_artifact_refs(model),
         })
     }
 
@@ -361,6 +394,19 @@ impl ModelManager {
         Ok(())
     }
 
+    fn probe_installed_model(&self, model: &ModelCatalogEntry) -> Result<(), ModelManagerError> {
+        let Some(probe) = &self.backend_probe else {
+            return Ok(());
+        };
+        for backend_id in &model.candidate_backends {
+            let model_ref = self.model_ref_from_catalog(&model.id, backend_id)?;
+            probe
+                .probe(&model.task, &model_ref)
+                .map_err(ModelManagerError::BackendProbeFailed)?;
+        }
+        Ok(())
+    }
+
     pub fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError> {
         let record = self.record(id)?;
         self.ensure_active(&record, id)?;
@@ -369,16 +415,49 @@ impl ModelManager {
     }
 
     fn run(&self, id: DownloadId, model: ModelCatalogEntry, record: Arc<TaskRecord>) {
-        let result = self.download_model(id, &model, &record);
+        let mut retries = 0;
+        let result = loop {
+            match self.download_model(id, &model, &record) {
+                Ok(()) => break Ok(()),
+                Err(error) if is_retryable(&error) && retries < 3 => {
+                    retries += 1;
+                    let _ = self.update(id, |progress| {
+                        progress.retry_count = retries;
+                        progress.state = DownloadState::Queued;
+                    });
+                    std::thread::sleep(std::time::Duration::from_millis(250 * u64::from(retries)));
+                    if record.control.checkpoint().is_err() {
+                        break Err(DownloadError::Cancelled);
+                    }
+                }
+                Err(error) => break Err(error),
+            }
+        };
         match result {
             Ok(()) if record.control.is_cancelled() => {
                 let _ = self.update(id, |progress| progress.state = DownloadState::Cancelled);
             }
             Ok(()) => {
-                let _ = self.update(id, |progress| {
-                    progress.state = DownloadState::Completed;
-                    progress.artifact_index = progress.artifact_count;
-                });
+                let _ = self.update(id, |progress| progress.state = DownloadState::Verifying);
+                match self.probe_installed_model(&model) {
+                    Ok(()) if record.control.is_cancelled() => {
+                        let _ =
+                            self.update(id, |progress| progress.state = DownloadState::Cancelled);
+                    }
+                    Ok(()) => {
+                        let _ = self.update(id, |progress| {
+                            progress.state = DownloadState::Completed;
+                            progress.artifact_index = progress.artifact_count;
+                            progress.eta_seconds = Some(0);
+                        });
+                    }
+                    Err(error) => {
+                        let _ = fs::remove_dir_all(model.install_directory(&self.model_root));
+                        let _ = self.update(id, |progress| {
+                            progress.state = DownloadState::Failed(error.to_string())
+                        });
+                    }
+                }
             }
             Err(DownloadError::Cancelled) => {
                 let _ = self.update(id, |progress| progress.state = DownloadState::Cancelled);
@@ -421,10 +500,11 @@ impl ModelManager {
         let paths = model.artifact_paths(&self.model_root);
         if model.artifacts.is_empty() {
             let rate = TransferRate::default();
-            download_file_controlled(
+            download_file_controlled_with_size(
                 &model.source,
                 &paths[0],
                 model.sha256.as_deref(),
+                model.size_bytes,
                 &record.control,
                 |completed, total| {
                     let speed = rate.sample(completed);
@@ -433,6 +513,8 @@ impl ModelManager {
                         progress.speed_bytes_per_second = speed;
                         progress.total_bytes = total.or(model.size_bytes);
                         progress.artifact_index = 1;
+                        progress.eta_seconds =
+                            eta_seconds(completed, total.or(model.size_bytes), speed);
                     });
                 },
             )?;
@@ -466,6 +548,7 @@ impl ModelManager {
                             progress.total_bytes = total;
                             progress.artifact_index = index.max(1);
                             progress.artifact_count = count;
+                            progress.eta_seconds = eta_seconds(completed, total, speed);
                         });
                     }
                 },
@@ -502,7 +585,10 @@ impl ModelManager {
             progress.model_id == model_id
                 && matches!(
                     progress.state,
-                    DownloadState::Queued | DownloadState::Downloading | DownloadState::Paused
+                    DownloadState::Queued
+                        | DownloadState::Downloading
+                        | DownloadState::Paused
+                        | DownloadState::Verifying
                 )
         }))
     }
@@ -514,7 +600,10 @@ impl ModelManager {
             .map_err(|_| ModelManagerError::LockPoisoned)?;
         if matches!(
             progress.state,
-            DownloadState::Queued | DownloadState::Downloading | DownloadState::Paused
+            DownloadState::Queued
+                | DownloadState::Downloading
+                | DownloadState::Paused
+                | DownloadState::Verifying
         ) {
             Ok(())
         } else {
@@ -561,11 +650,44 @@ impl ModelManager {
     }
 }
 
+fn eta_seconds(completed: u64, total: Option<u64>, speed: Option<u64>) -> Option<u64> {
+    let remaining = total?.saturating_sub(completed);
+    let speed = speed.filter(|speed| *speed > 0)?;
+    Some(remaining.div_ceil(speed))
+}
+
+fn is_retryable(error: &DownloadError) -> bool {
+    matches!(error, DownloadError::Request(_) | DownloadError::Io(_))
+}
+
 fn load_task_progress(path: &Path) -> Vec<DownloadProgress> {
     fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default()
+}
+
+fn model_artifact_refs(model: &ModelCatalogEntry) -> Vec<contracts::ModelArtifactRef> {
+    if !model.artifacts.is_empty() {
+        return model
+            .artifacts
+            .iter()
+            .map(|artifact| contracts::ModelArtifactRef {
+                filename: artifact.filename.clone(),
+                expected_sha256: artifact.sha256.clone(),
+                archive_member: artifact.archive_member.clone(),
+            })
+            .collect();
+    }
+    vec![contracts::ModelArtifactRef {
+        filename: model
+            .artifact_filenames()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "model.bin".into()),
+        expected_sha256: model.sha256.clone(),
+        archive_member: None,
+    }]
 }
 
 #[derive(Debug)]
@@ -601,14 +723,15 @@ mod tests {
                 task: "asr".into(),
                 model_family: "fixture".into(),
                 candidate_backends: vec!["fake".into()],
+                revision: Some("fixture-v1".into()),
                 source_format: "bin".into(),
                 source: "local/fixture.bin".into(),
                 size_bytes: Some(4),
                 estimated_vram_bytes: None,
-                sha256: None,
+                sha256: Some("fixture-sha256".into()),
                 license: "test".into(),
                 requires_auth: false,
-                status: "test".into(),
+                status: "ready".into(),
                 artifact_files: vec![],
                 artifacts: vec![],
             }],
@@ -655,6 +778,8 @@ mod tests {
             total_bytes: Some(100),
             artifact_index: 1,
             artifact_count: 1,
+            eta_seconds: None,
+            retry_count: 0,
         }];
         std::fs::write(
             root.join(".download-tasks.json"),
@@ -685,6 +810,11 @@ mod tests {
         let model = manager.configured_model_ref("asr", "fake", None).unwrap();
 
         assert_eq!(model.model_id, "fixture");
+        assert_eq!(model.revision.as_deref(), Some("fixture-v1"));
+        assert_eq!(
+            model.artifacts[0].expected_sha256.as_deref(),
+            Some("fixture-sha256")
+        );
         assert_eq!(
             model.artifact_path,
             root.join("asr/fixture/fixture.bin").display().to_string()
@@ -697,6 +827,92 @@ mod tests {
         let rate = TransferRate::default();
 
         assert!(rate.sample(1_000_000).is_some());
+        assert_eq!(eta_seconds(50, Some(100), Some(25)), Some(2));
+    }
+
+    struct RecordingProbe {
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl BackendProbe for RecordingProbe {
+        fn probe(&self, task: &str, model: &contracts::ModelRef) -> Result<(), String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("{task}:{}", model.model_id));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn probes_each_registered_backend_after_artifacts_are_installed() {
+        let root =
+            std::env::temp_dir().join(format!("meetnote-model-manager-probe-{}", unique_suffix()));
+        let manager = ModelManager::with_backend_probe(
+            fixture_catalog(),
+            &root,
+            Some(Arc::new(RecordingProbe {
+                calls: Mutex::new(Vec::new()),
+            })),
+        );
+        let model = manager.catalog.find("fixture").unwrap();
+        let path = model.artifact_paths(&root)[0].clone();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"fixture").unwrap();
+
+        manager.probe_installed_model(model).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn completes_download_only_after_backend_probe() {
+        use std::io::Read;
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 512];
+            let _ = stream.read(&mut request);
+            std::io::Write::write_all(
+                &mut stream,
+                b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nfixture",
+            )
+            .unwrap();
+        });
+
+        let mut catalog = fixture_catalog();
+        catalog.models[0].source = format!("http://{address}/fixture.bin");
+        catalog.models[0].size_bytes = Some(7);
+        catalog.models[0].sha256 = None;
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-model-manager-download-probe-{}",
+            unique_suffix()
+        ));
+        let probe = Arc::new(RecordingProbe {
+            calls: Mutex::new(Vec::new()),
+        });
+        let manager = ModelManager::with_backend_probe(catalog, &root, Some(probe.clone()));
+        let task = manager.start("fixture").unwrap();
+        let mut terminal = None;
+        while let Ok(event) = task.events.recv_timeout(std::time::Duration::from_secs(2)) {
+            let DownloadEvent::Updated(progress) = event;
+            if matches!(
+                progress.state,
+                DownloadState::Completed | DownloadState::Cancelled | DownloadState::Failed(_)
+            ) {
+                terminal = Some(progress.state);
+                break;
+            }
+        }
+
+        assert_eq!(terminal, Some(DownloadState::Completed));
+        assert_eq!(
+            probe.calls.lock().unwrap().first().map(String::as_str),
+            Some("asr:fixture")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

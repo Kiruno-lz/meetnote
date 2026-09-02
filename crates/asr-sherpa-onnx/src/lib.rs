@@ -4,7 +4,7 @@ use contracts::{
     AsrRequest, AsrResult, BackendDescriptor, BackendError, BackendErrorCode, ComputeDevice,
     ModelRef,
 };
-use runtime::{spawn_blocking, JobContext, Progress};
+use runtime::{JobContext, Progress};
 use sherpa_onnx::{
     OfflineParaformerModelConfig, OfflineQwen3ASRModelConfig, OfflineRecognizer,
     OfflineRecognizerConfig,
@@ -58,9 +58,10 @@ impl AsrBackend for SherpaOnnxAsrBackend {
 
     fn transcribe(&self, request: AsrRequest, context: JobContext) -> BackendFuture<AsrResult> {
         let num_threads = self.num_threads.max(1);
-        Box::pin(spawn_blocking(move || {
-            transcribe_sync(request, context, num_threads)
-        }))
+        let worker_context = context.clone();
+        Box::pin(
+            context.spawn_blocking(move || transcribe_sync(request, worker_context, num_threads)),
+        )
     }
 }
 
@@ -294,6 +295,7 @@ mod tests {
             model_id: model_id.into(),
             revision: None,
             artifact_path: artifact_path.display().to_string(),
+            artifacts: Vec::new(),
         }
     }
 

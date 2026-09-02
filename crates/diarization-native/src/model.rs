@@ -1,5 +1,5 @@
 use crate::NativeDiarizationError;
-use contracts::ModelRef;
+use contracts::{DiarizationStageConfiguration, ModelRef};
 use std::path::{Path, PathBuf};
 
 pub const REQUIRED_CPU_ARTIFACTS: &[&str] = &[
@@ -68,9 +68,136 @@ impl NativeModelBundle {
     }
 }
 
+pub(crate) struct PreparedNativeModelBundle {
+    bundle: NativeModelBundle,
+    temporary_root: Option<PathBuf>,
+}
+
+impl PreparedNativeModelBundle {
+    pub(crate) fn root(&self) -> &Path {
+        self.bundle.root()
+    }
+
+    pub(crate) fn probe_cpu(&self) -> Result<(), NativeDiarizationError> {
+        self.bundle.probe_cpu()
+    }
+}
+
+impl Drop for PreparedNativeModelBundle {
+    fn drop(&mut self) {
+        if let Some(root) = &self.temporary_root {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+}
+
+pub(crate) fn prepare_model_bundle(
+    model: &ModelRef,
+    configuration: &DiarizationStageConfiguration,
+) -> Result<PreparedNativeModelBundle, NativeDiarizationError> {
+    let base = NativeModelBundle::from_model(model)?;
+    if configuration.is_empty() {
+        return Ok(PreparedNativeModelBundle {
+            bundle: base,
+            temporary_root: None,
+        });
+    }
+
+    let root = std::env::temp_dir().join(format!("meetnote-native-stage-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).map_err(|error| {
+        NativeDiarizationError::ModelMissing(format!(
+            "failed to create temporary native stage bundle {}: {error}",
+            root.display()
+        ))
+    })?;
+
+    let result = (|| {
+        for filename in REQUIRED_CPU_ARTIFACTS {
+            link_file(&base.root().join(filename), &root.join(filename))?;
+        }
+        if let Some(segmentation) = &configuration.segmentation_model {
+            let source = stage_file(segmentation, "segmentation-3.0.onnx");
+            link_file(&source, &root.join("segmentation-3.0.onnx"))?;
+        }
+        if let Some(embedding) = &configuration.embedding_model {
+            for filename in [
+                "wespeaker-voxceleb-resnet34.onnx",
+                "wespeaker-voxceleb-resnet34.onnx.data",
+                "wespeaker-voxceleb-resnet34.min_num_samples.txt",
+            ] {
+                let source = stage_file(embedding, filename);
+                link_file(&source, &root.join(filename))?;
+            }
+        }
+        Ok::<(), NativeDiarizationError>(())
+    })();
+
+    if let Err(error) = result {
+        let _ = std::fs::remove_dir_all(&root);
+        return Err(error);
+    }
+
+    Ok(PreparedNativeModelBundle {
+        bundle: NativeModelBundle::from_root(root.clone()),
+        temporary_root: Some(root),
+    })
+}
+
+fn stage_file(stage: &ModelRef, filename: &str) -> PathBuf {
+    let path = PathBuf::from(&stage.artifact_path);
+    if path.is_dir() {
+        return path.join(filename);
+    }
+    if path.file_name().and_then(|name| name.to_str()) == Some(filename) {
+        return path;
+    }
+    path.parent()
+        .map(|parent| parent.join(filename))
+        .unwrap_or(path)
+}
+
+fn link_file(source: &Path, destination: &Path) -> Result<(), NativeDiarizationError> {
+    if !source.is_file() {
+        return Err(NativeDiarizationError::ModelMissing(format!(
+            "native diarization stage artifact does not exist: {}",
+            source.display()
+        )));
+    }
+    if destination.exists() {
+        std::fs::remove_file(destination).map_err(|error| {
+            NativeDiarizationError::ModelMissing(format!(
+                "failed to replace native diarization stage artifact {}: {error}",
+                destination.display()
+            ))
+        })?;
+    }
+    #[cfg(unix)]
+    {
+        if std::os::unix::fs::symlink(source, destination).is_ok() {
+            return Ok(());
+        }
+    }
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_file(source, destination).is_ok() {
+            return Ok(());
+        }
+    }
+    std::fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(|error| {
+            NativeDiarizationError::ModelMissing(format!(
+                "failed to prepare native diarization stage artifact {}: {error}",
+                destination.display()
+            ))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SPEAKRS_MODEL_ID;
+    use contracts::{AlgorithmRef, DiarizationStageConfiguration};
 
     #[test]
     fn probe_reports_the_first_missing_artifact() {
@@ -82,5 +209,85 @@ mod tests {
         assert!(matches!(error, NativeDiarizationError::ModelMissing(_)));
         assert!(error.to_string().contains("segmentation-3.0.onnx"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepares_overridden_stage_files_without_copying_the_base_bundle() {
+        let root = std::env::temp_dir().join(format!("meetnote-base-{}", uuid::Uuid::new_v4()));
+        let alternate =
+            std::env::temp_dir().join(format!("meetnote-stage-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&alternate).unwrap();
+        for filename in REQUIRED_CPU_ARTIFACTS {
+            std::fs::write(root.join(filename), format!("base:{filename}")).unwrap();
+        }
+        std::fs::write(
+            alternate.join("segmentation-3.0.onnx"),
+            "alternate-segmentation",
+        )
+        .unwrap();
+        std::fs::write(
+            alternate.join("wespeaker-voxceleb-resnet34.onnx"),
+            "alternate-embedding",
+        )
+        .unwrap();
+        std::fs::write(
+            alternate.join("wespeaker-voxceleb-resnet34.onnx.data"),
+            "alternate-data",
+        )
+        .unwrap();
+        std::fs::write(
+            alternate.join("wespeaker-voxceleb-resnet34.min_num_samples.txt"),
+            "1",
+        )
+        .unwrap();
+
+        let model = ModelRef {
+            backend_id: "diarization-native".into(),
+            model_id: SPEAKRS_MODEL_ID.into(),
+            revision: Some("test".into()),
+            artifact_path: root.display().to_string(),
+            artifacts: Vec::new(),
+        };
+        let configuration = DiarizationStageConfiguration {
+            segmentation_model: Some(ModelRef {
+                backend_id: "diarization-native".into(),
+                model_id: "alternate-segmentation".into(),
+                revision: None,
+                artifact_path: alternate
+                    .join("segmentation-3.0.onnx")
+                    .display()
+                    .to_string(),
+                artifacts: Vec::new(),
+            }),
+            embedding_model: Some(ModelRef {
+                backend_id: "diarization-native".into(),
+                model_id: "alternate-embedding".into(),
+                revision: None,
+                artifact_path: alternate
+                    .join("wespeaker-voxceleb-resnet34.onnx")
+                    .display()
+                    .to_string(),
+                artifacts: Vec::new(),
+            }),
+            clustering_algorithm: Some(AlgorithmRef {
+                id: "speakrs-ahc-plda-vbx".into(),
+                revision: None,
+                parameters: None,
+            }),
+        };
+        let prepared = prepare_model_bundle(&model, &configuration).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(prepared.root().join("segmentation-3.0.onnx")).unwrap(),
+            "alternate-segmentation"
+        );
+        assert_eq!(
+            std::fs::read_to_string(prepared.root().join("wespeaker-voxceleb-resnet34.onnx"))
+                .unwrap(),
+            "alternate-embedding"
+        );
+        prepared.probe_cpu().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(alternate).unwrap();
     }
 }

@@ -1,12 +1,18 @@
 use crate::{
     IdentityResolverConfig, JsonSpeakerProfileStore, NativeDiarizationEngine,
     NativeDiarizationError, NativeDiarizationOutput, SpeakerEmbeddingObservation,
-    SpeakerLibraryService, SpeakrsEngine,
+    SpeakerLibraryService, SpeakrsEngine, SPEAKRS_MODEL_ID, SPEAKRS_MODEL_REVISION,
 };
-use application::{diarization_descriptor, BackendFuture, DiarizationBackend};
+use application::{
+    diarization_descriptor_with_stages, BackendFuture, DiarizationBackend,
+    DiarizationStageProvenance,
+};
 use audio::read_audio_mono_16k;
-use contracts::{BackendDescriptor, BackendError, DiarizationRequest, DiarizationResult, ModelRef};
-use runtime::{spawn_blocking, JobContext, Progress};
+use contracts::{
+    BackendDescriptor, BackendError, DiarizationRequest, DiarizationResult,
+    DiarizationStageConfiguration, DiarizationStageKind, DiarizationStageOption, ModelRef,
+};
+use runtime::{JobContext, Progress};
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::PathBuf;
@@ -81,9 +87,10 @@ impl NativeDiarizationBackend {
         context: JobContext,
     ) -> NativeBackendFuture<NativeDiarizationOutput> {
         let backend = self.clone();
-        Box::pin(spawn_blocking(move || {
+        let worker_context = context.clone();
+        Box::pin(context.spawn_blocking(move || {
             backend
-                .analyze_sync(request, context)
+                .analyze_sync(request, worker_context)
                 .map_err(BackendError::from)
         }))
     }
@@ -94,7 +101,8 @@ impl NativeDiarizationBackend {
         context: JobContext,
     ) -> Result<NativeDiarizationOutput, NativeDiarizationError> {
         ensure_not_cancelled(&context)?;
-        self.engine.probe(&request.model)?;
+        self.engine
+            .probe_with_stages(&request.model, &request.stage_configuration)?;
         let audio = read_audio_mono_16k(&request.audio_path)
             .map_err(|error| NativeDiarizationError::InvalidAudio(error.to_string()))?;
         context.report(Progress {
@@ -103,11 +111,12 @@ impl NativeDiarizationBackend {
         });
         ensure_not_cancelled(&context)?;
 
-        let engine_output = self.engine.run(
+        let engine_output = self.engine.run_with_stages(
             &audio.samples,
             &request.model,
             request.device,
             request.expected_speakers,
+            &request.stage_configuration,
         )?;
         validate_engine_output(&engine_output.observations, &engine_output.segments)?;
         context.report(Progress {
@@ -161,7 +170,7 @@ impl NativeDiarizationBackend {
 
 impl DiarizationBackend for NativeDiarizationBackend {
     fn descriptor(&self) -> BackendDescriptor {
-        diarization_descriptor(
+        diarization_descriptor_with_stages(
             "diarization-native",
             &[
                 "offline",
@@ -174,11 +183,156 @@ impl DiarizationBackend for NativeDiarizationBackend {
                 "automatic-speaker-labeling",
                 "speaker-count-hint",
             ],
+            vec![
+                DiarizationStageKind::Segmentation,
+                DiarizationStageKind::Embedding,
+                DiarizationStageKind::Clustering,
+            ],
+            vec![
+                DiarizationStageOption {
+                    stage: DiarizationStageKind::Segmentation,
+                    id: "pyannote-segmentation-3.0".into(),
+                    model_id: Some("pyannote-segmentation-3.0".into()),
+                    revision: Some(SPEAKRS_MODEL_REVISION.into()),
+                    artifact_files: vec!["segmentation-3.0.onnx".into()],
+                },
+                DiarizationStageOption {
+                    stage: DiarizationStageKind::Embedding,
+                    id: "wespeaker-voxceleb-resnet34".into(),
+                    model_id: Some("wespeaker-voxceleb-resnet34".into()),
+                    revision: Some(SPEAKRS_MODEL_REVISION.into()),
+                    artifact_files: vec![
+                        "wespeaker-voxceleb-resnet34.onnx".into(),
+                        "wespeaker-voxceleb-resnet34.onnx.data".into(),
+                        "wespeaker-voxceleb-resnet34.min_num_samples.txt".into(),
+                    ],
+                },
+                DiarizationStageOption {
+                    stage: DiarizationStageKind::Clustering,
+                    id: "speakrs-ahc-plda-vbx".into(),
+                    model_id: None,
+                    revision: Some(SPEAKRS_MODEL_ID.into()),
+                    artifact_files: vec![
+                        "plda_lda.npy".into(),
+                        "plda_tr.npy".into(),
+                        "plda_mu.npy".into(),
+                        "plda_psi.npy".into(),
+                        "plda_mean1.npy".into(),
+                        "plda_mean2.npy".into(),
+                    ],
+                },
+            ],
         )
     }
 
     fn probe(&self, model: &ModelRef) -> Result<(), BackendError> {
         self.engine.probe(model).map_err(BackendError::from)
+    }
+
+    fn validate_stage_configuration(
+        &self,
+        model: &ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), BackendError> {
+        if model.model_id != SPEAKRS_MODEL_ID {
+            return Err(BackendError {
+                code: contracts::BackendErrorCode::ModelIncompatible,
+                message: format!("unsupported native diarization model: {}", model.model_id),
+            });
+        }
+        if let Some(model) = &configuration.segmentation_model {
+            if model.backend_id != "diarization-native" {
+                return Err(BackendError {
+                    code: contracts::BackendErrorCode::ModelIncompatible,
+                    message: "segmentation stage must use diarization-native".into(),
+                });
+            }
+        }
+        if let Some(model) = &configuration.embedding_model {
+            if model.backend_id != "diarization-native" {
+                return Err(BackendError {
+                    code: contracts::BackendErrorCode::ModelIncompatible,
+                    message: "embedding stage must use diarization-native".into(),
+                });
+            }
+        }
+        if let Some(algorithm) = &configuration.clustering_algorithm {
+            if algorithm.id != "speakrs-ahc-plda-vbx" {
+                return Err(BackendError {
+                    code: contracts::BackendErrorCode::ModelIncompatible,
+                    message: format!("unsupported native clustering algorithm: {}", algorithm.id),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn probe_with_configuration(
+        &self,
+        model: &ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), BackendError> {
+        self.validate_stage_configuration(model, configuration)?;
+        self.engine
+            .probe_with_stages(model, configuration)
+            .map_err(BackendError::from)
+    }
+
+    fn stage_provenance(&self, model: &ModelRef) -> DiarizationStageProvenance {
+        self.stage_provenance_with_configuration(model, &DiarizationStageConfiguration::default())
+    }
+
+    fn stage_provenance_with_configuration(
+        &self,
+        model: &ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> DiarizationStageProvenance {
+        let root = PathBuf::from(&model.artifact_path);
+        let revision = model
+            .revision
+            .clone()
+            .or_else(|| Some(SPEAKRS_MODEL_REVISION.into()));
+        DiarizationStageProvenance {
+            segmentation: Some(
+                configuration
+                    .segmentation_model
+                    .clone()
+                    .unwrap_or(ModelRef {
+                        backend_id: model.backend_id.clone(),
+                        model_id: "pyannote-segmentation-3.0".into(),
+                        revision: revision.clone(),
+                        artifact_path: root.join("segmentation-3.0.onnx").display().to_string(),
+                        artifacts: matching_artifacts(model, "segmentation-3.0.onnx"),
+                    }),
+            ),
+            embedding: Some(
+                configuration.embedding_model.clone().unwrap_or(ModelRef {
+                    backend_id: model.backend_id.clone(),
+                    model_id: "wespeaker-voxceleb-resnet34".into(),
+                    revision,
+                    artifact_path: root
+                        .join("wespeaker-voxceleb-resnet34.onnx")
+                        .display()
+                        .to_string(),
+                    artifacts: matching_artifacts(model, "wespeaker-voxceleb-resnet34.onnx"),
+                }),
+            ),
+            clustering: Some(
+                configuration
+                    .clustering_algorithm
+                    .as_ref()
+                    .map(|algorithm| domain::AlgorithmProvenance {
+                        id: algorithm.id.clone(),
+                        revision: algorithm.revision.clone(),
+                        parameters: algorithm.parameters.clone(),
+                    })
+                    .unwrap_or(domain::AlgorithmProvenance {
+                        id: "speakrs-ahc-plda-vbx".into(),
+                        revision: Some(SPEAKRS_MODEL_ID.into()),
+                        parameters: Some("community-1-default".into()),
+                    }),
+            ),
+        }
     }
 
     fn diarize(
@@ -197,6 +351,15 @@ fn ensure_not_cancelled(context: &JobContext) -> Result<(), NativeDiarizationErr
     } else {
         Ok(())
     }
+}
+
+fn matching_artifacts(model: &ModelRef, filename: &str) -> Vec<contracts::ModelArtifactRef> {
+    model
+        .artifacts
+        .iter()
+        .filter(|artifact| artifact.filename == filename)
+        .cloned()
+        .collect()
 }
 
 fn validate_engine_output(
@@ -238,6 +401,13 @@ fn validate_engine_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptor_exposes_all_replaceable_native_stages() {
+        let descriptor = NativeDiarizationBackend::default().descriptor();
+        assert_eq!(descriptor.configurable_diarization_stages.len(), 3);
+        assert_eq!(descriptor.diarization_stage_options.len(), 3);
+    }
     use crate::{
         EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
         EngineOutput, EngineSegment, InMemorySpeakerProfileStore, SpeakerSampleSource,
@@ -361,10 +531,12 @@ mod tests {
                     model_id: "fixture".into(),
                     revision: Some("1".into()),
                     artifact_path: "unused".into(),
+                    artifacts: Vec::new(),
                 },
                 expected_speakers: Some(1),
                 device: ComputeDevice::Cpu,
                 speaker_library_path: None,
+                stage_configuration: Default::default(),
             },
             context,
         ))

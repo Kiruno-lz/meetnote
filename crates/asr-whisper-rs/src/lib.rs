@@ -4,7 +4,7 @@ use contracts::{
     AsrRequest, AsrResult, BackendDescriptor, BackendError, BackendErrorCode, ComputeDevice,
     ModelRef,
 };
-use runtime::{spawn_blocking, JobContext};
+use runtime::JobContext;
 use std::path::Path;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
@@ -39,9 +39,8 @@ impl AsrBackend for WhisperRsBackend {
 
     fn transcribe(&self, request: AsrRequest, context: JobContext) -> BackendFuture<AsrResult> {
         let threads = self.threads.max(1);
-        Box::pin(spawn_blocking(move || {
-            transcribe_sync(request, context, threads)
-        }))
+        let worker_context = context.clone();
+        Box::pin(context.spawn_blocking(move || transcribe_sync(request, worker_context, threads)))
     }
 }
 
@@ -88,7 +87,13 @@ fn transcribe_sync(
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
     match request.language.as_deref() {
-        Some("auto") | None => params.set_detect_language(true),
+        Some("auto") | None => {
+            // whisper.cpp returns immediately when detect_language is true. Use
+            // the explicit "auto" language instead so detection is followed by
+            // the normal transcription pass.
+            params.set_language(Some("auto"));
+            params.set_detect_language(false);
+        }
         Some(language) => params.set_language(Some(language)),
     }
 
@@ -147,6 +152,7 @@ mod tests {
             model_id: "whisper-large-v3".into(),
             revision: None,
             artifact_path: "/missing/ggml-large-v3.bin".into(),
+            artifacts: Vec::new(),
         });
 
         assert!(matches!(

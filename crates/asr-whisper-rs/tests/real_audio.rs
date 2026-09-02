@@ -16,6 +16,7 @@ fn whisper_transcribes_real_audio_with_timestamps() {
         model_id: "whisper-large-v3-ggml".into(),
         revision: None,
         artifact_path: model_path,
+        artifacts: Vec::new(),
     };
     let backend = WhisperRsBackend::default();
     backend

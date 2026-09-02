@@ -4,7 +4,7 @@ use runtime::JobContext;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DiarizationBackendRegistry {
     backends: BTreeMap<String, Arc<dyn DiarizationBackend>>,
 }
@@ -24,6 +24,7 @@ impl DiarizationBackendRegistry {
     }
 }
 
+#[derive(Clone)]
 pub struct DiarizationBackendManager {
     registry: DiarizationBackendRegistry,
 }

@@ -16,6 +16,7 @@ fn paraformer_transcribes_real_audio() {
         model_id: "paraformer-zh".into(),
         revision: None,
         artifact_path: model_dir,
+        artifacts: Vec::new(),
     };
     let backend = SherpaOnnxAsrBackend::default();
     backend

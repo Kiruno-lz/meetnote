@@ -4,7 +4,7 @@ use runtime::JobContext;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct AsrBackendRegistry {
     backends: BTreeMap<String, Arc<dyn AsrBackend>>,
 }
@@ -28,6 +28,7 @@ impl AsrBackendRegistry {
     }
 }
 
+#[derive(Clone)]
 pub struct AsrBackendManager {
     registry: AsrBackendRegistry,
 }
