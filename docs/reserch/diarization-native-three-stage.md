@@ -2,9 +2,11 @@
 
 ## 探索原因
 
-MeetNote 现有 `diarization-sherpa-onnx` 可以完成离线 speaker diarization，但上层 API 只返回最终
-speaker segment，不暴露 segmentation track、speaker embedding 和 clustering 输入。旧的
-`diarization-native` 只是占位实现，既不能运行模型，也不能保存个人声纹。
+MeetNote 当前同时拥有 `diarization-sherpa-onnx` 和 `diarization-native` 两条离线路径。
+两者都能输出最终 speaker segment；当前 contracts 还会传递 speaker embedding observation，
+application 的共享 identity service 使用这些 observation 进行跨项目 profile matching。
+`diarization-native` 已通过 `speakrs` 接入固定 revision 的完整 pipeline；本文件保留其阶段边界、
+模型选择依据和可替换性约束，不再描述占位实现状态。
 
 本次探索解决三个直接影响架构的问题：
 

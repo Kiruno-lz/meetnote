@@ -429,23 +429,16 @@ resources/models/catalog.json
 
 当前应用实际注册的 backend 位于 [apps/meetnote/src/main.rs](../../apps/meetnote/src/main.rs)：
 
-- ASR：`whisper-rs`
-- Diarization：`sherpa-onnx`
+- ASR：`whisper-rs`、`sherpa-onnx`
+- Diarization：`sherpa-onnx`、`diarization-native`
 
 ### 目录中的 ASR 候选模型
 
 #### Whisper PyTorch 模型
 
-以下模型在 catalog 中标记为 `candle`，但当前项目没有 `asr-candle`：
-
-- `whisper-large-v3`
-- `whisper-large-v3-turbo`
-- `whisper-medium`
-- `whisper-small`
-- `whisper-base`
-- `whisper-tiny`
-
-这些 `.pt` 文件不能直接交给 `whisper-rs`。可选路线是：
+OpenAI Whisper PyTorch 条目和没有 Rust backend 的 Mimo 条目已从当前 catalog 移除；当前 Whisper
+catalog 只保留可被 `whisper-rs` 识别的 GGML 来源。PyTorch `.pt` 文件不能直接交给 `whisper-rs`，
+如果未来重新引入，必须先经过明确的转换或独立 native adapter。
 
 ```text
 .pt -> 转换为 GGML/GGUF -> whisper-rs
@@ -456,18 +449,18 @@ resources/models/catalog.json
 
 - 规划 backend：`sherpa-onnx`
 - 目标格式：ONNX 模型族 bundle
-- 当前状态：`asr-sherpa-onnx` 尚未实现模型加载和推理
+- 当前状态：已实现 Paraformer adapter，并保留 Qwen3 ASR adapter 的目录校验和配置路径；Qwen3
+  catalog 条目仍是 candidate source，尚未形成可直接安装的嵌套目录 manifest。
 
-#### `qwen3-asr-1.7b`
+#### `qwen3-asr-0.6b`
 
 - 规划 backend：`sherpa-onnx`
-- 当前状态：catalog 候选条目，当前 Rust ASR backend 尚未实现
+- 当前状态：`asr-sherpa-onnx` 已实现模型族配置，但 catalog archive 仍需目录成员下载支持。
 
 #### `mimo-v2.5-asr`
 
-- 当前没有候选 backend
-- catalog 标记为 `requires-native-adapter`
-- 不能假设它可以直接作为任意 ONNX 模型运行
+- 已从当前 catalog 移除，因为没有已注册的 Rust-native backend；未来重新加入前必须先完成明确的
+  模型族 adapter，不能假设它可以直接作为任意 ONNX 模型运行。
 
 ### 目录中的 diarization 候选模型
 
@@ -493,8 +486,8 @@ speaker segmentation
 
 - 规划 backend：`diarization-native`
 - gated Hugging Face 模型，需要授权
-- 当前 `diarization-native` 只有占位实现
-- 不能在当前应用中直接运行
+- 当前 `diarization-native` 已接入 `speakrs` 的 community-1 风格完整 pipeline，并通过固定
+  revision 的 CPU bundle 完成真实模型验收；Pyannote 3.1 仍是 gated、无直接 Rust adapter 的来源。
 
 ## Speaker embedding、重叠语音与个人 speaker profile
 
@@ -823,18 +816,13 @@ Whisper GGML/GGUF artifact
 文件存在 != 模型兼容
 ```
 
-后续应增加模型 magic、模型族、runtime format 和 backend probe 校验。
+下载完成后的 backend probe 只做快速 artifact 与模型入口校验；完整模型加载仍在实际推理时执行。
+文件存在、快速 probe 通过和真实推理成功是三个不同的状态，不能合并为一个 readiness 结论。
 
 ### sherpa-onnx ASR
 
-当前仓库的 `asr-sherpa-onnx` 只有接口占位：
-
-```text
-probe()      -> NotImplemented
-transcribe() -> NotImplemented
-```
-
-因此严格按照当前代码，sherpa-onnx ASR 当前实际可运行模型数量为 0。
+当前仓库的 `asr-sherpa-onnx` 已实现模型族适配、目录校验、音频解码和离线推理入口；
+Paraformer 路径可直接使用已安装目录，Qwen3 路径等待 catalog v2 的嵌套目录安装协议。
 
 上游 sherpa-onnx runtime 本身支持多个 ASR 模型族，例如：
 
@@ -988,7 +976,7 @@ ONNX
 | 来源格式 | PyTorch、safetensors、ONNX、GGML |
 | 运行格式 | GGML/GGUF、ONNX bundle、Candle weights |
 | 目标 backend | whisper-rs、sherpa-onnx、Candle |
-| backend 状态 | 已实现、占位、未注册 |
+| backend 状态 | 已实现、candidate source、未注册 |
 | 安装状态 | 缺失、部分安装、已安装 |
 | 转换要求 | 不需要、需要转换、转换工具缺失 |
 | 授权要求 | 无需授权、需要 token |
@@ -1073,7 +1061,7 @@ sherpa-onnx diarization
     独立 SpeakerEmbeddingExtractor/Manager 可补充 profile matching
 
 sherpa-onnx ASR
-  = 模型族覆盖面广，但 MeetNote Rust wrapper 尚未实现
+  = 已实现 Paraformer/Qwen3 模型族 adapter，catalog 仍需区分可安装与 candidate source
 
 Candle
   = Rust Tensor/NN framework，需要独立模型族 adapter，尚未接入

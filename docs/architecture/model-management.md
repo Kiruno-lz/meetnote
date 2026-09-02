@@ -18,6 +18,7 @@ resources/models/catalog.json
 - `task`
 - `candidateBackends`
 - `modelFamily`
+- `revision`
 - `sourceFormat`
 - `source`
 - `artifacts`（多文件 bundle 的逐文件来源、SHA-256 和可选 archive member）
@@ -39,12 +40,11 @@ sherpa-onnx speaker bundle 是由 segmentation archive 和 embedding 文件组�
 ## 下载状态
 
 ```text
-idle
 queued
 downloading
 paused
 verifying
-installed
+completed
 failed
 cancelled
 ```
@@ -61,11 +61,11 @@ cancelled
   -> 根据已有长度发送 Range
   -> 流式写入
   -> 发送进度事件
-  -> 校验文件大小
+  -> 校验文件大小与 SHA-256
   -> 校验 archive 或 artifact SHA-256
   -> 原子 rename
-  -> backend probe
-  -> 写入 installed 状态
+  -> 快速 backend artifact probe
+  -> 写入 completed 状态
 ```
 
 下载必须支持：
@@ -78,11 +78,14 @@ cancelled
 - 校验失败后清理
 - 临时文件与最终文件隔离
 
-v0.2 已落地 `models::download`：单文件支持 HTTP Range 续传、`.part` 临时文件、流式 SHA-256 校验和原子 rename；bundle 支持逐 artifact 下载，并从 sherpa-onnx tar.bz2 中提取指定 ONNX member 后再安装。GPUI 会在两个 bundle artifact 都存在后显示 DIA ready。
+当前 `models::download`：单文件支持 HTTP Range 续传、`.part` 临时文件、流式 SHA-256 校验和原子 rename；bundle 支持逐 artifact 下载，并从 sherpa-onnx tar.bz2 中提取指定 ONNX member 后再安装。
 
-v0.2.1 已落地 `models::manager::ModelManager`：提供 catalog 按 task/backend 浏览、模型安装状态查询、
-下载任务事件订阅，以及 `pause`、`resume`、`cancel` 控制。下载控制与文件写入解耦，
-不会要求 UI 参与模型协议。
+`models::manager::ModelManager` 提供 catalog 按 task/backend 浏览、模型安装状态查询、下载任务事件订阅，
+以及 `pause`、`resume`、`cancel` 控制。下载完成后通过注入的 backend probe 做快速结构和加载入口校验；
+该 probe 只在单个模型完成安装后触发，不在 catalog 浏览或 UI 启动时扫描全部模型。开始处理项目前，
+application 还会对已选模型和 stage configuration 执行一次 preflight；backend 随后在真正推理时
+创建 session，完成最终模型加载。下载控制与文件写入解耦，不要求 UI 参与模型协议。`ModelRef` 同时携带 catalog revision 和逐
+artifact 的期望 checksum，processing provenance 会记录实际文件 checksum。
 
 Assistant 与外部 Agent 都只能通过 application 暴露的稳定能力读取模型 readiness；它们不能直接修改 catalog、安装目录或下载任务内部状态。
 
@@ -112,7 +115,7 @@ Assistant 与外部 Agent 都只能通过 application 暴露的稳定能力读�
 - 转换工具和版本
 - 转换后 checksum
 
-没有完成转换和校验的条目不能显示为已安装。
+没有完成转换和校验的条目不能显示为可用；`candidate-source` 只能浏览，不能进入可用模型集合。
 
 ### Archive checksum 与成员 checksum
 
@@ -121,7 +124,10 @@ Assistant 与外部 Agent 都只能通过 application 暴露的稳定能力读�
 - 直接文件：校验下载文件本身。
 - `archiveMember`：优先校验整个 archive 的 `archiveSha256`，再提取成员；如果上游提供成员 checksum，再额外填写 `artifactSha256`。
 
-当前 catalog v1 只有一个 `sha256` 字段，旧的 archive bundle 条目可能将 archive checksum 重复写在每个 artifact 上。迁移到 catalog v2 时必须拆为 `archiveSha256` 与 `artifactSha256`，并增加目录成员/嵌套文件的 manifest 表达能力；在此之前不得把 archive checksum 误标成提取后文件 checksum。
+当前 catalog v1 只有一个 `sha256` 字段，archive bundle 的 checksum 语义仍需要通过
+`archiveMember` 区分来源 archive 与提取后的文件。迁移到 catalog v2 时必须拆为
+`archiveSha256` 与 `artifactSha256`，并增加目录成员/嵌套文件的 manifest 表达能力；
+在此之前不得把 archive checksum 误标成提取后文件 checksum。
 
 v0.1 的 backend artifact 约定：
 

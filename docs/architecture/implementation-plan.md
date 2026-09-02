@@ -4,7 +4,7 @@
 
 ### 目标
 
-建立一个可编译、可测试、可启动并已接入第一组真实推理后端的 Rust-native foundation，不下载模型权重，不实现完整音频资料工作区 UI。
+建立一个可编译、可测试、可启动并已接入第一组真实推理后端的 Rust-native foundation。模型下载、文档工作区和高阶语义能力在后续阶段建设。
 
 ### 交付目录
 
@@ -117,9 +117,9 @@ cargo build -p meetnote
 - pause/resume/cancel
 - SHA-256 校验
 - atomic install
-- backend probe
+- 下载完成后的快速 backend artifact probe
 
-验收：应用重启后能恢复下载状态；错误模型不会进入 installed。当前通过 `.download-tasks.json` 恢复中断任务为可继续的 `Paused` 状态。
+验收：应用重启后能恢复下载状态；下载完成后通过 backend probe；probe 失败的模型不能报告为可用。完整模型加载仍在第一次实际推理时执行。
 
 ## 阶段 3：第一个真实纵向流程
 
@@ -189,11 +189,16 @@ Agent 接入必须是模型、厂商和 Skill 无关的文档包读写边界。S
 - 当前使用每份文档自身的 `state.json` 和 `document.md`；列表索引与三层项目树通过目标目录扫描重建，不使用全局 project repository。
 - 真实 ASR/diarization 结果在 GPUI 中按 speaker 展示。
 
-仍需完成：
+已完成：
 
-- JobRuntime 事件订阅、取消和 ASR/diarization 状态展示已完成；处理任务不再写入持久化 `ProjectStatus`，文档只保存完成记录或失败原因，UI 通过 runtime 事件和兼容投影展示当前状态。
-- 完整 diarization bundle 的多文件下载、archive member 提取和 readiness 检查已完成。
-- speaker 合并和 Markdown 回写、文档 revision、三层关系校验和内部 document service 已完成；分层 `DocumentState`、旧扁平状态兼容迁移、处理失败记录和完整 pipeline 的基础 provenance 写回已完成；catalog 固定 checksum 传播、更细的 backend stage metadata 和外部 Skill 文档规范仍需补齐。
+- JobRuntime 基础事件、取消和处理结果状态投影。
+- diarization bundle 多文件下载和 archive member 提取。
+- speaker 合并、Markdown 回写、文档 revision、三层关系基础校验和内部 document service。
+- 分层 `DocumentState`、旧扁平状态迁移、处理失败记录和基础 provenance 写回。
+
+已完成：准确 provenance、显式 document status 写回、JobRuntime 任务状态、模型下载后 probe 和统一 CLI processing flow。
+
+roadmap：结果外部文件化、内部链接、子文档时间范围和更强的关系一致性校验。
 
 验收目标：GPUI 可导入音频、创建文档、执行 pipeline、重启后从目标目录恢复三层项目树，并显示 speaker-labelled transcript。当前项目状态已满足该目标；三层项目树是从文档 JSON 派生的正式产品特性。
 
@@ -206,8 +211,13 @@ Agent 接入必须是模型、厂商和 Skill 无关的文档包读写边界。S
 - `settings` crate 提供版本化 `AppSettings`、JSON 原子保存、读取、更新和重置；不使用 SQLite。
 - `AsrBackendProvider` 与 `DiarizationBackendProvider` 让 application 根据 `ModelRef.backend_id` 运行时选择后端。
 - `models::ModelManager` 提供 catalog 按任务/backend 浏览、缺失/部分/已安装状态查询和安装目录规划。
-- 下载任务提供进度事件、暂停、继续、取消；取消和中断保留 `.part`，继续使用 HTTP Range，校验失败清理临时文件。
+- 下载任务提供进度事件、暂停、继续、取消、重试次数、速度和 ETA；取消和中断保留 `.part`，继续使用 HTTP Range，下载结束校验大小/checksum 并进入快速 backend probe。
 - gated 模型在缺少认证接入时拒绝开始下载，不把 token 写入 catalog、日志或命令行。
+- Diarization stage 配置已完成：backend descriptor 声明可配置 stage 和候选项；native 可配置
+  segmentation、embedding、clustering，sherpa-onnx 不声明也不显示 stage 选项；处理前会校验
+  配置，native 会组装兼容模型目录并写回实际 stage provenance。
+- Backend probe 生命周期已固定为“下载完成快速 probe、处理前 preflight、推理时真实加载”；
+  catalog 浏览、UI 启动和设置读取不触发全量 probe。
 
 后端验收：
 
@@ -233,16 +243,11 @@ GPUI 页面已订阅 `DownloadTask.events`，调用 `ModelManager::pause/resume/
 
 当前已实现 Assistant、Meetings、Models、Settings 四个工作区入口、三层项目树、Summary/Original 展示、悬浮详情、模型下载任务绑定、backend 设置选择和文件变化刷新。Assistant 作为长期保留的内置 Agent 客户端，目前只通过内部 document service 读取文档并展示占位状态；具体 LLM/provider 仍保持可选适配边界。GPUI View 不得直接执行领域算法、文件 IO、模型下载、语义分析或 Agent 调用。当前 UI 是可运行的功能脚手架，不是最终高品位视觉方案。
 
-仍需完成：
-
-- 将 catalog 固定 checksum 传播到 `ModelProvenance`，并为各 backend 提供准确的 segmentation/embedding stage metadata。
-- 将 `ProjectStatus` 的 UI 展示继续收敛到从 `processing` 派生的文档读取模型；运行时任务状态已由 JobRuntime 事件提供，不能重新写回文档状态。
-- 完善 processing history、原始结果版本引用和外部 Skill 文档规范。
-- 发布 Skill-first 文档包规范；保留内部 command service，不把它作为外部 Agent 的固定协议。
+本阶段已完成 catalog revision、固定 checksum、stage metadata、JobRuntime 任务状态和当前结果覆盖策略。
 
 ## 阶段 6：生产化
 
-当前已完成文档扫描性能基线、文档处理中断恢复和模型下载任务恢复；发布相关工作暂缓，不在当前重构范围内。
+当前已完成文档扫描性能基线和模型下载任务恢复；音频处理任务的持久化恢复不属于当前版本，因为处理项目重新处理时直接替换当前结果。
 
 仍暂缓：
 

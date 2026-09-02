@@ -12,7 +12,7 @@ Candle ASR + custom ONNX diarization
 
 新增后端只增加实现 crate、模型 catalog 条目和注册 factory，不修改 domain、application 或 GPUI UI。
 
-后端只产生完整音频的标准化转录、speaker 段和运行时元数据。输出先由 application 对齐，再由 application/persistence 将原始结果与 processing provenance 写入目标目录文档，最后由 MeetNote 从文档 JSON 实时更新最多三层的项目树。当前 pipeline 已写入 backend/model/revision、可计算的输入与 artifact checksum、对齐算法和运行参数；catalog 固定 checksum 传播及更细的 segmentation/embedding stage metadata 仍需补强。Assistant、外部 Agent 和 Skill 不进入 ASR/diarization backend，也不能改变后端原始结果。
+后端只产生完整音频的标准化转录、speaker 段、embedding observation 和运行时元数据。输出由 application 对齐，再由 application/persistence 将当前结果与 processing provenance 写入目标目录文档；重新处理直接替换当前结果。当前 pipeline 已写入 catalog revision、逐 artifact checksum 和 segmentation/embedding/clustering stage metadata。Assistant、外部 Agent 和 Skill 不进入 ASR/diarization backend。
 
 ## ASR 接口
 
@@ -55,6 +55,16 @@ AppSettings.asr_backend_id / ModelRef.backend_id
 pub trait DiarizationBackend: Send + Sync {
     fn descriptor(&self) -> BackendDescriptor;
     fn probe(&self, model: &ModelRef) -> Result<(), BackendError>;
+    fn validate_stage_configuration(
+        &self,
+        model: &ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), BackendError>;
+    fn stage_provenance_with_configuration(
+        &self,
+        model: &ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> DiarizationStageProvenance;
     fn diarize(
         &self,
         request: DiarizationRequest,
@@ -67,9 +77,12 @@ pub trait DiarizationBackend: Send + Sync {
 
 - `diarization-sherpa-onnx`：segmentation、speaker embedding 和 clustering。
 - `diarization-native`：默认接入 `speakrs` 的 Pyannote powerset segmentation、
-  WeSpeaker embedding、AHC/PLDA/VBx 完整 pipeline，并通过独立 stage trait 保留模型替换能力。
-  该 backend 暴露中间 embedding observation，使用原子 JSON speaker library 完成跨项目
-  profile matching；最终结果同时保留项目内 cluster ID、稳定 profile ID 和可读 speaker label。
+  WeSpeaker embedding、AHC/PLDA/VBx 完整 pipeline，并通过独立 stage trait 提供替换边界。
+  当前生产配置可分别选择兼容的 segmentation、embedding 和 clustering stage；native backend
+  会按配置组装临时模型目录，再交给 `speakrs` 加载。stage 模型必须满足该 pipeline 的输入、
+  输出、关联 sidecar 和 PLDA 兼容约束，不能把任意 ONNX 当作替代品。
+- speaker profile matching 位于 application 的共享 identity service，可处理 native 和
+  sherpa-onnx 输出；backend 只负责输出 embedding observation。
 
 `diarization-native` 的模块边界固定为：
 
@@ -85,10 +98,29 @@ backend
 
 融合 provider 可以在 `engine` 内复用已经校准的 overlap-add、masked embedding 和 VBx，
 但不得绕过统一 observation、identity 和 persistence contract。模型下载仍由 `models` crate 负责，
-backend 不调用上游 package 的在线下载器。
+backend 不调用上游 package 的在线下载器。stage 配置由 descriptor 的结构化 capability 声明；
+不支持 stage override 的 backend 不显示这些设置，并在 application preflight 拒绝非空配置。
 
 `DiarizationBackendManager` 以同样方式实现 `DiarizationBackendProvider`。ASR 和
 diarization 可以独立选择，application 只接收两个统一的 `ModelRef`。
+
+`DiarizationStageProvenance` 是可选后端元数据边界。后端声明实际使用的 segmentation、embedding
+和 clustering 来源，application 将其写入当前 `ProcessingRecord`；未声明的 stage 不得由
+application 猜测为某个具体模型。
+
+## Backend probe 生命周期
+
+probe 分为快速 artifact probe、处理前 preflight 和实际加载三层，触发时机固定如下：
+
+| 时机 | 是否触发 | 作用 |
+| --- | --- | --- |
+| 浏览 catalog、启动 UI、读取设置 | 否 | 只读取 manifest 和文件安装状态，不为所有模型拖慢启动 |
+| 单个模型下载完成后 | 是 | `ModelManager` 进入 `verifying`，校验尺寸/checksum 后，对该模型声明的每个 candidate backend 执行快速 probe；失败则删除本次安装并标记失败 |
+| 开始处理项目之前 | 是 | `ProcessingService::probe` 对选中的 ASR、diarization 模型和 stage configuration 执行 preflight，阻止无效任务进入 JobRuntime |
+| backend 开始推理 | 是 | backend 再次检查请求，并创建真正的推理 session；ONNX graph、GGML header、provider/ABI 等只有在这里完成真实加载验证 |
+
+因此下载后的 probe 不等价于模型已经完成加载；设置页切换也不触发全 catalog probe。处理前 probe
+是用户可见任务的硬门槛，实际推理加载失败仍会以 `ModelLoadFailed` 或 `InferenceFailed` 返回。
 
 ## 不把任意 ONNX 当作通用 backend
 
@@ -142,4 +174,4 @@ pub enum JobEvent {
 }
 ```
 
-不使用字符串事件，不让具体 backend 直接更新 GPUI Entity、Assistant、外部 Agent 或项目树。处理完成后由 application 写入文档事实、`processing.latest` 和 `processing_history`，再触发文档扫描/项目树刷新事件。外部 Agent 通过 Skill 写回语义内容，不需要绑定内部 command enum。
+不使用字符串事件，不让具体 backend 直接更新 GPUI Entity、Assistant、外部 Agent 或项目树。处理完成后由 application 写入文档事实和当前 `processing.latest`，再触发文档扫描/项目树刷新事件。重新处理直接替换当前记录；外部 Agent 通过 Skill 写回语义内容，不需要绑定内部 command enum。

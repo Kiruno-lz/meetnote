@@ -16,7 +16,7 @@ Assistant 页面是保留的内置 Agent 客户端，不是特殊业务层。它
 
 ## 当前状态
 
-当前仓库已完成旧版 Tauri、TypeScript、Python 实现的清理，并已接入 Rust-native desktop workspace：GPUI Assistant 与项目树、音频导入、Rust 音频解码、后台 processing service、JSON/Markdown 结果保存、真实 `whisper-rs` ASR 和 `sherpa-onnx` diarization。以目标目录文档为事实来源的实时项目树仍是下一阶段的核心实现任务；当前 Assistant 是保留的占位客户端，不代表 MeetNote 已内置 LLM 服务。
+当前仓库已完成旧版 Tauri、TypeScript、Python 实现的清理，并已接入 Rust-native desktop workspace：GPUI application layer、目标目录文档扫描与三层项目树、音频导入、Rust 音频解码、后台 processing service、JSON/Markdown 结果保存、`whisper-rs` 与 `sherpa-onnx` ASR/diarization、native diarization 和 speaker profile matching。当前重点是完善模型真实加载 readiness、长音频流式处理和离线/在线 backend 能力；Assistant 仍是占位客户端，不代表 MeetNote 已内置 LLM 服务。
 
 ## 目标架构
 
@@ -27,8 +27,8 @@ GPUI UI / Assistant
   -> Rust or native-library inference backends
 
 External Agent / Skill
-  -> machine-readable document commands and queries
-  -> Rust application layer
+  -> Skill-guided Markdown/JSON document package
+  -> shared Rust document service boundary
 ```
 
 项目不再依赖 Tauri、WebView、Python subprocess 或 Python 运行环境。
@@ -52,17 +52,15 @@ LLM、语义拆分、自动总结、标签推断和语音库自然语言检索�
 
 ## 本地处理示例
 
-`meetnote` 默认启动 GPUI；传入 `process` 子命令可运行第一条真实 pipeline：
+`meetnote` 默认启动 GPUI；传入 `process` 子命令会读取 settings 中选择的 backend、模型、语言、设备、
+说话人数和声纹库设置，并把结果写入标准文档包：
 
 ```bash
 cargo run -p meetnote -- process \
-  docs/example/2p_en_video.m4a \
-  models/asr/whisper-large-v3-ggml/ggml-base.en.bin \
-  models/diarization/sherpa-onnx-speaker-diarization-bundle \
-  data/runs/2p_en_video
+  docs/example/2p_en_video.m4a
 ```
 
-命令直接读取 M4A，并输出 JSON 和 Markdown；模型文件位于被 `.gitignore` 忽略的 `models/`，不会提交进仓库。
+命令直接读取 M4A，并输出到 `data/documents/<document-id>/`；模型文件位于被 `.gitignore` 忽略的 `models/`，不会提交进仓库。
 
 ## 当前不执行
 

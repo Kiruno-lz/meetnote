@@ -85,7 +85,8 @@ resources/models/catalog.json
 
 ### runtime
 
-任务调度、取消、进度、日志、并发限制、模型 session 生命周期和恢复状态。
+统一管理音频处理任务的创建、排队、取消、进度、失败、完成和查询，并通过共享 worker gate 限制
+阻塞推理的并发数。模型 session 生命周期、跨进程恢复和跨启动任务持久化不属于当前 runtime 版本。
 
 ### persistence
 
@@ -93,7 +94,7 @@ resources/models/catalog.json
 
 ### models
 
-模型目录、解析、下载、断点续传、SHA-256 校验、原子安装、缓存索引和 backend probe。
+模型目录、解析、下载、断点续传、SHA-256 校验、原子安装、下载任务持久化和快速 backend artifact probe。完整模型加载在 backend 第一次使用时执行。
 
 ### settings
 
@@ -130,7 +131,8 @@ MeetNote 的知识后端能力分为“文档管理/写回”和“实时项目�
 - 编辑：Assistant 或外部 Agent 可以按 Skill 约定写回标题、标签、正文、文档状态、父子关系、内部链接和人工 speaker 修正。
 - 拆分：Agent/Skill 自行决定是否拆分、拆成什么文档以及语义项目树如何记录；MeetNote 提供文档创建、原子保存、三层约束校验和树刷新，不提供自动语义拆分算法。
 - 实时维护：目标目录发生新增、修改、移动或删除后，MeetNote 必须刷新派生项目树；通过 MeetNote 写入时拒绝超过三层、循环或跨音频来源的结构，外部无效修改在扫描后显示可定位错误。
-- 追溯：MeetNote 保存文档版本、原始资料引用和处理结果；原始音频、原始 ASR 和原始 diarization 结果不可被覆盖。
+- 追溯：MeetNote 保存当前处理结果和来源 provenance；文档语义编辑不能覆盖当前处理结果，
+  重新处理同一音频项目时允许直接替换旧的处理结果。
 
 Agent 接入不绑定某个模型、厂商或 Skill，也不把某个 command enum 作为外部 Agent 的强制 ABI。首要边界是 Skill 指导下的 Markdown/JSON 文档包读写；CLI、IPC 或其他适配器都必须复用同一 document service，不拥有额外权限。当前 `DocumentCommandService` 只是 application 内部的版本校验与用例入口。语义字段和拆分规则属于 Skill；三层上限和结构一致性属于 MeetNote domain contract。详细字段分层见[文档模型与处理记录](document-model.md)。
 
@@ -153,7 +155,7 @@ documents/<document-id>/
 系统处理状态与知识文档状态必须分开：
 
 - `processing_state`：由 `JobRuntime` 管理，表示一次音频任务的排队、运行、完成、失败或取消。任务成功后不作为长期项目状态保留。
-- `processing`：处理完成后写入文档 JSON，保存完成时间、输入指纹、ASR 模型、diarization segmentation/embedding 模型、clustering 算法、identity matching 和运行参数。重处理追加历史记录。
+- `processing`：处理完成后写入文档 JSON，保存完成时间、输入指纹、ASR 模型、diarization stage、clustering 算法、identity matching 和运行参数。重处理直接替换当前记录。
 - `document_status`：由外部 Agent 或用户按 Skill 写入文档自身 JSON，表示文档处于收件、编辑、复核、定稿或归档等知识工作流阶段；MeetNote 负责保存和展示，但不解释这些语义值。
 
 Agent 写入文档状态不得伪造或覆盖 MeetNote 的 `processing` 记录；处理失败也不得删除 Agent 已经编辑的文档内容或改变 `document_status`。当前 `ProjectStatus` 只作为旧 UI 的兼容投影，不能继续承载新的持久化语义。
@@ -169,4 +171,4 @@ Agent 写入文档状态不得伪造或覆盖 MeetNote 的 `processing` 记录�
 - 外部 Agent/Skill 标识及变更说明（如果由 Agent 写入）
 - 原始转录和最终文档之间的来源关系
 
-不可逆处理不得覆盖原始转录；语义结果由 Agent 作为文档内容、JSON 状态或新的文档文件保存。当前 pipeline 已将 `processing.latest`、处理历史、ASR/diarization backend 与 model、对齐算法、运行参数和可计算的输入/artifact checksum 写回 `state.json`；catalog 提供的固定 checksum 传播和更细的 backend stage provenance 仍是后续补强项。
+当前 pipeline 将 `processing.latest`、ASR/diarization backend 与 model、catalog revision、逐 artifact 期望与实际 checksum、准确的 diarization stage、对齐算法、运行参数和输入 checksum 写回 `state.json`。重新处理直接替换当前结果；如果需要保留不同处理结果，应创建新的文档项目。
