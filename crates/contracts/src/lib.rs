@@ -77,6 +77,8 @@ pub struct DocumentPatch {
     pub title: Option<String>,
     pub tags: Option<Vec<String>>,
     pub summary: Option<Option<String>>,
+    #[serde(default)]
+    pub document_status: Option<String>,
     pub markdown: Option<String>,
 }
 
@@ -104,6 +106,18 @@ pub struct ModelRef {
     pub model_id: String,
     pub revision: Option<String>,
     pub artifact_path: String,
+    #[serde(default)]
+    pub artifacts: Vec<ModelArtifactRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelArtifactRef {
+    pub filename: String,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub archive_member: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,6 +139,31 @@ pub struct BackendDescriptor {
     pub id: String,
     pub task: BackendTask,
     pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub configurable_diarization_stages: Vec<DiarizationStageKind>,
+    #[serde(default)]
+    pub diarization_stage_options: Vec<DiarizationStageOption>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiarizationStageKind {
+    Segmentation,
+    Embedding,
+    Clustering,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizationStageOption {
+    pub stage: DiarizationStageKind,
+    pub id: String,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub revision: Option<String>,
+    #[serde(default)]
+    pub artifact_files: Vec<String>,
 }
 
 pub const SPEAKER_LIBRARY_SCHEMA_VERSION: u32 = 1;
@@ -319,6 +358,37 @@ pub struct DiarizationRequest {
     pub device: ComputeDevice,
     #[serde(default)]
     pub speaker_library_path: Option<String>,
+    #[serde(default)]
+    pub stage_configuration: DiarizationStageConfiguration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizationStageConfiguration {
+    #[serde(default)]
+    pub segmentation_model: Option<ModelRef>,
+    #[serde(default)]
+    pub embedding_model: Option<ModelRef>,
+    #[serde(default)]
+    pub clustering_algorithm: Option<AlgorithmRef>,
+}
+
+impl DiarizationStageConfiguration {
+    pub fn is_empty(&self) -> bool {
+        self.segmentation_model.is_none()
+            && self.embedding_model.is_none()
+            && self.clustering_algorithm.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlgorithmRef {
+    pub id: String,
+    #[serde(default)]
+    pub revision: Option<String>,
+    #[serde(default)]
+    pub parameters: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

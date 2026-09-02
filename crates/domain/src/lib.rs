@@ -86,7 +86,6 @@ pub struct DocumentContent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProcessingMetadata {
     pub latest: Option<ProcessingRecord>,
-    pub history: Vec<ProcessingRecord>,
     pub last_error: Option<String>,
 }
 
@@ -108,6 +107,16 @@ pub struct ModelProvenance {
     pub revision: Option<String>,
     pub artifact_sha256: Option<String>,
     pub artifact_path: String,
+    #[serde(default)]
+    pub artifacts: Vec<ModelArtifactProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelArtifactProvenance {
+    pub filename: String,
+    pub expected_sha256: Option<String>,
+    pub observed_sha256: Option<String>,
+    pub archive_member: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -140,6 +149,7 @@ pub struct RuntimeProvenance {
     pub language: Option<String>,
     pub sample_rate_hz: Option<u32>,
     pub threads: Option<u32>,
+    pub expected_speakers: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -293,11 +303,7 @@ impl LegacyDocumentState {
                 tags: self.tags,
                 summary: self.summary,
             },
-            processing: ProcessingMetadata {
-                latest,
-                history: Vec::new(),
-                last_error,
-            },
+            processing: ProcessingMetadata { latest, last_error },
             results: ProcessingResults {
                 transcript: self.transcript,
                 diarization: self.diarization,
@@ -415,9 +421,7 @@ impl DocumentState {
     }
 
     pub fn record_processing(&mut self, record: ProcessingRecord) {
-        if let Some(previous) = self.processing.latest.replace(record) {
-            self.processing.history.push(previous);
-        }
+        self.processing.latest = Some(record);
         self.processing.last_error = None;
     }
 

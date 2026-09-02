@@ -2,18 +2,20 @@ use crate::{
     run_pipeline, AsrBackend, AsrBackendProvider, BackendFuture, DiarizationBackend,
     DiarizationBackendProvider, DocumentService, PipelineResult,
 };
-use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
+use contracts::{
+    AsrRequest, ComputeDevice, DiarizationRequest, DiarizationStageConfiguration, ModelRef,
+};
 use domain::{
     reorder_project, reparent_project, AlgorithmProvenance, DiarizationProvenance, DocumentState,
-    IdentityMatchingProvenance, ModelProvenance, ProcessingRecord, ProjectId, RuntimeProvenance,
-    SpeakerTaggedSegment,
+    IdentityMatchingProvenance, ModelArtifactProvenance, ModelProvenance, ProcessingRecord,
+    ProjectId, RuntimeProvenance, SpeakerTaggedSegment,
 };
 use futures::channel::mpsc::UnboundedReceiver;
 use runtime::{JobContext, JobEvent, JobRuntime};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct ProcessingRequest {
@@ -24,6 +26,7 @@ pub struct ProcessingRequest {
     pub expected_speakers: Option<u32>,
     pub device: ComputeDevice,
     pub speaker_library_path: Option<String>,
+    pub stage_configuration: DiarizationStageConfiguration,
 }
 
 #[derive(Clone)]
@@ -72,7 +75,7 @@ impl ProcessingService {
             .probe(&request.asr_model)?;
         self.diarization_provider
             .backend(&request.diarization_model.backend_id)?
-            .probe(&request.diarization_model)
+            .probe_with_configuration(&request.diarization_model, &request.stage_configuration)
     }
 
     pub fn backend_ids(&self) -> (String, String) {
@@ -134,6 +137,7 @@ impl ProcessingService {
                     expected_speakers: request.expected_speakers,
                     device: request.device,
                     speaker_library_path: request.speaker_library_path,
+                    stage_configuration: request.stage_configuration,
                 },
                 asr_context,
                 diarization_context,
@@ -192,6 +196,28 @@ impl DiarizationBackendProvider for SingleDiarizationBackendProvider {
 pub struct WorkspaceService {
     processing: ProcessingService,
     documents: DocumentService,
+    options: Arc<RwLock<ProcessingOptions>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessingOptions {
+    pub language: Option<String>,
+    pub expected_speakers: Option<u32>,
+    pub device: ComputeDevice,
+    pub speaker_library_path: Option<String>,
+    pub diarization_stages: DiarizationStageConfiguration,
+}
+
+impl Default for ProcessingOptions {
+    fn default() -> Self {
+        Self {
+            language: None,
+            expected_speakers: None,
+            device: ComputeDevice::Auto,
+            speaker_library_path: None,
+            diarization_stages: DiarizationStageConfiguration::default(),
+        }
+    }
 }
 
 pub struct ProjectProcessingJob {
@@ -204,10 +230,27 @@ pub struct ProjectProcessingJob {
 
 impl WorkspaceService {
     pub fn new(processing: ProcessingService, documents: DocumentService) -> Self {
+        Self::with_options(processing, documents, ProcessingOptions::default())
+    }
+
+    pub fn with_options(
+        processing: ProcessingService,
+        documents: DocumentService,
+        options: ProcessingOptions,
+    ) -> Self {
         Self {
             processing,
             documents,
+            options: Arc::new(RwLock::new(options)),
         }
+    }
+
+    pub fn set_processing_options(&self, options: ProcessingOptions) -> Result<(), String> {
+        *self
+            .options
+            .write()
+            .map_err(|_| "processing options lock poisoned".to_string())? = options;
+        Ok(())
     }
 
     pub fn list_projects(&self) -> Result<Vec<DocumentState>, String> {
@@ -373,14 +416,20 @@ impl WorkspaceService {
             .get(&project_id)
             .map_err(persistence_error)?
             .ok_or_else(|| persistence_error("project does not exist"))?;
+        let options = self
+            .options
+            .read()
+            .map_err(|_| persistence_error("processing options lock poisoned"))?
+            .clone();
         let request = ProcessingRequest {
             audio_path: project.audio_path().to_string(),
             asr_model,
             diarization_model,
-            language: None,
-            expected_speakers: None,
-            device: ComputeDevice::Auto,
-            speaker_library_path,
+            language: options.language,
+            expected_speakers: options.expected_speakers,
+            device: options.device,
+            speaker_library_path: speaker_library_path.or(options.speaker_library_path),
+            stage_configuration: options.diarization_stages,
         };
         self.processing.probe(&request).inspect_err(|error| {
             project.set_processing_error(error.message.clone());
@@ -502,13 +551,25 @@ fn processing_record(
         diarization: DiarizationProvenance {
             backend_id: result.diarization.backend.id.clone(),
             model_revision: result.diarization.model.revision.clone(),
-            segmentation: Some(model_provenance(&result.diarization.model)),
-            embedding: Some(model_provenance(&result.diarization.model)),
-            clustering: AlgorithmProvenance {
-                id: "backend-clustering".into(),
-                revision: Some(result.diarization.backend.id.clone()),
-                parameters: None,
-            },
+            segmentation: result
+                .diarization_stage_provenance
+                .segmentation
+                .as_ref()
+                .map(model_provenance),
+            embedding: result
+                .diarization_stage_provenance
+                .embedding
+                .as_ref()
+                .map(model_provenance),
+            clustering: result
+                .diarization_stage_provenance
+                .clustering
+                .clone()
+                .unwrap_or_else(|| AlgorithmProvenance {
+                    id: "backend-clustering".into(),
+                    revision: Some(result.diarization.backend.id.clone()),
+                    parameters: None,
+                }),
             identity_matching,
         },
         alignment: AlgorithmProvenance {
@@ -525,6 +586,7 @@ fn processing_record(
                 .or_else(|| request.language.clone()),
             sample_rate_hz: Some(16_000),
             threads: None,
+            expected_speakers: request.expected_speakers,
         },
     }
 }
@@ -536,6 +598,24 @@ fn model_provenance(model: &ModelRef) -> ModelProvenance {
         revision: model.revision.clone(),
         artifact_sha256: artifact_sha256(&model.artifact_path),
         artifact_path: model.artifact_path.clone(),
+        artifacts: model
+            .artifacts
+            .iter()
+            .map(|artifact| ModelArtifactProvenance {
+                filename: artifact.filename.clone(),
+                expected_sha256: artifact.expected_sha256.clone(),
+                observed_sha256: {
+                    let root = Path::new(&model.artifact_path);
+                    let artifact_path = if root.is_file() {
+                        root.to_path_buf()
+                    } else {
+                        root.join(&artifact.filename)
+                    };
+                    file_sha256(&artifact_path.display().to_string())
+                },
+                archive_member: artifact.archive_member.clone(),
+            })
+            .collect(),
     }
 }
 
@@ -691,7 +771,7 @@ mod tests {
                 Ok(AsrResult {
                     backend: asr_descriptor("fake-asr", &["timestamps"]),
                     model: request.model,
-                    language: Some("en".into()),
+                    language: request.language,
                     segments: vec![TranscriptSegment {
                         id: "t1".into(),
                         start_ms: 0,
@@ -714,6 +794,18 @@ mod tests {
             Ok(())
         }
 
+        fn stage_provenance(&self, model: &ModelRef) -> crate::DiarizationStageProvenance {
+            crate::DiarizationStageProvenance {
+                segmentation: Some(model.clone()),
+                embedding: Some(model.clone()),
+                clustering: Some(AlgorithmProvenance {
+                    id: "fake-clustering".into(),
+                    revision: Some("1".into()),
+                    parameters: None,
+                }),
+            }
+        }
+
         fn diarize(
             &self,
             request: DiarizationRequest,
@@ -732,7 +824,7 @@ mod tests {
                         end_ms: 1_000,
                         confidence: Some(1.0),
                     }],
-                    speaker_count: Some(1),
+                    speaker_count: request.expected_speakers,
                     embedding_observations: Vec::new(),
                 })
             })
@@ -742,9 +834,16 @@ mod tests {
     #[test]
     fn workspace_processes_and_persists_a_project() {
         let repository = Arc::new(MemoryRepository::default());
-        let workspace = WorkspaceService::new(
+        let workspace = WorkspaceService::with_options(
             ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
             DocumentService::new(repository.clone()),
+            ProcessingOptions {
+                language: Some("zh".into()),
+                expected_speakers: Some(2),
+                device: ComputeDevice::Cpu,
+                speaker_library_path: None,
+                diarization_stages: DiarizationStageConfiguration::default(),
+            },
         );
         let project = workspace.import_audio("fixture.wav").unwrap();
         let asr_model = ModelRef {
@@ -752,12 +851,14 @@ mod tests {
             model_id: "fixture".into(),
             revision: None,
             artifact_path: "fixture-model".into(),
+            artifacts: Vec::new(),
         };
         let diarization_model = ModelRef {
             backend_id: "fake-diarization".into(),
             model_id: "fixture".into(),
             revision: None,
             artifact_path: "fixture-model".into(),
+            artifacts: Vec::new(),
         };
 
         let result = futures::executor::block_on(workspace.process_project(
@@ -772,8 +873,20 @@ mod tests {
         let processing = result.processing.latest.as_ref().unwrap();
         assert_eq!(processing.asr.backend_id, "fake-asr");
         assert_eq!(processing.diarization.backend_id, "fake-diarization");
+        assert_eq!(
+            processing
+                .diarization
+                .segmentation
+                .as_ref()
+                .map(|model| model.model_id.as_str()),
+            Some("fixture")
+        );
+        assert_eq!(processing.diarization.clustering.id, "fake-clustering");
         assert_eq!(processing.alignment.id, "max-overlap-speaker-alignment");
         assert_eq!(processing.runtime.sample_rate_hz, Some(16_000));
+        assert_eq!(processing.runtime.language.as_deref(), Some("zh"));
+        assert_eq!(processing.runtime.device, "Cpu");
+        assert_eq!(processing.runtime.expected_speakers, Some(2));
         assert_eq!(repository.get(project.id()).unwrap(), Some(result.clone()));
     }
 }

@@ -596,6 +596,7 @@ mod tests {
                 model_id: "model".into(),
                 revision: None,
                 artifact_path: "fixture".into(),
+                artifacts: Vec::new(),
             },
             segments: vec![domain::DiarizationSegment {
                 id: "segment".into(),

@@ -1,6 +1,6 @@
 use contracts::{
     AsrRequest, AsrResult, BackendError, BackendTask, DiarizationRequest, DiarizationResult,
-    DocumentRecord,
+    DiarizationStageConfiguration, DocumentRecord, ModelRef,
 };
 use domain::{align_transcript_and_speakers, SpeakerTaggedSegment};
 use runtime::JobContext;
@@ -23,7 +23,7 @@ pub use speaker_identity::{
     SpeakerLibraryService, SpeakerProfileStore,
 };
 pub use workspace::{
-    render_markdown, ProcessingContexts, ProcessingRequest, ProcessingService,
+    render_markdown, ProcessingContexts, ProcessingOptions, ProcessingRequest, ProcessingService,
     ProjectProcessingJob, WorkspaceService,
 };
 
@@ -65,6 +65,41 @@ pub trait AsrBackendProvider: Send + Sync {
 pub trait DiarizationBackend: Send + Sync {
     fn descriptor(&self) -> BackendDescriptor;
     fn probe(&self, model: &contracts::ModelRef) -> Result<(), BackendError>;
+    fn validate_stage_configuration(
+        &self,
+        _model: &contracts::ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), BackendError> {
+        if configuration.is_empty() {
+            Ok(())
+        } else {
+            Err(BackendError {
+                code: contracts::BackendErrorCode::ModelIncompatible,
+                message: format!(
+                    "{} does not support diarization stage overrides",
+                    self.descriptor().id
+                ),
+            })
+        }
+    }
+    fn probe_with_configuration(
+        &self,
+        model: &contracts::ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), BackendError> {
+        self.probe(model)?;
+        self.validate_stage_configuration(model, configuration)
+    }
+    fn stage_provenance(&self, _model: &contracts::ModelRef) -> DiarizationStageProvenance {
+        DiarizationStageProvenance::default()
+    }
+    fn stage_provenance_with_configuration(
+        &self,
+        model: &contracts::ModelRef,
+        _configuration: &DiarizationStageConfiguration,
+    ) -> DiarizationStageProvenance {
+        self.stage_provenance(model)
+    }
     fn diarize(
         &self,
         request: DiarizationRequest,
@@ -215,6 +250,14 @@ pub struct PipelineResult {
     pub asr: AsrResult,
     pub diarization: DiarizationResult,
     pub aligned: Vec<SpeakerTaggedSegment>,
+    pub diarization_stage_provenance: DiarizationStageProvenance,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DiarizationStageProvenance {
+    pub segmentation: Option<ModelRef>,
+    pub embedding: Option<ModelRef>,
+    pub clustering: Option<domain::AlgorithmProvenance>,
 }
 
 pub async fn run_pipeline(
@@ -226,6 +269,10 @@ pub async fn run_pipeline(
     diarization_context: JobContext,
 ) -> Result<PipelineResult, BackendError> {
     let speaker_library_path = diarization_request.speaker_library_path.clone();
+    let diarization_stage_provenance = diarization_backend.stage_provenance_with_configuration(
+        &diarization_request.model,
+        &diarization_request.stage_configuration,
+    );
     let asr_future = asr_backend.transcribe(asr_request, asr_context);
     let diarization_future = diarization_backend.diarize(diarization_request, diarization_context);
     let (asr, diarization) = futures::join!(asr_future, diarization_future);
@@ -247,6 +294,7 @@ pub async fn run_pipeline(
         asr,
         diarization,
         aligned,
+        diarization_stage_provenance,
     })
 }
 
@@ -258,6 +306,8 @@ pub fn asr_descriptor(id: &str, capabilities: &[&str]) -> BackendDescriptor {
             .iter()
             .map(|value| (*value).to_string())
             .collect(),
+        configurable_diarization_stages: Vec::new(),
+        diarization_stage_options: Vec::new(),
     }
 }
 
@@ -269,7 +319,21 @@ pub fn diarization_descriptor(id: &str, capabilities: &[&str]) -> BackendDescrip
             .iter()
             .map(|value| (*value).to_string())
             .collect(),
+        configurable_diarization_stages: Vec::new(),
+        diarization_stage_options: Vec::new(),
     }
+}
+
+pub fn diarization_descriptor_with_stages(
+    id: &str,
+    capabilities: &[&str],
+    stages: Vec<contracts::DiarizationStageKind>,
+    options: Vec<contracts::DiarizationStageOption>,
+) -> BackendDescriptor {
+    let mut descriptor = diarization_descriptor(id, capabilities);
+    descriptor.configurable_diarization_stages = stages;
+    descriptor.diarization_stage_options = options;
+    descriptor
 }
 
 #[cfg(test)]
@@ -303,6 +367,7 @@ mod tests {
                         model_id: "fake".into(),
                         revision: None,
                         artifact_path: "fixture-model".into(),
+                        artifacts: Vec::new(),
                     },
                     language: Some("zh".into()),
                     segments: vec![TranscriptSegment {
@@ -340,6 +405,7 @@ mod tests {
                         model_id: "fake".into(),
                         revision: None,
                         artifact_path: "fixture-model".into(),
+                        artifacts: Vec::new(),
                     },
                     segments: vec![DiarizationSegment {
                         id: "d1".into(),
@@ -367,6 +433,7 @@ mod tests {
             model_id: "fake".into(),
             revision: None,
             artifact_path: "fixture-model".into(),
+            artifacts: Vec::new(),
         };
         let result = futures::executor::block_on(run_pipeline(
             &FakeAsr,
@@ -383,6 +450,7 @@ mod tests {
                 expected_speakers: Some(1),
                 device: ComputeDevice::Cpu,
                 speaker_library_path: None,
+                stage_configuration: DiarizationStageConfiguration::default(),
             },
             asr_context,
             diarization_context,

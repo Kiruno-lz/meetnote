@@ -159,7 +159,7 @@ impl DocumentCommandService {
             .ok_or_else(|| DocumentCommandError::NotFound(document_id.clone()))?;
         ensure_revision(&record.state, expected_revision)?;
         let mut state = record.state;
-        apply_patch(&mut state, &patch);
+        apply_patch(&mut state, &patch)?;
         let markdown = patch.markdown.unwrap_or(record.markdown);
         let updated = self
             .documents
@@ -247,7 +247,10 @@ impl DocumentCommandService {
     }
 }
 
-fn apply_patch(state: &mut DocumentState, patch: &DocumentPatch) {
+fn apply_patch(
+    state: &mut DocumentState,
+    patch: &DocumentPatch,
+) -> Result<(), DocumentCommandError> {
     if let Some(title) = &patch.title {
         state.content.title = title.clone();
     }
@@ -257,6 +260,16 @@ fn apply_patch(state: &mut DocumentState, patch: &DocumentPatch) {
     if let Some(summary) = &patch.summary {
         state.content.summary = summary.clone();
     }
+    if let Some(status) = &patch.document_status {
+        let status = status.trim();
+        if status.is_empty() {
+            return Err(DocumentCommandError::Invalid(
+                "document status cannot be empty".into(),
+            ));
+        }
+        state.document_status.value = status.to_string();
+    }
+    Ok(())
 }
 
 fn ensure_revision(
@@ -403,6 +416,25 @@ mod tests {
         assert_eq!(updated_record.state.revision(), 1);
         assert_eq!(updated_record.markdown, "# Daily note\n");
 
+        let status_updated = service
+            .execute(contracts::DocumentCommandEnvelope::new(
+                "status-1",
+                DocumentCommand::Update {
+                    document_id: updated_record.state.id().clone(),
+                    expected_revision: updated_record.state.revision(),
+                    patch: DocumentPatch {
+                        document_status: Some("review".into()),
+                        ..DocumentPatch::default()
+                    },
+                },
+            ))
+            .unwrap();
+        let status_record = match status_updated {
+            contracts::DocumentCommandResult::Updated(record) => record,
+            other => panic!("unexpected status result: {other:?}"),
+        };
+        assert_eq!(status_record.state.document_status.value, "review");
+
         let stale = service.execute(contracts::DocumentCommandEnvelope::new(
             "update-stale",
             DocumentCommand::Update {
@@ -415,7 +447,7 @@ mod tests {
             stale,
             Err(DocumentCommandError::RevisionConflict {
                 expected: 0,
-                actual: 1
+                actual: 2
             })
         ));
     }
