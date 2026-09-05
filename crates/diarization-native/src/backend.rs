@@ -161,6 +161,7 @@ impl NativeDiarizationBackend {
                 segments,
                 speaker_count,
                 embedding_observations: engine_output.observations.clone(),
+                speaker_profile_candidates: Vec::new(),
             },
             observations: engine_output.observations,
             anonymous_clusters: all_clusters.into_iter().collect(),
@@ -493,6 +494,9 @@ mod tests {
                     source_segment_id: Some("segment".into()),
                     start_ms: 0,
                     end_ms: 1_000,
+                    audio_path: Some("fixture.wav".into()),
+                    audio_sha256: None,
+                    backup_path: None,
                 },
                 0.7,
             )
@@ -517,6 +521,7 @@ mod tests {
                 identity: IdentityResolverConfig {
                     default_threshold: 0.7,
                     ambiguity_margin: 0.03,
+                    ..IdentityResolverConfig::default()
                 },
             },
         );
@@ -548,6 +553,7 @@ mod tests {
             &application::ClusterIdentityResolver::new(IdentityResolverConfig {
                 default_threshold: 0.7,
                 ambiguity_margin: 0.03,
+                ..IdentityResolverConfig::default()
             }),
         )
         .unwrap();

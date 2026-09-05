@@ -269,6 +269,12 @@ pub struct SpeakerSampleSource {
     pub source_segment_id: Option<String>,
     pub start_ms: u64,
     pub end_ms: u64,
+    #[serde(default)]
+    pub audio_path: Option<String>,
+    #[serde(default)]
+    pub audio_sha256: Option<String>,
+    #[serde(default)]
+    pub backup_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -332,6 +338,27 @@ pub struct IdentityMatch {
     pub display_name: String,
     pub score: f32,
     pub threshold: f32,
+    #[serde(default)]
+    pub distribution_floor: f32,
+    #[serde(default)]
+    pub cluster_dispersion: f32,
+    #[serde(default)]
+    pub combined_dispersion: f32,
+    #[serde(default)]
+    pub competition_margin: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeakerProfileCandidate {
+    pub cluster_id: u32,
+    pub representative_observation_ids: Vec<String>,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub observation_count: usize,
+    pub mean_quality: f32,
+    pub dispersion: f32,
+    pub embedding_space: EmbeddingSpace,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -399,6 +426,8 @@ pub struct DiarizationResult {
     pub speaker_count: Option<u32>,
     #[serde(default)]
     pub embedding_observations: Vec<SpeakerEmbeddingObservation>,
+    #[serde(default)]
+    pub speaker_profile_candidates: Vec<SpeakerProfileCandidate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -500,5 +529,23 @@ mod tests {
         let mut unknown = legacy;
         unknown.legacy_feature_config = Some("unknown-feature-config".into());
         assert!(!unknown.compatible_with(&structured));
+    }
+
+    #[test]
+    fn existing_speaker_sample_sources_keep_schema_one_compatibility() {
+        let source: SpeakerSampleSource = serde_json::from_str(
+            r#"{
+                "projectId":"project",
+                "sourceSegmentId":"segment",
+                "startMs":10,
+                "endMs":20
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(SPEAKER_LIBRARY_SCHEMA_VERSION, 1);
+        assert_eq!(source.project_id.as_deref(), Some("project"));
+        assert!(source.audio_path.is_none());
+        assert!(source.backup_path.is_none());
     }
 }

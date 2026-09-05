@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub use contracts::{
     EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
     IdentityMatch, SpeakerEmbeddingObservation, SpeakerEmbeddingSample, SpeakerLibraryDocument,
-    SpeakerProfile, SpeakerSampleSource,
+    SpeakerProfile, SpeakerProfileCandidate, SpeakerSampleSource,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

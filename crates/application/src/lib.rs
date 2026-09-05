@@ -18,9 +18,9 @@ mod workspace;
 pub use contracts::BackendDescriptor;
 pub use document_commands::{DocumentCommandError, DocumentCommandService};
 pub use speaker_identity::{
-    apply_identity_matches, cosine_similarity, ClusterIdentityResolver, IdentityResolverConfig,
-    InMemorySpeakerProfileStore, JsonSpeakerProfileStore, SpeakerLibraryError,
-    SpeakerLibraryService, SpeakerProfileStore,
+    apply_identity_matches, cosine_similarity, ClusterIdentityResolver, IdentityResolution,
+    IdentityResolverConfig, InMemorySpeakerProfileStore, JsonSpeakerProfileStore,
+    SpeakerLibraryError, SpeakerLibraryService, SpeakerProfileStore,
 };
 pub use workspace::{
     render_markdown, ProcessingContexts, ProcessingOptions, ProcessingRequest, ProcessingService,
@@ -418,6 +418,7 @@ mod tests {
                     }],
                     speaker_count: Some(1),
                     embedding_observations: Vec::new(),
+                    speaker_profile_candidates: Vec::new(),
                 })
             })
         }

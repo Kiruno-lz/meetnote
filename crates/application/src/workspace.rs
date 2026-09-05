@@ -826,6 +826,7 @@ mod tests {
                     }],
                     speaker_count: request.expected_speakers,
                     embedding_observations: Vec::new(),
+                    speaker_profile_candidates: Vec::new(),
                 })
             })
         }
