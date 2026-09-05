@@ -10,6 +10,14 @@ use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
 use thiserror::Error;
 
+mod stream;
+mod window;
+
+pub use stream::{AudioChunk, AudioChunkReader, AudioSourceInfo, TARGET_SAMPLE_RATE_HZ};
+pub use window::{
+    AudioWindow, AudioWindowBounds, AudioWindowPlan, ProcessingWindowPlanner, WindowPlanError,
+};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MonoPcm16k {
     pub samples: Vec<f32>,
@@ -28,6 +36,8 @@ pub enum AudioError {
     Empty { path: String },
     #[error("failed to decode audio file {path}: {message}")]
     Decode { path: String, message: String },
+    #[error("audio decoding was cancelled at output sample {output_sample}: {path}")]
+    Cancelled { path: String, output_sample: u64 },
 }
 
 pub fn read_audio_mono_16k(path: impl AsRef<Path>) -> Result<MonoPcm16k, AudioError> {
