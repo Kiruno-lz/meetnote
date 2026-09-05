@@ -23,13 +23,16 @@ use types::{chunk_audio_raw, chunk_start_frames, total_output_frames};
 pub(crate) mod clustering;
 #[cfg(test)]
 use clustering::mark_inactive_speakers;
+pub use clustering::{
+    EmbeddingClustering, EmbeddingObservation, EmbeddingObservationOrigin, EmbeddingObservations,
+};
 pub(crate) use clustering::{clean_masks, select_speaker_weights, write_speaker_mask_to_slice};
 
 mod concurrent;
 use concurrent::ConcurrentEmbeddingRunner;
 
 mod post_inference;
-pub use post_inference::post_inference;
+pub use post_inference::{post_inference, post_inference_with_clustering};
 
 #[cfg(feature = "coreml")]
 mod chunk_embedding;
@@ -87,7 +90,7 @@ macro_rules! pipeline_run_methods {
         }
 
         /// Run only inference (segmentation + embedding), returning intermediate artifacts
-        pub fn run_inference_only(
+        pub fn run_inference(
             &mut self,
             audio: &[f32],
         ) -> Result<InferenceArtifacts, PipelineError> {
@@ -120,6 +123,11 @@ macro_rules! pipeline_run_methods {
         /// Segmentation step size in seconds for the current execution mode
         pub fn segmentation_step(&self) -> f64 {
             self.seg_model.step_seconds()
+        }
+
+        /// Segmentation window size in input samples for the current model.
+        pub fn segmentation_window_samples(&self) -> usize {
+            self.seg_model.window_samples()
         }
     };
 }
@@ -170,12 +178,31 @@ impl OwnedDiarizationPipeline {
     ///
     /// Does not need mutable model access, so it can run on a background
     /// thread while the next file's inference proceeds
-    pub fn finish_post_inference(
+    pub fn cluster_inference_artifacts(
         &self,
         artifacts: InferenceArtifacts,
         config: &PipelineConfig,
     ) -> Result<DiarizationResult, PipelineError> {
         post_inference(artifacts, config, &self.plda)
+    }
+
+    /// Fit recording-wide anonymous speaker clusters from embedding observations.
+    pub fn cluster_embedding_observations(
+        &self,
+        observations: &EmbeddingObservations,
+        config: &PipelineConfig,
+    ) -> EmbeddingClustering {
+        clustering::fit_embedding_observations(observations, &self.plda, config)
+    }
+
+    /// Reconstruct one window using previously fitted recording-wide clusters.
+    pub fn finish_post_inference_with_clustering(
+        &self,
+        artifacts: InferenceArtifacts,
+        clustering: &EmbeddingClustering,
+        config: &PipelineConfig,
+    ) -> Result<DiarizationResult, PipelineError> {
+        post_inference_with_clustering(artifacts, clustering, config)
     }
 
     /// Convert into a background-processing queue

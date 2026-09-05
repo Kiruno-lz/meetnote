@@ -6,6 +6,7 @@ use crate::clustering::plda::PldaTransform;
 use crate::reconstruct::Reconstructor;
 use crate::segment::merge_segments;
 
+use super::clustering::{EmbeddingClustering, assign_embedding_clustering};
 use super::config::{PipelineConfig, ReconstructMethod};
 use super::types::{
     ChunkSpeakerClusters, DiarizationResult, DiscreteDiarization, InferenceArtifacts, PipelineError,
@@ -42,8 +43,66 @@ pub fn post_inference(
     let training_embeddings = embeddings.training_set(&segmentations);
     let hard_clusters = training_embeddings.cluster(&segmentations, &embeddings, plda, config);
 
+    complete_post_inference(
+        segmentations,
+        embeddings,
+        speaker_count,
+        hard_clusters,
+        layout.start_frames,
+        config,
+        post_start,
+    )
+}
+
+/// Reconstruct one inference artifact set using recording-wide speaker clustering.
+pub fn post_inference_with_clustering(
+    inference_artifacts: InferenceArtifacts,
+    clustering: &EmbeddingClustering,
+    config: &PipelineConfig,
+) -> Result<DiarizationResult, PipelineError> {
+    let post_start = std::time::Instant::now();
+    let InferenceArtifacts {
+        layout,
+        segmentations,
+        embeddings,
+    } = inference_artifacts;
+    let speaker_count = segmentations.speaker_count(&layout);
+    if speaker_count
+        .iter()
+        .all(|speaker_count| *speaker_count == 0)
+    {
+        return Ok(DiarizationResult {
+            segmentations,
+            embeddings,
+            speaker_count,
+            hard_clusters: ChunkSpeakerClusters(Array2::zeros((0, 0))),
+            discrete_diarization: DiscreteDiarization(Array2::zeros((0, 0))),
+            segments: Vec::new(),
+        });
+    }
+    let hard_clusters = assign_embedding_clustering(&segmentations, &embeddings, clustering);
+    complete_post_inference(
+        segmentations,
+        embeddings,
+        speaker_count,
+        hard_clusters,
+        layout.start_frames,
+        config,
+        post_start,
+    )
+}
+
+fn complete_post_inference(
+    segmentations: super::types::DecodedSegmentations,
+    embeddings: super::types::ChunkEmbeddings,
+    speaker_count: super::types::SpeakerCountTrack,
+    hard_clusters: ChunkSpeakerClusters,
+    start_frames: Vec<usize>,
+    config: &PipelineConfig,
+    post_start: std::time::Instant,
+) -> Result<DiarizationResult, PipelineError> {
     let reconstructor =
-        Reconstructor::with_clusters(&segmentations, &hard_clusters, &layout.start_frames, 0);
+        Reconstructor::with_clusters(&segmentations, &hard_clusters, &start_frames, 0);
     let discrete_diarization = match config.reconstruct_method {
         ReconstructMethod::Smoothed { epsilon } => {
             reconstructor.reconstruct_smoothed(&speaker_count, epsilon)

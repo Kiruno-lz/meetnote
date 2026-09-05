@@ -568,7 +568,7 @@ fn fast_apple_single_embedding_matches_python_fixture() {
 }
 
 #[test]
-fn run_inference_only_plus_finish_matches_run_with_config() {
+fn run_inference_plus_clustering_matches_run_with_config() {
     let harness = PipelineTestHarness::load();
     let Some(mut pipeline) = harness.cpu_pipeline() else {
         return;
@@ -578,8 +578,10 @@ fn run_inference_only_plus_finish_matches_run_with_config() {
         .run_with_config(harness.audio(), "file1", &config)
         .unwrap();
 
-    let artifacts = pipeline.run_inference_only(harness.audio()).unwrap();
-    let split = pipeline.finish_post_inference(artifacts, &config).unwrap();
+    let artifacts = pipeline.run_inference(harness.audio()).unwrap();
+    let split = pipeline
+        .cluster_inference_artifacts(artifacts, &config)
+        .unwrap();
 
     assert_eq!(combined.segments, split.segments);
 }
@@ -649,9 +651,11 @@ fn chunk_embedding_pipelined_vs_sequential_baseline() {
     // both runs should produce identical RTTM
     assert_eq!(result_a.segments, result_b.segments);
 
-    // also verify run_inference_only + finish_post_inference round-trips
+    // also verify run_inference + cluster_inference_artifacts round-trips
     let config = pipeline.pipeline_config();
-    let artifacts = pipeline.run_inference_only(harness.audio()).unwrap();
-    let result_split = pipeline.finish_post_inference(artifacts, &config).unwrap();
+    let artifacts = pipeline.run_inference(harness.audio()).unwrap();
+    let result_split = pipeline
+        .cluster_inference_artifacts(artifacts, &config)
+        .unwrap();
     assert_eq!(result_a.segments, result_split.segments);
 }

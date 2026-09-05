@@ -229,6 +229,7 @@ pub use models::ModelBundle;
 pub use models::ModelManager;
 pub use pipeline::{
     AhcConfig, BatchInput, BinarizeConfig, DiarizationPipeline, DiarizationResult,
+    EmbeddingClustering, EmbeddingObservation, EmbeddingObservationOrigin, EmbeddingObservations,
     OwnedDiarizationPipeline, PipelineBuilder, PipelineConfig, PipelineError, QueueError,
     QueueReceiver, QueueReceiverIter, QueueSender, QueuedDiarizationJobId,
     QueuedDiarizationRequest, QueuedDiarizationResult, RuntimeConfig, VbxConfig,

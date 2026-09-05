@@ -8,15 +8,106 @@ use crate::inference::embedding::should_use_clean_mask;
 use crate::utils::cosine_similarity;
 
 use super::config::{MIN_SPEAKER_ACTIVITY, PipelineConfig};
-use super::types::{ChunkEmbeddings, ChunkSpeakerClusters, DecodedSegmentations};
+use super::types::{
+    ChunkEmbeddings, ChunkSpeakerClusters, DecodedSegmentations, InferenceArtifacts, PipelineError,
+};
 
-pub(super) struct TrainingEmbeddings(pub Array2<f32>);
+/// Location of an embedding in its source inference artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EmbeddingObservationOrigin {
+    /// Chunk row in the source inference artifact layout.
+    pub chunk_index: usize,
+    /// Local speaker track column in the source inference artifact layout.
+    pub speaker_index: usize,
+}
+
+/// One clean, finite speaker embedding and its optional inference origin.
+#[derive(Debug, Clone)]
+pub struct EmbeddingObservation {
+    /// Source tensor location, present for observations extracted from inference artifacts.
+    pub origin: Option<EmbeddingObservationOrigin>,
+    /// Finite speaker embedding vector.
+    pub vector: Vec<f32>,
+}
+
+/// Speaker embeddings prepared for recording-wide clustering.
+#[derive(Debug, Clone)]
+pub struct EmbeddingObservations(Vec<EmbeddingObservation>);
+
+impl EmbeddingObservations {
+    /// Build an observation collection from equal-dimensional embedding vectors.
+    pub fn from_vectors(vectors: &[Vec<f32>]) -> Result<Self, PipelineError> {
+        let dimension = vectors.first().map(Vec::len).unwrap_or(0);
+        if vectors.iter().any(|vector| {
+            vector.len() != dimension || vector.iter().any(|value| !value.is_finite())
+        }) {
+            return Err(PipelineError::Invariant(
+                "embedding observations must be finite and equal-dimensional".into(),
+            ));
+        }
+        Ok(Self(
+            vectors
+                .iter()
+                .cloned()
+                .map(|vector| EmbeddingObservation {
+                    origin: None,
+                    vector,
+                })
+                .collect(),
+        ))
+    }
+
+    /// Access individual observations and their source origins when available.
+    pub fn iter(&self) -> impl Iterator<Item = &EmbeddingObservation> {
+        self.0.iter()
+    }
+
+    /// Number of observations in the collection.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the collection contains no usable observations.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn matrix(&self) -> Array2<f32> {
+        let dimension = self.0.first().map(|item| item.vector.len()).unwrap_or(0);
+        Array2::from_shape_vec(
+            (self.0.len(), dimension),
+            self.0
+                .iter()
+                .flat_map(|item| item.vector.iter().copied())
+                .collect(),
+        )
+        .expect("embedding observations are validated when constructed")
+    }
+}
+
+/// Recording-wide speaker centroids fitted from embedding observations.
+#[derive(Debug, Clone)]
+pub struct EmbeddingClustering {
+    centroids: Array2<f32>,
+}
+
+impl EmbeddingClustering {
+    /// Number of global anonymous speaker clusters.
+    pub fn cluster_count(&self) -> usize {
+        self.centroids.nrows()
+    }
+}
+
+pub(super) struct TrainingEmbeddings {
+    vectors: Array2<f32>,
+    origins: Vec<EmbeddingObservationOrigin>,
+}
 
 impl ChunkEmbeddings {
     pub(super) fn training_set(&self, segmentations: &DecodedSegmentations) -> TrainingEmbeddings {
         let num_frames = segmentations.0.shape()[1] as f32;
         let mut filtered = Vec::new();
-        let mut chunk_indices = Vec::new();
+        let mut origins = Vec::new();
 
         for chunk_idx in 0..segmentations.0.shape()[0] {
             let single_active: Vec<bool> = segmentations
@@ -38,12 +129,15 @@ impl ChunkEmbeddings {
                 let valid_embedding = embedding.iter().all(|value| value.is_finite());
                 if valid_embedding && clean_frames >= 0.2 * num_frames {
                     filtered.extend(embedding.iter());
-                    chunk_indices.push(chunk_idx);
+                    origins.push(EmbeddingObservationOrigin {
+                        chunk_index: chunk_idx,
+                        speaker_index: speaker_idx,
+                    });
                 }
             }
         }
 
-        let row_count = chunk_indices.len();
+        let row_count = origins.len();
         let embedding_dim = self.0.shape()[2];
         let mut filtered_embeddings = Array2::<f32>::zeros((row_count, embedding_dim));
         for (row_idx, values) in filtered.chunks_exact(embedding_dim).enumerate() {
@@ -51,29 +145,44 @@ impl ChunkEmbeddings {
                 .slice_mut(s![row_idx, ..])
                 .assign(&ndarray::ArrayView1::from(values));
         }
-        TrainingEmbeddings(filtered_embeddings)
+        TrainingEmbeddings {
+            vectors: filtered_embeddings,
+            origins,
+        }
+    }
+}
+
+impl InferenceArtifacts {
+    /// Extract the clean embedding subset used by the calibrated clustering stage.
+    pub fn embedding_observations(&self) -> EmbeddingObservations {
+        let training = self.embeddings.training_set(&self.segmentations);
+        EmbeddingObservations(
+            training
+                .vectors
+                .rows()
+                .into_iter()
+                .zip(training.origins)
+                .map(|(row, origin)| EmbeddingObservation {
+                    origin: Some(origin),
+                    vector: row.to_vec(),
+                })
+                .collect(),
+        )
     }
 }
 
 impl TrainingEmbeddings {
-    pub(super) fn cluster(
-        &self,
-        segmentations: &DecodedSegmentations,
-        embeddings: &ChunkEmbeddings,
-        plda: &PldaTransform,
-        config: &PipelineConfig,
-    ) -> ChunkSpeakerClusters {
-        if self.0.nrows() < 2 {
-            let mut clusters =
-                Array2::<i32>::zeros((segmentations.0.shape()[0], segmentations.0.shape()[2]));
-            mark_inactive_speakers(&segmentations.0, &mut clusters);
-            return ChunkSpeakerClusters(clusters);
+    pub(super) fn fit(&self, plda: &PldaTransform, config: &PipelineConfig) -> EmbeddingClustering {
+        if self.vectors.nrows() < 2 {
+            return EmbeddingClustering {
+                centroids: self.vectors.clone(),
+            };
         }
 
-        let ahc_labels = cluster_ahc(&self.0.view(), config.ahc);
+        let ahc_labels = cluster_ahc(&self.vectors.view(), config.ahc);
         debug!(
-            rows = self.0.nrows(),
-            cols = self.0.ncols(),
+            rows = self.vectors.nrows(),
+            cols = self.vectors.ncols(),
             "train_embeddings shape"
         );
         {
@@ -85,7 +194,7 @@ impl TrainingEmbeddings {
             }
         }
 
-        let plda_features = plda.transform(&self.0.view(), 128);
+        let plda_features = plda.transform(&self.vectors.view(), 128);
         let phi = plda.phi();
         let (gamma, pi): (Array2<f32>, ndarray::Array1<f32>) = cluster_vbx(
             &ahc_labels,
@@ -93,9 +202,7 @@ impl TrainingEmbeddings {
             &phi.slice(s![..128]),
             &config.vbx,
         );
-
         debug!(?pi, "VBx speaker priors");
-
         let mut kept_speakers: Vec<usize> = pi
             .iter()
             .enumerate()
@@ -112,9 +219,8 @@ impl TrainingEmbeddings {
                 .unwrap_or(0);
             kept_speakers.push(best_speaker);
         }
-
         debug!(?kept_speakers, "VBx kept speakers");
-        let centroids = weighted_centroids(&self.0, &gamma, &kept_speakers);
+        let centroids = weighted_centroids(&self.vectors, &gamma, &kept_speakers);
         for cluster_idx in 0..centroids.nrows() {
             let norm: f32 = centroids
                 .row(cluster_idx)
@@ -122,8 +228,26 @@ impl TrainingEmbeddings {
                 .sqrt();
             debug!(cluster = cluster_idx, norm, "centroid");
         }
+        EmbeddingClustering { centroids }
+    }
 
-        let mut clusters = assign_chunk_embeddings(segmentations, embeddings, &centroids);
+    pub(super) fn cluster(
+        &self,
+        segmentations: &DecodedSegmentations,
+        embeddings: &ChunkEmbeddings,
+        plda: &PldaTransform,
+        config: &PipelineConfig,
+    ) -> ChunkSpeakerClusters {
+        if self.vectors.nrows() < 2 {
+            let mut clusters =
+                Array2::<i32>::zeros((segmentations.0.shape()[0], segmentations.0.shape()[2]));
+            mark_inactive_speakers(&segmentations.0, &mut clusters);
+            return ChunkSpeakerClusters(clusters);
+        }
+
+        let clustering = self.fit(plda, config);
+        let mut clusters =
+            assign_chunk_embeddings(segmentations, embeddings, &clustering.centroids);
         mark_inactive_speakers(&segmentations.0, &mut clusters);
         debug!(
             rows = clusters.nrows(),
@@ -133,6 +257,32 @@ impl TrainingEmbeddings {
 
         ChunkSpeakerClusters(clusters)
     }
+}
+
+pub(super) fn fit_embedding_observations(
+    observations: &EmbeddingObservations,
+    plda: &PldaTransform,
+    config: &PipelineConfig,
+) -> EmbeddingClustering {
+    TrainingEmbeddings {
+        vectors: observations.matrix(),
+        origins: Vec::new(),
+    }
+    .fit(plda, config)
+}
+
+pub(super) fn assign_embedding_clustering(
+    segmentations: &DecodedSegmentations,
+    embeddings: &ChunkEmbeddings,
+    clustering: &EmbeddingClustering,
+) -> ChunkSpeakerClusters {
+    let mut clusters = if clustering.centroids.nrows() == 0 {
+        Array2::<i32>::zeros((segmentations.0.shape()[0], segmentations.0.shape()[2]))
+    } else {
+        assign_chunk_embeddings(segmentations, embeddings, &clustering.centroids)
+    };
+    mark_inactive_speakers(&segmentations.0, &mut clusters);
+    ChunkSpeakerClusters(clusters)
 }
 
 pub(super) fn weighted_centroids(

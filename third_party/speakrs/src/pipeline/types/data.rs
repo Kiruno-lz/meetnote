@@ -158,49 +158,6 @@ pub struct InferenceArtifacts {
     pub(in crate::pipeline) embeddings: ChunkEmbeddings,
 }
 
-impl InferenceArtifacts {
-    /// Build inference artifacts from already computed, shape-compatible
-    /// segmentation and embedding tensors.
-    ///
-    /// This is intended for bounded offline inference whose observations are
-    /// assembled before the normal recording-wide post-inference stage.
-    pub fn from_arrays(
-        segmentations: Array3<f32>,
-        embeddings: Array3<f32>,
-        step_seconds: f64,
-        step_samples: usize,
-        window_samples: usize,
-    ) -> Result<Self, super::PipelineError> {
-        if segmentations.ndim() != 3 || embeddings.ndim() != 3 {
-            return Err(super::PipelineError::Invariant(
-                "inference artifacts require rank-3 tensors".into(),
-            ));
-        }
-        if segmentations.shape()[0] != embeddings.shape()[0]
-            || segmentations.shape()[2] != embeddings.shape()[1]
-        {
-            return Err(super::PipelineError::Invariant(
-                "segmentation and embedding tensor shapes are incompatible".into(),
-            ));
-        }
-        if !step_seconds.is_finite()
-            || step_seconds <= 0.0
-            || step_samples == 0
-            || window_samples == 0
-        {
-            return Err(super::PipelineError::Invariant(
-                "inference artifact layout is invalid".into(),
-            ));
-        }
-        let chunks = segmentations.shape()[0];
-        Ok(Self {
-            layout: ChunkLayout::new(step_seconds, step_samples, window_samples, chunks),
-            segmentations: DecodedSegmentations(segmentations),
-            embeddings: ChunkEmbeddings(embeddings),
-        })
-    }
-}
-
 /// Complete output from a diarization run
 pub struct DiarizationResult {
     /// Decoded segmentations from the powerset model
