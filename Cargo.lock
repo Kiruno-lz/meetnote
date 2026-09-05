@@ -212,9 +212,11 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "application"
 version = "0.1.0"
 dependencies = [
+ "audio",
  "contracts",
  "domain",
  "futures",
+ "hound",
  "runtime",
  "serde_json",
  "sha2 0.10.9",
@@ -1629,6 +1631,7 @@ dependencies = [
  "domain",
  "futures",
  "hound",
+ "ndarray",
  "runtime",
  "serde",
  "speakrs",
@@ -4104,6 +4107,7 @@ dependencies = [
  "asr",
  "asr-sherpa-onnx",
  "asr-whisper-rs",
+ "audio",
  "contracts",
  "diarization",
  "diarization-native",
@@ -6877,8 +6881,6 @@ dependencies = [
 [[package]]
 name = "speakrs"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7ed3d9e4670beaa31736bc2baf3736aca4554920edeb6ed463c903da9df57ac"
 dependencies = [
  "block2 0.6.2",
  "crossbeam-channel",
@@ -7140,6 +7142,7 @@ dependencies = [
  "symphonia-bundle-mp3",
  "symphonia-codec-aac",
  "symphonia-codec-alac",
+ "symphonia-codec-pcm",
  "symphonia-core",
  "symphonia-format-isomp4",
  "symphonia-format-riff",
@@ -7186,6 +7189,16 @@ name = "symphonia-codec-alac"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8413fa754942ac16a73634c9dfd1500ed5c61430956b33728567f667fdd393ab"
+dependencies = [
+ "log",
+ "symphonia-core",
+]
+
+[[package]]
+name = "symphonia-codec-pcm"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e89d716c01541ad3ebe7c91ce4c8d38a7cf266a3f7b2f090b108fb0cb031d95"
 dependencies = [
  "log",
  "symphonia-core",

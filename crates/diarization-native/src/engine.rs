@@ -139,6 +139,18 @@ pub trait NativeDiarizationEngine: Send + Sync {
             ))
         }
     }
+    fn supports_windowed_audio(&self) -> bool {
+        false
+    }
+    fn create_window_session(
+        &self,
+        _request: contracts::DiarizationRequest,
+        _descriptor: contracts::BackendDescriptor,
+    ) -> Result<Box<dyn crate::NativeDiarizationWindowSession>, NativeDiarizationError> {
+        Err(NativeDiarizationError::ModelIncompatible(
+            "native engine does not support bounded offline windows".into(),
+        ))
+    }
 }
 
 pub struct StagePipelineEngine<S, E, C> {
@@ -417,9 +429,25 @@ impl NativeDiarizationEngine for SpeakrsEngine {
             speaker_count,
         })
     }
+
+    fn supports_windowed_audio(&self) -> bool {
+        true
+    }
+
+    fn create_window_session(
+        &self,
+        request: contracts::DiarizationRequest,
+        descriptor: contracts::BackendDescriptor,
+    ) -> Result<Box<dyn crate::NativeDiarizationWindowSession>, NativeDiarizationError> {
+        Ok(Box::new(crate::windowed::SpeakrsWindowSession::new(
+            request, descriptor,
+        )?))
+    }
 }
 
-fn execution_mode(device: ComputeDevice) -> Result<ExecutionMode, NativeDiarizationError> {
+pub(crate) fn execution_mode(
+    device: ComputeDevice,
+) -> Result<ExecutionMode, NativeDiarizationError> {
     match device {
         ComputeDevice::Auto | ComputeDevice::Cpu => Ok(ExecutionMode::Cpu),
         ComputeDevice::Metal | ComputeDevice::CoreMl => {

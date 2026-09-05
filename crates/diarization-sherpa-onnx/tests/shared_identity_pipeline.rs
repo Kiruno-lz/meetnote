@@ -81,6 +81,9 @@ fn sherpa_embeddings_are_matched_by_the_shared_identity_service() {
                 source_segment_id: Some(baseline.embedding_observations[0].id.clone()),
                 start_ms: baseline.embedding_observations[0].start_ms,
                 end_ms: baseline.embedding_observations[0].end_ms,
+                audio_path: Some(audio_path.clone()),
+                audio_sha256: None,
+                backup_path: None,
             },
             0.7,
         )

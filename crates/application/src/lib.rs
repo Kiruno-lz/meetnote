@@ -12,15 +12,19 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 mod document_commands;
+mod long_audio;
 mod speaker_identity;
 mod workspace;
 
 pub use contracts::BackendDescriptor;
 pub use document_commands::{DocumentCommandError, DocumentCommandService};
+pub use long_audio::{
+    run_windowed_pipeline, AsrWindowSession, DiarizationWindowSession, LongAudioConfig,
+};
 pub use speaker_identity::{
-    apply_identity_matches, cosine_similarity, ClusterIdentityResolver, IdentityResolverConfig,
-    InMemorySpeakerProfileStore, JsonSpeakerProfileStore, SpeakerLibraryError,
-    SpeakerLibraryService, SpeakerProfileStore,
+    apply_identity_matches, cosine_similarity, ClusterIdentityResolver, IdentityResolution,
+    IdentityResolverConfig, InMemorySpeakerProfileStore, JsonSpeakerProfileStore,
+    SpeakerLibraryError, SpeakerLibraryService, SpeakerProfileStore,
 };
 pub use workspace::{
     render_markdown, ProcessingContexts, ProcessingOptions, ProcessingRequest, ProcessingService,
@@ -55,6 +59,18 @@ pub trait AsrBackend: Send + Sync {
     fn descriptor(&self) -> BackendDescriptor;
     fn probe(&self, model: &contracts::ModelRef) -> Result<(), BackendError>;
     fn transcribe(&self, request: AsrRequest, context: JobContext) -> BackendFuture<AsrResult>;
+    fn supports_windowed_audio(&self) -> bool {
+        false
+    }
+    fn create_window_session(
+        &self,
+        _request: AsrRequest,
+    ) -> Result<Box<dyn AsrWindowSession>, BackendError> {
+        Err(BackendError::not_implemented(format!(
+            "{} does not support bounded offline audio windows",
+            self.descriptor().id
+        )))
+    }
 }
 
 pub trait AsrBackendProvider: Send + Sync {
@@ -105,6 +121,18 @@ pub trait DiarizationBackend: Send + Sync {
         request: DiarizationRequest,
         context: JobContext,
     ) -> BackendFuture<DiarizationResult>;
+    fn supports_windowed_audio(&self) -> bool {
+        false
+    }
+    fn create_window_session(
+        &self,
+        _request: DiarizationRequest,
+    ) -> Result<Box<dyn DiarizationWindowSession>, BackendError> {
+        Err(BackendError::not_implemented(format!(
+            "{} does not expose unclustered observations for bounded offline audio windows",
+            self.descriptor().id
+        )))
+    }
 }
 
 pub trait DiarizationBackendProvider: Send + Sync {
@@ -251,6 +279,16 @@ pub struct PipelineResult {
     pub diarization: DiarizationResult,
     pub aligned: Vec<SpeakerTaggedSegment>,
     pub diarization_stage_provenance: DiarizationStageProvenance,
+    pub windowing: Option<AudioWindowing>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioWindowing {
+    pub sample_rate_hz: u32,
+    pub core_samples: u64,
+    pub context_samples: u64,
+    pub window_count: u64,
+    pub source_samples: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -295,6 +333,7 @@ pub async fn run_pipeline(
         diarization,
         aligned,
         diarization_stage_provenance,
+        windowing: None,
     })
 }
 
@@ -418,6 +457,7 @@ mod tests {
                     }],
                     speaker_count: Some(1),
                     embedding_observations: Vec::new(),
+                    speaker_profile_candidates: Vec::new(),
                 })
             })
         }

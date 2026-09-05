@@ -283,6 +283,7 @@ fn diarize_sync(
         segments,
         speaker_count,
         embedding_observations,
+        speaker_profile_candidates: Vec::new(),
     })
 }
 

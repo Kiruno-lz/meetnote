@@ -161,6 +161,7 @@ impl NativeDiarizationBackend {
                 segments,
                 speaker_count,
                 embedding_observations: engine_output.observations.clone(),
+                speaker_profile_candidates: Vec::new(),
             },
             observations: engine_output.observations,
             anonymous_clusters: all_clusters.into_iter().collect(),
@@ -343,6 +344,42 @@ impl DiarizationBackend for NativeDiarizationBackend {
         let future = self.analyze(request, context);
         Box::pin(async move { future.await.map(|output| output.result) })
     }
+
+    fn supports_windowed_audio(&self) -> bool {
+        self.engine.supports_windowed_audio()
+    }
+
+    fn create_window_session(
+        &self,
+        request: DiarizationRequest,
+    ) -> Result<Box<dyn application::DiarizationWindowSession>, BackendError> {
+        self.validate_stage_configuration(&request.model, &request.stage_configuration)?;
+        let session = self
+            .engine
+            .create_window_session(request, self.descriptor())
+            .map_err(BackendError::from)?;
+        Ok(Box::new(ApplicationWindowSessionAdapter { session }))
+    }
+}
+
+struct ApplicationWindowSessionAdapter {
+    session: Box<dyn crate::NativeDiarizationWindowSession>,
+}
+
+impl application::DiarizationWindowSession for ApplicationWindowSessionAdapter {
+    fn process_window(
+        &mut self,
+        window: Arc<audio::AudioWindow>,
+        context: &JobContext,
+    ) -> Result<(), BackendError> {
+        self.session
+            .process_window(window, context)
+            .map_err(BackendError::from)
+    }
+
+    fn finish(self: Box<Self>) -> Result<DiarizationResult, BackendError> {
+        self.session.finish().map_err(BackendError::from)
+    }
 }
 
 fn ensure_not_cancelled(context: &JobContext) -> Result<(), NativeDiarizationError> {
@@ -493,6 +530,9 @@ mod tests {
                     source_segment_id: Some("segment".into()),
                     start_ms: 0,
                     end_ms: 1_000,
+                    audio_path: Some("fixture.wav".into()),
+                    audio_sha256: None,
+                    backup_path: None,
                 },
                 0.7,
             )
@@ -517,6 +557,7 @@ mod tests {
                 identity: IdentityResolverConfig {
                     default_threshold: 0.7,
                     ambiguity_margin: 0.03,
+                    ..IdentityResolverConfig::default()
                 },
             },
         );
@@ -548,6 +589,7 @@ mod tests {
             &application::ClusterIdentityResolver::new(IdentityResolverConfig {
                 default_threshold: 0.7,
                 ambiguity_margin: 0.03,
+                ..IdentityResolverConfig::default()
             }),
         )
         .unwrap();
