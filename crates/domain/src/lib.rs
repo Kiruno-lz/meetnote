@@ -150,6 +150,17 @@ pub struct RuntimeProvenance {
     pub sample_rate_hz: Option<u32>,
     pub threads: Option<u32>,
     pub expected_speakers: Option<u32>,
+    #[serde(default)]
+    pub windowing: Option<AudioWindowingProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioWindowingProvenance {
+    pub sample_rate_hz: u32,
+    pub core_samples: u64,
+    pub context_samples: u64,
+    pub window_count: u64,
+    pub source_samples: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]

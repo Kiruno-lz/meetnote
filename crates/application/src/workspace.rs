@@ -1,6 +1,7 @@
 use crate::{
-    run_pipeline, AsrBackend, AsrBackendProvider, BackendFuture, DiarizationBackend,
-    DiarizationBackendProvider, DocumentService, PipelineResult,
+    run_pipeline, run_windowed_pipeline, AsrBackend, AsrBackendProvider, BackendFuture,
+    DiarizationBackend, DiarizationBackendProvider, DocumentService, LongAudioConfig,
+    PipelineResult,
 };
 use contracts::{
     AsrRequest, ComputeDevice, DiarizationRequest, DiarizationStageConfiguration, ModelRef,
@@ -14,6 +15,7 @@ use futures::channel::mpsc::UnboundedReceiver;
 use runtime::{JobContext, JobEvent, JobRuntime};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
@@ -34,6 +36,7 @@ pub struct ProcessingService {
     asr_provider: Arc<dyn AsrBackendProvider>,
     diarization_provider: Arc<dyn DiarizationBackendProvider>,
     runtime: Arc<JobRuntime>,
+    long_audio: LongAudioConfig,
 }
 
 pub struct ProcessingContexts {
@@ -66,7 +69,13 @@ impl ProcessingService {
             asr_provider,
             diarization_provider,
             runtime: Arc::new(JobRuntime::default()),
+            long_audio: LongAudioConfig::default(),
         }
+    }
+
+    pub fn with_long_audio_config(mut self, config: LongAudioConfig) -> Self {
+        self.long_audio = config;
+        self
     }
 
     pub fn probe(&self, request: &ProcessingRequest) -> Result<(), contracts::BackendError> {
@@ -121,28 +130,66 @@ impl ProcessingService {
             Ok(backend) => backend,
             Err(error) => return Box::pin(async move { Err(error) }),
         };
+        let long_audio = self.long_audio;
         Box::pin(async move {
-            run_pipeline(
-                asr_backend.as_ref(),
-                diarization_backend.as_ref(),
-                AsrRequest {
-                    audio_path: request.audio_path.clone(),
-                    model: request.asr_model,
-                    language: request.language,
-                    device: request.device,
-                },
-                DiarizationRequest {
-                    audio_path: request.audio_path,
-                    model: request.diarization_model,
-                    expected_speakers: request.expected_speakers,
-                    device: request.device,
-                    speaker_library_path: request.speaker_library_path,
-                    stage_configuration: request.stage_configuration,
-                },
-                asr_context,
-                diarization_context,
-            )
-            .await
+            let source =
+                audio::AudioChunkReader::open(&request.audio_path, long_audio.decode_chunk_samples)
+                    .map_err(|error| contracts::BackendError {
+                        code: contracts::BackendErrorCode::InvalidAudio,
+                        message: error.to_string(),
+                    })?;
+            let use_windows = long_audio.is_long(source.source_info().estimated_output_samples);
+            drop(source);
+            let asr_request = AsrRequest {
+                audio_path: request.audio_path.clone(),
+                model: request.asr_model,
+                language: request.language,
+                device: request.device,
+            };
+            let diarization_request = DiarizationRequest {
+                audio_path: request.audio_path,
+                model: request.diarization_model,
+                expected_speakers: request.expected_speakers,
+                device: request.device,
+                speaker_library_path: request.speaker_library_path,
+                stage_configuration: request.stage_configuration,
+            };
+            if use_windows {
+                if !asr_backend.supports_windowed_audio()
+                    || !diarization_backend.supports_windowed_audio()
+                {
+                    return Err(contracts::BackendError {
+                        code: contracts::BackendErrorCode::NotImplemented,
+                        message: format!(
+                            "long audio requires bounded-window ASR and unclustered global diarization; selected backends are ASR={} (windowed={}) and diarization={} (windowed={})",
+                            asr_backend.descriptor().id,
+                            asr_backend.supports_windowed_audio(),
+                            diarization_backend.descriptor().id,
+                            diarization_backend.supports_windowed_audio()
+                        ),
+                    });
+                }
+                run_windowed_pipeline(
+                    asr_backend,
+                    diarization_backend,
+                    asr_request,
+                    diarization_request,
+                    asr_context,
+                    diarization_context,
+                    long_audio,
+                )
+                .await
+            } else {
+                run_pipeline(
+                    asr_backend.as_ref(),
+                    diarization_backend.as_ref(),
+                    asr_request,
+                    diarization_request,
+                    asr_context,
+                    diarization_context,
+                )
+                .await
+            }
         })
     }
 }
@@ -587,6 +634,15 @@ fn processing_record(
             sample_rate_hz: Some(16_000),
             threads: None,
             expected_speakers: request.expected_speakers,
+            windowing: result
+                .windowing
+                .map(|windowing| domain::AudioWindowingProvenance {
+                    sample_rate_hz: windowing.sample_rate_hz,
+                    core_samples: windowing.core_samples,
+                    context_samples: windowing.context_samples,
+                    window_count: windowing.window_count,
+                    source_samples: windowing.source_samples,
+                }),
         },
     }
 }
@@ -620,9 +676,18 @@ fn model_provenance(model: &ModelRef) -> ModelProvenance {
 }
 
 fn file_sha256(path: &str) -> Option<String> {
-    let bytes = fs::read(path).ok()?;
-    let digest = Sha256::digest(bytes);
-    Some(format!("{digest:x}"))
+    let file = fs::File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = reader.read(&mut buffer).ok()?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 fn artifact_sha256(path: &str) -> Option<String> {
@@ -640,7 +705,16 @@ fn artifact_sha256(path: &str) -> Option<String> {
     for file in files {
         let relative = file.strip_prefix(root).ok()?;
         hasher.update(relative.to_string_lossy().as_bytes());
-        hasher.update(fs::read(file).ok()?);
+        let file = fs::File::open(file).ok()?;
+        let mut reader = BufReader::new(file);
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let read = reader.read(&mut buffer).ok()?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
     }
     Some(format!("{:x}", hasher.finalize()))
 }
@@ -832,6 +906,29 @@ mod tests {
         }
     }
 
+    fn write_test_wav() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "meetnote-application-{}-{}.wav",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let mut writer = hound::WavWriter::create(
+            &path,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: 16_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            },
+        )
+        .unwrap();
+        for _ in 0..16_000 {
+            writer.write_sample(0i16).unwrap();
+        }
+        writer.finalize().unwrap();
+        path
+    }
+
     #[test]
     fn workspace_processes_and_persists_a_project() {
         let repository = Arc::new(MemoryRepository::default());
@@ -846,7 +943,10 @@ mod tests {
                 diarization_stages: DiarizationStageConfiguration::default(),
             },
         );
-        let project = workspace.import_audio("fixture.wav").unwrap();
+        let audio_path = write_test_wav();
+        let project = workspace
+            .import_audio(audio_path.display().to_string())
+            .unwrap();
         let asr_model = ModelRef {
             backend_id: "fake-asr".into(),
             model_id: "fixture".into(),
@@ -888,6 +988,8 @@ mod tests {
         assert_eq!(processing.runtime.language.as_deref(), Some("zh"));
         assert_eq!(processing.runtime.device, "Cpu");
         assert_eq!(processing.runtime.expected_speakers, Some(2));
+        assert_eq!(processing.runtime.windowing, None);
         assert_eq!(repository.get(project.id()).unwrap(), Some(result.clone()));
+        std::fs::remove_file(audio_path).unwrap();
     }
 }

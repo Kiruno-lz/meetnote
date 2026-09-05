@@ -73,7 +73,7 @@ fn main() {
     let diarization_backend_id = settings_snapshot
         .diarization_backend_id
         .as_deref()
-        .unwrap_or("sherpa-onnx");
+        .unwrap_or("diarization-native");
     let asr_model = model_manager
         .configured_model_ref("asr", asr_backend_id, settings_snapshot.asr_model.as_ref())
         .unwrap_or_else(|_| unconfigured_model(asr_backend_id));

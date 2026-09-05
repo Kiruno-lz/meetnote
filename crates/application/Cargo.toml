@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+audio = { path = "../audio" }
 contracts = { path = "../contracts" }
 domain = { path = "../domain" }
 runtime = { path = "../runtime" }
@@ -15,3 +16,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 futures.workspace = true
+hound.workspace = true

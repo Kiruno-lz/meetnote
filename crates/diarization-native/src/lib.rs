@@ -10,6 +10,7 @@ mod engine;
 mod error;
 mod model;
 mod types;
+mod windowed;
 
 pub use application::{
     cosine_similarity, ClusterIdentityResolver, IdentityResolverConfig,
@@ -28,5 +29,6 @@ pub use model::{NativeModelBundle, REQUIRED_CPU_ARTIFACTS};
 pub use types::{
     EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
     IdentityMatch, NativeDiarizationOutput, SpeakerEmbeddingObservation, SpeakerEmbeddingSample,
-    SpeakerLibraryDocument, SpeakerProfile, SpeakerSampleSource,
+    SpeakerLibraryDocument, SpeakerProfile, SpeakerProfileCandidate, SpeakerSampleSource,
 };
+pub use windowed::NativeDiarizationWindowSession;
