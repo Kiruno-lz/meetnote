@@ -1,147 +1,122 @@
-# 模型目录与下载协议
+# 模型管理
 
 ## 资产边界
 
-旧实现中可保留的主要资产是模型清单、来源信息和下载生命周期协议。新实现不保留 Python library-managed 下载路径；所有下载、校验和安装由 Rust `models` crate 负责。
+`resources/models/catalog.json` 是模型来源、格式、revision、候选 backend、大小、显存预估、license 与 artifact 清单的版本化声明。`models/` 是本地缓存，`.download-tasks.json` 是可恢复的下载任务状态；两者都不保存文档或项目树。
 
-模型目录和安装状态属于 MeetNote 运行时资产，不属于文档项目结构。目标目录中的文档 JSON 仍是三层项目树的唯一事实来源；模型 manifest、下载任务和 cache 不得保存项目父子关系，也不得被 Assistant 或外部 Agent 当作文档数据库。
-
-模型目录位于：
+模型权重不进入仓库。backend 不自行联网下载，UI、Assistant 和外部 Agent 也不能直接修改 catalog、缓存或下载任务内部状态。
 
 ```text
 resources/models/catalog.json
+models/
+├── asr/<model-id>/
+├── diarization/<model-id>/
+└── .download-tasks.json
 ```
 
-模型条目必须包含：
+## Catalog 字段
 
-- `id`
-- `task`
-- `candidateBackends`
-- `modelFamily`
-- `revision`
-- `sourceFormat`
-- `source`
-- `artifacts`（多文件 bundle 的逐文件来源、SHA-256 和可选 archive member）
-- `sha256`
-- `sizeBytes`
-- `license`
-- `requiresAuth`
-- `estimatedVramBytes`
-- `status`
+每个条目必须声明：
 
-`source` 是单文件模型的直接下载地址，或 bundle 的主来源地址；它不是必然可下载的网页说明。多来源 bundle 必须把每个文件写入 `artifacts`。`candidateBackends` 只允许填写当前已注册且能 probe 该格式的 backend；没有 Rust-native adapter 的模型必须使用 `reference-only` 或 `requires-native-adapter`，不能伪装为可下载模型。
+- `id`、`task`、`modelFamily`、`candidateBackends`
+- `revision`、`sourceFormat`、`source`
+- `sizeBytes`、`estimatedVramBytes`
+- `sha256` 或逐项 `artifacts[].sha256`
+- `license`、`requiresAuth`、`status`
+- bundle 的 `artifactFiles` 与 `artifacts`
 
-当前目录只保留当前 Rust backend 可识别的 Whisper GGML 条目；OpenAI Whisper PyTorch 条目和没有 Rust-native backend 的 Mimo ASR 已被清除。gated Pyannote 仍作为明确标记为 `requires-native-adapter` 的后续来源保留。
+状态含义：
 
-Qwen 条目已改为官方 sherpa-onnx 的 `0.6B int8` ONNX archive 直接地址；这不是原先的 Qwen 1.7B Transformers 仓库。该 archive 内含 `conv_frontend.onnx`、`encoder.int8.onnx`、`decoder.int8.onnx`、`tokenizer` 目录和 `tokens.txt`。catalog v1 不能表达嵌套目录 manifest，因此在实现目录成员下载前只能保持 `candidate-source`，不得显示为 ready 或把 archive 当作单一可 probe 模型。
+| 状态 | 含义 |
+|---|---|
+| `ready` | Rust model manager 可以下载、安装并交给候选 backend probe |
+| `candidate-source` | 来源已记录，但下载 manifest 或 backend 适配尚不完整，不可安装 |
+| `requires-native-adapter` | 只有模型来源，没有可用 Rust backend |
 
-sherpa-onnx speaker bundle 是由 segmentation archive 和 embedding 文件组成的多来源 bundle，主 `source` 现在指向有效的 segmentation archive；真正的逐文件来源仍以 `artifacts` 为准。上游 release 的 `speaker-recongition-models` 拼写虽然看起来像错误，但该地址是有效的官方路径，不能擅自改成其他 URL。
+`candidateBackends` 只表示格式和 adapter 的候选关系，不代表模型已经下载、probe 成功或完成真实推理验收。
 
-## 下载状态
+## 当前模型
+
+大小和显存均来自 catalog；`—` 表示 catalog 尚未给出可靠值。
+
+| 模型 | 后端 / 状态 | 下载来源 | 权重大小 | 预期显存 | 说明 |
+|---|---|---|---:|---:|---|
+| `paraformer-zh` | `sherpa-onnx` / `ready` | [sherpa-onnx Paraformer archive](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2) | 81,904,027 B | 1 GiB | 中文离线 ASR；安装 `model.int8.onnx` 与 `tokens.txt`，支持整文件和离线分窗 |
+| `qwen3-asr-0.6b` | `sherpa-onnx` / `candidate-source` | [sherpa-onnx Qwen3-ASR archive](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2) | — | — | backend 已有 Qwen3 文件布局适配；catalog 尚不能安装含 tokenizer 目录的完整 bundle |
+| `whisper-large-v3-ggml` | `whisper-rs` / `candidate-source` | [whisper.cpp GGML large-v3](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin) | 3,095,033,483 B | 4 GiB | 多语言 Whisper GGML；backend 支持整文件和离线分窗，catalog 缺少固定 checksum |
+| `whisper-base-en-ggml` | `whisper-rs` / `candidate-source` | [whisper.cpp GGML base.en](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin) | 147,964,211 B | 512 MiB | 英文 Whisper GGML；已有固定 checksum，但仍未标为可安装 |
+| `speakrs-community-1-cpu` | `diarization-native` / `ready` | [固定 revision 资产目录](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | 59,751,799 B | 1 GiB | Pyannote segmentation、WeSpeaker embedding 与 AHC/PLDA/VBx 参数，共 10 个固定 artifact；支持整文件和离线分窗 |
+| `sherpa-onnx-speaker-diarization-bundle` | `sherpa-onnx` / `candidate-source` | [segmentation archive](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2) + [3D-Speaker embedding](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx) | 45,586,674 B | 512 MiB | sherpa-onnx 离线 diarization；当前只支持整文件处理 |
+| `pyannote-speaker-diarization-3.1` | 无 backend / `requires-native-adapter` | [Pyannote 3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) | — | 1 GiB | gated 参考来源，不能进入当前处理链路 |
+
+具体 artifact URL 与 SHA-256 不在本文重复维护，以 [`catalog.json`](../../resources/models/catalog.json) 为唯一清单。
+
+## 下载与安装协议
 
 ```text
-queued
-downloading
-paused
-verifying
-completed
-failed
-cancelled
+读取并校验 catalog
+  -> 创建下载任务
+  -> <artifact>.part
+  -> HTTP Range 续传
+  -> 流式写入、速度与 ETA
+  -> 大小与 SHA-256 校验
+  -> archive member 提取（如有）
+  -> 原子 rename 到最终 artifact
+  -> 对全部候选 backend 执行快速 probe
+  -> completed
 ```
 
-运行时任务状态由 Rust `ModelManager` 管理；取消或进程中断会保留 `.part`，下一次下载
-自动通过 HTTP Range 继续。`.download-tasks.json` 保存可重建的下载进度，应用重启时将中断
-任务恢复为 `Paused`，调用 `resume` 后重新创建 worker。项目不引入 SQLite，下载状态不与文档项目树混用。
-
-## HTTP 下载流程
+下载状态：
 
 ```text
-解析 catalog
-  -> 创建 .part 文件
-  -> 根据已有长度发送 Range
-  -> 流式写入
-  -> 发送进度事件
-  -> 校验文件大小与 SHA-256
-  -> 校验 archive 或 artifact SHA-256
-  -> 原子 rename
-  -> 快速 backend artifact probe
-  -> 写入 completed 状态
+queued -> downloading <-> paused -> verifying -> completed
+                    └-> cancelled      └-> failed
 ```
 
-下载必须支持：
+- 暂停、取消和进程中断保留 `.part`；重启后活动任务恢复为 `paused`。
+- 继续下载时发送 HTTP `Range`；服务器不返回 `206` 时从零覆盖临时文件。
+- 网络或 IO 错误最多自动重试三次。
+- 校验失败删除临时文件；backend probe 失败删除本次模型安装目录。
+- `requiresAuth` 且没有认证接入的模型拒绝下载，token 不进入 catalog、日志或命令行。
+- bundle 按 artifact 下载；`archiveMember` 先校验来源 archive，再提取目标成员。
 
-- 断点续传
-- 暂停
-- 取消
-- 失败重试
-- 速度和 ETA
-- 校验失败后清理
-- 临时文件与最终文件隔离
+当前 catalog v1 的 `artifacts[].sha256` 对直接文件表示文件 checksum；对 `archiveMember` 表示下载 archive 的 checksum。需要同时校验 archive 与成员时，应升级 catalog schema 后分别建模。
 
-当前 `models::download`：单文件支持 HTTP Range 续传、`.part` 临时文件、流式 SHA-256 校验和原子 rename；bundle 支持逐 artifact 下载，并从 sherpa-onnx tar.bz2 中提取指定 ONNX member 后再安装。
+## 三层 Probe
 
-`models::manager::ModelManager` 提供 catalog 按 task/backend 浏览、模型安装状态查询、下载任务事件订阅，
-以及 `pause`、`resume`、`cancel` 控制。下载完成后通过注入的 backend probe 做快速结构和加载入口校验；
-该 probe 只在单个模型完成安装后触发，不在 catalog 浏览或 UI 启动时扫描全部模型。开始处理项目前，
-application 还会对已选模型和 stage configuration 执行一次 preflight；backend 随后在真正推理时
-创建 session，完成最终模型加载。下载控制与文件写入解耦，不要求 UI 参与模型协议。`ModelRef` 同时携带 catalog revision 和逐
-artifact 的期望 checksum，processing provenance 会记录实际文件 checksum。
+### 1. Catalog 与安装状态
 
-Assistant 与外部 Agent 都只能通过 application 暴露的稳定能力读取模型 readiness；它们不能直接修改 catalog、安装目录或下载任务内部状态。
+加载 catalog 时校验 schema、ID 唯一性、来源和 license。安装状态只根据声明的 artifact 是否齐全划分为 `missing`、`partial` 或 `installed`，不加载模型。
 
-## library-managed 的新含义
+### 2. 下载后快速 probe
 
-旧版 `library-managed` 表示启动 Python 模型下载器。新版本中它只表示：
+下载完成并通过大小/checksum 后，`ModelManager` 为条目中的每个 `candidateBackend` 构造 `ModelRef` 并调用 backend probe。失败时模型不能进入 `completed`。
 
-> 模型由 meetnote 的 Rust model manager 根据 catalog 解析、下载、校验和安装。
+快速 probe 至少检查：
 
-不同后端的模型文件可以有不同目录，但安装协议统一：
+- backend 与 model ID/模型族兼容。
+- 文件或目录存在，bundle 必需 artifact 齐全。
+- native diarization stage 组合、revision 和固定参数文件兼容。
+
+### 3. 处理前 preflight 与真实加载
+
+`ProcessingService::probe` 在任务进入 runtime 前再次检查选中的 ASR、diarization 模型和 stage configuration。真正的 ONNX graph、GGML/GGUF context、provider/ABI 与推理 session 在 backend 执行时加载；快速 probe 不能替代这一层。
 
 ```text
-<model-cache>/<task>/<model-id>/
-├── artifact files
-└── .part files during download
-
-<model-cache>/.download-tasks.json
+下载后 artifact probe
+  -> 处理前 model/stage preflight
+  -> backend session 真实加载
+  -> 输出结构校验
 ```
 
-## 模型兼容性
+## Provenance
 
-模型源格式不等于 backend 可直接加载的格式。例如 PyTorch `.pt` 不能直接视为 whisper-rs 的 GGML/GGUF 模型。catalog 必须显式记录：
+处理成功后，`state.json` 的 `processing.latest` 记录：
 
-- 原始来源格式
-- 目标 backend 支持格式
-- 是否需要转换
-- 转换工具和版本
-- 转换后 checksum
+- backend、model ID 与 revision
+- artifact 路径、聚合 checksum 和逐 artifact 期望/实际 checksum
+- diarization segmentation、embedding 与 clustering 来源
+- 设备、语言、采样率、expected speakers 与窗口参数
+- 输入音频 checksum 和对齐算法
 
-没有完成转换和校验的条目不能显示为可用；`candidate-source` 只能浏览，不能进入可用模型集合。
-
-### Archive checksum 与成员 checksum
-
-`artifacts[].sha256` 的含义必须由来源类型决定：
-
-- 直接文件：校验下载文件本身。
-- `archiveMember`：优先校验整个 archive 的 `archiveSha256`，再提取成员；如果上游提供成员 checksum，再额外填写 `artifactSha256`。
-
-当前 catalog v1 只有一个 `sha256` 字段，archive bundle 的 checksum 语义仍需要通过
-`archiveMember` 区分来源 archive 与提取后的文件。迁移到 catalog v2 时必须拆为
-`archiveSha256` 与 `artifactSha256`，并增加目录成员/嵌套文件的 manifest 表达能力；
-在此之前不得把 archive checksum 误标成提取后文件 checksum。
-
-v0.1 的 backend artifact 约定：
-
-- `whisper-rs` 接收一个已解析的 GGML/GGUF 文件路径，例如 `ggml-large-v3.bin`；OpenAI Whisper 的 PyTorch `.pt` 文件不能直接加载。
-- `sherpa-onnx` diarization 接收一个目录路径，目录至少包含 catalog `artifactFiles` 声明的 `segmentation.onnx` 和 `embedding.onnx`。
-- `diarization-native` CPU bundle 接收一个目录，包含固定 revision 的 Pyannote segmentation ONNX、
-  WeSpeaker ONNX/external data、六个 PLDA/VBx `.npy` 参数文件和最短样本配置。catalog 对十个 artifact
-  分别固定 URL 与 SHA-256；backend 不调用上游在线下载器。
-- `ModelRef.artifact_path` 是安装完成后的解析路径，不是下载 URL；文件模型指向文件，bundle 模型指向目录。
-
-## 安全与可追溯
-
-- SHA-256 必须来自可信的固定 manifest。
-- 下载完成前不得覆盖已安装版本。
-- gated 模型的 token 不写入 catalog、日志或命令行。
-- 每次推理记录 backend、模型 id、revision、artifact checksum 和运行参数；当前 `ModelRef` 的 artifact 路径由 catalog 和设置解析，不由 UI 或入口硬编码。处理 provenance 的完整写回由 document model 迁移任务完成，见[文档模型与处理记录](document-model.md)。
-- 模型 license 和原始来源必须随安装记录保留。
+模型 license 与来源保留在版本化 catalog 中；将其快照写入每次处理记录属于当前生产化计划，见[工程实施计划](../plan/implementation-plan.md)。

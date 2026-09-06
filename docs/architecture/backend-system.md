@@ -1,20 +1,20 @@
-# ASR 与 Diarization 后端管理层
+# 模型后端系统
 
-## 设计目标
+## 目标
 
-应用层可以自由组合不同后端：
+ASR 与 diarization 分别注册、选择和执行。application 只依赖稳定 trait 和归一化 contracts，不知道模型族、推理库或文件布局；新增具体 backend 不修改 domain、application 或 GPUI 接口。
 
 ```text
-whisper-rs + sherpa-onnx diarization
-sherpa-onnx ASR + diarization crate
-Candle ASR + custom ONNX diarization
+application
+├── AsrBackendProvider -> AsrBackendManager -> concrete ASR backend
+└── DiarizationBackendProvider -> DiarizationBackendManager -> concrete DIA backend
 ```
 
-新增后端只增加实现 crate、模型 catalog 条目和注册 factory，不修改 domain、application 或 GPUI UI。
+模型来源、安装和 checksum 由 `models` crate 管理，见[模型管理](model-management.md)。
 
-后端只产生完整音频的标准化转录、speaker 段、embedding observation 和运行时元数据。输出由 application 对齐，再由 application/persistence 将当前结果与 processing provenance 写入目标目录文档；重新处理直接替换当前结果。当前 pipeline 已写入 catalog revision、逐 artifact checksum 和 segmentation/embedding/clustering stage metadata。Assistant、外部 Agent 和 Skill 不进入 ASR/diarization backend。
+## ASR 兼容层
 
-## ASR 接口
+`crates/asr` 提供 registry 与 manager，`application` 定义 backend/provider 接口：
 
 ```rust
 pub trait AsrBackend: Send + Sync {
@@ -25,37 +25,38 @@ pub trait AsrBackend: Send + Sync {
         request: AsrRequest,
         context: JobContext,
     ) -> BackendFuture<AsrResult>;
+    fn supports_windowed_audio(&self) -> bool;
+    fn create_window_session(
+        &self,
+        request: AsrRequest,
+    ) -> Result<Box<dyn AsrWindowSession>, BackendError>;
+}
+
+pub trait AsrBackendProvider: Send + Sync {
+    fn available_backends(&self) -> Vec<BackendDescriptor>;
+    fn backend(&self, backend_id: &str)
+        -> Result<Arc<dyn AsrBackend>, BackendError>;
 }
 ```
 
-核心对象：
+`AsrBackendRegistry` 只按 ID 保存实现；`AsrBackendManager` 负责 descriptor 列表、选择、probe 与调用。`AsrResult` 必须包含 backend、model、语言和全局时间戳 transcript segments。
 
-- `AsrBackendRegistry`：注册和发现 backend。
-- `AsrBackendManager`：维护 registry，按 `backend_id` 返回实现并执行 probe。
-- `AsrBackendProvider`：application 使用的稳定选择边界，不依赖具体实现 crate。
-- session 缓存和能力解析在具体 backend 需要时独立增加，不进入 application pipeline。
+窗口 session 接收共享的 `Arc<AudioWindow>`，backend 自行处理模型族特有的 overlap 去重和时间恢复，最终只返回一个完整 `AsrResult`。
 
-第一批实现：
+## Diarization 兼容层
 
-- `asr-whisper-rs`：whisper.cpp、GGML/GGUF、Metal/CPU。
-- `asr-sherpa-onnx`：sherpa-onnx 支持的 ONNX ASR 模型族。
-
-运行时选择流程：
-
-```text
-AppSettings.asr_backend_id / ModelRef.backend_id
-  -> AsrBackendProvider
-  -> AsrBackendManager
-  -> selected AsrBackend
-```
-
-## Diarization 接口
+`crates/diarization` 提供独立 registry 与 manager：
 
 ```rust
 pub trait DiarizationBackend: Send + Sync {
     fn descriptor(&self) -> BackendDescriptor;
     fn probe(&self, model: &ModelRef) -> Result<(), BackendError>;
     fn validate_stage_configuration(
+        &self,
+        model: &ModelRef,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), BackendError>;
+    fn probe_with_configuration(
         &self,
         model: &ModelRef,
         configuration: &DiarizationStageConfiguration,
@@ -70,82 +71,118 @@ pub trait DiarizationBackend: Send + Sync {
         request: DiarizationRequest,
         context: JobContext,
     ) -> BackendFuture<DiarizationResult>;
+    fn supports_windowed_audio(&self) -> bool;
+    fn create_window_session(
+        &self,
+        request: DiarizationRequest,
+    ) -> Result<Box<dyn DiarizationWindowSession>, BackendError>;
 }
 ```
 
-第一批实现：
+不声明 stage override 的 backend 只接受空配置。`DiarizationResult` 必须包含完整录音的 speaker segments、speaker count、embedding observations 和可选 profile candidates；窗口局部 label 不能直接成为最终 speaker ID。
 
-- `diarization-sherpa-onnx`：segmentation、speaker embedding 和 clustering。
-- `diarization-native`：默认接入 `speakrs` 的 Pyannote powerset segmentation、
-  WeSpeaker embedding、AHC/PLDA/VBx 完整 pipeline，并通过独立 stage trait 提供替换边界。
-  当前生产配置可分别选择兼容的 segmentation、embedding 和 clustering stage；native backend
-  会按配置组装临时模型目录，再交给 `speakrs` 加载。stage 模型必须满足该 pipeline 的输入、
-  输出、关联 sidecar 和 PLDA 兼容约束，不能把任意 ONNX 当作替代品。
-- speaker profile matching 位于 application 的共享 identity service，可处理 native 和
-  sherpa-onnx 输出；backend 只负责输出 embedding observation。
+## `asr-whisper-rs`
 
-`diarization-native` 的模块边界固定为：
+实现：whisper.cpp 的 Rust adapter。
 
-```text
-backend
-  -> engine
-       -> SegmentationAdapter
-       -> EmbeddingAdapter
-       -> ClusteringAdapter
-  -> identity resolver
-  -> speaker profile store
-```
+- 模型：单文件 GGML/GGUF。
+- 设备：`Cpu` 强制 CPU；其他选择允许 whisper.cpp 使用 GPU/Metal。
+- whole-file：读取完整 16 kHz mono 音频，输出 Whisper 时间戳段。
+- windowed：复用一个 `WhisperContext`，每个窗口创建 state；用全局 sample offset 恢复时间，以 valid-core midpoint 归属并去除重复段。
+- probe：检查模型 artifact 是现存文件；真实 context 加载在推理 session 创建时完成。
 
-融合 provider 可以在 `engine` 内复用已经校准的 overlap-add、masked embedding 和 VBx，
-但不得绕过统一 observation、identity 和 persistence contract。模型下载仍由 `models` crate 负责，
-backend 不调用上游 package 的在线下载器。stage 配置由 descriptor 的结构化 capability 声明；
-不支持 stage override 的 backend 不显示这些设置，并在 application preflight 拒绝非空配置。
+当前 catalog 中 Whisper 条目都是 `candidate-source`，backend 可运行不等于 UI 可下载。
 
-`DiarizationBackendManager` 以同样方式实现 `DiarizationBackendProvider`。ASR 和
-diarization 可以独立选择，application 只接收两个统一的 `ModelRef`。
+## `asr-sherpa-onnx`
 
-`DiarizationStageProvenance` 是可选后端元数据边界。后端声明实际使用的 segmentation、embedding
-和 clustering 来源，application 将其写入当前 `ProcessingRecord`；未声明的 stage 不得由
-application 猜测为某个具体模型。
+实现：sherpa-onnx offline recognizer adapter。
 
-## Backend probe 生命周期
+- 模型族：Paraformer 与 Qwen3-ASR。
+- 设备：CPU/CoreML；显式拒绝 Metal provider。
+- Paraformer：要求 `model.int8.onnx` 或 `model.onnx`，以及 `tokens.txt`。
+- Qwen3-ASR：要求 `conv_frontend.onnx`、encoder、decoder、`tokenizer/` 和 `tokens.txt`。
+- whole-file：输出完整文本段。
+- windowed：复用 recognizer；优先按 token timestamp 与 valid core 拼接，没有时间戳时使用近似文本边界去重，无法可靠匹配时保留文本。
+- probe：检查 backend ID、模型目录和模型族必需文件；真实 recognizer 创建属于加载验证。
 
-probe 分为快速 artifact probe、处理前 preflight 和实际加载三层，触发时机固定如下：
+`paraformer-zh` 已是可安装路径；Qwen3-ASR adapter 存在，但 catalog bundle 尚未达到 `ready`。
 
-| 时机 | 是否触发 | 作用 |
-| --- | --- | --- |
-| 浏览 catalog、启动 UI、读取设置 | 否 | 只读取 manifest 和文件安装状态，不为所有模型拖慢启动 |
-| 单个模型下载完成后 | 是 | `ModelManager` 进入 `verifying`，校验尺寸/checksum 后，对该模型声明的每个 candidate backend 执行快速 probe；失败则删除本次安装并标记失败 |
-| 开始处理项目之前 | 是 | `ProcessingService::probe` 对选中的 ASR、diarization 模型和 stage configuration 执行 preflight，阻止无效任务进入 JobRuntime |
-| backend 开始推理 | 是 | backend 再次检查请求，并创建真正的推理 session；ONNX graph、GGML header、provider/ABI 等只有在这里完成真实加载验证 |
+## `diarization-sherpa-onnx`
 
-因此下载后的 probe 不等价于模型已经完成加载；设置页切换也不触发全 catalog probe。处理前 probe
-是用户可见任务的硬门槛，实际推理加载失败仍会以 `ModelLoadFailed` 或 `InferenceFailed` 返回。
+实现：sherpa-onnx offline speaker diarization。
 
-## 不把任意 ONNX 当作通用 backend
+- 模型：包含 `segmentation.onnx` 与 `embedding.onnx` 的目录。
+- 设备：CPU/CoreML。
+- pipeline：Pyannote segmentation、speaker embedding、sherpa fast clustering。
+- stage：不支持用户覆盖 segmentation、embedding 或 clustering。
+- provenance：分别记录 segmentation、embedding 与 `sherpa-fast-clustering`。
+- 长音频：尚未暴露未聚类的窗口中间结果，因此 `supports_windowed_audio == false`；application 对长音频明确拒绝该组合。
 
-裸 ONNX 文件不足以描述完整模型。每个模型族还需要声明：
+## `diarization-native`
 
-- 输入 tensor 和采样率
-- 输出 tensor
-- tokenizer 或特征提取器
-- 解码策略
-- 时间戳恢复方式
-- embedding 与 clustering 方式
-
-因此运行时分两层：
+实现：固定版本 `speakrs` 的完整三阶段 pipeline。
 
 ```text
-InferenceRuntime
-  -> ModelFamilyAdapter
-  -> normalized result
+NativeDiarizationBackend
+  -> NativeDiarizationEngine
+       -> segmentation
+       -> embedding
+       -> AHC / PLDA / VBx clustering
+  -> normalized DiarizationResult
+  -> application Speaker Library service
 ```
 
-这样可以复用 ONNX Runtime，但不会把模型族差异塞进一个巨型 manager。
+- segmentation：`pyannote-segmentation-3.0`。
+- embedding：`wespeaker-voxceleb-resnet34`，含 external data 和最短样本配置。
+- clustering：`speakrs-ahc-plda-vbx` 与配套参数。
+- 设备：CPU；可选 Cargo `coreml` feature 提供 CoreML 执行路径。
+- stage override：只接受 descriptor 声明且与 `speakrs-community-1-cpu` bundle 兼容的三阶段配置。
+- whole-file：speakrs 完整 inference、聚类和重建。
+- windowed：每个窗口只做 inference 和 observation 提取；全录音聚类一次，再用全局结果重建每个窗口并裁剪 valid core。
 
-## 后端错误
+native engine 返回自己的窗口 session，只有 backend adapter 实现 application 的 `DiarizationWindowSession`，避免 engine 依赖应用层 session 细节。
 
-所有后端错误统一转换为：
+Speaker Library 位于 application，不属于具体 diarization backend。它只在匿名聚类完成后匹配兼容 `EmbeddingSpace` 的 profile，并生成 label 或待确认 candidate；不能替代跨窗口聚类。
+
+## Application Pipeline
+
+### 短音频
+
+```text
+ASR future ──────────┐
+                     ├-> join -> identity -> alignment -> normalized result
+Diarization future ──┘
+```
+
+### 长音频
+
+```text
+AudioChunkReader
+  -> ProcessingWindowPlanner
+  -> shared Arc<AudioWindow>
+       ├── ASR window session -> backend stitcher
+       └── native DIA window session -> recording-wide clustering
+  -> Speaker Library matching
+  -> alignment
+  -> windowing provenance
+```
+
+默认窗口阈值为 30 分钟，core 为 60 秒，前后 context 各 15 秒，采样率为 16 kHz。后端必须同时声明并实现窗口 session；不允许静默退回整文件或拼接窗口局部 speaker label。
+
+当前 native session 保留全部窗口 artifact 与 observation，AHC 使用二次规模的 pairwise distance；20 小时资源上限和受控并发属于生产化阻塞项，见[工程实施计划](../plan/implementation-plan.md)。
+
+## Probe 与错误
+
+固定生命周期：
+
+```text
+下载完成 -> 快速 artifact probe
+处理开始 -> model + stage preflight
+backend 执行 -> session/graph/context 真实加载
+推理完成 -> normalized output validation
+```
+
+统一错误码：
 
 - `BackendUnavailable`
 - `ModelMissing`
@@ -157,21 +194,6 @@ InferenceRuntime
 - `Cancelled`
 - `OutputValidationFailed`
 - `PersistenceFailed`
+- `NotImplemented`
 
-当前后端统一返回 `BackendError { code, message }`；GPUI 只消费错误码和用户可读消息。
-
-文档项目树错误不属于推理后端错误。第四层、循环、缺失父节点和跨音频来源关系由 document/domain 层处理；backend 不读取或维护项目结构。
-
-## 任务事件
-
-```rust
-pub enum JobEvent {
-    Started { job_id: JobId },
-    Progress { job_id: JobId, progress: Progress },
-    Completed { job_id: JobId },
-    Failed { job_id: JobId, message: String },
-    Cancelled { job_id: JobId },
-}
-```
-
-不使用字符串事件，不让具体 backend 直接更新 GPUI Entity、Assistant、外部 Agent 或项目树。处理完成后由 application 写入文档事实和当前 `processing.latest`，再触发文档扫描/项目树刷新事件。重新处理直接替换当前记录；外部 Agent 通过 Skill 写回语义内容，不需要绑定内部 command enum。
+backend 不读取文档树，不更新 GPUI，不保存项目，也不解释 Agent/Skill 语义。处理结果由 application 写入当前文档和 processing provenance。

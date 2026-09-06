@@ -2,80 +2,127 @@
 
 ## 项目定位
 
-MeetNote 是 Rust-native、本地优先的音频处理与 AI 可读文档项目管理平台。它把音频转换为带时间戳和说话人信息的文档，以目标目录中的 Markdown 与文档 JSON 为事实来源，实时构建并维护最多三层的语义项目树。会议、全天录音和访谈只是文档内容类型，不是领域模型限制。
+MeetNote 是 Rust-native、本地优先的音频处理与 AI 可读文档工作区。它把任意音频资产转换为带时间戳、说话人和处理来源的文档，并从文档自身的 Markdown/JSON 实时派生最多三层的项目树。
 
-## 当前架构边界
+MeetNote 负责音频事实、文档服务和结构校验；Assistant 或外部 Agent 按 Skill 决定语义拆分、标题、标签、总结与父子关系。会议、全天录音和访谈只是内容类型，不是领域模型。
 
-- GPUI 只负责窗口、视图、交互和 UI 状态投影。
-- `domain` 只包含领域模型、校验和纯业务算法，不依赖 GPUI、数据库或具体推理库。
-- `application` 只编排用例，通过 trait 调用后端、持久化和模型服务。
-- ASR 与 diarization 分别拥有独立的 backend manager，后端可替换、可组合。
-- 推理后端不得启动 Python subprocess；项目不维护 Rust/Python 兼容层。
-- 模型下载、校验、缓存和安装由 Rust model manager 统一负责。
-- 文档 Markdown 与同目录 JSON 状态是项目结构的唯一事实来源；不使用 SQLite 或独立项目数据库。运行时索引和项目树必须能从目标目录重新扫描生成。
-- MeetNote 主动监听或扫描目标目录，解析文档关系并实时维护最多三层的项目树；通过 MeetNote 写入时必须校验最大深度、循环和来源一致性，外部修改无效时必须显示错误而不是静默构造另一份结构。
-- 复合录音的语义边界、标题、标签和总结由 Agent 按 Skill 决定并写入文档；MeetNote 负责读取、验证、保存和反映结果，不内置自动语义拆分器。
-- Assistant 保留为内置 Agent 客户端，与任意外部 Agent 使用同一 application/document service、相同权限和相同写入规则，不得拥有直接修改 repository 或文件的特权路径。
-- 所有后端输出先归一化到统一 contracts，再进入对齐、人工修正和文档生成流程；原始音频、原始转录和原始 diarization 结果不得被语义编辑覆盖。
-
-## Workspace 约定
+## 当前架构
 
 ```text
-apps/meetnote/
-crates/domain/
-crates/contracts/
-crates/application/
-crates/runtime/
-crates/persistence/
-crates/models/
-crates/asr/
-crates/asr-whisper-rs/
-crates/asr-sherpa-onnx/
-crates/diarization/
-crates/diarization-sherpa-onnx/
-crates/diarization-native/
-crates/llm/
-crates/ui/
+GPUI / CLI / Agent adapter
+          -> application
+               ├── document service -> persistence -> Markdown/JSON
+               ├── processing -> audio/runtime
+               ├── ASR provider -> ASR backends
+               ├── diarization provider -> diarization backends
+               └── Speaker Library identity service
 ```
 
-`crates/` 下使用语义名称，不重复 `meetnote-` 前缀。Cargo package 名称与目录保持一致，只有需要区分具体实现时才使用后端后缀。
+- `domain`：领域模型、校验和纯算法，不依赖 GPUI、文件系统或推理库。
+- `contracts`：跨层请求、结果、能力、模型引用、文档命令和统一错误。
+- `application`：用例编排，只依赖 trait，不依赖具体 backend 或 UI。
+- `audio`：解码、16 kHz mono 重采样、chunk 和离线窗口。
+- `runtime`：任务、进度、取消和阻塞 worker 并发。
+- `persistence`：文档包、目录扫描、关系错误和文件监听。
+- `settings` / `models`：设置、catalog、下载、安装和 probe。
+- `asr` / `diarization`：各自独立的 registry、manager 和 provider。
+- 具体 backend crate：模型族加载、推理、后处理和窗口 session。
+- `llm`：可选 Agent/provider 边界，不保存语义规则。
+- `ui`：GPUI 视图、交互和状态投影。
 
-`crates/llm/` 当前只允许承载可选 Agent/provider 适配边界，不承载项目树、拆分、总结或索引的业务规则。语义规则属于 Skill，文档后端能力属于 application/persistence。
+完整分区见[架构总览](docs/architecture/overview.md)。
+
+## 核心数据约束
+
+- 每个项目由 `document.md + state.json` 表达；文档目录是项目结构的唯一事实来源。
+- 项目树固定最多三层，必须能从目录完整重建。
+- MeetNote 写入必须校验 schema、revision、循环、层级和音频来源。
+- 外部文件修改无效时必须报告可定位错误，不得静默构造另一份结构。
+- 处理任务状态、`processing` 记录和 `document_status` 必须分离。
+- 原始音频引用、ASR、diarization、对齐与 processing provenance 不得被语义编辑覆盖。
+- Assistant 与外部 Agent 必须通过同一 document service，具有相同权限和写回规则。
+- `DocumentCommandService` 只是内部 application API，不是外部 Agent 的固定 ABI。
+
+## 音频与后端约束
+
+- 短音频保留整文件 baseline；长音频使用有上下文重叠的离线分窗，不建设实时流式协议。
+- `AudioChunkReader` 负责连续解码、downmix、重采样、sample offset、取消和错误定位。
+- ASR 拼接属于具体 ASR backend；application 不实现模型族特有去重。
+- diarization 窗口不得输出最终局部 speaker label；必须汇总兼容 embedding observation 后执行录音级聚类。
+- Speaker Library 只在匿名聚类之后进行身份匹配，不替代 clustering。
+- ASR 与 diarization manager 必须独立；新增 backend 不修改 domain、application 或 UI contract。
+- backend 不下载模型，不启动 Python，不更新 GPUI 或文档树。
+- 模型由 catalog 管理，安装必须经过大小、SHA-256、快速 probe、处理前 preflight 和推理时真实加载。
 
 ## 工程规则
 
-- 先读当前状态和相关架构文档，再修改代码。
-- 复杂逻辑必须拆分到职责明确的模块；GPUI View 不得承载领域算法或 IO。
-- 新增 ASR/diarization backend 时，不得修改 application、domain 或 UI 的既有接口。
-- 后端特有字段只能放入明确的 metadata/raw payload，不得污染统一领域模型。
-- 所有长任务必须经过统一 JobRuntime，支持进度、取消、失败和恢复状态。
-- 模型必须通过 catalog 管理，下载完成后进行尺寸、SHA-256 和 backend probe 校验。
-- 文档写入必须采用原子替换并携带版本；文件变化后必须刷新项目树派生视图。
-- 项目树固定最多三层。这个限制是正式产品需求，不得作为临时 MVP 约束移除。
-- Assistant 和外部 Agent 的读写命令必须进入同一 controller/application 边界。
-- 不提交模型权重、音频样本、secret、`.env`、构建产物或本机缓存。
-- GPUI 版本必须锁定；新增 UI 依赖前先确认是否破坏跨平台和打包边界。
+- 修改前先读取当前代码、相关架构文档和工作树状态；代码是实现状态的唯一证据。
+- 选择满足当前要求的最简单长期实现，不增加推测性抽象、配置或兼容层。
+- 复杂逻辑拆到职责明确的模块；GPUI View 不承载领域算法、文件 IO、下载、推理或 Agent 调用。
+- 优先复用项目已有依赖；增加依赖前检查现有 API、跨平台和打包影响。
+- 所有长任务经过统一 JobRuntime，必须具备进度、取消、失败可见性和受控并发。
+- 文档和 Speaker Library 使用临时文件加原子替换；多文件或多文档操作必须设计故障恢复，不能只更新内存。
+- 不提交模型权重、音频样本、secret、`.env`、运行数据、构建产物或本机缓存。
+- GPUI 与第三方推理依赖必须锁定；vendor 变更必须保持最小、可审计并有对应测试。
+- 工作树存在用户改动时保留并隔离无关文件，不覆盖、不清理、不顺带提交。
+
+## 文档规则
+
+- 指导性文档只记录当前架构、当前进度和预期功能，不保留版本过渡叙述。
+- 已实现、可编译、合成测试、真实模型执行、精度验收和生产就绪必须明确区分。
+- 内容有机融入对应章节，避免重复；总览只做最小说明并引用具体文档。
+- 代码变化影响公开边界、数据格式、验证方式或计划状态时，同步更新对应文档。
+- 未经用户明确授意，不创建、删除或修改项目文档。
+- 研究文档只用于复杂 debug 或会改变系统架构的验证，存放在 `docs/reserch/`。
+- 研究文档使用“探索原因 / 探索目标 / 探索结果 / 复现说明 / 注意事项与补充”结构；临时代码在探索后删除，只在附录保留核心方法。
 
 ## 验证分层
 
 - `domain`：纯 Rust 单元测试。
-- `application`：使用 fake backend、fake repository 的用例测试。
-- `persistence`：文档目录扫描、原子写入、外部修改检测、索引重建和冲突测试。
-- 项目树：三层上限、循环、缺失父节点、跨音频来源和实时刷新测试。
-- backend：每个实现独立的模型加载、输出归一化和错误测试。
+- `application`：fake backend/repository、处理编排、文档命令和身份匹配。
+- `persistence`：扫描、文件写回、外部修改、关系错误和重建。
+- `audio`：packet 连续性、重采样、窗口覆盖、取消和压缩格式等价。
+- backend：模型布局、probe、归一化输出和 backend-specific stitcher。
 - integration：真实模型与真实音频的受控测试。
-- performance：冷启动、模型加载、实时率、内存峰值、WER/CER、DER。
-- GPUI：视图和交互测试，不把 UI 测试当作推理正确性证明。
+- performance：冷启动、实时率、峰值内存、长音频资源和并发。
+- quality：WER/CER、DER、speaker count、跨窗口身份一致性和误匹配率。
+- GPUI：视图与交互；UI 测试不能证明推理正确。
+- release：打包、签名、notarization、license 和全新环境安装。
+
+基础检查：
+
+```bash
+cargo fmt --all -- --check
+cargo check --workspace
+cargo test --workspace
+```
+
+真实模型测试必须显式提供模型和音频路径；`#[ignore]` 测试未运行时不得声称真实推理已验收。
 
 ## 禁止事项
 
-- 禁止恢复 Tauri、WebView 或 Python subprocess 作为默认架构。
-- 禁止把多个 backend 的逻辑塞入单个 manager 或单个文件。
-- 禁止把“任意 ONNX 文件”误认为可以无需模型族适配直接推理。
-- 禁止在没有 schema、模型来源、license 和验证方式的情况下加入模型。
-- 禁止使用 SQLite、全局 JSON project store 或其他独立数据库作为文档项目结构的事实来源。
-- 禁止维护无法从目标目录文档重建的项目树状态。
-- 禁止移除三层项目树限制。
-- 禁止让 Assistant 绕过外部 Agent 使用的统一文档接口。
-- 禁止把 Skill 的语义拆分规则硬编码进 MeetNote application/domain。
-- 禁止在架构未确认前大规模实现 UI。
+- 禁止恢复 Tauri、WebView、Python subprocess、SQLite 或独立全局 project store。
+- 禁止把语义拆分、总结、标签或索引规则硬编码进 MeetNote domain/application。
+- 禁止让 Assistant 绕过外部 Agent 使用的统一文档边界。
+- 禁止把多个 backend 或多个模型族实现塞入单个 manager。
+- 禁止把任意 ONNX 文件视为无需模型族 adapter 的可运行模型。
+- 禁止在缺少 schema、来源、revision、license、checksum 和验证方式时把模型标为 `ready`。
+- 禁止移除三层项目树限制或把它描述为临时约束。
+- 禁止把窗口、VAD、局部 speaker label 或 embedding observation 当成语义项目事实。
+- 禁止在未确认架构前进行大规模 UI 实现。
+- 禁止用短样本、无 ground truth 的输出或进程退出码代替生产验收。
+
+## 完整文档索引
+
+- [README](README.md)：项目简介、快速构建、架构入口。
+- [文档索引](docs/index.md)：面向阅读者的文档导航。
+- [系统架构总览](docs/architecture/overview.md)：分层、crate 边界与依赖方向。
+- [模型管理](docs/architecture/model-management.md)：模型资产、下载、安装与 probe。
+- [文档与音频项目模型](docs/architecture/document-model.md)：文档包、数据流、三层树与 Agent 协作。
+- [模型后端系统](docs/architecture/backend-system.md)：兼容层和具体 backend。
+- [架构决策](docs/architecture/decisions.md)：不可偏离的长期约束。
+- [工程实施计划](docs/plan/implementation-plan.md)：完成度、生产化缺口和验收顺序。
+- [GPUI UI 计划](docs/plan/ui-plan.md)：界面边界、当前状态和后续步骤。
+- [Diarization 三阶段研究](docs/reserch/diarization-native-three-stage.md)：native pipeline 选型依据。
+- [语音模型与 Rust runtime 研究](docs/reserch/voice-models-and-rust-runtimes.md)：模型格式与 runtime 依据。
+- [长音频离线分窗研究](docs/reserch/audio-streaming-and-semantic-splitting.md)：长音频、聚类与语义边界依据。

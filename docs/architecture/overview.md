@@ -1,174 +1,126 @@
-# Rust-native 系统架构
+# 系统架构总览
 
-## 目标
+## 产品边界
 
-MeetNote 是一个本地优先的音频处理与 AI 可读文档后端。它不假设一份文档必须是一次会议，也不替 Agent 判断一天的录音应当如何按语义拆分；它会持续读取目标目录中的文档信息，主动解析并维护固定最多三层的语义项目树：
+MeetNote 是 Rust-native、本地优先的音频处理与 AI 可读文档工作区。音频可以是一整天的记录、会议、访谈或其他资料，不进入固定的会议领域模型。
 
-```text
-导入音频资产
-  -> ASR
-  -> speaker diarization
-  -> transcript/speaker 对齐
-  -> 可追溯的原始文档资料
-  -> 文档内容、JSON 状态和处理结果保存
-  -> 外部 Agent 读取或写回文档
-```
+MeetNote 负责：
 
-处理顺序固定为先完成整段音频转录和说话人对齐，再由 Assistant 或外部 Agent 使用 Skill 进行语义理解。语义拆分、标题、标签和总结不是 MeetNote 的自动推理功能。Agent 把结果记录到文档自身的 JSON/结构化内容中，MeetNote 实时读取、校验三层上限并更新项目树。树是文档的派生视图，不是第二份事实来源。
+- 音频解码、ASR、speaker diarization、Speaker Library 匹配和结果对齐。
+- Markdown/JSON 文档包的扫描、读取、写回、版本校验和错误报告。
+- 从文档声明实时派生并维护最多三层的项目树。
+- 为 GPUI、CLI、Assistant 和外部 Agent 提供同一 application/document service 边界。
 
-桌面应用由单一 Rust 进程提供。GPUI 是 UI 层，application layer 是业务编排层，推理后端通过 Rust trait 接入。
+Assistant 或外部 Agent 按 Skill 决定语义边界、标题、标签、总结和父子关系。MeetNote 不内置 LLM、自动语义拆分器或另一份项目数据库。
 
 ## 顶层数据流
 
 ```text
-┌────────────────────┐   ┌────────────────────┐
-│ GPUI Assistant     │   │ External Agent     │
-│ built-in client    │   │ Skill-driven client│
-└─────────┬──────────┘   └─────────┬──────────┘
-          └────────────┬───────────┘
-                       │ same document service and events
-             ┌─────────▼──────────┐
-             │ Rust application   │
-             │ processing/docs/tree│
-             └─────┬────────┬─────┘
-                   │        │
-        ┌──────────▼──┐  ┌──▼──────────┐
-        │ target docs │  │ JobRuntime  │
-        │ md + json   │  │ jobs/events │
-        └──────┬──────┘  └──┬──────────┘
-               │ scan/watch   │
-        ┌──────▼──────────┐   ├── ASR manager
-        │ derived project │   └── DIA manager
-        │ tree, max depth 3│
-        └─────────────────┘
+音频路径
+  -> 解码为 16 kHz mono
+  -> ASR + diarization
+  -> Speaker Library identity matching
+  -> transcript/speaker alignment
+  -> document.md + state.json
+  -> 目录扫描/监听
+  -> 最多三层的项目树
+  -> GPUI / Assistant / external Agent
 ```
 
-## Workspace
+短音频使用整文件 pipeline。达到 30 分钟或无法预估长度时，application 使用 60 秒 valid core 与前后各 15 秒 context 的离线窗口；ASR 在 backend 内拼接，native diarization 汇总窗口 artifact 后执行录音级聚类。完整规则见[模型后端系统](backend-system.md)和[文档与音频项目模型](document-model.md)。
+
+## Workspace 分区
 
 ```text
-apps/meetnote/
+apps/meetnote/                    进程装配、CLI 与 GPUI 启动
 crates/
-├── domain/
-├── contracts/
-├── application/
-├── runtime/
-├── persistence/
-├── settings/
-├── models/
-├── asr/
-├── asr-whisper-rs/
-├── asr-sherpa-onnx/
-├── diarization/
-├── diarization-sherpa-onnx/
-├── diarization-native/
-└── ui/
-resources/models/catalog.json
+├── domain/                       领域模型、校验与纯算法
+├── contracts/                    跨层请求、结果、能力与错误结构
+├── application/                  用例编排与稳定服务边界
+├── audio/                        解码、重采样、chunk 与窗口规划
+├── runtime/                      任务、进度、取消与 worker gate
+├── persistence/                  Markdown/JSON 文档包与目录监听
+├── settings/                     版本化设置与原子 JSON 保存
+├── models/                       catalog、下载、安装与 probe 调度
+├── asr/                          ASR registry 与 manager
+├── asr-whisper-rs/               whisper.cpp backend
+├── asr-sherpa-onnx/              sherpa-onnx ASR backend
+├── diarization/                  diarization registry 与 manager
+├── diarization-sherpa-onnx/      sherpa-onnx diarization backend
+├── diarization-native/           speakrs 三阶段与分窗 backend
+├── llm/                          可选 Agent/provider 描述边界
+└── ui/                           GPUI 视图、交互与状态投影
+resources/models/catalog.json     模型资产清单
+third_party/speakrs/              固定版本的 native diarization 实现
 ```
 
-`crates/` 下去除重复的 `meetnote-` 前缀。具体后端使用任务和实现名称区分。
+## 分区边界
 
-当前工作区中的 `crates/llm/` 是占位适配边界，只允许为 Assistant 或外部 Agent 接入可选 provider；它不拥有项目树、拆分、总结或索引规则，也不改变 Assistant 与外部 Agent 的同层关系。
+### `domain`
 
-## 层职责
+只包含 `DocumentState`、音频来源、处理结果、三层关系、speaker segment、对齐和校验。不得依赖 GPUI、文件系统、runtime 或具体推理库。
 
-### domain
+### `contracts`
 
-纯 Rust 领域模型和算法：音频资产、文档、最多三层的项目树派生视图、UUID、父子关系、时间范围、分类标签、转录段、speaker 段、人工修正、对齐、处理状态和领域错误。domain 解释文档声明的结构并校验三层上限、循环和来源一致性，但不替 Agent 判断语义边界。
+定义版本化文档命令、`ModelRef`、backend descriptor、ASR/diarization 请求与归一化结果、embedding space、speaker profile 和统一错误码。具体 backend 字段只能进入明确的 metadata 或 provenance。
 
-### contracts
+### `application`
 
-统一的版本化请求、结果、进度、能力、模型引用和错误结构。所有 backend 必须转换成 contracts 类型后才能进入 application。
+编排文档读写、模型 preflight、长短音频处理、ASR/diarization 并发、对齐、Speaker Library 和 processing provenance。只通过 trait 选择后端与 repository，不依赖 GPUI。
 
-### application
+### `audio`
 
-用例编排：导入、转录、分离、对齐、目标目录扫描/监听、文档读取和写回、项目树刷新、处理状态更新、人工修正、保存和基于文档信息的查询。只依赖接口，不依赖 GPUI、具体 Agent 或推理库；不实现 LLM 调用和语义边界推理。
+负责音频 demux/decode、downmix、连续重采样、整数 sample offset、取消检查、整文件读取和有界窗口。技术窗口不是领域文档，也不决定语义边界。
 
-### runtime
+### `runtime`
 
-统一管理音频处理任务的创建、排队、取消、进度、失败、完成和查询，并通过共享 worker gate 限制
-阻塞推理的并发数。模型 session 生命周期、跨进程恢复和跨启动任务持久化不属于当前 runtime 版本。
+提供任务 ID、状态、进度、取消、查询和阻塞 worker 并发门。处理任务是进程内状态，不写入文档事实。生产化并发约束见[工程实施计划](../plan/implementation-plan.md)。
 
-### persistence
+### `persistence`
 
-文件系统保存音频、文档内容和模型资产；每份文档自身的 Markdown 与 JSON 状态是权威数据源。MeetNote 扫描或监听目标目录，实时维护文档索引和最多三层的项目树；索引与树必须可丢弃、可重建，不能替代文档 JSON。v0.2 不引入 SQLite、全局项目数据库或 localStorage。
+以 `document.md + state.json` 保存文档，通过目录扫描重建列表和项目树，通过文件监听触发刷新。无效外部修改必须形成可定位 issue。完整格式见[文档与音频项目模型](document-model.md)。
 
-### models
+### `settings`
 
-模型目录、解析、下载、断点续传、SHA-256 校验、原子安装、下载任务持久化和快速 backend artifact probe。完整模型加载在 backend 第一次使用时执行。
+保存 UI locale、backend/model 选择、设备、转录语言、speaker 数提示、Speaker Library 路径和 diarization stage 配置；不保存项目事实。
 
-### settings
+### `models`
 
-版本化设置 schema、JSON 原子持久化、运行时设置快照与更新；不使用 SQLite。
+读取 catalog，管理模型可用性、HTTP Range 下载、暂停/继续/取消、校验、原子安装、任务恢复和下载后 probe。完整协议见[模型管理](model-management.md)。
 
-### ui
+### `asr` 与 `diarization`
 
-GPUI Application、Window、Entity、View、Action 和交互状态投影。Assistant 是保留的内置 Agent 客户端，与外部 Agent 共用 controller/application 文档接口；UI 不直接调用 backend 或 repository。
+分别维护 registry/manager，通过 provider trait 向 application 返回后端。两类后端独立选择和组合，具体接口见[模型后端系统](backend-system.md)。
 
-## 关键边界
+### 具体 backend
+
+每个 backend 独立处理模型族的文件布局、预处理、推理、后处理、设备能力和窗口拼接。新增 backend 不修改 domain、application 或 UI contract。
+
+### `llm`
+
+只保留可选 provider descriptor/trait。项目树、拆分、总结、标签和查询规则属于 Skill 与文档服务，不进入此 crate。
+
+### `ui`
+
+GPUI 只发送 application command、订阅事件和投影视图状态，不直接执行文件 IO、模型下载、推理或语义判断。当前完成度见[GPUI UI 计划](../plan/ui-plan.md)。
+
+## 依赖原则
 
 ```text
-domain 不知道 backend 和具体 Agent/provider
-application 只知道 backend/document storage/tree projection trait
-backend 只负责模型加载和推理
-Assistant 与外部 Agent 使用相同 document read/write 边界
-项目树只从目标目录文档派生，固定最多三层
-UI 只发送 command 和消费 event
+domain <- contracts <- application <- adapters/backends/UI
+                         |
+                         +-> audio/runtime traits
+
+persistence/models/settings 实现 application 或独立服务边界
+apps/meetnote 只负责组装具体实现
 ```
 
-ASR 和 diarization 相互独立，最终由 `AlignmentService` 合并：
+- 单一 Rust 进程，不启动 Python subprocess。
+- 文档目录是项目结构的唯一事实来源。
+- ASR 与 diarization 输出必须先归一化，再由 application 对齐和保存。
+- Assistant 与外部 Agent 不得绕过文档版本、来源和三层约束。
+- 原始音频引用、原始转录、原始 diarization 与 processing provenance 不得被语义编辑覆盖。
 
-```text
-ASR segments + diarization segments
-          -> AlignmentService
-          -> speaker-tagged transcript
-```
+## 当前实现边界
 
-## Assistant 与外部 Agent 的知识后端边界
-
-MeetNote 的知识后端能力分为“文档管理/写回”和“实时项目树”两部分：
-
-- 查询：Assistant 或外部 Agent 可以按文档 ID、项目树位置、文档 JSON 字段、时间范围和来源信息读取文档元数据、原始转录、说话人对齐结果和 Markdown 内容；MeetNote 不为 Skill 定义固定的语义字段。
-- 编辑：Assistant 或外部 Agent 可以按 Skill 约定写回标题、标签、正文、文档状态、父子关系、内部链接和人工 speaker 修正。
-- 拆分：Agent/Skill 自行决定是否拆分、拆成什么文档以及语义项目树如何记录；MeetNote 提供文档创建、原子保存、三层约束校验和树刷新，不提供自动语义拆分算法。
-- 实时维护：目标目录发生新增、修改、移动或删除后，MeetNote 必须刷新派生项目树；通过 MeetNote 写入时拒绝超过三层、循环或跨音频来源的结构，外部无效修改在扫描后显示可定位错误。
-- 追溯：MeetNote 保存当前处理结果和来源 provenance；文档语义编辑不能覆盖当前处理结果，
-  重新处理同一音频项目时允许直接替换旧的处理结果。
-
-Agent 接入不绑定某个模型、厂商或 Skill，也不把某个 command enum 作为外部 Agent 的强制 ABI。首要边界是 Skill 指导下的 Markdown/JSON 文档包读写；CLI、IPC 或其他适配器都必须复用同一 document service，不拥有额外权限。当前 `DocumentCommandService` 只是 application 内部的版本校验与用例入口。语义字段和拆分规则属于 Skill；三层上限和结构一致性属于 MeetNote domain contract。详细字段分层见[文档模型与处理记录](document-model.md)。
-
-## 文档包与事实来源
-
-MeetNote 管理的是文档包，而不是一张集中式项目表。最小文档包由内容文件和状态文件组成：
-
-```text
-documents/<document-id>/
-├── document.md       # AI 可读正文
-└── state.json        # 该文档的权威状态
-```
-
-`state.json` 按 `schema`、`identity`、`source`、`hierarchy`、`document_status`、`content`、`processing` 和 `results` 分层。父子关系、拆分关系、标签、总结和其他语义字段由 Skill 定义并记录在这里；MeetNote 解析这些字段，维护最多三层的项目树，但不为它们建立第二份权威持久化结构。当前代码使用分层 v2 `DocumentState`，旧扁平 v1 只存在于读取时的兼容迁移逻辑中。
-
-文档管理服务必须扫描或监听 `documents/`，生成文档列表、过滤、查询索引和最多三层的项目树。索引或树丢失、过期、或被 Assistant/外部 Agent 修改后，必须通过增量刷新或完整重扫恢复；任何缓存都不能成为文档状态的事实来源。
-
-## 两类状态
-
-系统处理状态与知识文档状态必须分开：
-
-- `processing_state`：由 `JobRuntime` 管理，表示一次音频任务的排队、运行、完成、失败或取消。任务成功后不作为长期项目状态保留。
-- `processing`：处理完成后写入文档 JSON，保存完成时间、输入指纹、ASR 模型、diarization stage、clustering 算法、identity matching 和运行参数。重处理直接替换当前记录。
-- `document_status`：由外部 Agent 或用户按 Skill 写入文档自身 JSON，表示文档处于收件、编辑、复核、定稿或归档等知识工作流阶段；MeetNote 负责保存和展示，但不解释这些语义值。
-
-Agent 写入文档状态不得伪造或覆盖 MeetNote 的 `processing` 记录；处理失败也不得删除 Agent 已经编辑的文档内容或改变 `document_status`。当前 `ProjectStatus` 只作为旧 UI 的兼容投影，不能继续承载新的持久化语义。
-
-## 持久化原则
-
-文档是面向 Agent 的知识单元，Markdown 是稳定、可读、可迁移的内容表达，文档自身 JSON/结构化状态是该文档的管理事实来源。MeetNote 不维护独立的权威项目数据库；文档列表、筛选、查询和最多三层的项目树只能从目标目录文档生成。文档可以代表一天、一次会议或其他任意语义单元。文档之间的父子关系、标签和内部链接由 Assistant 或外部 Agent 按 Skill 写入文档状态，MeetNote 负责校验、保存并实时更新派生树。完整 pipeline 成功后写入处理记录：
-
-- 使用的 ASR backend、model 和 revision
-- 使用的 diarization backend、segmentation/embedding model 和 revision
-- clustering 算法或模型、identity matching embedding space、阈值和 profile library schema
-- speaker 修正版本
-- 外部 Agent/Skill 标识及变更说明（如果由 Agent 写入）
-- 原始转录和最终文档之间的来源关系
-
-当前 pipeline 将 `processing.latest`、ASR/diarization backend 与 model、catalog revision、逐 artifact 期望与实际 checksum、准确的 diarization stage、对齐算法、运行参数和输入 checksum 写回 `state.json`。重新处理直接替换当前结果；如果需要保留不同处理结果，应创建新的文档项目。
+核心 Rust workspace、文档包、模型管理、四个真实 backend、GPUI 功能脚手架和 native 长音频链路已经落地。当前未完成的是具体 Agent/provider、完整文档编辑 UI、文档多文件/多文档事务、长音频资源上限验收、精度基准和 macOS 发布。进度与验收顺序统一记录在[工程实施计划](../plan/implementation-plan.md)。

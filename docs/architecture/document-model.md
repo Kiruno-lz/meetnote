@@ -1,172 +1,177 @@
-# 文档模型与处理记录
+# 文档与音频项目模型
 
-## 目的
+## 项目定义
 
-MeetNote 的持久化单位是文档包，而不是数据库中的项目行。文档可以代表一整段录音、一天中的一个语义片段、一次会议、访谈或个人整理。文档包中的 Markdown 与 JSON 必须能够在没有 MeetNote 索引和数据库的情况下被读取、迁移和重新建立关系。
+MeetNote 的项目是由音频事实派生的 AI 可读文档，不是固定的会议记录。根文档可以覆盖一整段录音；Assistant 或外部 Agent 可以按 Skill 将其拆成最多两级子文档，因此整棵树最多三层。
+
+MeetNote 负责保存和校验事实，Agent 负责判断语义。音频必须先完成完整 ASR、diarization 与对齐，语义拆分不能截断或替代原始结果。
+
+## 存储架构
 
 ```text
-documents/<document-id>/
-├── document.md
-└── state.json
+data/
+├── documents/
+│   └── <document-id>/
+│       ├── document.md
+│       └── state.json
+├── settings/settings.json
+└── speakers/library.json
+models/
+└── <task>/<model-id>/...
 ```
 
-`document.md` 保存 AI 可读的正文、总结、引用和内部链接；`state.json` 保存机器可读的身份、来源、层级、文档状态、当前处理记录和当前处理结果。派生索引和三层项目树只能从这些文件重建。
+- `document.md`：面向用户和 Agent 的正文。
+- `state.json`：身份、音频来源、层级、工作流状态、当前处理记录和当前处理结果。
+- `settings`、模型缓存和 Speaker Library 是独立运行资产，不是项目树事实。
+- 当前音频导入保存源文件路径，不复制音频；音频资产托管和丢失恢复属于生产化计划。
 
-## `DocumentState` 的当前分层
+文档目录是唯一事实来源。列表、查询视图和项目树通过扫描重建，文件变化通过 watcher 触发刷新；不得增加 SQLite、全局 project store 或无法从文档恢复的权威索引。
 
-当前 Rust `DocumentState` 已使用 v2 分层结构。旧的扁平 v1 只存在于反序列化迁移逻辑中，加载旧文件后会原子写回 v2；新的代码和文档不得继续增加扁平字段。
+## `DocumentState`
 
 ```text
 DocumentState
 ├── schema
+│   ├── schema_version
+│   ├── revision
+│   └── updated_at_ms
 ├── identity
-├── source: AudioSource
-├── hierarchy: DocumentHierarchy
-├── document_status: DocumentStatus
-├── content: DocumentContent
-├── processing: ProcessingMetadata
-└── results: ProcessingResults
+│   ├── id
+│   └── created_at_ms
+├── source
+│   ├── audio_path
+│   ├── audio_asset_id
+│   ├── recorded_at_ms
+│   └── audio_start_ms / audio_end_ms
+├── hierarchy
+│   ├── parent_id
+│   ├── depth
+│   └── sibling_order
+├── document_status
+├── content
+│   ├── title
+│   ├── tags
+│   └── summary
+├── processing
+│   ├── latest
+│   └── last_error
+└── results
+    ├── transcript
+    ├── diarization
+    ├── speaker_segments
+    └── markdown_path
 ```
 
-### `schema`
+`revision` 是写回并发控制版本；通过 `DocumentCommandService` 更新内容、状态或关系时必须携带预期 revision。`processing` 和 `results` 由 MeetNote 维护，普通文档 patch 不能覆盖它们。
 
-保存状态文件 schema 版本和文档版本：
+## 音频处理顶层流程
 
-- `schema_version`：状态文件结构版本；不随普通编辑递增。
-- `revision`：文档包的并发控制版本；每次原子写回递增。
-- `updated_at`：最近一次写回时间。
+```text
+导入音频路径
+  -> 创建根文档
+  -> model/stage preflight
+  -> JobRuntime 创建 ASR 与 diarization 任务
+  -> 短音频：whole-file pipeline
+     长音频：有界离线窗口 pipeline
+  -> 标准化 ASR 与 diarization 结果
+  -> 录音级匿名 speaker 聚类
+  -> Speaker Library identity matching
+  -> transcript/speaker alignment
+  -> 更新 processing.latest 与 results
+  -> 生成 document.md
+  -> 保存文档包并触发目录刷新
+```
 
-### `identity`
+处理失败只更新 `processing.last_error`，不得删除既有结果或改变 `document_status`、标题、标签、总结和正文。重新处理成功后替换 `processing.latest` 与当前 `results`；如需保留另一套结果，应创建另一个文档项目。
 
-保存不可变或受严格校验的标识：
+### 长音频
 
-- `document_id`：文档 UUID。
-- `created_at`：文档包创建时间。
-- `title`、`tags`、`summary` 等语义字段属于 `content`，不属于身份。
+达到 30 分钟或无法预估长度时启用离线分窗：连续解码为 16 kHz mono，以 60 秒 valid core 和前后各 15 秒 context 构造窗口。ASR 负责模型族特有的拼接；native diarization 保存窗口 inference artifact，在全录音范围执行一次匿名 speaker 聚类，再裁剪 valid core、匹配 Speaker Library 并对齐。
 
-### `source: AudioSource`
+窗口、局部 speaker track、VAD、embedding observation 都是一次处理任务的技术状态，不能成为文档节点或语义拆分依据。完整后端规则见[模型后端系统](backend-system.md)。
 
-描述文档来自哪一个音频及其时间范围：
+## 处理记录
 
-- `audio_asset_id`：同一份原始音频的稳定 UUID；主文档以自身 UUID 作为默认来源标识。
-- `audio_path`：原始音频路径或项目内相对路径。
-- `recorded_at`：录音发生时间，可为空。
-- `start_ms`、`end_ms`：文档在原始音频中的范围；根文档可以覆盖全长。
-- 输入音频 checksum：当前写入 `processing.latest.input_audio_checksum`，不以路径作为内容身份。
-
-子文档当前必须保留根文档的 `audio_asset_id`；项目树保留最多三层。子文档时间范围与内部链接的精确约束列入 roadmap，当前不作为 application 写回的强校验。
-
-### `hierarchy: DocumentHierarchy`
-
-保存文档声明的关系：
-
-- `parent_id`：可为空。
-- `sibling_order`：同级稳定排序。
-- `depth`：当前保存并检查声明值，自动派生和修复列入 roadmap。
-- `internal_links`：正文或状态中的文档引用；结构化链接模型和目标校验列入 roadmap。
-
-根节点为第 1 层，子文档最多到第 3 层。当前实现保留三层上限和基础关系错误报告；更强的循环、缺失父节点、来源范围和内部链接一致性校验列入 roadmap，不能在没有明确 schema 的情况下扩展为新的强约束。
-
-### `document_status: DocumentStatus`
-
-这是知识文档的持久化工作流状态，不是音频处理状态。字段已经存在，当前以可扩展字符串值保存，例如收件、整理中、待复核、已定稿或归档。其语义由用户或 Agent 按 Skill 约定，MeetNote 不固定枚举。
-
-`document_status` 必须独立于 `processing`。处理完成后它仍然存在；重新处理音频不得把它重置为默认值；处理失败不得覆盖 Agent 已经写入的标题、标签、总结或正文。
-
-当前缺口不是状态模型，而是写回边界：`DocumentPatch` 和内部 document service 需要提供显式的状态更新入口，并通过同一 revision 校验保存。状态迁移历史和状态值 schema 暂不属于当前版本。
-
-### `content: DocumentContent`
-
-保存语义整理结果的索引元数据：
-
-- `title`
-- `tags`
-- `summary`
-- `content_kind` 和结构化 `links` 尚未进入当前 v2 结构，列入 roadmap。
-
-MeetNote 不判断标题、标签、总结和拆分边界是否“语义正确”。它只校验 JSON 结构、关系安全、版本和文件写入原子性。
-
-### `processing: ProcessingRecord`
-
-处理成功后只保留完成记录和不可变的运行来源，不保留一个需要持续维护的“正在处理项目状态”：
+`processing.latest` 只描述当前结果：
 
 ```text
 ProcessingRecord
-├── processing_revision
-├── completed_at
+├── processing_revision / completed_at_ms
 ├── input_audio_checksum
 ├── asr: ModelProvenance
 ├── diarization
-│   ├── segmentation: ModelProvenance
-│   ├── embedding: ModelProvenance
-│   ├── clustering: AlgorithmProvenance
-│   └── identity_matching: IdentityMatchingProvenance
-├── alignment: AlgorithmProvenance
-└── runtime: RuntimeProvenance
+│   ├── backend_id / model_revision
+│   ├── segmentation / embedding
+│   ├── clustering
+│   └── identity_matching
+├── alignment
+└── runtime
+    ├── device / language / sample_rate_hz
+    ├── threads / expected_speakers
+    └── windowing
 ```
 
-`ModelProvenance` 当前包含 `backend_id`、`model_id`、`revision`、已安装 artifact 的聚合 SHA-256、
-解析后的 artifact 路径，以及逐 artifact 的期望 checksum、实际 checksum 和 archive member。
-`RuntimeProvenance` 包含采样率、语言、设备、线程和 expected speakers 等影响结果的参数。
+`results.transcript` 保存 ASR 时间段，`results.diarization` 保存匿名 cluster 与可选 profile 标识，`results.speaker_segments` 保存对齐后的 speaker-labelled transcript。语义正文可以引用这些结果，但不能代替它们。
 
-diarization 不强行假设有三个神经网络模型：segmentation 和 embedding 通常是模型，clustering 通常是 AHC/PLDA/VBx 算法及其参数；speaker identity matching 还需要记录 embedding space、profile library schema 和阈值。若某后端确实使用 clustering 模型，则在 `clustering` 中记录 `ModelProvenance`，否则记录 `AlgorithmProvenance`。
-
-重新处理属于同一音频项目的再次生成。当前策略是直接替换 `processing.latest` 和当前处理结果，不保留旧处理记录或旧结果版本；如果用户需要另一套结果，应创建新的文档项目。处理记录只服务于当前结果的可追溯性。
-
-### `results: ProcessingResults`
-
-结果与语义内容分层保存：
-
-- `transcript`：当前处理生成的 ASR 段及其时间戳。
-- `diarization`：原始 speaker 段及 cluster/profile 标识。
-- `speaker_segments`：应用层将 ASR 与 diarization 对齐后的结果。
-- `markdown_path`：当前 Markdown 输出引用。
-
-未来可以把结果拆到文档包内部的独立文件，但当前 v2 将结果内嵌在 `state.json`，语义总结和人工修正更新文档内容，不作为另一个处理版本保存。
-
-## `processing_state` 与 `document_status`
-
-`processing_state` 只描述一次音频处理任务的运行过程：
+## 三层项目树
 
 ```text
-queued -> running -> completed
-                   ├-> failed
-                   └-> cancelled
+根文档                     depth 0
+└── 语义子文档             depth 1
+    └── 语义子文档         depth 2
 ```
 
-它属于 `JobRuntime` 的短生命周期状态。任务成功后，从运行时移除；文档只写入 `ProcessingRecord.completed_at` 和模型/运行元数据。任务失败或进程中断时，运行时报告失败事件，当前不会把未完成任务恢复成可继续的处理任务，也不得把它误当成文档工作流状态。
+MeetNote 写入关系时必须拒绝：
 
-当前代码中的 `ProjectStatus::{Imported, Processing, Ready, Failed}` 已不再作为持久化字段；`processing_status()` 只根据 `processing.latest` 与 `processing.last_error` 为旧 UI 提供兼容投影。运行时任务状态应继续由 JobRuntime 提供。
+- 第四层。
+- 自身父节点或循环。
+- 不存在的父节点。
+- 不同 `audio_asset_id` 之间的父子关系。
+- 非法或空的子文档时间范围。
 
-目标分层由以下部分组成：
+扫描外部修改时检查目录 ID、schema、重复 ID、父节点、循环、来源、声明深度和三层上限。无效文档保留为可定位 issue，不得静默生成另一棵树。
 
-1. `JobRuntime` 的处理任务状态，负责队列、进度、取消、失败、完成、任务查询和阻塞 worker 并发限制。
-2. `DocumentState.processing`，只负责当前已完成处理记录；当前写入 `latest`、输入 checksum、模型/算法来源和运行参数。
-3. `DocumentState.document_status`，负责独立的知识文档工作流状态。
+拖动到目标内部表示 reparent；拖动到目标前后表示同级 reorder。关系写回必须更新文档 JSON，而不是只修改 UI 内存。跨多个文档的事务一致性、严格的时间范围包含关系和结构化内部链接仍属于生产化计划。
 
-验收必须覆盖：成功处理后重启不自动重新处理；处理完成时间、ASR 模型、diarization stage、clustering 算法和运行参数可从 `state.json` 读取；处理失败不改变 `document_status`；重新处理后只保留当前结果。
+## 子项目分割标准
 
-## Skill-first Agent 边界
+语义分割只由 Assistant 或外部 Agent 按 Skill 发起：
 
-MeetNote 不把外部 Agent 锁定在一个强约束的 command ABI 上。Agent 的主协作方式是读取 Skill 指导，直接操作可读的 Markdown/JSON 文档包，再由 MeetNote 监听、校验和刷新派生视图。
+1. 读取根文档完整 transcript、diarization、speaker alignment 和当前 revision。
+2. 决定语义边界、标题、标签、总结与父节点。
+3. 为子文档提供非空时间范围，继承相同音频路径与根 `audio_asset_id`。
+4. MeetNote 从父文档复制与时间范围相交的 transcript、diarization 和 speaker segments。
+5. MeetNote 校验 revision、来源、循环和三层上限后保存并刷新项目树。
 
-Skill 必须明确：
+声学静音、speaker 切换、ASR 窗口边界和 embedding cluster 都不能直接等同于语义边界。
 
-- 文档包布局和可读字段。
-- 哪些字段由 Agent/用户维护，哪些字段由 MeetNote 写入。
-- 如何决定语义拆分、标题、标签、总结、父子关系和内部链接。
-- 如何保留原始音频、ASR、diarization 和处理记录。
-- 写回前如何使用 `revision`，写回后如何检查扫描错误。
-- 创建子文档时如何满足同一音频来源和最多三层规则。
+## `document_status`
 
-MeetNote 当前强制执行 schema、UUID、版本冲突、原子写入、三层上限，以及基础的循环、缺失父节点和跨音频来源检查。子文档时间范围、内部链接模型和更强的关系一致性规则列入 roadmap；它不强制执行 Skill 的语义字段枚举，也不判断 Agent 的总结质量。
+`document_status` 是持久化的知识工作流状态，当前为非空字符串，默认值是 `inbox`。具体值由用户或 Skill 约定，例如整理中、待复核、定稿或归档；MeetNote 不固定状态枚举，也不根据状态自动执行语义工作。
 
-当前 `application::DocumentCommandService` 保留为 GPUI 和未来适配器使用的内部应用边界。它不是外部 Agent 必须实现的公共协议；任何 CLI、IPC 或 Agent adapter 都必须最终复用同一 document service、同一权限和同一校验规则。
+它与处理任务严格分离：
 
-## 当前实现与 roadmap
+- `JobRuntime::JobState`：一次运行中的 queued/running/completed/failed/cancelled。
+- `processing.latest`：处理成功后的模型、算法和运行来源。
+- `processing.last_error`：最近一次处理失败信息。
+- `document_status`：长期文档工作流状态。
 
-已完成：分层 v2、旧扁平状态迁移、当前处理记录、文档状态字段、文档包原子保存和基础三层树。
+更新 `document_status` 使用与正文相同的 revision 检查。处理成功、失败、取消和重新处理都不得重置它。
 
-已完成：catalog revision、逐 artifact checksum、diarization stage provenance、显式 document status 更新、JobRuntime 任务状态和下载后快速 backend probe。
+## Assistant 与外部 Agent
 
-roadmap：结果外部文件化、内部链接模型、子文档时间范围约束、深度自动派生、强关系一致性校验。旧扁平结构只存在于读取迁移逻辑中。
+Assistant 是内置 Agent 客户端，外部 Agent 是可替换客户端；两者必须使用相同文档权限和校验规则。
+
+```text
+Skill + Agent
+  -> 读取 Markdown/JSON 与 revision
+  -> 形成查询或写回意图
+  -> application/document service
+  -> schema、revision、来源与三层校验
+  -> 文档包保存
+  -> watcher 刷新派生树
+```
+
+`DocumentCommandService` 提供 list、read、create、update、create semantic child、reparent 和 reorder 的内部应用边界，但不是外部 Agent 必须绑定的 ABI。CLI、IPC 或其他 adapter 必须复用相同 service；不得直接改写 MeetNote 管理的 processing/results 字段。
+
+当前 Assistant 只通过 document service 读取列表并显示占位反馈，外部 Agent adapter 尚未实现。接入进度见[工程实施计划](../plan/implementation-plan.md)。
