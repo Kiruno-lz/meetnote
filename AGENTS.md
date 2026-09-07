@@ -123,6 +123,7 @@ cargo test --workspace
 - [架构决策](docs/architecture/decisions.md)：不可偏离的长期约束。
 - [工程实施计划](docs/plan/implementation-plan.md)：完成度、生产化缺口和验收顺序。
 - [GPUI UI 计划](docs/plan/ui-plan.md)：界面边界、当前状态和后续步骤。
+- [Assistant 构建计划](docs/plan/assistant-plan.md)：Agent 场景、协议 adapter、工具边界、写回策略和验收阶段。
 - [Diarization 三阶段研究](docs/reserch/diarization-native-three-stage.md)：native pipeline 选型依据。
 - [语音模型与 Rust runtime 研究](docs/reserch/voice-models-and-rust-runtimes.md)：模型格式与 runtime 依据。
 - [长音频离线分窗研究](docs/reserch/audio-streaming-and-semantic-splitting.md)：长音频、聚类与语义边界依据。

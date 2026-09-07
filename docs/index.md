@@ -12,6 +12,7 @@
 
 - [工程实施计划](plan/implementation-plan.md)：当前完成度、生产化缺口和验收顺序。
 - [GPUI UI 计划](plan/ui-plan.md)：现有 UI、目标信息架构和后续工作。
+- [Assistant 构建计划](plan/assistant-plan.md)：Agent 场景、Skill/Tool/validator 边界、LiteLLM 协议 adapter、写回策略和分阶段验收。
 
 ## 研究依据
 

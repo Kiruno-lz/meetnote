@@ -53,8 +53,8 @@ P0 完成条件：长音频受控并发和资源上限可证明；任意写入�
 - 明确音频资产是外部引用还是项目托管，并实现缺失文件检测与恢复入口。
 - 完成标题、标签、总结、Markdown、`document_status`、revision 和 provenance 的查看/编辑 UI。
 - 完成 Speaker Library 候选确认、enrollment、样本追加、profile merge/split 与证据查看。
-- 接入至少一个 Assistant/provider，并提供一个外部 Agent adapter；两者复用同一 document service。
-- Agent 写回必须先预览再确认，且不能修改 processing/results 所有权字段。
+- 按[Assistant 构建计划](assistant-plan.md)接入 LiteLLM、三类协议 adapter 和外部 Agent adapter；内置与外部 Agent 复用同一 tool、validator 和 document application 边界。
+- Agent 写回默认自动执行，并可在 settings 切换为逐次确认；两种模式都不能修改 processing/results 所有权字段。
 - 将 identity matching 实际阈值、模型 license 和来源快照写入处理 provenance。
 
 P1 完成条件：用户可以从选择工作区、导入音频、安装模型、处理、语义整理、人工校正到重启恢复，完成一个不依赖开发工具的闭环。
