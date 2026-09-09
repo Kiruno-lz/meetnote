@@ -2,17 +2,21 @@
 
 ## 当前架构
 
-- [系统架构总览](architecture/overview.md)：产品边界、数据流、crate 分区和依赖方向。
+- [系统架构总览](architecture/overview.md)：Workspace Host、Audio Host、Agent Host、GPUI UI，以及现有 crate 的归属和依赖方向。
+- [Workspace Host](architecture/workspace-host.md)：文件事实、窄操作、外部编辑与恢复。
+- [Agent Host](architecture/agent-host.md)：会话 backend、事件与场景分工。
+- [Extension](architecture/extension-system.md)：服务注册、依赖、生命周期与执行载体。
 - [模型管理](architecture/model-management.md)：catalog、下载、安装、校验和 probe 生命周期。
-- [文档与音频项目模型](architecture/document-model.md)：文档包、音频处理结果、三层项目树和 Agent 协作。
-- [模型后端系统](architecture/backend-system.md)：兼容层接口、具体 ASR/diarization backend 和长音频协议。
+- [文档状态与音频项目模型](architecture/document-state.md)：文档包、音频处理结果、三层项目树和 Agent 协作。
+- [Audio Host 与模型后端](architecture/audio-host.md)：兼容层接口、具体 ASR/diarization backend 和长音频协议。
 - [架构决策](architecture/decisions.md)：当前必须长期保持的设计约束。
 
 ## 实施计划
 
+- [架构对齐计划](plan/architecture-alignment.md)：当前架构进度、职责收敛、保留项和最小实施步骤。
 - [工程实施计划](plan/implementation-plan.md)：当前完成度、生产化缺口和验收顺序。
 - [GPUI UI 计划](plan/ui-plan.md)：现有 UI、目标信息架构和后续工作。
-- [Assistant 构建计划](plan/assistant-plan.md)：Agent 场景、Skill/Tool/validator 边界、LiteLLM 协议 adapter、写回策略和分阶段验收。
+- [Assistant 构建计划](plan/assistant-plan.md)：文档场景、共享 Workspace 工具、Built-in 模型层与验收。
 
 ## 研究依据
 

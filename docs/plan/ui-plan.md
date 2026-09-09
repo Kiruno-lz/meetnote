@@ -29,6 +29,8 @@ MeetNote
 
 ## 当前状态
 
+下表描述当前 UI。Assistant 当前只有输入和文档列表占位交互；场景、授权文档、连接测试、结果、confirm/undo 和凭据设置属于后续实现范围。
+
 | 区域 | 已实现 | 当前缺口 |
 |---|---|---|
 | Application shell | 四个入口、暗色主题、基础路由 | 最终视觉、键盘导航与完整无障碍 |
@@ -38,7 +40,7 @@ MeetNote
 | Models | catalog 分组、下载、暂停、继续、取消和进度 | license/source 展示、probe 结果和安装问题诊断 |
 | Settings | locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径 | 文档工作区路径、能力联动说明和完整校验反馈 |
 
-当前 UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。Assistant 仍是占位客户端。
+UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。Assistant 尚缺 provider、通用 session、统一 JobRuntime 与实时阶段事件投影。
 
 ## Documents
 
@@ -64,7 +66,7 @@ Detail 作为右侧悬浮面板，展示 identity、audio source、hierarchy、d
 
 ```text
 输入请求
-  -> Agent/provider + Skill
+  -> Agent Host / backend + profile/Skill
   -> 读取文档
   -> 查询结果，或 typed write tool
   -> settings write policy：自动执行或用户确认
@@ -76,7 +78,8 @@ Detail 作为右侧悬浮面板，展示 identity、audio source、hierarchy、d
 - 修改标题、标签、总结、正文、状态或树关系时，automatic 模式直接执行并显示结果与撤销入口；confirm_each 模式在执行前显示明确 diff/proposal。
 - Assistant 与外部 Agent 使用相同 document service，不允许直接编辑 processing/results。
 - provider 不可用时保留文档管理能力，并显示可操作的配置错误。
-- connection profile、协议、模型和写回策略统一保存在 Settings；完整行为与验收见[Assistant 构建计划](assistant-plan.md)。
+- 区分 Agent backend、session 与文档 profile；恢复/流式等能力按 backend 真实支持情况显示。
+- Built-in connection profile、协议、模型和写回策略统一保存在 Settings；完整行为与验收见[Assistant 构建计划](assistant-plan.md)。
 
 ## Models
 
@@ -95,7 +98,7 @@ Detail 作为右侧悬浮面板，展示 identity、audio source、hierarchy、d
 - ASR：backend、model、transcription language。
 - Diarization：backend、model、segmentation、embedding、clustering、expected speakers。
 - Runtime：Auto/CPU/Metal/CoreML 与 backend 能力提示。
-- Assistant：LiteLLM connection profile、协议、模型、credential reference、写回策略与 Agent loop 上限。
+- Assistant：Agent backend 与 profile；Built-in 使用现有 LiteLLM connection、协议、模型、credential reference 与 loop 上限；Workspace 写回策略独立于 backend。
 
 UI locale 与 transcription language 独立。backend 不支持的设备或 stage 不显示为有效选择；修改后立即保存时必须给出成功或失败反馈。
 
@@ -105,7 +108,7 @@ UI locale 与 transcription language 独立。backend 不支持的设备或 stag
 2. 将全部树和文档写回切换到 revision-aware document service，并补齐冲突 UI。
 3. 完成通用文档编辑、speaker 校正和 Speaker Library 管理。
 4. 增加可选择的文档工作区与音频缺失恢复。
-5. 按 Assistant 构建计划接入 LiteLLM、查询结果、自动写回与可选确认。
+5. 按架构对齐计划实现 Assistant UI，接入 Host 会话、JobRuntime 事件和 Workspace 结果；模型失败后仍显示已提交修改与 undo。
 6. 补齐 Models 的 license、来源、probe 与失败诊断。
 7. 完成键盘、焦点、无障碍、视觉系统和端到端 GPUI 验收。
 

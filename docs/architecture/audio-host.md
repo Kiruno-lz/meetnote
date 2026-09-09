@@ -1,4 +1,6 @@
-# 模型后端系统
+# Audio Host 与模型后端系统
+
+Audio Host 是 MeetNote 四个基础层之一，负责音频事实、处理编排、模型资源和 ASR/diarization provider；它通过 Workspace 保存结果，通过 Agent capability 接受显式调用。
 
 ## 目标
 
@@ -11,6 +13,14 @@ application
 ```
 
 模型来源、安装和 checksum 由 `models` crate 管理，见[模型管理](model-management.md)。
+
+## Audio Host 与扩展边界
+
+Audio Host 是现有 application processing、audio、模型管理与专用 provider 的逻辑集合，不要求新增同名 crate。保留现有 adapter/backend 链路；provider contract 决定能做什么，Extension lifecycle 决定实现如何注册、启动、停止与分发，见[扩展系统](extension-system.md)。
+
+当前公开替换点是 ASR 与 diarization；native segmentation/embedding/clustering stage 配置不是独立通用 provider。只有出现独立消费者、替换需求与明确的输出/模型兼容规则后，才提取 VadProvider、EmbeddingProvider 或 enhancement contract，不一次拆开全部 pipeline。
+
+原生 Rust、C/C++ FFI、GPU runtime 是现有实现基础；未来 provider 可以使用受管理的外部 Python/native 进程或云 API。它们须归一化输出、传播取消与错误，说明资源和数据传输；不恢复旧混合主程序。模型下载仍由 models 管理，云 provider 需明确服务/模型来源，不能伪造本地 artifact checksum。
 
 ## ASR 兼容层
 
