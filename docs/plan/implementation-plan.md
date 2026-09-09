@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-MeetNote 已完成 Rust-native 核心架构和主要纵向处理链路，当前处于生产化前的功能收敛阶段。
+MeetNote 已有 Rust-native 核心分层和主要音频处理链路，当前进行职责对齐与生产化收敛；架构迁移顺序见[架构对齐计划](architecture-alignment.md)。
 
 | 能力 | 状态 |
 |---|---|
@@ -15,7 +15,8 @@ MeetNote 已完成 Rust-native 核心架构和主要纵向处理链路，当前�
 | 短音频整文件 pipeline | 已完成 |
 | 长音频离线分窗与 native 全局聚类 | 已完成技术链路 |
 | GPUI 文档、模型、设置和处理界面 | 功能脚手架 |
-| Assistant / external Agent | 只有内部边界和占位客户端 |
+| Assistant / external Agent | Assistant 为占位客户端；工具、Skill、LLM adapter 与通用 Host 尚待实现 |
+| 通用 Agent Host / Extension 生命周期 | 未实现；目标不等于当前能力 |
 | 长音频资源、精度、故障与发布验收 | 未完成 |
 
 基础验证：
@@ -39,8 +40,9 @@ cargo test --workspace
 
 ### 文档一致性
 
-- 为 `state.json + document.md` 提供文档包级提交或恢复协议。
-- 为 reparent/reorder 等多文档写回提供原子批次、journal 或可验证回滚。
+- 为 Workspace 文档包提交增加并验证 mutation journal，覆盖所有受管理写路径。
+- 在已有多文档 batch/journal 基础上验证跨进程互斥、恢复所有权、外部编辑冲突和普通附件保留，不把实例内锁当作工作区锁。
+- 为源音频、Markdown、项目 JSON 和 Speaker Library 固化不可删除资产边界；为全文索引、embedding index 和搜索缓存定义 stale、删除与重建测试。
 - 所有 UI 写回统一使用 revision-aware document service。
 - 在正常文档工作区展示 scanner issue 的路径和原因。
 - 校验子文档时间范围包含关系、稳定 ID 格式和结构化内部链接。
@@ -53,7 +55,8 @@ P0 完成条件：长音频受控并发和资源上限可证明；任意写入�
 - 明确音频资产是外部引用还是项目托管，并实现缺失文件检测与恢复入口。
 - 完成标题、标签、总结、Markdown、`document_status`、revision 和 provenance 的查看/编辑 UI。
 - 完成 Speaker Library 候选确认、enrollment、样本追加、profile merge/split 与证据查看。
-- 按[Assistant 构建计划](assistant-plan.md)接入 LiteLLM、三类协议 adapter 和外部 Agent adapter；内置与外部 Agent 复用同一 tool、validator 和 document application 边界。
+- 提供首批 Workspace capability port，让插件通过受控接口访问读取、搜索、索引构建和订阅能力；不开放任意文件系统操作。
+- 按[架构对齐计划](architecture-alignment.md)先建立 Built-in 最小会话与共享 Workspace 能力，再实现 LLM adapter、CLI 并验证 Codex/Claude Code backend；文档场景见[Assistant 计划](assistant-plan.md)。
 - Agent 写回默认自动执行，并可在 settings 切换为逐次确认；两种模式都不能修改 processing/results 所有权字段。
 - 将 identity matching 实际阈值、模型 license 和来源快照写入处理 provenance。
 

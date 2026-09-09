@@ -6,7 +6,7 @@ MeetNote 的项目是由音频事实派生的 AI 可读文档，不是固定的�
 
 MeetNote 负责保存和校验事实，Agent 负责判断语义。音频必须先完成完整 ASR、diarization 与对齐，语义拆分不能截断或替代原始结果。
 
-## 存储架构
+## 工作区文件结构
 
 ```text
 data/
@@ -14,6 +14,8 @@ data/
 │   └── <document-id>/
 │       ├── document.md
 │       └── state.json
+├── assets/
+├── indexes/
 ├── settings/settings.json
 └── speakers/library.json
 models/
@@ -22,10 +24,14 @@ models/
 
 - `document.md`：面向用户和 Agent 的正文。
 - `state.json`：身份、音频来源、层级、工作流状态、当前处理记录和当前处理结果。
-- `settings`、模型缓存和 Speaker Library 是独立运行资产，不是项目树事实。
-- 当前音频导入保存源文件路径，不复制音频；音频资产托管和丢失恢复属于生产化计划。
+- `assets/` 源音频。也可以暂时以外部引用表达，记录其 checksum 和缺失状态。
+- `indexes/` 只保存可重建的全文、embedding、解析和搜索缓存。
+- `settings`、模型缓存和 Speaker Library 是独立运行资产，不是项目树事实；Speaker Library 本身是不可删除资产，不能被当作索引缓存清理。
+- 当前音频导入仍可保存源文件路径，不复制音频；要满足不可删除资产的完整生命周期，需要补齐音频托管、checksum 和丢失恢复。
 
-文档目录是唯一事实来源。列表、查询视图和项目树通过扫描重建，文件变化通过 watcher 触发刷新；不得增加 SQLite、全局 project store 或无法从文档恢复的权威索引。
+//TODO - 为源音频增加明确的 asset manifest、checksum 和托管/外部引用状态；用移动、缺失、恢复和重建测试验证不可删除资产的生命周期语义。
+
+项目资产文件是唯一事实来源。列表、查询视图和项目树通过扫描重建，文件变化通过 watcher 触发刷新；索引只提供查询加速，删除或损坏后必须能从资产重建。文件生命周期、外部编辑与历史保留见[Workspace Host](workspace-host.md)。
 
 ## `DocumentState`
 
@@ -88,7 +94,7 @@ DocumentState
 
 达到 30 分钟或无法预估长度时启用离线分窗：连续解码为 16 kHz mono，以 60 秒 valid core 和前后各 15 秒 context 构造窗口。ASR 负责模型族特有的拼接；native diarization 保存窗口 inference artifact，在全录音范围执行一次匿名 speaker 聚类，再裁剪 valid core、匹配 Speaker Library 并对齐。
 
-窗口、局部 speaker track、VAD、embedding observation 都是一次处理任务的技术状态，不能成为文档节点或语义拆分依据。完整后端规则见[模型后端系统](backend-system.md)。
+窗口、局部 speaker track、VAD、embedding observation 都是一次处理任务的技术状态，不能成为文档节点或语义拆分依据。完整后端规则见[Audio Host 与模型后端](audio-host.md)。
 
 ## 处理记录
 
@@ -131,7 +137,7 @@ MeetNote 写入关系时必须拒绝：
 
 扫描外部修改时检查目录 ID、schema、重复 ID、父节点、循环、来源、声明深度和三层上限。无效文档保留为可定位 issue，不得静默生成另一棵树。
 
-拖动到目标内部表示 reparent；拖动到目标前后表示同级 reorder。关系写回必须更新文档 JSON，而不是只修改 UI 内存。跨多个文档的事务一致性、严格的时间范围包含关系和结构化内部链接仍属于生产化计划。
+拖动到目标内部表示 reparent；拖动到目标前后表示同级 reorder。关系写回必须更新文档 JSON，而不是只修改 UI 内存。多文档事务、严格时间范围包含关系和结构化内部链接仍需补齐；Agent mutation 已有事务与范围校验，但尚不能代表所有写入路径，见[Workspace 恢复边界](workspace-host.md)。
 
 ## 子项目分割标准
 
@@ -161,17 +167,12 @@ MeetNote 写入关系时必须拒绝：
 ## Assistant 与外部 Agent
 
 Assistant 是内置 Agent 客户端，外部 Agent 是可替换客户端；两者必须使用相同文档权限和校验规则。
+使用同一套Agent Capability API
 
 ```text
-Skill + Agent
-  -> 读取 Markdown/JSON 与 revision
-  -> 形成查询或写回意图
-  -> application/document service
-  -> schema、revision、来源与三层校验
-  -> 文档包保存
-  -> watcher 刷新派生树
+read / write
+create / move
+search / patch
 ```
 
 `DocumentCommandService` 提供 list、read、create、update、create semantic child、reparent 和 reorder 的内部应用边界，但不是外部 Agent 必须绑定的 ABI。CLI、IPC 或其他 adapter 必须复用相同 service；不得直接改写 MeetNote 管理的 processing/results 字段。
-
-当前 Assistant 只通过 document service 读取列表并显示占位反馈，外部 Agent adapter 尚未实现。接入进度见[工程实施计划](../plan/implementation-plan.md)。
