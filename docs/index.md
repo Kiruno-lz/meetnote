@@ -4,7 +4,7 @@
 
 - [系统架构总览](architecture/overview.md)：Workspace Host、Audio Host、Agent Host、GPUI UI，以及现有 crate 的归属和依赖方向。
 - [Workspace Host](architecture/workspace-host.md)：文件事实、窄操作、外部编辑与恢复。
-- [Agent Host](architecture/agent-host.md)：会话 backend、事件与场景分工。
+- [Agent Host](architecture/agent-host.md)：Capability API、最小 Tool Loop 与场景分工。
 - [Extension](architecture/extension-system.md)：服务注册、依赖、生命周期与执行载体。
 - [模型管理](architecture/model-management.md)：catalog、下载、安装、校验和 probe 生命周期。
 - [文档状态与音频项目模型](architecture/document-state.md)：文档包、音频处理结果、三层项目树和 Agent 协作。

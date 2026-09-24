@@ -1,50 +1,35 @@
 # Agent Host
 
-Agent Host 是 MeetNote 四个基础层之一；它通过 Workspace 和 Audio 的显式 capability 工作，不能替代这两个 Host。
+Agent Host 的核心是 Capability API 的绑定与薄适配，不是完整 Agent 系统。MeetNote 不管理 Codex / Claude Code 的 Session、Context 和 Loop；外部 Agent 使用自己的运行能力经 Agent Host 调用 MeetNote capability；验收必须穿过 Host 分发层，不能用直调服务或独立 capability CLI 代替。Built-in 只提供有限 Tool Loop，Assistant 是其 GPUI 入口。
 
-## 职责
+## 职责与依赖
 
-Agent Host 是通用 Agent backend 的会话运行边界。初始目标 backend 为 Built-in Agent、Codex 和 Claude Code；不按日记、会议或课程创建专用 runtime。
+Workspace、Audio、Settings 分别拥有具体操作、typed contract、validator 和结果。Agent Host 为消费者绑定已经授予的 capability，将模型 tool call 或外部 wire 请求映射到服务调用；不执行文档规则、音频算法或配置写入。插件通过同一 port 访问这些服务，核心服务不需要成为插件才能被调用。
 
-Host 管理 session ID、backend session 映射、workspace 关联、创建/恢复/关闭、发送输入、取消、运行状态、能力描述与归一化事件。backend 负责自身协议与进程/连接生命周期。JobRuntime 负责一次运行的调度、进度和受控 worker；会话可以跨多次运行存在，两者不能混为一个 ID 或互相复制调度逻辑。
+一次 Built-in 输入只需当前运行消息、工具结果、有限轮次、取消和可用 usage。JobRuntime 负责长任务调度、进度、取消与受控并发；Host 不另建 worker 调度器。外部 Agent 不需要 MeetNote session 才能发现和调用能力。
 
-## 与现有代码的关系
+## 最小规范化层
 
-当前代码提供 `llm` provider 描述边界、文档 application 服务和 Assistant 占位客户端；通用 `AgentRuntime`、AgentGateway、JSON 工具 CLI、三种 LLM adapter 与桌面 Agent 会话仍属于待实现能力。本节规定它们未来的职责，不能当作当前 API。
+各 capability 服务拥有输入、输出、错误与事件 payload，复用小型公共关联 envelope：版本、request/call ID、能力标识、结果或错误；长任务包含 job ID。事件关联同一次调用，顺序与终止明确。
 
-- LLM provider 和协议 adapter 属于 Agent Host 的模型连接层；调用 Claude 模型不等于运行 Claude Code，外部 Codex 调用 MeetNote CLI 也不等于 MeetNote 已托管 Codex session。
-- Agent runtime 需要承担 loop、取消、usage 和阶段进度，但不应把 `AgentScene` 固定成所有 backend 的通用领域枚举；context 与 Map/Reduce 属于文档场景层。
-- Agent gateway 未来可以汇集文档工具、Skill、scope 与调用协调，但文档执行与 validator 必须归 Workspace；Skill 选择与场景上下文归 profile/场景层。
-- 当前没有通用 create/resume session 或跨 backend 流式事件协议；统一事件只能声明 backend 真实支持的能力。
+服务错误保持所属 contract 的固定 code：Workspace 使用 Rust `AgentErrorCode`，Audio/Settings adapter 分别使用 `AUDIO_*`/`SETTINGS_*` code（包括 Audio 授权拒绝 `AUDIO_ACCESS_DENIED`），并只在明确可重试的 revision、锁或运行时失败上标记 retryable；Host 不通过解析自然语言 message 判断修正策略。Audio/Settings descriptor 暴露 operation、side effect、long-running 和输入 schema 元数据。
 
-## 目标契约
+Workspace port 已归一化的事件直接复用，Agent Host 不再转换成第二份业务事件格式。CLI/MCP 等 adapter 只做 wire 映射；LLM adapter 只归一化模型消息与 tool call。首版可以返回完整文本，不伪造 token streaming，也不为接工具而解析外部 Agent 的完整事件流。
 
-以下为待实现的语义要求，不固定 Rust 名称或外部 wire schema：
+授权由 Host 授予，Skill 和请求只能收窄能力。取消阻止后续调用，已经提交的 receipt 必须独立保留；失败、超时、解释生成失败都不能隐藏副作用。confirm/reject/undo 的校验与执行归所属服务。
 
-| 操作/数据 | 要求 |
-|---|---|
-| backend descriptor | backend/model 标识、可用性、恢复、输入、流式与工具能力；不支持的能力明确报告 |
-| create / resume / close | host session 与 backend session 分离；恢复失败可定位，不能伪装为成功续接 |
-| send input / cancel run | 每次输入关联 run；取消终止继续生成与新工具调用，已经提交的文档修改仍需返回 receipt |
-| context / capability binding | 显式 workspace ID、profile/Skill 与服务授权；选择 Skill 不扩大授权 |
-| normalized events | session/run ID、递增序号、状态、输出、工具请求/结果、usage、错误与终止；无法归一化的 backend 信息留明确 metadata |
+## Built-in 与场景
 
-先支持内置 backend 能真实提供的事件；不支持 token streaming 时可以发送完整消息事件。不得通过切分完整文本伪造实时流。消费端慢、取消与终止后不再发事件的行为属于契约验收。
+Built-in 循环为：请求模型、解析工具调用、执行已授权 capability、回传结果，直到模型完成、轮次耗尽或取消。工具串行，错误修正有界，不建设通用 Harness、长期记忆、自动压缩、规划器、多 Agent 或跨 backend session/resume/replay。
 
-如需重启恢复，记录可版本化的会话元数据和追加事件历史；最初只持久化实际支持的恢复信息。日志不是确定性重放承诺，重放不能再次提交写工具；模型输出、远程 session 和副作用不能仅靠事件重新生成。凭据不进入事件正文，历史保留策略需与用户数据一起定义。
+LLM 模型层支持 Chat Completions、Anthropic Messages、OpenAI Responses；LiteLLM 是兼容连接路径，不是外部 Agent 的依赖。连接配置和 API key/API key file 归 Settings；Capability 对外 snapshot 脱敏 API key/API key file，不使用操作系统 credential store。
 
-## 能力与场景组合
+Skill/profile 描述语义目标；Workspace 提供投影、有界读取、语义结果提交和事实校验。Map/Reduce 等多步语义策略归外部 Agent 或可选场景插件，不进入核心 loop。文档、Audio、Settings 能力不依赖固定 AgentScene。
 
-```text
-backend + profile/config + Skills + granted tools + output schema
-  -> 文档问答 / 整理 / 日记 / 课程等场景
-  -> Workspace 或 Audio 服务
-```
+## 当前验收目标
 
-文档 context projection、segment 选取、语义 Map/Reduce、摘要与拆分策略不进入 Host。保留现有五种 Skill 与工具作为文档场景，固定 `AgentScene` 不成为所有 backend 和扩展的通用枚举。Rust argument 类型继续作为工具 schema 来源；领域 validator 继续裁决范围、来源和 revision。
+三个目标分别验收：完整 capability 接口化、Host 最短输入得到真实可解析回应、Codex（Luna medium）经 Host/真实 MoonBit 测试插件调用 capability 并纠错完成任务。有效非 200 响应可证明连通/解析，但不能证明完整任务成功。语义拆分属于后续插件扩展；质量由渐进 benchmark 独立验收，不加入 Host 内核。
 
-内置与外部客户端复用 Workspace 操作与错误语义，wire adapter 可以不同。现有 JSON CLI 先保留原有工具名；`workspace.patch_document` 是能力归属示意，不要求立即重命名 `update_document`。
+## 当前代码与调整
 
-Codex/Claude Code 接入前验证其真实会话、取消与工具桥接协议，再决定 adapter。若 backend 具有直接文件权限，服务授权不能限制其操作系统访问；集成时必须区分工具受控模式与直接文件编辑模式，后者走 Workspace 外部编辑校验。
-
-最小实施与验证见[架构对齐计划](../plan/architecture-alignment.md)，文档场景要求见[Assistant 计划](../plan/assistant-plan.md)。
+具体阶段、代码处置与验收见 [Assistant 计划](../plan/assistant-plan.md)，注册和载体边界见 [Extension](extension-system.md)。

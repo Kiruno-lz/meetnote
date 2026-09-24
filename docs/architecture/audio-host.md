@@ -18,6 +18,8 @@ application
 
 Audio Host 是现有 application processing、audio、模型管理与专用 provider 的逻辑集合，不要求新增同名 crate。保留现有 adapter/backend 链路；provider contract 决定能做什么，Extension lifecycle 决定实现如何注册、启动、停止与分发，见[扩展系统](extension-system.md)。
 
+`application::AudioCapabilityPort` 是面向 Assistant、外部 Agent 和插件的最小受控入口。它只接受授予的项目 ID，复用 `WorkspaceService` 的 probe 和 `ProjectProcessingJob`；模型、配置、任务进度和结果仍由 Audio/Workspace 服务负责，port 不开放任意音频路径或文件系统。
+
 当前公开替换点是 ASR 与 diarization；native segmentation/embedding/clustering stage 配置不是独立通用 provider。只有出现独立消费者、替换需求与明确的输出/模型兼容规则后，才提取 VadProvider、EmbeddingProvider 或 enhancement contract，不一次拆开全部 pipeline。
 
 原生 Rust、C/C++ FFI、GPU runtime 是现有实现基础；未来 provider 可以使用受管理的外部 Python/native 进程或云 API。它们须归一化输出、传播取消与错误，说明资源和数据传输；不恢复旧混合主程序。模型下载仍由 models 管理，云 provider 需明确服务/模型来源，不能伪造本地 artifact checksum。

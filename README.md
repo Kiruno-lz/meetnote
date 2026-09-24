@@ -39,8 +39,8 @@ models/                         本地模型缓存
       ┌─────────────┼─────────────┐
       ▼             ▼             ▼
 Workspace Host  Audio Host   Agent Host
-文档、文件、     解码、模型、    session、input、
-结构校验、恢复   provider、处理  event、backend
+文档、文件、     解码、模型、    capability 绑定、
+结构校验、恢复   provider、处理  薄适配、最小 loop
 
 详细边界见[架构总览](docs/architecture/overview.md)
 
