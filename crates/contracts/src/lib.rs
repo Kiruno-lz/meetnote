@@ -341,7 +341,7 @@ pub struct DocumentCommandIssue {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelRef {
     pub backend_id: String,
     pub model_id: String,
@@ -351,7 +351,7 @@ pub struct ModelRef {
     pub artifacts: Vec<ModelArtifactRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelArtifactRef {
     pub filename: String,
@@ -361,7 +361,7 @@ pub struct ModelArtifactRef {
     pub archive_member: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum ComputeDevice {
     Auto,
     Cpu,
@@ -630,7 +630,7 @@ pub struct DiarizationRequest {
     pub stage_configuration: DiarizationStageConfiguration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DiarizationStageConfiguration {
     #[serde(default)]
@@ -649,7 +649,7 @@ impl DiarizationStageConfiguration {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AlgorithmRef {
     pub id: String,

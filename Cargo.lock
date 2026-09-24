@@ -6671,9 +6671,11 @@ name = "settings"
 version = "0.1.0"
 dependencies = [
  "contracts",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "url",
 ]
 
 [[package]]
