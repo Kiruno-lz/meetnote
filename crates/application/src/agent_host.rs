@@ -547,6 +547,74 @@ fn service_for(request: &CapabilityCallRequest) -> CapabilityService {
     }
 }
 
+impl crate::AgentCapabilityInvoker for AgentHost {
+    fn execute(&self, tool_name: &str, request: CapabilityCallRequest) -> CapabilityCallResponse {
+        let mut request = request;
+        request.operation = tool_name.into();
+        self.dispatch(request)
+    }
+
+    fn prepare_arguments(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+        source_results: &[contracts::CapabilityCallResponse],
+    ) -> Value {
+        <WorkspaceCapabilityPort as crate::AgentCapabilityInvoker>::prepare_arguments(
+            &self.workspace,
+            tool_name,
+            arguments,
+            source_results,
+        )
+    }
+
+    fn provider_response(&self, response: &CapabilityCallResponse) -> CapabilityCallResponse {
+        <WorkspaceCapabilityPort as crate::AgentCapabilityInvoker>::provider_response(
+            &self.workspace,
+            response,
+        )
+    }
+
+    fn evidence_segment_ids(&self, response: &CapabilityCallResponse) -> Vec<String> {
+        <WorkspaceCapabilityPort as crate::AgentCapabilityInvoker>::evidence_segment_ids(
+            &self.workspace,
+            response,
+        )
+    }
+
+    fn mutation_receipts(
+        &self,
+        response: &CapabilityCallResponse,
+    ) -> Vec<contracts::AgentMutationReceipt> {
+        <WorkspaceCapabilityPort as crate::AgentCapabilityInvoker>::mutation_receipts(
+            &self.workspace,
+            response,
+        )
+    }
+
+    fn pending_mutation(
+        &self,
+        response: &CapabilityCallResponse,
+    ) -> Option<contracts::AgentPendingMutation> {
+        <WorkspaceCapabilityPort as crate::AgentCapabilityInvoker>::pending_mutation(
+            &self.workspace,
+            response,
+        )
+    }
+
+    fn referenced_evidence_ids(
+        &self,
+        answer: &crate::AgentAnswer,
+        known_evidence: &[String],
+    ) -> Vec<String> {
+        <WorkspaceCapabilityPort as crate::AgentCapabilityInvoker>::referenced_evidence_ids(
+            &self.workspace,
+            answer,
+            known_evidence,
+        )
+    }
+}
+
 fn parse_audio_arguments<T: DeserializeOwned>(
     arguments: &Value,
     operation: &str,

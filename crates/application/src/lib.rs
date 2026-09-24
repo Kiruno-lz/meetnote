@@ -14,6 +14,8 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 mod agent_host;
+mod assistant_runtime;
+mod assistant_skills;
 mod capabilities;
 mod document_commands;
 mod long_audio;
@@ -24,6 +26,14 @@ mod workspace_capability;
 pub use agent_host::{
     AgentHost, CapabilityBinding, AGENT_HOST_CAPABILITY_ID, AGENT_HOST_CAPABILITY_VERSION,
 };
+pub use assistant_runtime::{
+    agent_error_from_llm, AgentAnswer, AgentCancellation, AgentCapabilityBinding,
+    AgentCapabilityDescription, AgentCapabilityInvoker, AgentContext, AgentContextAssembler,
+    AgentPreparedRun, AgentProgress, AgentProgressStage, AgentRunDiagnostics, AgentRunPath,
+    AgentRunResult, AgentRuntime, AgentRuntimeConfig, AgentSceneAssembly, AgentTask, AgentUsage,
+    HostAgentScene, WorkspaceAgentScene,
+};
+pub use assistant_skills::BundledAgentSkill;
 pub use capabilities::{
     AudioCapabilityPort, CapabilityDescriptor, CapabilityOperation, SettingsCapabilityPort,
     SettingsPatchArguments, SettingsReadArguments, SettingsSection,

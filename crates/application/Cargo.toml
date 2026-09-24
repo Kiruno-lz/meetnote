@@ -7,6 +7,7 @@ edition.workspace = true
 audio = { path = "../audio" }
 contracts = { path = "../contracts" }
 domain = { path = "../domain" }
+llm = { path = "../llm" }
 runtime = { path = "../runtime" }
 settings = { path = "../settings" }
 futures.workspace = true

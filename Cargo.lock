@@ -217,6 +217,7 @@ dependencies = [
  "domain",
  "futures",
  "hound",
+ "llm",
  "runtime",
  "schemars",
  "serde",
