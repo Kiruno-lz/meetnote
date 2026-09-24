@@ -12,7 +12,7 @@ use domain::{
     ProjectId, RuntimeProvenance, SpeakerTaggedSegment,
 };
 use futures::channel::mpsc::UnboundedReceiver;
-use runtime::{JobContext, JobEvent, JobRuntime};
+use runtime::{JobContext, JobEvent, JobId, JobRuntime, JobRuntimeError, JobSnapshot};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{BufReader, Read};
@@ -111,6 +111,14 @@ impl ProcessingService {
             asr_events,
             diarization_events,
         }
+    }
+
+    pub fn job_snapshot(&self, job_id: JobId) -> Result<JobSnapshot, JobRuntimeError> {
+        self.runtime.snapshot(job_id)
+    }
+
+    pub fn remove_job(&self, job_id: JobId) -> Result<JobSnapshot, JobRuntimeError> {
+        self.runtime.remove(job_id)
     }
 
     pub fn process(
@@ -275,6 +283,17 @@ pub struct ProjectProcessingJob {
     pub diarization_events: UnboundedReceiver<JobEvent>,
 }
 
+impl ProjectProcessingJob {
+    pub fn job_ids(&self) -> (JobId, JobId) {
+        (self.asr_context.job_id(), self.diarization_context.job_id())
+    }
+
+    pub fn cancel(&self) {
+        self.asr_context.cancel();
+        self.diarization_context.cancel();
+    }
+}
+
 impl WorkspaceService {
     pub fn new(processing: ProcessingService, documents: DocumentService) -> Self {
         Self::with_options(processing, documents, ProcessingOptions::default())
@@ -298,6 +317,14 @@ impl WorkspaceService {
             .write()
             .map_err(|_| "processing options lock poisoned".to_string())? = options;
         Ok(())
+    }
+
+    pub fn documents(&self) -> DocumentService {
+        self.documents.clone()
+    }
+
+    pub fn processing(&self) -> ProcessingService {
+        self.processing.clone()
     }
 
     pub fn list_projects(&self) -> Result<Vec<DocumentState>, String> {
@@ -458,9 +485,25 @@ impl WorkspaceService {
         diarization_model: ModelRef,
         speaker_library_path: Option<String>,
     ) -> Result<ProjectProcessingJob, contracts::BackendError> {
-        let mut project = self
+        let request = self.processing_request(
+            &project_id,
+            asr_model,
+            diarization_model,
+            speaker_library_path,
+        )?;
+        self.start_project_processing_with_request(project_id, request)
+    }
+
+    pub fn processing_request(
+        &self,
+        project_id: &ProjectId,
+        asr_model: ModelRef,
+        diarization_model: ModelRef,
+        speaker_library_path: Option<String>,
+    ) -> Result<ProcessingRequest, contracts::BackendError> {
+        let project = self
             .documents
-            .get(&project_id)
+            .get(project_id)
             .map_err(persistence_error)?
             .ok_or_else(|| persistence_error("project does not exist"))?;
         let options = self
@@ -468,7 +511,7 @@ impl WorkspaceService {
             .read()
             .map_err(|_| persistence_error("processing options lock poisoned"))?
             .clone();
-        let request = ProcessingRequest {
+        Ok(ProcessingRequest {
             audio_path: project.audio_path().to_string(),
             asr_model,
             diarization_model,
@@ -477,7 +520,19 @@ impl WorkspaceService {
             device: options.device,
             speaker_library_path: speaker_library_path.or(options.speaker_library_path),
             stage_configuration: options.diarization_stages,
-        };
+        })
+    }
+
+    pub fn start_project_processing_with_request(
+        &self,
+        project_id: ProjectId,
+        request: ProcessingRequest,
+    ) -> Result<ProjectProcessingJob, contracts::BackendError> {
+        let mut project = self
+            .documents
+            .get(&project_id)
+            .map_err(persistence_error)?
+            .ok_or_else(|| persistence_error("project does not exist"))?;
         self.processing.probe(&request).inspect_err(|error| {
             project.set_processing_error(error.message.clone());
             let _ = self.documents.save(project.clone());
@@ -549,6 +604,15 @@ impl WorkspaceService {
             asr_events: contexts.asr_events,
             diarization_events: contexts.diarization_events,
         })
+    }
+
+    pub fn discard_processing_job(&self, job: &ProjectProcessingJob) {
+        self.discard_processing_job_ids(job.job_ids());
+    }
+
+    pub fn discard_processing_job_ids(&self, (asr_job, diarization_job): (JobId, JobId)) {
+        let _ = self.processing.remove_job(asr_job);
+        let _ = self.processing.remove_job(diarization_job);
     }
 
     pub fn process_project(
@@ -990,6 +1054,57 @@ mod tests {
         assert_eq!(processing.runtime.expected_speakers, Some(2));
         assert_eq!(processing.runtime.windowing, None);
         assert_eq!(repository.get(project.id()).unwrap(), Some(result.clone()));
+        std::fs::remove_file(audio_path).unwrap();
+    }
+
+    #[test]
+    fn processing_job_keeps_the_settings_snapshot_from_start() {
+        let repository = Arc::new(MemoryRepository::default());
+        let workspace = WorkspaceService::with_options(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(repository),
+            ProcessingOptions {
+                language: Some("zh".into()),
+                expected_speakers: Some(2),
+                device: ComputeDevice::Cpu,
+                speaker_library_path: None,
+                diarization_stages: DiarizationStageConfiguration::default(),
+            },
+        );
+        let audio_path = write_test_wav();
+        let project = workspace
+            .import_audio(audio_path.display().to_string())
+            .unwrap();
+        let asr_model = ModelRef {
+            backend_id: "fake-asr".into(),
+            model_id: "fixture".into(),
+            revision: None,
+            artifact_path: "fixture-model".into(),
+            artifacts: Vec::new(),
+        };
+        let diarization_model = ModelRef {
+            backend_id: "fake-diarization".into(),
+            model_id: "fixture".into(),
+            revision: None,
+            artifact_path: "fixture-model".into(),
+            artifacts: Vec::new(),
+        };
+        let job = workspace
+            .start_project_processing(project.id().clone(), asr_model, diarization_model)
+            .unwrap();
+        workspace
+            .set_processing_options(ProcessingOptions {
+                language: Some("en".into()),
+                expected_speakers: Some(4),
+                device: ComputeDevice::Cpu,
+                speaker_library_path: None,
+                diarization_stages: DiarizationStageConfiguration::default(),
+            })
+            .unwrap();
+        let result = futures::executor::block_on(job.future).unwrap();
+        let processing = result.processing.latest.as_ref().unwrap();
+        assert_eq!(processing.runtime.language.as_deref(), Some("zh"));
+        assert_eq!(processing.runtime.expected_speakers, Some(2));
         std::fs::remove_file(audio_path).unwrap();
     }
 }

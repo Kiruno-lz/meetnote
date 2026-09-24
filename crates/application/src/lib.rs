@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
+mod agent_host;
 mod capabilities;
 mod document_commands;
 mod long_audio;
@@ -20,6 +21,13 @@ mod speaker_identity;
 mod workspace;
 mod workspace_capability;
 
+pub use agent_host::{
+    AgentHost, CapabilityBinding, AGENT_HOST_CAPABILITY_ID, AGENT_HOST_CAPABILITY_VERSION,
+};
+pub use capabilities::{
+    AudioCapabilityPort, CapabilityDescriptor, CapabilityOperation, SettingsCapabilityPort,
+    SettingsPatchArguments, SettingsReadArguments, SettingsSection,
+};
 pub use contracts::BackendDescriptor;
 pub use document_commands::{DocumentCommandError, DocumentCommandService};
 pub use long_audio::{

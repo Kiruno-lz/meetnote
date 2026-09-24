@@ -8,6 +8,7 @@ audio = { path = "../audio" }
 contracts = { path = "../contracts" }
 domain = { path = "../domain" }
 runtime = { path = "../runtime" }
+settings = { path = "../settings" }
 futures.workspace = true
 schemars.workspace = true
 sha2.workspace = true

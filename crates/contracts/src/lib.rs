@@ -5,9 +5,11 @@ use std::collections::BTreeMap;
 use std::ops::{Deref, DerefMut};
 
 mod assistant;
+mod capability;
 mod workspace_capability;
 
 pub use assistant::*;
+pub use capability::*;
 pub use workspace_capability::*;
 
 /// Version of the wire envelope shared by all capability services.
@@ -342,10 +344,14 @@ pub struct DocumentCommandIssue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelRef {
+    #[serde(alias = "backend_id")]
     pub backend_id: String,
+    #[serde(alias = "model_id")]
     pub model_id: String,
     pub revision: Option<String>,
+    #[serde(alias = "artifact_path")]
     pub artifact_path: String,
     #[serde(default)]
     pub artifacts: Vec<ModelArtifactRef>,
@@ -356,8 +362,10 @@ pub struct ModelRef {
 pub struct ModelArtifactRef {
     pub filename: String,
     #[serde(default)]
+    #[serde(alias = "expected_sha256")]
     pub expected_sha256: Option<String>,
     #[serde(default)]
+    #[serde(alias = "archive_member")]
     pub archive_member: Option<String>,
 }
 
@@ -678,6 +686,7 @@ pub enum BackendErrorCode {
     ModelIncompatible,
     ModelLoadFailed,
     DeviceUnavailable,
+    AccessDenied,
     InvalidAudio,
     InferenceFailed,
     Cancelled,
