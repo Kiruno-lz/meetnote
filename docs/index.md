@@ -16,7 +16,7 @@
 - [架构对齐计划](plan/architecture-alignment.md)：当前架构进度、职责收敛、保留项和最小实施步骤。
 - [工程实施计划](plan/implementation-plan.md)：当前完成度、生产化缺口和验收顺序。
 - [GPUI UI 计划](plan/ui-plan.md)：现有 UI、目标信息架构和后续工作。
-- [Assistant 构建计划](plan/assistant-plan.md)：文档场景、共享 Workspace 工具、Built-in 模型层与验收。
+- [Assistant 构建计划](plan/assistant-plan.md)：Workspace、Audio、Settings 的 capability、Host 真实回应、MoonBit 插件与 Codex 经 Host 完成任务。
 
 ## 研究依据
 
