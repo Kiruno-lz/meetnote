@@ -1,13 +1,16 @@
 use crate::{
+    assistant_ui::{
+        now_ms, AssistantController, AssistantScopeMode, AssistantUiError, AssistantUiService,
+        ConnectionProbeKind,
+    },
     i18n, pages,
     route::Route,
     state::{ContentMode, Overlay, UiState},
     text_input::TextInput,
 };
-use application::{BackendInventory, DocumentCommandService, ProcessingOptions, WorkspaceService};
+use application::{BackendInventory, ProcessingOptions, WorkspaceService};
 use contracts::{
-    DiarizationStageKind, DiarizationStageOption, DocumentCommand, DocumentCommandEnvelope,
-    DocumentCommandResult, ModelRef,
+    AgentScene, AgentWriteMode, DiarizationStageKind, DiarizationStageOption, ModelRef,
 };
 use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
@@ -19,7 +22,9 @@ use gpui_platform::application;
 use models::manager::{DownloadEvent, DownloadState};
 use models::{ModelAvailability, ModelInstallState};
 use runtime::{JobContext, JobEvent};
-use settings::{AppSettings, SettingsService};
+use settings::{
+    AppSettings, AssistantAuthMode, AssistantConnectionProfile, LlmProtocol, SettingsService,
+};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -128,14 +133,61 @@ pub(crate) struct SettingsSelectors {
     pub(crate) compute_device: Entity<StringSelect>,
 }
 
+pub(crate) struct AssistantInputs {
+    pub(crate) prompt: Entity<TextInput>,
+    pub(crate) connection_id: Entity<TextInput>,
+    pub(crate) connection_name: Entity<TextInput>,
+    pub(crate) base_url: Entity<TextInput>,
+    pub(crate) model: Entity<TextInput>,
+    pub(crate) api_key: Entity<TextInput>,
+    pub(crate) api_key_file: Entity<TextInput>,
+    pub(crate) context_window_tokens: Entity<TextInput>,
+    pub(crate) timeout_ms: Entity<TextInput>,
+    pub(crate) max_output_tokens: Entity<TextInput>,
+    pub(crate) max_tool_rounds: Entity<TextInput>,
+    pub(crate) max_validation_retries: Entity<TextInput>,
+}
+
+impl AssistantInputs {
+    fn load_profile(
+        &self,
+        profile: Option<&AssistantConnectionProfile>,
+        cx: &mut Context<RootView>,
+    ) {
+        let profile = profile.cloned().unwrap_or_else(empty_connection_profile);
+        for (input, value) in [
+            (&self.connection_id, profile.id),
+            (&self.connection_name, profile.name),
+            (&self.base_url, profile.base_url),
+            (&self.model, profile.model),
+            (&self.api_key, profile.api_key.unwrap_or_default()),
+            (&self.api_key_file, profile.api_key_file.unwrap_or_default()),
+            (
+                &self.context_window_tokens,
+                profile
+                    .context_window_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_default(),
+            ),
+            (&self.timeout_ms, profile.timeout_ms.to_string()),
+            (
+                &self.max_output_tokens,
+                profile.max_output_tokens.to_string(),
+            ),
+        ] {
+            input.update(cx, |input, _| input.set_value(value));
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DesktopServices {
     pub workspace: WorkspaceService,
-    pub document_commands: DocumentCommandService,
     pub settings: SettingsService,
     pub model_manager: models::manager::ModelManager,
     pub asr_model: ModelRef,
     pub diarization_model: ModelRef,
+    pub assistant: Arc<dyn AssistantUiService>,
 }
 
 impl DesktopServices {
@@ -152,13 +204,44 @@ impl DesktopServices {
     }
 }
 
+fn text_input(
+    cx: &mut Context<RootView>,
+    placeholder: &'static str,
+    value: &str,
+) -> Entity<TextInput> {
+    cx.new(|cx| {
+        let mut input = TextInput::new(cx, placeholder);
+        input.set_value(value);
+        input
+    })
+}
+
+fn empty_connection_profile() -> AssistantConnectionProfile {
+    AssistantConnectionProfile {
+        id: String::new(),
+        name: String::new(),
+        protocol: LlmProtocol::OpenAiChatCompletions,
+        base_url: String::new(),
+        model: String::new(),
+        auth_mode: AssistantAuthMode::Bearer,
+        api_key: None,
+        api_key_file: None,
+        context_window_tokens: None,
+        timeout_ms: 120_000,
+        max_output_tokens: 4_096,
+    }
+}
+
 pub(crate) struct RootView {
     pub(crate) inventory: BackendInventory,
     pub(crate) services: DesktopServices,
     pub(crate) settings_draft: AppSettings,
     pub(crate) projects: Vec<DocumentState>,
     pub(crate) ui: UiState,
-    pub(crate) assistant_input: gpui::Entity<TextInput>,
+    pub(crate) assistant: AssistantController,
+    pub(crate) assistant_inputs: AssistantInputs,
+    pub(crate) assistant_protocol: LlmProtocol,
+    pub(crate) assistant_auth_mode: AssistantAuthMode,
     pub(crate) cancel_contexts: Option<(JobContext, JobContext)>,
     pub(crate) settings_selectors: Option<SettingsSelectors>,
 }
@@ -175,6 +258,7 @@ impl RootView {
         inventory: BackendInventory,
         services: DesktopServices,
         assistant_input: gpui::Entity<TextInput>,
+        cx: &mut Context<Self>,
     ) -> Self {
         let projects = services.workspace.list_projects().unwrap_or_default();
         let locale = services
@@ -183,6 +267,86 @@ impl RootView {
             .map(|settings| i18n::Locale::from_code(&settings.ui_locale))
             .unwrap_or(i18n::Locale::ZhCn);
         let settings_draft = services.settings.snapshot().unwrap_or_default();
+        let active_profile = settings_draft.assistant.active_connection().cloned();
+        let assistant_inputs = AssistantInputs {
+            prompt: assistant_input,
+            connection_id: text_input(
+                cx,
+                "local-litellm",
+                active_profile.as_ref().map(|p| p.id.as_str()).unwrap_or(""),
+            ),
+            connection_name: text_input(
+                cx,
+                "Local LiteLLM",
+                active_profile
+                    .as_ref()
+                    .map(|p| p.name.as_str())
+                    .unwrap_or(""),
+            ),
+            base_url: text_input(
+                cx,
+                "http://127.0.0.1:4000",
+                active_profile
+                    .as_ref()
+                    .map(|p| p.base_url.as_str())
+                    .unwrap_or(""),
+            ),
+            model: text_input(
+                cx,
+                "assistant-default",
+                active_profile
+                    .as_ref()
+                    .map(|p| p.model.as_str())
+                    .unwrap_or(""),
+            ),
+            api_key: cx.new(|cx| TextInput::secret(cx, "API key (stored in settings)")),
+            api_key_file: text_input(
+                cx,
+                "path/to/api-key.txt",
+                active_profile
+                    .as_ref()
+                    .and_then(|p| p.api_key_file.as_deref())
+                    .unwrap_or(""),
+            ),
+            context_window_tokens: text_input(
+                cx,
+                "128000",
+                active_profile
+                    .as_ref()
+                    .and_then(|p| p.context_window_tokens)
+                    .map(|v| v.to_string())
+                    .as_deref()
+                    .unwrap_or(""),
+            ),
+            timeout_ms: text_input(
+                cx,
+                "120000",
+                &active_profile
+                    .as_ref()
+                    .map(|p| p.timeout_ms)
+                    .unwrap_or(120_000)
+                    .to_string(),
+            ),
+            max_output_tokens: text_input(
+                cx,
+                "4096",
+                &active_profile
+                    .as_ref()
+                    .map(|p| p.max_output_tokens)
+                    .unwrap_or(4_096)
+                    .to_string(),
+            ),
+            max_tool_rounds: text_input(
+                cx,
+                "8",
+                &settings_draft.assistant.max_tool_rounds.to_string(),
+            ),
+            max_validation_retries: text_input(
+                cx,
+                "3",
+                &settings_draft.assistant.max_validation_retries.to_string(),
+            ),
+        };
         let mut ui = UiState::from_projects(&projects, locale);
         ui.expanded_model_families.extend(
             services
@@ -198,7 +362,16 @@ impl RootView {
             settings_draft,
             projects,
             ui,
-            assistant_input,
+            assistant: AssistantController::default(),
+            assistant_inputs,
+            assistant_protocol: active_profile
+                .as_ref()
+                .map(|profile| profile.protocol)
+                .unwrap_or(LlmProtocol::OpenAiChatCompletions),
+            assistant_auth_mode: active_profile
+                .as_ref()
+                .map(|profile| profile.auth_mode)
+                .unwrap_or(AssistantAuthMode::Bearer),
             cancel_contexts: None,
             settings_selectors: None,
         }
@@ -1021,7 +1194,7 @@ impl RootView {
     pub(crate) fn set_locale(&mut self, locale: i18n::Locale, cx: &mut Context<Self>) {
         self.settings_draft.ui_locale = locale.code().into();
         self.ui.locale = locale;
-        self.assistant_input.update(cx, |input, _| {
+        self.assistant_inputs.prompt.update(cx, |input, _| {
             input.set_placeholder(i18n::text(locale, "ask_placeholder"));
         });
         match self.services.settings.update(self.settings_draft.clone()) {
@@ -1053,41 +1226,475 @@ impl RootView {
         cx.notify();
     }
 
+    pub(crate) fn edit_assistant_profile(&mut self, id: &str, cx: &mut Context<Self>) {
+        let Some(profile) = self
+            .settings_draft
+            .assistant
+            .connections
+            .iter()
+            .find(|profile| profile.id == id)
+            .cloned()
+        else {
+            return;
+        };
+        self.settings_draft.assistant.active_connection_id = Some(profile.id.clone());
+        self.assistant_protocol = profile.protocol;
+        self.assistant_auth_mode = profile.auth_mode;
+        self.assistant_inputs.load_profile(Some(&profile), cx);
+        cx.notify();
+    }
+
+    pub(crate) fn new_assistant_profile(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.assistant_protocol = LlmProtocol::OpenAiChatCompletions;
+        self.assistant_auth_mode = AssistantAuthMode::Bearer;
+        self.assistant_inputs.load_profile(None, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn set_assistant_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.settings_draft.assistant.enabled = enabled;
+        cx.notify();
+    }
+
+    pub(crate) fn set_assistant_write_mode(
+        &mut self,
+        write_mode: AgentWriteMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_draft.assistant.write_mode = write_mode;
+        cx.notify();
+    }
+
+    pub(crate) fn set_assistant_protocol(&mut self, protocol: LlmProtocol, cx: &mut Context<Self>) {
+        self.assistant_protocol = protocol;
+        cx.notify();
+    }
+
+    pub(crate) fn set_assistant_auth_mode(
+        &mut self,
+        auth_mode: AssistantAuthMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.assistant_auth_mode = auth_mode;
+        cx.notify();
+    }
+
+    fn assistant_profile_from_inputs(
+        &self,
+        cx: &Context<Self>,
+    ) -> Result<Option<AssistantConnectionProfile>, AssistantUiError> {
+        let id = self.assistant_inputs.connection_id.read(cx).value();
+        let name = self.assistant_inputs.connection_name.read(cx).value();
+        let base_url = self.assistant_inputs.base_url.read(cx).value();
+        let model = self.assistant_inputs.model.read(cx).value();
+        let api_key = self.assistant_inputs.api_key.read(cx).value();
+        let api_key_file = self.assistant_inputs.api_key_file.read(cx).value();
+        if [&id, &name, &base_url, &model, &api_key, &api_key_file]
+            .iter()
+            .all(|value| value.trim().is_empty())
+        {
+            return Ok(None);
+        }
+        Ok(Some(AssistantConnectionProfile {
+            id,
+            name,
+            protocol: self.assistant_protocol,
+            base_url,
+            model,
+            auth_mode: self.assistant_auth_mode,
+            api_key: (!api_key.is_empty()).then_some(api_key),
+            api_key_file: (!api_key_file.is_empty()).then_some(api_key_file),
+            context_window_tokens: parse_optional_u32(
+                &self.assistant_inputs.context_window_tokens.read(cx).value(),
+                "contextWindowTokens",
+            )?,
+            timeout_ms: parse_u64(
+                &self.assistant_inputs.timeout_ms.read(cx).value(),
+                "timeoutMs",
+            )?,
+            max_output_tokens: parse_u32(
+                &self.assistant_inputs.max_output_tokens.read(cx).value(),
+                "maxOutputTokens",
+            )?,
+        }))
+    }
+
+    fn assistant_settings_from_inputs(
+        &self,
+        cx: &Context<Self>,
+    ) -> Result<settings::AssistantSettings, AssistantUiError> {
+        let mut assistant = self.settings_draft.assistant.clone();
+        assistant.max_tool_rounds = parse_u32(
+            &self.assistant_inputs.max_tool_rounds.read(cx).value(),
+            "maxToolRounds",
+        )?;
+        assistant.max_validation_retries = parse_u32(
+            &self
+                .assistant_inputs
+                .max_validation_retries
+                .read(cx)
+                .value(),
+            "maxValidationRetries",
+        )?;
+        let profile = self.assistant_profile_from_inputs(cx)?;
+        if let Some(profile) = profile {
+            let id = profile.id.clone();
+            if let Some(existing) = assistant
+                .connections
+                .iter_mut()
+                .find(|existing| existing.id == id)
+            {
+                *existing = profile;
+            } else {
+                assistant.connections.push(profile);
+            }
+            assistant.active_connection_id = Some(id);
+        }
+        Ok(assistant)
+    }
+
+    pub(crate) fn save_assistant_settings(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let assistant = match self.assistant_settings_from_inputs(cx) {
+            Ok(value) => value,
+            Err(error) => {
+                self.ui.notice = error.to_string();
+                cx.notify();
+                return;
+            }
+        };
+        let service = self.services.assistant.clone();
+        cx.spawn(async move |this, cx| {
+            let result =
+                runtime::spawn_blocking(move || service.save_assistant_settings(assistant)).await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(assistant) => {
+                        this.settings_draft.assistant = assistant;
+                        this.ui.notice =
+                            i18n::text(this.ui.locale, "assistant_settings_saved").into();
+                    }
+                    Err(error) => this.ui.notice = error.to_string(),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn probe_assistant_connection(&mut self, kind: ConnectionProbeKind, cx: &mut Context<Self>) {
+        let profile = match self.assistant_profile_from_inputs(cx) {
+            Ok(Some(profile)) => profile,
+            Ok(None) => {
+                self.ui.notice = i18n::text(self.ui.locale, "assistant_connection_required").into();
+                cx.notify();
+                return;
+            }
+            Err(error) => {
+                self.ui.notice = error.to_string();
+                cx.notify();
+                return;
+            }
+        };
+        let cancellation = self.assistant.begin_probe(kind);
+        let service = self.services.assistant.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || {
+                service.probe_connection(profile, kind, cancellation)
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.assistant.finish_probe(result);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn probe_assistant_readiness(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.probe_assistant_connection(ConnectionProbeKind::Readiness, cx);
+    }
+
+    pub(crate) fn probe_assistant_model(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.probe_assistant_connection(ConnectionProbeKind::Model, cx);
+    }
+
+    pub(crate) fn cancel_assistant_probe(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.assistant.request_probe_cancel() {
+            self.ui.notice = i18n::text(self.ui.locale, "cancellation_requested").into();
+            cx.notify();
+        }
+    }
+
     pub(crate) fn assistant_action(
         &mut self,
         _: &ClickEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let query = self.assistant_input.read(cx).value();
+        let query = self.assistant_inputs.prompt.read(cx).value();
         self.ui.assistant_query = query.clone();
-        self.ui.notice = if query.trim().is_empty() {
-            i18n::text(self.ui.locale, "empty_request").into()
-        } else {
-            match self
-                .services
-                .document_commands
-                .execute(DocumentCommandEnvelope::new(
-                    format!("assistant-{}", self.ui.assistant_query.len()),
-                    DocumentCommand::List,
-                )) {
-                Ok(DocumentCommandResult::Snapshot { documents, issues }) => {
-                    let suffix = if issues.is_empty() {
-                        format!(" ({} documents available)", documents.len())
-                    } else {
-                        format!(" ({} document issues)", issues.len())
-                    };
-                    i18n::message(
-                        self.ui.locale,
-                        "request_received",
-                        &format!("{query}{suffix}"),
-                    )
-                }
-                Ok(_) => i18n::message(self.ui.locale, "request_received", &query),
-                Err(error) => error.to_string(),
+        match self.assistant.scope_mode {
+            AssistantScopeMode::CurrentDocument => {
+                let selected = self
+                    .ui
+                    .selected_project
+                    .as_ref()
+                    .and_then(|id| self.projects.iter().find(|project| project.id() == id));
+                self.assistant.authorize_document(selected);
             }
-        };
+            AssistantScopeMode::AllVisibleDocuments => {
+                self.assistant.authorize_documents(&self.projects);
+            }
+        }
+        let (request, cancellation) =
+            match self.assistant.begin(query, &self.settings_draft.assistant) {
+                Ok(started) => started,
+                Err(error) => {
+                    self.ui.notice = error.to_string();
+                    cx.notify();
+                    return;
+                }
+            };
+        let request_id = request.request_id.clone();
+        let service = self.services.assistant.clone();
+        let (progress_sender, mut progress_receiver) =
+            futures::channel::mpsc::unbounded::<crate::assistant_ui::AssistantProgress>();
+        let progress_handler = Arc::new(move |progress| {
+            let _ = progress_sender.unbounded_send(progress);
+        });
+        self.ui.notice = i18n::text(self.ui.locale, "assistant_running").into();
         cx.notify();
+        cx.spawn(async move |this, cx| {
+            let run_future = runtime::spawn_blocking(move || {
+                service.run_with_progress(request, cancellation, progress_handler)
+            })
+            .fuse();
+            futures::pin_mut!(run_future);
+            let result = loop {
+                futures::select! {
+                    result = run_future => break result,
+                    progress = progress_receiver.next().fuse() => {
+                        if let Some(progress) = progress {
+                            let notice = format!(
+                                "assistant {}{}",
+                                progress.stage,
+                                progress.tool_name.as_deref().map(|tool| format!(" · {tool}")).unwrap_or_default()
+                            );
+                            this.update(cx, |this, cx| {
+                                this.assistant.record_progress(progress);
+                                this.ui.notice = notice;
+                                cx.notify();
+                            }).ok();
+                        }
+                    }
+                }
+            };
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(result) => {
+                        let notice = result
+                            .warning
+                            .as_ref()
+                            .map(ToString::to_string)
+                            .unwrap_or_else(|| {
+                                i18n::text(this.ui.locale, "assistant_completed").into()
+                            });
+                        this.assistant.complete(&request_id, result);
+                        this.ui.notice = notice;
+                    }
+                    Err(error) => {
+                        this.ui.notice = error.to_string();
+                        this.assistant.fail(&request_id, error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn cancel_assistant(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.assistant.request_cancel() {
+            self.ui.notice = i18n::text(self.ui.locale, "cancellation_requested").into();
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn select_assistant_scene(&mut self, scene: AgentScene, cx: &mut Context<Self>) {
+        self.assistant.select_scene(scene);
+        cx.notify();
+    }
+
+    pub(crate) fn select_assistant_scope(
+        &mut self,
+        scope: AssistantScopeMode,
+        cx: &mut Context<Self>,
+    ) {
+        self.assistant.scope_mode = scope;
+        match scope {
+            AssistantScopeMode::CurrentDocument => {
+                let selected = self
+                    .ui
+                    .selected_project
+                    .as_ref()
+                    .and_then(|id| self.projects.iter().find(|project| project.id() == id));
+                self.assistant.authorize_document(selected);
+            }
+            AssistantScopeMode::AllVisibleDocuments => {
+                self.assistant.authorize_documents(&self.projects);
+            }
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn accept_assistant_pending(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self.assistant.pending_for_accept(now_ms()) else {
+            cx.notify();
+            return;
+        };
+        let authorized_document_ids = self
+            .assistant
+            .authorized_documents
+            .iter()
+            .map(|document| document.document_id.clone())
+            .collect();
+        let service = self.services.assistant.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || {
+                service.confirm(pending.confirmation_id, authorized_document_ids)
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(result) => this.assistant.confirmation_complete(result),
+                    Err(error) => this.assistant.confirmation_failed(error),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn reject_assistant_pending(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pending) = self.assistant.pending_for_reject(now_ms()) else {
+            cx.notify();
+            return;
+        };
+        let authorized_document_ids = self
+            .assistant
+            .authorized_documents
+            .iter()
+            .map(|document| document.document_id.clone())
+            .collect();
+        let service = self.services.assistant.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || {
+                service.reject(pending.confirmation_id, authorized_document_ids)
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(()) => this.assistant.rejection_complete(),
+                    Err(error) => this.assistant.confirmation_failed(error),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn undo_assistant_mutation_for(
+        &mut self,
+        mutation_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((token, mutation_id)) = self.assistant.begin_mutation_undo(&mutation_id) else {
+            return;
+        };
+        let authorized_document_ids = self
+            .assistant
+            .authorized_documents
+            .iter()
+            .map(|document| document.document_id.clone())
+            .collect();
+        let service = self.services.assistant.clone();
+
+        #[cfg(test)]
+        {
+            let result = service.undo(token, authorized_document_ids);
+            match result {
+                Ok(mutation) => self
+                    .assistant
+                    .mutation_undo_complete(&mutation_id, mutation),
+                Err(error) => self.assistant.mutation_undo_failed(&mutation_id, error),
+            }
+            cx.notify();
+        }
+
+        #[cfg(not(test))]
+        cx.spawn(async move |this, cx| {
+            let result =
+                runtime::spawn_blocking(move || service.undo(token, authorized_document_ids)).await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(mutation) => this
+                        .assistant
+                        .mutation_undo_complete(&mutation_id, mutation),
+                    Err(error) => this.assistant.mutation_undo_failed(&mutation_id, error),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn toggle_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
@@ -1532,6 +2139,31 @@ fn selected_index(items: &[String], value: Option<&str>) -> Option<IndexPath> {
         .map(|row| IndexPath::default().row(row))
 }
 
+fn parse_u32(value: &str, field: &str) -> Result<u32, AssistantUiError> {
+    value.trim().parse().map_err(|_| AssistantUiError {
+        code: "ASSISTANT_SETTINGS_INVALID".into(),
+        message: format!("{field} must be an unsigned integer"),
+        retryable: false,
+    })
+}
+
+fn parse_optional_u32(value: &str, field: &str) -> Result<Option<u32>, AssistantUiError> {
+    let value = value.trim();
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        parse_u32(value, field).map(Some)
+    }
+}
+
+fn parse_u64(value: &str, field: &str) -> Result<u64, AssistantUiError> {
+    value.trim().parse().map_err(|_| AssistantUiError {
+        code: "ASSISTANT_SETTINGS_INVALID".into(),
+        message: format!("{field} must be an unsigned integer"),
+        retryable: false,
+    })
+}
+
 fn selected_model_index(items: &[ModelOption], value: Option<&str>) -> Option<IndexPath> {
     value
         .and_then(|value| items.iter().position(|item| item.id == value))
@@ -1609,8 +2241,8 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
                         TextInput::new(cx, i18n::text(initial_locale, "ask_placeholder"))
                     });
                     let workspace = services.workspace.clone();
-                    let view = cx.new(|_| {
-                        RootView::new(inventory.clone(), services.clone(), assistant_input)
+                    let view = cx.new(|cx| {
+                        RootView::new(inventory.clone(), services.clone(), assistant_input, cx)
                     });
                     if let Ok(receiver) = workspace.watch_documents() {
                         let receiver = Arc::new(Mutex::new(receiver));

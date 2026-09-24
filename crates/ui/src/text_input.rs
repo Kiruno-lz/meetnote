@@ -18,6 +18,7 @@ pub struct TextInput {
     selected_range: Range<usize>,
     last_layout: Option<ShapedLine>,
     last_bounds: Option<Bounds<Pixels>>,
+    masked: bool,
 }
 
 impl TextInput {
@@ -29,7 +30,14 @@ impl TextInput {
             selected_range: 0..0,
             last_layout: None,
             last_bounds: None,
+            masked: false,
         }
+    }
+
+    pub fn secret(cx: &mut Context<Self>, placeholder: impl Into<SharedString>) -> Self {
+        let mut input = Self::new(cx, placeholder);
+        input.masked = true;
+        input
     }
 
     pub fn value(&self) -> String {
@@ -38,6 +46,11 @@ impl TextInput {
 
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
         self.placeholder = placeholder.into();
+    }
+
+    pub fn set_value(&mut self, value: impl Into<String>) {
+        self.content = value.into();
+        self.selected_range = self.content.len()..self.content.len();
     }
 
     fn previous_boundary(&self) -> usize {
@@ -113,6 +126,15 @@ impl TextInput {
             .encode_utf16()
             .count()
     }
+}
+
+fn masked_text_and_cursor(content: &str, cursor_byte_offset: usize) -> (SharedString, usize) {
+    let cursor = content
+        .get(..cursor_byte_offset)
+        .unwrap_or(content)
+        .chars()
+        .count();
+    ("*".repeat(content.chars().count()).into(), cursor)
 }
 
 impl EntityInputHandler for TextInput {
@@ -266,10 +288,22 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> TextPrepaint {
         let input = self.input.read(cx);
-        let (text, color) = if input.content.is_empty() {
-            (input.placeholder.clone(), hsla(220., 0.12, 0.68, 1.))
+        let (text, color, cursor_index) = if input.content.is_empty() {
+            (
+                input.placeholder.clone(),
+                hsla(220., 0.12, 0.68, 1.),
+                input.selected_range.end,
+            )
+        } else if input.masked {
+            let (text, cursor_index) =
+                masked_text_and_cursor(&input.content, input.selected_range.end);
+            (text, window.text_style().color, cursor_index)
         } else {
-            (input.content.clone().into(), window.text_style().color)
+            (
+                input.content.clone().into(),
+                window.text_style().color,
+                input.selected_range.end,
+            )
         };
         let run = TextRun {
             len: text.len(),
@@ -285,7 +319,7 @@ impl Element for TextElement {
             &[run],
             None,
         );
-        let cursor_x = line.x_for_index(input.selected_range.end);
+        let cursor_x = line.x_for_index(cursor_index);
         TextPrepaint {
             line,
             cursor: fill(
@@ -354,5 +388,19 @@ impl Render for TextInput {
                 }),
             )
             .child(TextElement { input: cx.entity() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::masked_text_and_cursor;
+
+    #[test]
+    fn secret_mask_uses_character_offsets_for_non_ascii_values() {
+        let value = "key-密钥";
+        let (masked, cursor) = masked_text_and_cursor(value, value.len());
+
+        assert_eq!(masked.as_ref(), "******");
+        assert_eq!(cursor, 6);
     }
 }

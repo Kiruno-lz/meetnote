@@ -1,9 +1,8 @@
 mod assistant_service;
 
 use application::{
-    AgentHost, BackendInventory, DocumentCommandService, DocumentService, ProcessingOptions,
-    ProcessingService, SettingsCapabilityPort, WorkspaceAccessPolicy, WorkspaceCapabilityPort,
-    WorkspaceService,
+    AgentHost, BackendInventory, DocumentService, ProcessingOptions, ProcessingService,
+    SettingsCapabilityPort, WorkspaceAccessPolicy, WorkspaceCapabilityPort, WorkspaceService,
 };
 use asr::{AsrBackendManager, AsrBackendRegistry};
 use asr_sherpa_onnx::SherpaOnnxAsrBackend;
@@ -65,7 +64,6 @@ fn main() {
         FileDocumentRepository::open("data/documents").expect("failed to open document repository"),
     );
     let documents = DocumentService::new(repository);
-    let document_commands = DocumentCommandService::new(documents.clone());
     let assistant = Arc::new(assistant_service::DesktopAssistantService::new(
         settings.clone(),
         documents.clone(),
@@ -159,11 +157,11 @@ fn main() {
 
     let desktop_services = DesktopServices {
         workspace,
-        document_commands,
         settings,
         model_manager,
         asr_model,
         diarization_model,
+        assistant,
     };
     ui::run(
         BackendInventory::new(

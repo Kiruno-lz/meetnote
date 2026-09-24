@@ -1,16 +1,21 @@
 use crate::{
+    assistant_ui::ConnectionProbeKind,
     components::{setting_control_row, settings_section},
     controller::{ModelOption, RootView},
     i18n::text as tr,
 };
+use contracts::AgentWriteMode;
 use gpui::{div, prelude::*, px, Context, IntoElement};
 use gpui_component::{
     button::{Button, ButtonVariants},
     scroll::ScrollableElement as _,
     select::Select,
+    Disableable,
 };
+use settings::{AssistantAuthMode, LlmProtocol};
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
+    let assistant = assistant_settings_section(root, cx);
     let Some(selectors) = root.settings_selectors.as_ref() else {
         return div().flex_1().into_any_element();
     };
@@ -134,7 +139,8 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 select_control(&selectors.compute_device, "compute-device"),
             )
             .into_any_element()],
-        ));
+        ))
+        .child(assistant);
 
     div()
         .flex_1()
@@ -152,6 +158,391 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         )
         .child(body)
         .into_any_element()
+}
+
+fn assistant_settings_section(root: &RootView, cx: &mut Context<RootView>) -> gpui::AnyElement {
+    let locale = root.ui.locale;
+    let active = root
+        .settings_draft
+        .assistant
+        .active_connection_id
+        .as_deref();
+    let profiles = root
+        .settings_draft
+        .assistant
+        .connections
+        .iter()
+        .map(|profile| {
+            let id = profile.id.clone();
+            let selected = active == Some(id.as_str());
+            let mut button = Button::new(format!("assistant-profile-{id}"))
+                .compact()
+                .label(profile.name.clone());
+            button = if selected {
+                button.primary()
+            } else {
+                button.secondary()
+            };
+            button
+                .on_click(cx.listener(move |root, _, _, cx| root.edit_assistant_profile(&id, cx)))
+                .into_any_element()
+        })
+        .collect::<Vec<_>>();
+    let diagnostic = root
+        .assistant
+        .diagnostic
+        .as_ref()
+        .map(|result| match result {
+            Ok(diagnostic) => format!(
+                "{} · {} · text={} · tools={} · {} → {} · context={} · models={} · {}",
+                if diagnostic.local {
+                    tr(locale, "assistant_local_connection")
+                } else {
+                    tr(locale, "assistant_remote_connection")
+                },
+                if diagnostic.ready {
+                    tr(locale, "ready")
+                } else {
+                    tr(locale, "failed")
+                },
+                capability(diagnostic.text),
+                capability(diagnostic.client_tools),
+                diagnostic.requested_model,
+                diagnostic.resolved_model.as_deref().unwrap_or("—"),
+                diagnostic
+                    .context_window_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                diagnostic
+                    .models
+                    .as_ref()
+                    .map(|models| models.join(", "))
+                    .unwrap_or_else(|| "—".into()),
+                diagnostic.message
+            ),
+            Err(error) => error.to_string(),
+        });
+    let inputs = &root.assistant_inputs;
+
+    settings_section(
+        tr(locale, "assistant_settings"),
+        vec![
+            setting_control_row(
+                tr(locale, "assistant_enabled"),
+                choice_buttons(
+                    [
+                        ("assistant-enabled", tr(locale, "enabled"), true),
+                        ("assistant-disabled", tr(locale, "disabled"), false),
+                    ],
+                    root.settings_draft.assistant.enabled,
+                    cx,
+                    |root, value, cx| root.set_assistant_enabled(value, cx),
+                ),
+            )
+            .into_any_element(),
+            setting_control_row(
+                tr(locale, "assistant_profiles"),
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(profiles)
+                    .child(
+                        Button::new("assistant-new-profile")
+                            .secondary()
+                            .compact()
+                            .label(tr(locale, "assistant_new_profile"))
+                            .on_click(cx.listener(RootView::new_assistant_profile)),
+                    )
+                    .into_any_element(),
+            )
+            .into_any_element(),
+            assistant_text_row(tr(locale, "assistant_connection_id"), &inputs.connection_id),
+            assistant_text_row(
+                tr(locale, "assistant_connection_name"),
+                &inputs.connection_name,
+            ),
+            setting_control_row(
+                tr(locale, "assistant_protocol"),
+                protocol_buttons(root.assistant_protocol, locale, cx),
+            )
+            .into_any_element(),
+            assistant_text_row(tr(locale, "assistant_base_url"), &inputs.base_url),
+            assistant_text_row(tr(locale, "assistant_model"), &inputs.model),
+            setting_control_row(
+                tr(locale, "assistant_auth_mode"),
+                auth_buttons(root.assistant_auth_mode, locale, cx),
+            )
+            .into_any_element(),
+            assistant_text_row(tr(locale, "assistant_api_key"), &inputs.api_key),
+            assistant_text_row(tr(locale, "assistant_api_key_file"), &inputs.api_key_file),
+            assistant_text_row(
+                tr(locale, "assistant_context_window"),
+                &inputs.context_window_tokens,
+            ),
+            assistant_text_row(tr(locale, "assistant_timeout"), &inputs.timeout_ms),
+            assistant_text_row(
+                tr(locale, "assistant_max_output"),
+                &inputs.max_output_tokens,
+            ),
+            setting_control_row(
+                tr(locale, "assistant_write_mode"),
+                write_mode_buttons(root.settings_draft.assistant.write_mode, locale, cx),
+            )
+            .into_any_element(),
+            assistant_text_row(tr(locale, "assistant_max_rounds"), &inputs.max_tool_rounds),
+            assistant_text_row(
+                tr(locale, "assistant_max_retries"),
+                &inputs.max_validation_retries,
+            ),
+            setting_control_row(
+                tr(locale, "assistant_connection_test"),
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        Button::new("assistant-save-settings")
+                            .primary()
+                            .compact()
+                            .label(tr(locale, "save"))
+                            .on_click(cx.listener(RootView::save_assistant_settings)),
+                    )
+                    .child(
+                        Button::new("assistant-readiness")
+                            .secondary()
+                            .compact()
+                            .label(tr(locale, "assistant_readiness"))
+                            .disabled(root.assistant.probe_running.is_some())
+                            .on_click(cx.listener(RootView::probe_assistant_readiness)),
+                    )
+                    .child(
+                        Button::new("assistant-model-probe")
+                            .secondary()
+                            .compact()
+                            .label(tr(locale, "assistant_model_probe"))
+                            .disabled(root.assistant.probe_running.is_some())
+                            .on_click(cx.listener(RootView::probe_assistant_model)),
+                    )
+                    .children(root.assistant.probe_running.map(|kind| {
+                        Button::new("assistant-cancel-probe")
+                            .secondary()
+                            .compact()
+                            .label(format!(
+                                "{} ({})",
+                                tr(locale, "cancel"),
+                                match kind {
+                                    ConnectionProbeKind::Readiness => "readiness",
+                                    ConnectionProbeKind::Model => "model",
+                                }
+                            ))
+                            .on_click(cx.listener(RootView::cancel_assistant_probe))
+                    }))
+                    .into_any_element(),
+            )
+            .into_any_element(),
+            diagnostic
+                .map(|message| {
+                    div()
+                        .text_xs()
+                        .text_color(gpui::rgb(0x8992a3))
+                        .child(message)
+                        .into_any_element()
+                })
+                .unwrap_or_else(|| div().into_any_element()),
+        ],
+    )
+    .into_any_element()
+}
+
+fn assistant_text_row(
+    label: &'static str,
+    input: &gpui::Entity<crate::text_input::TextInput>,
+) -> gpui::AnyElement {
+    setting_control_row(
+        label,
+        div()
+            .w(px(360.))
+            .min_h(px(34.))
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .border_1()
+            .border_color(gpui::rgb(0x303744))
+            .bg(gpui::rgb(0x171b22))
+            .child(input.clone())
+            .into_any_element(),
+    )
+    .into_any_element()
+}
+
+fn protocol_buttons(
+    selected: LlmProtocol,
+    locale: crate::i18n::Locale,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    div()
+        .flex()
+        .flex_wrap()
+        .gap_2()
+        .children([
+            protocol_button(
+                LlmProtocol::OpenAiChatCompletions,
+                "Chat Completions",
+                selected,
+                cx,
+            ),
+            protocol_button(
+                LlmProtocol::AnthropicMessages,
+                "Anthropic Messages",
+                selected,
+                cx,
+            ),
+            protocol_button(
+                LlmProtocol::OpenAiResponses,
+                "OpenAI Responses",
+                selected,
+                cx,
+            ),
+        ])
+        .child(
+            div()
+                .text_xs()
+                .text_color(gpui::rgb(0x8992a3))
+                .child(tr(locale, "assistant_protocol_notice")),
+        )
+        .into_any_element()
+}
+
+fn protocol_button(
+    protocol: LlmProtocol,
+    label: &'static str,
+    selected: LlmProtocol,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let mut button = Button::new(format!("assistant-protocol-{label}"))
+        .compact()
+        .label(label);
+    button = if protocol == selected {
+        button.primary()
+    } else {
+        button.secondary()
+    };
+    button
+        .on_click(cx.listener(move |root, _, _, cx| root.set_assistant_protocol(protocol, cx)))
+        .into_any_element()
+}
+
+fn auth_buttons(
+    selected: AssistantAuthMode,
+    _locale: crate::i18n::Locale,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    div()
+        .flex()
+        .gap_2()
+        .children([
+            auth_button(AssistantAuthMode::Bearer, "Bearer", selected, cx),
+            auth_button(AssistantAuthMode::XApiKey, "x-api-key", selected, cx),
+        ])
+        .into_any_element()
+}
+
+fn auth_button(
+    auth: AssistantAuthMode,
+    label: &'static str,
+    selected: AssistantAuthMode,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let mut button = Button::new(format!("assistant-auth-{label}"))
+        .compact()
+        .label(label);
+    button = if auth == selected {
+        button.primary()
+    } else {
+        button.secondary()
+    };
+    button
+        .on_click(cx.listener(move |root, _, _, cx| root.set_assistant_auth_mode(auth, cx)))
+        .into_any_element()
+}
+
+fn write_mode_buttons(
+    selected: AgentWriteMode,
+    locale: crate::i18n::Locale,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    div()
+        .flex()
+        .gap_2()
+        .children([
+            write_mode_button(
+                AgentWriteMode::Automatic,
+                tr(locale, "assistant_automatic"),
+                selected,
+                cx,
+            ),
+            write_mode_button(
+                AgentWriteMode::ConfirmEach,
+                tr(locale, "assistant_confirm_each"),
+                selected,
+                cx,
+            ),
+        ])
+        .into_any_element()
+}
+
+fn write_mode_button(
+    mode: AgentWriteMode,
+    label: &'static str,
+    selected: AgentWriteMode,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let mut button = Button::new(format!("assistant-write-{label}"))
+        .compact()
+        .label(label);
+    button = if mode == selected {
+        button.primary()
+    } else {
+        button.secondary()
+    };
+    button
+        .on_click(cx.listener(move |root, _, _, cx| root.set_assistant_write_mode(mode, cx)))
+        .into_any_element()
+}
+
+fn choice_buttons<F>(
+    choices: [(&'static str, &'static str, bool); 2],
+    selected: bool,
+    cx: &mut Context<RootView>,
+    action: F,
+) -> gpui::AnyElement
+where
+    F: Fn(&mut RootView, bool, &mut Context<RootView>) + Clone + 'static,
+{
+    div()
+        .flex()
+        .gap_2()
+        .children(choices.map(|(id, label, value)| {
+            let action = action.clone();
+            let mut button = Button::new(id).compact().label(label);
+            button = if value == selected {
+                button.primary()
+            } else {
+                button.secondary()
+            };
+            button
+                .on_click(cx.listener(move |root, _, _, cx| action(root, value, cx)))
+                .into_any_element()
+        }))
+        .into_any_element()
+}
+
+fn capability(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unknown",
+    }
 }
 
 fn select_control(
