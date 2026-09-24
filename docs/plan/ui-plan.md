@@ -103,11 +103,14 @@ U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件�
   - i18n key 源码扫描；
   - 颜色字面量扫描：`crates/ui/src` 除 `theme/` 外不得出现 `rgb(`/`rgba(`/`hsla(`，测试用 `include_str!` 读取源码，初始红线为 61 处；
   - 渲染函数中无 `std::fs`/`Path::is_file` 的源码扫描。
-- **L2**：`TestAppContext` + fake service 的 GPUI 交互测试。覆盖点击、键盘、焦点、异步完成与 `debug_bounds` 结构断言。
+- **L2**：`TestAppContext` + fake service 的 GPUI 交互测试。覆盖点击、键盘、焦点、异步完成与 `debug_bounds` 结构断言；涉及 `runtime::spawn_blocking` 真实线程的测试调用 `cx.executor().allow_parking()`。
 - **L3**：`VisualTestAppContext::capture_screenshot`（`Window::render_to_image`，Metal 离屏）。
   - 以固定窗口尺寸 1180×760、固定 locale 与 fixture 工作区渲染每个 route，覆盖深/浅 × 玻璃/不透明。
-  - 测试标记 `#[ignore]`，须在 macOS 主线程运行：`cargo test -p ui -- --ignored --test-threads=1`。
-  - 基线 PNG 存 `crates/ui/tests/visual/`，同时记录生成时的 display scale factor，只与相同 scale factor 的截图比较。
+  - `crates/ui/tests/visual.rs` 是 `harness = false` 目标，在 macOS 主线程运行（libtest 的测试线程不是主线程）。
+    - 比较：`MEETNOTE_VISUAL=1 cargo test -p ui --test visual`；
+    - 更新基线：另加 `MEETNOTE_VISUAL_UPDATE=1`；
+    - 未设置 `MEETNOTE_VISUAL` 时跳过，默认 `cargo test -p ui` 只编译 harness。
+  - 基线 PNG 存 `crates/ui/tests/visual/`。`baseline.json` 记录 scale factor、窗口尺寸、locale 与 GPUI/gpui-component revision；scale factor 与基线不一致时比较直接失败。
   - 单通道差 > 2 的像素占比超过 0.5% 视为变化，需人工确认后更新基线。
   - in-window blur 可以确定性截图；窗口背后桌面 blur 由 `NSVisualEffectView` 在进程外合成，只做手工检查。
 - **无障碍**：
@@ -126,12 +129,18 @@ U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件�
 
 | 区域 | 已实现 | 当前缺口 |
 |---|---|---|
-| Application shell | 顶部四个入口、暗色、基础路由；窗口只设 bounds；颜色为 61 处字面量 | zui 迁移、token、玻璃外壳、外观设置、键盘导航与无障碍 |
+| Application shell | 顶部四个入口、暗色、基础路由；窗口第一层为 gpui-component `Root`，只设 bounds、未设标题；导航不高亮当前 route；颜色为 61 处字面量 | zui 迁移、token、玻璃外壳、外观设置、键盘导航与无障碍 |
 | Assistant | 输入、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染 | 下文三项页面验收与已知缺陷 |
 | Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original、处理与取消 | 文档编辑、scanner issue、revision/provenance、通用 speaker 校正 |
 | Detail | overlay 打开/关闭、基础 transcript | 完整 JSON、来源、状态、处理记录和 Agent 变更来源 |
 | Models | catalog 分组、下载、暂停、继续、取消和进度 | license/source 展示、probe 结果和安装问题诊断 |
-| Settings | locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径 | 外观、文档工作区路径、能力联动说明和完整校验反馈 |
+| Settings | locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径；即时保存项经 `update_if_equal` 在后台逐项提交，Assistant 连接区为草稿并以 typed patch 保存，revision 冲突显示可重试错误 | 外观、文档工作区路径、能力联动说明和完整校验反馈 |
+
+当前 GPUI 上的测试基线：
+
+- L1：i18n key 与渲染路径文件探测的源码扫描；
+- L2：路由结构与交互测试（`crates/ui/tests/routes.rs`、`crates/ui/src/lib.rs`）；
+- L3：四个 route 的深色不透明基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN）。
 
 UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。Assistant 任务在 `DesktopAssistantService` 自建的 JobRuntime 中执行并联动取消，阶段进度经 `AgentProgress` 回调投影；该 JobRuntime 的 `JobEvent` 未被消费，也未与音频任务共用。通用 session 不属于当前范围。
 
@@ -139,23 +148,17 @@ UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独�
 
 ### 已知缺陷
 
-以下缺陷与 GPUI 版本无关，在 U1 按"复现 → 测试红线 → 修复 → 转绿"处理。测试写在 controller/state 层，保证 U4 替换控件后仍有效。
+以下缺陷与 GPUI 版本无关，按"复现 → 测试红线 → 修复 → 转绿"处理，测试写在 controller/state 层。
 
-- //TODO - 窗口根视图包一层 `gpui_component::Root`（`controller.rs` `run`）；否则 Speaker Library 迁移对话框会 panic（`Root::update` 要求第一层为 Root）。验证：L2 测试打开该对话框不 panic。
-- //TODO - UI 的全部 settings 写入改用 `patch_if_equal`/`update_if_equal`，并移出主线程（`controller.rs` `persist_settings`，`assistant_service.rs` `save_assistant_settings`）。Assistant 凭据经 `CredentialUpdate` 写入；密钥框为空表示不修改；已存密钥不回填明文（`controller.rs` `load_profile`）。验证：
-  - 保存 profile 后已存 key 保留；
-  - 外部 patch 之后，UI 以旧 revision 保存得到可重试冲突，且不覆盖外部修改。
-- //TODO - 区分即时保存与草稿：Assistant 开关、写策略、active profile 只在点击保存时写入。验证：修改 ASR 选择不会持久化未保存的 Assistant 草稿。
-- //TODO - 补齐 `assistant_awaiting_confirmation`、`assistant_warning`、`assistant_pending_queue` 翻译，i18n 测试改为扫描源码中的全部 key（`i18n.rs`）。验证：L1 扫描测试先因 3 个缺失 key 失败。
-- //TODO - 连接探测带 probe id，丢弃已取消或已被新请求替代的迟到结果（`assistant_ui.rs` `finish_probe`）。验证：L1 测试"取消后迟到 Ok 被忽略"。
-- //TODO - 每个运行结果记录发起时的文档授权，confirm/undo 使用该授权而非当前 scope。验证：运行后切换 scope，confirm 仍只作用于原授权。
-- //TODO - pending 超过 8 项时显示溢出提示；过期由定时器驱动，不依赖重绘（`assistant_ui.rs` pending 队列，`pages/assistant.rs`）。验证：L2 测试推进测试时钟后状态变为过期。
-- //TODO - 删除 undo 的 `#[cfg(test)]` 同步分支，L2 测试经 `run_until_parked` 走真实异步路径。验证：现有 undo 点击测试不改断言仍通过。
-- //TODO - 目录变化与下载进度的等待改为异步 channel，不占用 `runtime::spawn_blocking` 的共享 worker（上限 4）。验证：L2 测试在 `JobRuntime::with_max_concurrency(1)` 下，并行等待期间 UI 操作仍完成。
-- //TODO - 渲染路径中的文件探测改为事件刷新的缓存状态，包括模型安装状态、stage 模型、Speaker Library 路径和 Models 页 `browse()`；`migrate_file` 移出主线程。验证：L1 源码扫描，以及 L2 渲染计数测试确认渲染不触发服务 IO。
-- //TODO - 英文界面的设备下拉正确选中 Auto；下拉项与"已下载/未下载/自动"随 locale 本地化，并在切换 locale 后重建。验证：L1 测试两种 locale 下的选中索引与文案。
-- //TODO - GPUI 测试使用唯一临时目录保存 settings，不写固定文件名（`lib.rs` 测试）。验证：并行运行测试互不干扰。
-- //TODO - 删除 `ui.assistant_query`、`ui.downloading` 与仅测试使用的 `mutation_complete`、`select_mutation_for_undo`。验证：`rg` 引用检索确认非测试代码无读取。
+- //TODO - 当前 pending 过期后，队列中的后续 review 无法推进，因为接受/拒绝只作用于 awaiting 项。验证：L2 测试让首项过期后，下一项进入 awaiting 并可接受。
+- //TODO - 事件回调中的主线程文件 IO 移到后台，包括：
+  - 目录变化、导入、合并与处理完成时的 `list_projects()`；
+  - `use_model` 的 `model_ref`；
+  - `download_model` 的 `start`。
+  验证：L2 测试使用阻塞的 fake repository/model manager，断言这些操作期间其他 UI 操作仍能完成。
+- //TODO - 安装状态探测、目录事件与下载事件由 models/application 服务提供异步订阅。当前 UI 在后台调用 `probe_installation`，并用转发线程桥接同步 receiver。验证：`crates/ui` 不再调用 `ModelManager::browse` 与文件探测，L1 扫描覆盖 `controller.rs`。
+- //TODO - Settings 重新加载只读取内存快照，看不到其他进程对 `settings.json` 的修改，冲突后重试会持续失败；需要 Settings 基础服务提供从 repository 重新加载。验证：另一进程修改后，UI 重新加载能看到外部值并保存成功。
+- //TODO - Settings 契约缺少创建连接的 patch，`DesktopAssistantService` 先在内存候选设置上应用 patch，再以一次 `update_if_equal` 提交。验证：契约补齐后，新建连接只经一次 `patch_if_equal` 提交，凭据规则测试不变。
 
 Speaker 合并目前在 UI 固定为 `speaker-1 → speaker-0`，随 U5 的通用 speaker 校正移除。
 
@@ -186,8 +189,8 @@ Detail 作为右侧不透明面板，以 hairline 与内容区分隔；展示 id
 当前已有 warning、多 mutation、逐项 undo、pending 和进度渲染代码；按以下交互要求验收，不以字段或状态测试替代完整页面行为。
 
 - //TODO - 多写后失败与取消两条路径下，全部 receipt、warning 和逐项恢复入口可见，迟到结果不覆盖终态。验证：L2 页面测试覆盖两条路径（现有覆盖只有 controller 单元测试与一个 undo 点击测试）。
-- //TODO - pending 暂停/队列、接受/拒绝/过期与焦点、按钮状态；关闭自动写回时设置页给出明确反馈。验证：L2 渲染与点击测试；依赖上文草稿保存、翻译、溢出与过期定时器修复。
-- //TODO - 连接/授权字段、secret 输入、错误、取消与重试经 GPUI 异步完成，`retryable` 错误显示重试入口；复用服务，不创建 UI 专用调度器。验证：L2 测试经 `run_until_parked` 覆盖成功、失败、取消与重试；依赖上文凭据保存与 probe id 修复。
+- //TODO - pending 暂停/队列、接受/拒绝/过期与焦点、按钮状态；关闭自动写回时设置页给出明确反馈。验证：L2 渲染与点击测试，覆盖溢出提示与过期后的队列推进。
+- //TODO - 连接/授权字段、secret 输入、错误、取消与重试经 GPUI 异步完成，`retryable` 错误显示重试入口；复用服务，不创建 UI 专用调度器。修改协议、baseUrl、模型或认证方式时须重新输入密钥（`SETTINGS_CREDENTIAL_TARGET_CONFLICT`），页面给出对应提示。验证：L2 测试经 `run_until_parked` 覆盖成功、失败、取消、重试与端点修改。
 
 ```text
 输入请求
@@ -240,30 +243,32 @@ UI locale 与 transcription language 独立。backend 不支持的设备或 stag
   - `host_probe`：`host_probe_reads_the_api_key_file_that_settings_validates`、`host_probe_rejects_an_unreadable_api_key_file_before_contacting_the_provider`；
   - `meetnote` 二进制单元测试：`assistant_service::tests::resolves_api_key_file_from_the_settings_directory`。
 
-1. **U0 基线**
-   - 提交 `crates/ui/**`（含新增 `assistant_ui.rs`）、`apps/meetnote/src/main.rs` 的 `DesktopServices` 接线与 `DocumentCommandService` 导入调整、`apps/meetnote/src/assistant_service.rs` 的 `AssistantUiService` 实现与结果映射，恢复 `meetnote` 二进制编译。
-   - 验证：在干净 `git worktree` 中构建该提交并运行上述门禁。
-2. **U1 缺陷修复与测试基线**
-   - 在当前 GPUI 上完成"已知缺陷"各项，每项先有失败测试。
-   - 在当前 GPUI 上建立 L3 离屏截图 harness 与各 route 的 L2 结构测试，并生成迁移前基线。
-3. **U2 依赖迁移**
+U0 基线与 U1 缺陷修复、测试基线已完成，当前状态见上文。
+
+1. **U2 依赖迁移**
    - 按依赖表写明 zui 与 fork 的 `rev`（原 zed 依赖只由 `Cargo.lock` 锁定）。
    - 执行 `cargo update -p cocoa-foundation --precise 0.2.0`（zui 精确要求）；删除 4 处 `accessibility_label`：3 处下拉的 label 由 U4 的 gpui-base `Select` 恢复；进度条 label 在 U4 改为 MeetNote 包装后恢复。
    - zui 基于 zed `f14fea9`，比原 pin `669bede5` 早 642 个提交；共享依赖随之变化，包括 strum 0.28→0.27、which 8→6、taffy 0.13→0.12。
    - 验证：
-     - L2 结构测试全部通过，测试数量不少于 U1 结束时；
+     - L2 结构测试全部通过，ui crate 测试数量不少于当前基线的 52 个（lib 40、pixels 8、routes 4）；
      - L3 截图差异逐项审阅并记录；
      - `cargo tree -i path` 与 `cargo tree -i ztracing` 均无结果；
      - 应用在 macOS 27 启动，各 route 可达。
-4. **U3 token 与外壳**
+2. **U3 token 与外壳**
    - 建立 `crates/ui/src/theme/`、`THIRD_PARTY_NOTICES.md`，并由 `scripts/package-macos-app.sh` 打包进产物；61 处颜色字面量改为 token。
    - 实现透明标题栏（拖拽区与交通灯位置）、玻璃侧栏与内容平面布局、Settings 外观项与系统外观跟随。
+   - 修正当前基线中可见的问题：
+     - 导航高亮当前 route；
+     - 设置项控件按列对齐；
+     - 设置窗口标题；
+     - gpui-component 占位文字（Please select）与 projection 值（complete）本地化；
+     - Models 状态列对齐。
    - 验证：
      - L1 颜色扫描与对比度测试转绿，`effective_material` 测试通过；
      - L2 测试断言玻璃材质下 `tokens.background.a == 0`；
      - 四种外观组合的 L3 基线通过视觉清单；
      - 桌面背后 blur 手工检查。
-5. **U4 玻璃原语与页面迁移**
+3. **U4 玻璃原语与页面迁移**
    - `frosted`、`edge_faded` 原语与不透明回退。
    - 基于 gpui-base 的 frosted 下拉、对话框与 Assistant 输入条；gpui-base `Input` 替换 `TextInput`；各页面迁移到 token 与原语。
    - 验证：
@@ -271,8 +276,8 @@ UI locale 与 transcription language 独立。backend 不支持的设备或 stag
      - L1 扫描确认下拉与进度条都经带 label 的包装创建；
      - 对话框确认/取消；输入粘贴，以及经 `EntityInputHandler` 提交中文文本；密钥框 Copy/Cut 不泄露；
      - 重新验证 U1 中设备下拉、secret 输入与对话框相关用例。
-   - //TODO - 增加 `#[ignore]` 的 macOS 资源探测。预热 10 次后，浮层开合 50 次，`MTLDevice.currentAllocatedSize` 增长 ≤ 8 MiB，帧时间 p95 ≤ 16.7 ms。验证：手动运行 `cargo test -p ui -- --ignored --test-threads=1 frosted_resource_probe` 并记录结果。
-6. **U5 产品功能**
+   - //TODO - 在 L3 harness 中增加 macOS 资源探测。预热 10 次后，浮层开合 50 次，`MTLDevice.currentAllocatedSize` 增长 ≤ 8 MiB，帧时间 p95 ≤ 16.7 ms。验证：手动运行 `MEETNOTE_VISUAL=1 MEETNOTE_RESOURCE_PROBE=1 cargo test -p ui --test visual` 并记录结果。
+4. **U5 产品功能**
    - scanner issue、revision 和完整文档状态接入 Documents/Detail。验证：L2 测试以无效外部文件与 revision 变化驱动显示。
    - 全部树和文档写回切换到 revision-aware document service，并补齐冲突 UI。验证：L2 测试在外部修改后写回，得到冲突提示且磁盘内容不变。
    - 通用文档编辑、speaker 校正和 Speaker Library 管理，移除固定 speaker 合并。验证：L2 编辑与校正测试回读 revision 递增、processing 字段不变。
