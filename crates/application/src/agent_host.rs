@@ -19,6 +19,10 @@ use contracts::{
     UndoMutationArguments,
 };
 use domain::ProjectId;
+use llm::{
+    LlmCancellation, LlmError, LlmInputBlock, LlmMessage, LlmOutput, LlmProvider, LlmRequest,
+    LlmToolChoice,
+};
 use runtime::JobId;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -112,6 +116,28 @@ impl AgentHost {
 
     pub fn workspace(&self) -> &WorkspaceCapabilityPort {
         &self.workspace
+    }
+
+    /// Perform the smallest provider call through the Host-owned provider
+    /// boundary. This is a connectivity/decoding probe, not a semantic task.
+    pub fn provider_probe(
+        &self,
+        provider: &dyn LlmProvider,
+        cancellation: &LlmCancellation,
+    ) -> Result<LlmOutput, LlmError> {
+        provider.complete(
+            &LlmRequest {
+                instructions: Some("Return only the word ready.".into()),
+                thinking: Some(false),
+                messages: vec![LlmMessage::User(vec![LlmInputBlock::Text {
+                    text: "MeetNote Agent Host connectivity probe".into(),
+                }])],
+                tools: Vec::new(),
+                tool_choice: LlmToolChoice::None,
+                max_output_tokens: Some(16),
+            },
+            cancellation,
+        )
     }
 
     pub fn dispatch(&self, request: CapabilityCallRequest) -> CapabilityCallResponse {

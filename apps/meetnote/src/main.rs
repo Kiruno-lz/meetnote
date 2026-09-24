@@ -1,3 +1,5 @@
+mod assistant_service;
+
 use application::{
     AgentHost, BackendInventory, DocumentCommandService, DocumentService, ProcessingOptions,
     ProcessingService, SettingsCapabilityPort, WorkspaceAccessPolicy, WorkspaceCapabilityPort,
@@ -12,6 +14,7 @@ use contracts::{CapabilityCallRequest, CapabilityCallResponse, ModelRef};
 use diarization::{DiarizationBackendManager, DiarizationBackendRegistry};
 use diarization_native::{NativeDiarizationBackend, NativeDiarizationConfig};
 use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
+use llm::{LlmOutputBlock, LlmProvider};
 use models::{manager::BackendProbe, ModelCatalog, ModelManager};
 use persistence::FileDocumentRepository;
 use settings::{JsonSettingsRepository, SettingsService};
@@ -63,6 +66,10 @@ fn main() {
     );
     let documents = DocumentService::new(repository);
     let document_commands = DocumentCommandService::new(documents.clone());
+    let assistant = Arc::new(assistant_service::DesktopAssistantService::new(
+        settings.clone(),
+        documents.clone(),
+    ));
     #[cfg(feature = "host-test-fake-audio")]
     let processing = if is_agent && env::var("MEETNOTE_AGENT_HOST_FAKE_AUDIO").as_deref() == Ok("1")
     {
@@ -88,6 +95,7 @@ fn main() {
     if is_agent {
         run_agent_cli(
             &args,
+            &assistant,
             settings.clone(),
             settings_snapshot.assistant.write_mode,
             workspace,
@@ -282,12 +290,16 @@ impl application::DiarizationBackend for HostFakeDiarization {
 
 fn run_agent_cli(
     args: &[String],
+    assistant: &assistant_service::DesktopAssistantService,
     settings: settings::SettingsService,
     write_mode: contracts::AgentWriteMode,
     workspace: WorkspaceService,
 ) -> ! {
     let documents = workspace.documents();
     match args.get(2).map(String::as_str) {
+        Some("host") if args.get(3).map(String::as_str) == Some("probe") => {
+            run_host_probe(assistant, settings, workspace);
+        }
         Some("host") if args.get(3).map(String::as_str) == Some("discover") => {
             run_host_discover(&args[4..], settings, workspace);
         }
@@ -406,6 +418,73 @@ fn run_agent_cli(
         _ => fail_agent_adapter(
             "usage: meetnote agent host <probe|discover|call|serve> ... | meetnote agent describe --json [scope] | meetnote agent call [workspace] <tool-name> --json-stdin [scope] | meetnote agent <confirm|reject|undo> <token> <request-id> [scope]",
         ),
+    }
+}
+
+fn run_host_probe(
+    assistant: &assistant_service::DesktopAssistantService,
+    settings: settings::SettingsService,
+    workspace: WorkspaceService,
+) -> ! {
+    // Settings and credential errors are reported before any provider exists.
+    let (provider, secret) = match assistant.active_provider() {
+        Ok(Some(provider)) => provider,
+        Ok(None) => fail_agent_adapter("no active Assistant connection is configured"),
+        Err(error) => {
+            write_agent_json(&serde_json::json!({
+                "hostCallId": "host-probe",
+                "ok": false,
+                "error": {
+                    "code": error.code,
+                    "message": error.message,
+                    "retryable": error.retryable,
+                },
+            }));
+            std::process::exit(2);
+        }
+    };
+    let host = AgentHost::new(
+        WorkspaceCapabilityPort::new(
+            workspace.clone().documents(),
+            WorkspaceAccessPolicy::AllDocuments,
+        ),
+        application::AudioCapabilityPort::new(workspace, std::iter::empty()),
+        SettingsCapabilityPort::new(settings, std::iter::empty::<String>()),
+        std::iter::empty::<String>(),
+    );
+    match host.provider_probe(&provider, &llm::LlmCancellation::new()) {
+        Ok(output) => {
+            let text = output
+                .blocks
+                .iter()
+                .filter_map(|block| match block {
+                    LlmOutputBlock::Text { text } => Some(text.as_str()),
+                    LlmOutputBlock::ToolCall { .. } => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            write_agent_json(&serde_json::json!({
+                "hostCallId": "host-probe",
+                "ok": true,
+                "providerId": provider.descriptor().id,
+                "requestedModel": output.requested_model,
+                "resolvedModel": output.resolved_model,
+                "stopReason": format!("{:?}", output.stop_reason),
+                "text": text,
+            }));
+            std::process::exit(0);
+        }
+        Err(error) => {
+            let mut error = application::agent_error_from_llm(error);
+            assistant_service::redact_secret(&mut error.message, secret.as_deref());
+            write_agent_json(&serde_json::json!({
+                "hostCallId": "host-probe",
+                "ok": false,
+                "providerId": provider.descriptor().id,
+                "error": error,
+            }));
+            std::process::exit(2);
+        }
     }
 }
 

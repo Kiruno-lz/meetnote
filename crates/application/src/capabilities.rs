@@ -2267,6 +2267,73 @@ mod tests {
         );
     }
 
+    struct RecordingProbeProvider(Mutex<Vec<llm::LlmRequest>>);
+
+    impl llm::LlmProvider for RecordingProbeProvider {
+        fn descriptor(&self) -> llm::LlmProviderDescriptor {
+            llm::LlmProviderDescriptor {
+                id: "recording".into(),
+                local: true,
+                protocol: llm::LlmProtocol::OpenAiChatCompletions,
+            }
+        }
+
+        fn complete(
+            &self,
+            request: &llm::LlmRequest,
+            _: &llm::LlmCancellation,
+        ) -> Result<llm::LlmOutput, llm::LlmError> {
+            self.0.lock().unwrap().push(request.clone());
+            Ok(llm::LlmOutput {
+                blocks: vec![llm::LlmOutputBlock::Text {
+                    text: "ready".into(),
+                }],
+                stop_reason: llm::LlmStopReason::Complete,
+                usage: None,
+                requested_model: "requested".into(),
+                resolved_model: "resolved".into(),
+            })
+        }
+
+        fn probe(&self, _: &llm::LlmCancellation) -> Result<llm::ProbeResult, llm::LlmError> {
+            unreachable!("Host probe must use one minimal completion")
+        }
+    }
+
+    #[test]
+    fn host_provider_probe_sends_one_minimal_toolless_request() {
+        let documents =
+            crate::DocumentService::new(Arc::new(MemoryDocuments(Mutex::new(BTreeMap::new()))));
+        let workspace = crate::WorkspaceService::new(
+            crate::ProcessingService::new(Arc::new(NoopAsr), Arc::new(NoopDiarization)),
+            documents.clone(),
+        );
+        let settings =
+            SettingsService::open(Arc::new(MemorySettings(Mutex::new(AppSettings::default()))))
+                .unwrap();
+        let host = crate::AgentHost::new(
+            crate::WorkspaceCapabilityPort::new(
+                documents,
+                crate::WorkspaceAccessPolicy::AllDocuments,
+            ),
+            AudioCapabilityPort::new(workspace, std::iter::empty()),
+            SettingsCapabilityPort::new(settings, std::iter::empty::<String>()),
+            std::iter::empty::<String>(),
+        );
+        let provider = RecordingProbeProvider(Mutex::new(Vec::new()));
+        let output = host
+            .provider_probe(&provider, &llm::LlmCancellation::new())
+            .unwrap();
+        assert_eq!(output.resolved_model, "resolved");
+        let requests = provider.0.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert!(request.tools.is_empty());
+        assert_eq!(request.tool_choice, llm::LlmToolChoice::None);
+        assert_eq!(request.max_output_tokens, Some(16));
+        assert_eq!(request.messages.len(), 1);
+    }
+
     #[test]
     fn audio_capability_is_a_granted_project_port_and_rejects_path_escape() {
         let repository = Arc::new(MemoryDocuments(Mutex::new(BTreeMap::new())));

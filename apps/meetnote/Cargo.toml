@@ -17,6 +17,7 @@ diarization-native = { path = "../../crates/diarization-native" }
 diarization-sherpa-onnx = { path = "../../crates/diarization-sherpa-onnx" }
 domain = { path = "../../crates/domain" }
 futures.workspace = true
+llm = { path = "../../crates/llm" }
 runtime = { path = "../../crates/runtime" }
 serde.workspace = true
 serde_json.workspace = true

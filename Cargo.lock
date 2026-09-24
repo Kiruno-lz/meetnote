@@ -4123,6 +4123,7 @@ dependencies = [
  "diarization-sherpa-onnx",
  "domain",
  "futures",
+ "llm",
  "models",
  "persistence",
  "runtime",
