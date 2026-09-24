@@ -1,6 +1,8 @@
 use contracts::{AgentScene, AgentSkillSelector, AgentWriteMode, DocumentProjection};
 use domain::DocumentState;
-use settings::{AssistantConnectionProfile, AssistantSettings};
+use settings::{
+    AppSettings, AssistantConnectionProfile, AssistantSettings, SettingsError, SettingsPatch,
+};
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -42,6 +44,8 @@ pub struct AssistantUiError {
     pub retryable: bool,
 }
 
+pub const SETTINGS_REVISION_CONFLICT: &str = "SETTINGS_REVISION_CONFLICT";
+
 impl AssistantUiError {
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self {
@@ -50,6 +54,36 @@ impl AssistantUiError {
             retryable: false,
         }
     }
+
+    /// A settings write that lost a compare-and-swap is retryable once the
+    /// caller reloads; every other settings error is not.
+    pub fn from_settings(error: &SettingsError) -> Self {
+        let conflict = matches!(error, SettingsError::RevisionConflict);
+        Self {
+            code: if conflict {
+                SETTINGS_REVISION_CONFLICT
+            } else {
+                "ASSISTANT_SETTINGS_INVALID"
+            }
+            .into(),
+            message: error.to_string(),
+            retryable: conflict,
+        }
+    }
+
+    pub fn is_settings_conflict(&self) -> bool {
+        self.code == SETTINGS_REVISION_CONFLICT
+    }
+}
+
+/// The Assistant settings form as changes relative to the settings it was
+/// loaded from. `patch.connection` edits an existing profile; a new profile
+/// is `new_connection`, and its credential is `patch.connection.credential`.
+/// A credential of `None` keeps the stored one.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AssistantSettingsSave {
+    pub patch: SettingsPatch,
+    pub new_connection: Option<AssistantConnectionProfile>,
 }
 
 impl fmt::Display for AssistantUiError {
@@ -228,10 +262,13 @@ pub struct AssistantRunDiagnostics {
 }
 
 pub trait AssistantUiService: Send + Sync {
+    /// Commits `save` only while the settings still have `expected_revision`;
+    /// otherwise fails with a retryable `SETTINGS_REVISION_CONFLICT`.
     fn save_assistant_settings(
         &self,
-        settings: AssistantSettings,
-    ) -> Result<AssistantSettings, AssistantUiError>;
+        expected_revision: String,
+        save: AssistantSettingsSave,
+    ) -> Result<AppSettings, AssistantUiError>;
 
     fn probe_connection(
         &self,
@@ -784,9 +821,10 @@ mod tests {
     impl AssistantUiService for FakeAssistantService {
         fn save_assistant_settings(
             &self,
-            settings: AssistantSettings,
-        ) -> Result<AssistantSettings, AssistantUiError> {
-            Ok(settings)
+            _: String,
+            _: AssistantSettingsSave,
+        ) -> Result<AppSettings, AssistantUiError> {
+            Err(AssistantUiError::unavailable("not exercised"))
         }
 
         fn probe_connection(

@@ -112,6 +112,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "select_project_first") => "请先选择一个项目。",
         (Locale::ZhCn, "project_missing") => "选中的项目已不存在。",
         (Locale::ZhCn, "settings_saved") => "设置已保存。",
+        (Locale::ZhCn, "settings_conflict") => "设置已在别处修改，已重新载入；请重试。",
         (Locale::ZhCn, "assistant_settings") => "Assistant",
         (Locale::ZhCn, "assistant_enabled") => "启用 Assistant",
         (Locale::ZhCn, "enabled") => "启用",
@@ -288,6 +289,9 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "select_project_first") => "Select a project first.",
         (Locale::EnUs, "project_missing") => "Selected project no longer exists.",
         (Locale::EnUs, "settings_saved") => "Settings saved.",
+        (Locale::EnUs, "settings_conflict") => {
+            "Settings changed elsewhere and were reloaded; try again."
+        }
         (Locale::EnUs, "assistant_settings") => "Assistant",
         (Locale::EnUs, "assistant_enabled") => "Enable Assistant",
         (Locale::EnUs, "enabled") => "Enabled",

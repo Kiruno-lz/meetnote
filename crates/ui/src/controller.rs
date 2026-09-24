@@ -1,7 +1,7 @@
 use crate::{
     assistant_ui::{
-        now_ms, AssistantController, AssistantScopeMode, AssistantUiError, AssistantUiService,
-        ConnectionProbeKind,
+        now_ms, AssistantController, AssistantScopeMode, AssistantSettingsSave, AssistantUiError,
+        AssistantUiService, ConnectionProbeKind,
     },
     i18n, pages,
     route::Route,
@@ -10,7 +10,8 @@ use crate::{
 };
 use application::{BackendInventory, ProcessingOptions, WorkspaceService};
 use contracts::{
-    AgentScene, AgentWriteMode, DiarizationStageKind, DiarizationStageOption, ModelRef,
+    AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, DiarizationStageOption,
+    ModelRef,
 };
 use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
@@ -23,7 +24,8 @@ use models::manager::{DownloadEvent, DownloadState};
 use models::{ModelAvailability, ModelInstallState};
 use runtime::{JobContext, JobEvent};
 use settings::{
-    AppSettings, AssistantAuthMode, AssistantConnectionProfile, LlmProtocol, SettingsService,
+    AppSettings, AssistantAuthMode, AssistantConnectionPatch, AssistantConnectionProfile,
+    AssistantSettings, CredentialUpdate, LlmProtocol, SettingsService,
 };
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -37,20 +39,49 @@ use gpui_component::{
 type StringSelect = SelectState<Vec<String>>;
 type ModelSelect = SelectState<Vec<ModelOption>>;
 type StageModelSelect = SelectState<Vec<StageModelOption>>;
+type SettingsChange = Arc<dyn Fn(&mut AppSettings) + Send + Sync>;
+
+enum SettingsWrite {
+    /// An instant-save field. It is applied to the persisted settings alone,
+    /// so it never carries the unsaved Assistant draft.
+    Field {
+        change: SettingsChange,
+        saved_notice: String,
+    },
+    /// The Assistant form, relative to the settings it was loaded from.
+    Assistant(AssistantSettingsSave),
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct ModelOption {
     id: String,
     installed: bool,
+    locale: i18n::Locale,
 }
 
 impl ModelOption {
-    fn from_availability(availability: &ModelAvailability) -> Self {
+    fn from_availability(availability: &ModelAvailability, locale: i18n::Locale) -> Self {
         Self {
             id: availability.model.id.clone(),
             installed: availability.install_state == ModelInstallState::Installed,
+            locale,
         }
     }
+
+    fn status_label(&self) -> &'static str {
+        install_status_label(self.locale, self.installed)
+    }
+}
+
+fn install_status_label(locale: i18n::Locale, installed: bool) -> &'static str {
+    i18n::text(
+        locale,
+        if installed {
+            "downloaded"
+        } else {
+            "not_downloaded"
+        },
+    )
 }
 
 impl SelectItem for ModelOption {
@@ -71,11 +102,7 @@ impl SelectItem for ModelOption {
             .justify_between()
             .gap_3()
             .child(self.id.clone())
-            .child(if self.installed {
-                "已下载"
-            } else {
-                "未下载"
-            })
+            .child(self.status_label())
     }
 
     fn disabled(&self) -> bool {
@@ -87,6 +114,13 @@ impl SelectItem for ModelOption {
 pub(crate) struct StageModelOption {
     id: String,
     installed: bool,
+    locale: i18n::Locale,
+}
+
+impl StageModelOption {
+    fn status_label(&self) -> &'static str {
+        install_status_label(self.locale, self.installed)
+    }
 }
 
 impl SelectItem for StageModelOption {
@@ -107,11 +141,7 @@ impl SelectItem for StageModelOption {
             .justify_between()
             .gap_3()
             .child(self.id.clone())
-            .child(if self.installed {
-                "已下载"
-            } else {
-                "未下载"
-            })
+            .child(self.status_label())
     }
 
     fn disabled(&self) -> bool {
@@ -149,6 +179,8 @@ pub(crate) struct AssistantInputs {
 }
 
 impl AssistantInputs {
+    /// The secret field always starts empty: the stored key is never shown,
+    /// and an empty field keeps it.
     fn load_profile(
         &self,
         profile: Option<&AssistantConnectionProfile>,
@@ -160,7 +192,7 @@ impl AssistantInputs {
             (&self.connection_name, profile.name),
             (&self.base_url, profile.base_url),
             (&self.model, profile.model),
-            (&self.api_key, profile.api_key.unwrap_or_default()),
+            (&self.api_key, String::new()),
             (&self.api_key_file, profile.api_key_file.unwrap_or_default()),
             (
                 &self.context_window_tokens,
@@ -236,6 +268,14 @@ pub(crate) struct RootView {
     pub(crate) inventory: BackendInventory,
     pub(crate) services: DesktopServices,
     pub(crate) settings_draft: AppSettings,
+    /// The persisted settings as the UI last loaded them. Every settings write
+    /// is a compare-and-swap against them.
+    settings_base: AppSettings,
+    /// The Assistant section the settings form was loaded from; saving sends
+    /// only the changes relative to it, so a retry keeps external changes.
+    assistant_origin: AssistantSettings,
+    /// The last queued settings write; writes run one at a time.
+    settings_write: Option<Task<()>>,
     pub(crate) projects: Vec<DocumentState>,
     pub(crate) ui: UiState,
     pub(crate) assistant: AssistantController,
@@ -244,6 +284,8 @@ pub(crate) struct RootView {
     pub(crate) assistant_auth_mode: AssistantAuthMode,
     pub(crate) cancel_contexts: Option<(JobContext, JobContext)>,
     pub(crate) settings_selectors: Option<SettingsSelectors>,
+    /// The last failed settings write, shown on the settings page.
+    pub(crate) settings_error: Option<AssistantUiError>,
     pending_expiry: Option<Task<()>>,
 }
 
@@ -360,6 +402,9 @@ impl RootView {
         Self {
             inventory,
             services,
+            settings_base: settings_draft.clone(),
+            assistant_origin: settings_draft.assistant.clone(),
+            settings_write: None,
             settings_draft,
             projects,
             ui,
@@ -375,6 +420,7 @@ impl RootView {
                 .unwrap_or(AssistantAuthMode::Bearer),
             cancel_contexts: None,
             settings_selectors: None,
+            settings_error: None,
             pending_expiry: None,
         }
     }
@@ -416,20 +462,10 @@ impl RootView {
             settings.diarization_model.as_ref(),
         );
         let clustering_items = self.clustering_options(settings.diarization_backend_id.as_deref());
-        let transcription_language_items = vec!["自动".into(), "English".into(), "中文".into()];
-        let expected_speakers_items = vec![
-            "自动".into(),
-            "1".into(),
-            "2".into(),
-            "3".into(),
-            "4".into(),
-        ];
-        let compute_device_items = vec![
-            "自动".into(),
-            "CPU".into(),
-            "Metal".into(),
-            "Core ML".into(),
-        ];
+        let locale = self.ui.locale;
+        let transcription_language_items = transcription_language_items(locale);
+        let expected_speakers_items = expected_speaker_items(locale);
+        let compute_device_items = compute_device_items(locale);
         let expected_speakers_value = settings.expected_speakers.map(|value| value.to_string());
 
         let language = cx.new(|cx| {
@@ -474,11 +510,10 @@ impl RootView {
                 transcription_language_items.clone(),
                 selected_index(
                     &transcription_language_items,
-                    Some(match settings.language.as_deref() {
-                        Some("en") | Some("en-US") => "English",
-                        Some("zh") | Some("zh-CN") => "中文",
-                        _ => "自动",
-                    }),
+                    Some(transcription_language_label(
+                        locale,
+                        settings.language.as_deref(),
+                    )),
                 ),
                 window,
                 cx,
@@ -560,7 +595,11 @@ impl RootView {
                 expected_speakers_items.clone(),
                 selected_index(
                     &expected_speakers_items,
-                    Some(expected_speakers_value.as_deref().unwrap_or("自动")),
+                    Some(
+                        expected_speakers_value
+                            .as_deref()
+                            .unwrap_or(auto_label(locale)),
+                    ),
                 ),
                 window,
                 cx,
@@ -649,7 +688,7 @@ impl RootView {
             .model_manager
             .browse(Some(task), backend_id)
             .into_iter()
-            .map(|entry| ModelOption::from_availability(&entry))
+            .map(|entry| ModelOption::from_availability(&entry, self.ui.locale))
             .collect()
     }
 
@@ -677,6 +716,7 @@ impl RootView {
             .map(|option| StageModelOption {
                 id: option.id.clone(),
                 installed: model.is_some_and(|model| self.stage_option_is_installed(model, option)),
+                locale: self.ui.locale,
             })
             .collect()
     }
@@ -743,18 +783,176 @@ impl RootView {
         })
     }
 
-    fn persist_settings(&mut self, cx: &mut Context<Self>) {
-        match self.services.settings.update(self.settings_draft.clone()) {
-            Ok(settings) => {
-                self.settings_draft = settings;
-                self.ui.notice = i18n::text(self.ui.locale, "settings_saved").into();
+    /// Shows `change` at once and persists only that change.
+    fn persist_field(
+        &mut self,
+        change: impl Fn(&mut AppSettings) + Send + Sync + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        let saved_notice = i18n::text(self.ui.locale, "settings_saved").into();
+        self.persist_field_with_notice(change, saved_notice, cx);
+    }
+
+    fn persist_field_with_notice(
+        &mut self,
+        change: impl Fn(&mut AppSettings) + Send + Sync + 'static,
+        saved_notice: String,
+        cx: &mut Context<Self>,
+    ) {
+        change(&mut self.settings_draft);
+        self.queue_settings_write(
+            SettingsWrite::Field {
+                change: Arc::new(change),
+                saved_notice,
+            },
+            cx,
+        );
+        cx.notify();
+    }
+
+    /// Settings writes run one at a time off the main thread. Each compares
+    /// against the settings loaded when it starts, so the UI's own writes do
+    /// not conflict with each other while external changes still do.
+    fn queue_settings_write(&mut self, write: SettingsWrite, cx: &mut Context<Self>) {
+        let previous = self.settings_write.take();
+        self.settings_write = Some(cx.spawn(async move |this, cx| {
+            if let Some(previous) = previous {
+                previous.await;
             }
-            Err(error) => {
-                self.ui.notice =
-                    i18n::message(self.ui.locale, "settings_failed", &error.to_string());
+            let Ok((settings, assistant, expected)) = this.update(cx, |this, _| {
+                (
+                    this.services.settings.clone(),
+                    this.services.assistant.clone(),
+                    this.settings_base.clone(),
+                )
+            }) else {
+                return;
+            };
+            match write {
+                SettingsWrite::Field {
+                    change,
+                    saved_notice,
+                } => {
+                    let apply = change.clone();
+                    let result = runtime::spawn_blocking(move || {
+                        let mut next = expected.clone();
+                        apply(&mut next);
+                        settings
+                            .update_if_equal(&expected, next)
+                            .map_err(|error| AssistantUiError::from_settings(&error))
+                    })
+                    .await;
+                    this.update(cx, |this, cx| {
+                        this.finish_field_write(change.as_ref(), saved_notice, result, cx)
+                    })
+                    .ok();
+                }
+                SettingsWrite::Assistant(save) => {
+                    let result = runtime::spawn_blocking(move || {
+                        assistant
+                            .save_assistant_settings(SettingsService::revision_of(&expected), save)
+                    })
+                    .await;
+                    this.update(cx, |this, cx| this.finish_assistant_save(result, cx))
+                        .ok();
+                }
             }
+        }));
+    }
+
+    fn finish_field_write(
+        &mut self,
+        change: &(dyn Fn(&mut AppSettings) + Send + Sync),
+        saved_notice: String,
+        result: Result<AppSettings, AssistantUiError>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(saved) => {
+                self.settings_base = saved;
+                // An earlier failed write resets the draft; keep this change.
+                change(&mut self.settings_draft);
+                self.sync_locale(cx);
+                self.settings_error = None;
+                self.ui.notice = saved_notice;
+            }
+            Err(error) => self.settings_write_failed(error, cx),
         }
         cx.notify();
+    }
+
+    fn finish_assistant_save(
+        &mut self,
+        result: Result<AppSettings, AssistantUiError>,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(saved) => {
+                self.assistant_origin = saved.assistant.clone();
+                self.settings_draft.assistant = saved.assistant.clone();
+                self.settings_base = saved;
+                self.load_assistant_form(cx);
+                self.settings_error = None;
+                self.ui.notice = i18n::text(self.ui.locale, "assistant_settings_saved").into();
+            }
+            Err(error) => self.settings_write_failed(error, cx),
+        }
+        cx.notify();
+    }
+
+    /// The persisted settings stay authoritative after a failed write: a
+    /// conflict reloads them and the instant-save fields show them again. The
+    /// unsaved Assistant form is kept, so saving it again is the retry.
+    fn settings_write_failed(&mut self, error: AssistantUiError, cx: &mut Context<Self>) {
+        if error.is_settings_conflict() {
+            if let Ok(latest) = self.services.settings.snapshot() {
+                self.settings_base = latest;
+            }
+        }
+        self.settings_draft = AppSettings {
+            assistant: self.settings_draft.assistant.clone(),
+            ..self.settings_base.clone()
+        };
+        self.settings_selectors = None;
+        self.sync_locale(cx);
+        self.ui.notice = settings_error_text(self.ui.locale, &error);
+        self.settings_error = Some(error);
+    }
+
+    /// Follows the draft's UI locale; the localized selects are rebuilt on
+    /// the next render.
+    fn sync_locale(&mut self, cx: &mut Context<Self>) {
+        let locale = i18n::Locale::from_code(&self.settings_draft.ui_locale);
+        if locale == self.ui.locale {
+            return;
+        }
+        self.ui.locale = locale;
+        self.settings_selectors = None;
+        self.assistant_inputs.prompt.update(cx, |input, _| {
+            input.set_placeholder(i18n::text(locale, "ask_placeholder"));
+        });
+    }
+
+    fn load_assistant_form(&mut self, cx: &mut Context<Self>) {
+        let assistant = &self.settings_draft.assistant;
+        let profile = assistant.active_connection().cloned();
+        let rounds = assistant.max_tool_rounds.to_string();
+        let retries = assistant.max_validation_retries.to_string();
+        self.assistant_protocol = profile
+            .as_ref()
+            .map_or(LlmProtocol::OpenAiChatCompletions, |profile| {
+                profile.protocol
+            });
+        self.assistant_auth_mode = profile
+            .as_ref()
+            .map_or(AssistantAuthMode::Bearer, |profile| profile.auth_mode);
+        self.assistant_inputs.load_profile(profile.as_ref(), cx);
+        self.assistant_inputs
+            .max_tool_rounds
+            .update(cx, |input, _| input.set_value(rounds));
+        self.assistant_inputs
+            .max_validation_retries
+            .update(cx, |input, _| input.set_value(retries));
     }
 
     fn refresh_model_selector(
@@ -904,12 +1102,12 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         if let SelectEvent::Confirm(Some(value)) = event {
-            self.settings_draft.language = match value.as_str() {
+            let language: Option<String> = match value.as_str() {
                 "English" => Some("en".into()),
                 "中文" => Some("zh".into()),
                 _ => None,
             };
-            self.persist_settings(cx);
+            self.persist_field(move |settings| settings.language = language.clone(), cx);
         }
     }
 
@@ -950,9 +1148,11 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         if let SelectEvent::Confirm(Some(value)) = event {
-            self.settings_draft.diarization_stages.segmentation_model =
-                self.stage_model_ref(DiarizationStageKind::Segmentation, value);
-            self.persist_settings(cx);
+            let model = self.stage_model_ref(DiarizationStageKind::Segmentation, value);
+            self.persist_field(
+                move |settings| settings.diarization_stages.segmentation_model = model.clone(),
+                cx,
+            );
         }
     }
 
@@ -964,9 +1164,11 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         if let SelectEvent::Confirm(Some(value)) = event {
-            self.settings_draft.diarization_stages.embedding_model =
-                self.stage_model_ref(DiarizationStageKind::Embedding, value);
-            self.persist_settings(cx);
+            let model = self.stage_model_ref(DiarizationStageKind::Embedding, value);
+            self.persist_field(
+                move |settings| settings.diarization_stages.embedding_model = model.clone(),
+                cx,
+            );
         }
     }
 
@@ -985,13 +1187,17 @@ impl RootView {
                         option.stage == DiarizationStageKind::Clustering && option.id == *value
                     })
                 });
-            self.settings_draft.diarization_stages.clustering_algorithm =
-                option.map(|option| contracts::AlgorithmRef {
-                    id: option.id.clone(),
-                    revision: option.revision.clone(),
-                    parameters: None,
-                });
-            self.persist_settings(cx);
+            let algorithm = option.map(|option| contracts::AlgorithmRef {
+                id: option.id.clone(),
+                revision: option.revision.clone(),
+                parameters: None,
+            });
+            self.persist_field(
+                move |settings| {
+                    settings.diarization_stages.clustering_algorithm = algorithm.clone()
+                },
+                cx,
+            );
         }
     }
 
@@ -1003,8 +1209,11 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         if let SelectEvent::Confirm(Some(value)) = event {
-            self.settings_draft.expected_speakers = value.parse().ok();
-            self.persist_settings(cx);
+            let expected_speakers = value.parse().ok();
+            self.persist_field(
+                move |settings| settings.expected_speakers = expected_speakers,
+                cx,
+            );
         }
     }
 
@@ -1016,13 +1225,8 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         if let SelectEvent::Confirm(Some(value)) = event {
-            self.settings_draft.compute_device = match value.as_str() {
-                "CPU" => contracts::ComputeDevice::Cpu,
-                "Metal" => contracts::ComputeDevice::Metal,
-                "Core ML" => contracts::ComputeDevice::CoreMl,
-                _ => contracts::ComputeDevice::Auto,
-            };
-            self.persist_settings(cx);
+            let device = compute_device_from_label(self.ui.locale, value);
+            self.persist_field(move |settings| settings.compute_device = device, cx);
         }
     }
 
@@ -1171,14 +1375,13 @@ impl RootView {
     }
 
     fn commit_speaker_library_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
-        self.settings_draft.speaker_library_path = path.display().to_string();
-        self.persist_settings(cx);
-        self.ui.notice = i18n::message(
-            self.ui.locale,
-            "speaker_library_updated",
-            &self.settings_draft.speaker_library_path,
+        let path = path.display().to_string();
+        let saved_notice = i18n::message(self.ui.locale, "speaker_library_updated", &path);
+        self.persist_field_with_notice(
+            move |settings| settings.speaker_library_path = path.clone(),
+            saved_notice,
+            cx,
         );
-        cx.notify();
     }
 
     pub(crate) fn select_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
@@ -1194,21 +1397,12 @@ impl RootView {
     }
 
     pub(crate) fn set_locale(&mut self, locale: i18n::Locale, cx: &mut Context<Self>) {
-        self.settings_draft.ui_locale = locale.code().into();
-        self.ui.locale = locale;
-        self.assistant_inputs.prompt.update(cx, |input, _| {
-            input.set_placeholder(i18n::text(locale, "ask_placeholder"));
-        });
-        match self.services.settings.update(self.settings_draft.clone()) {
-            Ok(settings) => {
-                self.settings_draft = settings;
-                self.ui.notice = i18n::text(locale, "language_changed").into();
-            }
-            Err(error) => {
-                self.ui.notice = i18n::message(locale, "settings_failed", &error.to_string());
-            }
-        }
-        cx.notify();
+        self.persist_field_with_notice(
+            move |settings| settings.ui_locale = locale.code().into(),
+            i18n::text(locale, "language_changed").into(),
+            cx,
+        );
+        self.sync_locale(cx);
     }
 
     pub(crate) fn open_detail(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1286,10 +1480,14 @@ impl RootView {
         cx.notify();
     }
 
+    /// The profile in the form and its credential decision. The returned
+    /// profile carries the credential it would use: the typed key, the key
+    /// file, or the stored credential when the decision is `None`.
     fn assistant_profile_from_inputs(
         &self,
         cx: &Context<Self>,
-    ) -> Result<Option<AssistantConnectionProfile>, AssistantUiError> {
+    ) -> Result<Option<(AssistantConnectionProfile, Option<CredentialUpdate>)>, AssistantUiError>
+    {
         let id = self.assistant_inputs.connection_id.read(cx).value();
         let name = self.assistant_inputs.connection_name.read(cx).value();
         let base_url = self.assistant_inputs.base_url.read(cx).value();
@@ -1302,15 +1500,29 @@ impl RootView {
         {
             return Ok(None);
         }
-        Ok(Some(AssistantConnectionProfile {
+        let stored = self
+            .assistant_origin
+            .connections
+            .iter()
+            .find(|profile| profile.id == id);
+        let credential = credential_update(&api_key, &api_key_file, stored);
+        let (api_key, api_key_file) = match &credential {
+            Some(CredentialUpdate::Direct(key)) => (Some(key.clone()), None),
+            Some(CredentialUpdate::File(file)) => (None, Some(file.clone())),
+            Some(CredentialUpdate::Clear) => (None, None),
+            None => stored.map_or((None, None), |stored| {
+                (stored.api_key.clone(), stored.api_key_file.clone())
+            }),
+        };
+        let profile = AssistantConnectionProfile {
             id,
             name,
             protocol: self.assistant_protocol,
             base_url,
             model,
             auth_mode: self.assistant_auth_mode,
-            api_key: (!api_key.is_empty()).then_some(api_key),
-            api_key_file: (!api_key_file.is_empty()).then_some(api_key_file),
+            api_key,
+            api_key_file,
             context_window_tokens: parse_optional_u32(
                 &self.assistant_inputs.context_window_tokens.read(cx).value(),
                 "contextWindowTokens",
@@ -1323,19 +1535,23 @@ impl RootView {
                 &self.assistant_inputs.max_output_tokens.read(cx).value(),
                 "maxOutputTokens",
             )?,
-        }))
+        };
+        Ok(Some((profile, credential)))
     }
 
-    fn assistant_settings_from_inputs(
+    /// Only the fields that differ from `assistant_origin` are saved, so
+    /// fields changed elsewhere since the form loaded are kept.
+    fn assistant_save_from_inputs(
         &self,
         cx: &Context<Self>,
-    ) -> Result<settings::AssistantSettings, AssistantUiError> {
-        let mut assistant = self.settings_draft.assistant.clone();
-        assistant.max_tool_rounds = parse_u32(
+    ) -> Result<AssistantSettingsSave, AssistantUiError> {
+        let origin = &self.assistant_origin;
+        let draft = &self.settings_draft.assistant;
+        let max_tool_rounds = parse_u32(
             &self.assistant_inputs.max_tool_rounds.read(cx).value(),
             "maxToolRounds",
         )?;
-        assistant.max_validation_retries = parse_u32(
+        let max_validation_retries = parse_u32(
             &self
                 .assistant_inputs
                 .max_validation_retries
@@ -1343,21 +1559,42 @@ impl RootView {
                 .value(),
             "maxValidationRetries",
         )?;
-        let profile = self.assistant_profile_from_inputs(cx)?;
-        if let Some(profile) = profile {
-            let id = profile.id.clone();
-            if let Some(existing) = assistant
+        let mut save = AssistantSettingsSave::default();
+        let mut active_connection_id = draft.active_connection_id.clone();
+        if let Some((profile, credential)) = self.assistant_profile_from_inputs(cx)? {
+            active_connection_id = Some(profile.id.clone());
+            let unchanged = AssistantConnectionPatch {
+                id: profile.id.clone(),
+                ..Default::default()
+            };
+            let connection = match origin
                 .connections
-                .iter_mut()
-                .find(|existing| existing.id == id)
+                .iter()
+                .find(|stored| stored.id == profile.id)
             {
-                *existing = profile;
-            } else {
-                assistant.connections.push(profile);
-            }
-            assistant.active_connection_id = Some(id);
+                Some(stored) => connection_patch(stored, &profile, credential),
+                None => {
+                    save.new_connection = Some(AssistantConnectionProfile {
+                        api_key: None,
+                        api_key_file: None,
+                        ..profile
+                    });
+                    AssistantConnectionPatch {
+                        credential,
+                        ..unchanged.clone()
+                    }
+                }
+            };
+            save.patch.connection = (connection != unchanged).then_some(connection);
         }
-        Ok(assistant)
+        save.patch.assistant_enabled = changed(&origin.enabled, &draft.enabled);
+        save.patch.write_mode = changed(&origin.write_mode, &draft.write_mode);
+        save.patch.active_connection_id =
+            changed(&origin.active_connection_id, &active_connection_id);
+        save.patch.max_tool_rounds = changed(&origin.max_tool_rounds, &max_tool_rounds);
+        save.patch.max_validation_retries =
+            changed(&origin.max_validation_retries, &max_validation_retries);
+        Ok(save)
     }
 
     pub(crate) fn save_assistant_settings(
@@ -1366,37 +1603,18 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let assistant = match self.assistant_settings_from_inputs(cx) {
-            Ok(value) => value,
+        match self.assistant_save_from_inputs(cx) {
+            Ok(save) => self.queue_settings_write(SettingsWrite::Assistant(save), cx),
             Err(error) => {
                 self.ui.notice = error.to_string();
                 cx.notify();
-                return;
             }
-        };
-        let service = self.services.assistant.clone();
-        cx.spawn(async move |this, cx| {
-            let result =
-                runtime::spawn_blocking(move || service.save_assistant_settings(assistant)).await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(assistant) => {
-                        this.settings_draft.assistant = assistant;
-                        this.ui.notice =
-                            i18n::text(this.ui.locale, "assistant_settings_saved").into();
-                    }
-                    Err(error) => this.ui.notice = error.to_string(),
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+        }
     }
 
     fn probe_assistant_connection(&mut self, kind: ConnectionProbeKind, cx: &mut Context<Self>) {
         let profile = match self.assistant_profile_from_inputs(cx) {
-            Ok(Some(profile)) => profile,
+            Ok(Some((profile, _))) => profile,
             Ok(None) => {
                 self.ui.notice = i18n::text(self.ui.locale, "assistant_connection_required").into();
                 cx.notify();
@@ -1769,22 +1987,24 @@ impl RootView {
     }
 
     pub(crate) fn select_asr_backend(&mut self, backend_id: String, cx: &mut Context<Self>) {
-        self.settings_draft.asr_backend_id = Some(backend_id.clone());
-        if self
-            .settings_draft
-            .asr_model
-            .as_ref()
-            .is_some_and(|model| model.backend_id != backend_id)
-        {
-            self.settings_draft.asr_model = None;
-        }
         self.ui.notice = i18n::message(
             self.ui.locale,
             "backend_selected",
             &format!("ASR {backend_id}"),
         );
-        self.persist_settings(cx);
-        cx.notify();
+        self.persist_field(
+            move |settings| {
+                if settings
+                    .asr_model
+                    .as_ref()
+                    .is_some_and(|model| model.backend_id != backend_id)
+                {
+                    settings.asr_model = None;
+                }
+                settings.asr_backend_id = Some(backend_id.clone());
+            },
+            cx,
+        );
     }
 
     pub(crate) fn select_diarization_backend(
@@ -1792,23 +2012,25 @@ impl RootView {
         backend_id: String,
         cx: &mut Context<Self>,
     ) {
-        self.settings_draft.diarization_backend_id = Some(backend_id.clone());
-        if self
-            .settings_draft
-            .diarization_model
-            .as_ref()
-            .is_some_and(|model| model.backend_id != backend_id)
-        {
-            self.settings_draft.diarization_model = None;
-        }
-        self.settings_draft.diarization_stages = Default::default();
         self.ui.notice = i18n::message(
             self.ui.locale,
             "backend_selected",
             &format!("Diarization {backend_id}"),
         );
-        self.persist_settings(cx);
-        cx.notify();
+        self.persist_field(
+            move |settings| {
+                if settings
+                    .diarization_model
+                    .as_ref()
+                    .is_some_and(|model| model.backend_id != backend_id)
+                {
+                    settings.diarization_model = None;
+                }
+                settings.diarization_backend_id = Some(backend_id.clone());
+                settings.diarization_stages = Default::default();
+            },
+            cx,
+        );
     }
 
     pub(crate) fn use_model(
@@ -1824,18 +2046,20 @@ impl RootView {
             .model_ref(&model_id, &backend_id);
         match model {
             Ok(model) => {
-                let mut settings = self.settings_draft.clone();
-                if task == "asr" {
-                    settings.asr_backend_id = Some(backend_id);
-                    settings.asr_model = Some(model);
-                } else {
-                    settings.diarization_backend_id = Some(backend_id);
-                    settings.diarization_model = Some(model);
-                    settings.diarization_stages = Default::default();
-                }
-                self.settings_draft = settings;
                 self.ui.notice = i18n::message(self.ui.locale, "model_selected", &model_id);
-                self.persist_settings(cx);
+                self.persist_field(
+                    move |settings| {
+                        if task == "asr" {
+                            settings.asr_backend_id = Some(backend_id.clone());
+                            settings.asr_model = Some(model.clone());
+                        } else {
+                            settings.diarization_backend_id = Some(backend_id.clone());
+                            settings.diarization_model = Some(model.clone());
+                            settings.diarization_stages = Default::default();
+                        }
+                    },
+                    cx,
+                );
             }
             Err(error) => {
                 self.ui.notice =
@@ -2125,6 +2349,106 @@ impl RootView {
     }
 }
 
+fn auto_label(locale: i18n::Locale) -> &'static str {
+    i18n::text(locale, "auto")
+}
+
+fn transcription_language_items(locale: i18n::Locale) -> Vec<String> {
+    vec![auto_label(locale).into(), "English".into(), "中文".into()]
+}
+
+fn transcription_language_label(locale: i18n::Locale, language: Option<&str>) -> &'static str {
+    match language {
+        Some("en") | Some("en-US") => "English",
+        Some("zh") | Some("zh-CN") => "中文",
+        _ => auto_label(locale),
+    }
+}
+
+fn expected_speaker_items(locale: i18n::Locale) -> Vec<String> {
+    std::iter::once(auto_label(locale).to_string())
+        .chain((1..=4).map(|count: u32| count.to_string()))
+        .collect()
+}
+
+const COMPUTE_DEVICES: [ComputeDevice; 4] = [
+    ComputeDevice::Auto,
+    ComputeDevice::Cpu,
+    ComputeDevice::Metal,
+    ComputeDevice::CoreMl,
+];
+
+/// Labels come from `i18n::device`, the same function the selection uses.
+fn compute_device_items(locale: i18n::Locale) -> Vec<String> {
+    COMPUTE_DEVICES
+        .iter()
+        .map(|device| i18n::device(locale, *device).to_string())
+        .collect()
+}
+
+fn compute_device_from_label(locale: i18n::Locale, label: &str) -> ComputeDevice {
+    COMPUTE_DEVICES
+        .into_iter()
+        .find(|device| i18n::device(locale, *device) == label)
+        .unwrap_or(ComputeDevice::Auto)
+}
+
+fn changed<T: PartialEq + Clone>(before: &T, after: &T) -> Option<T> {
+    (before != after).then(|| after.clone())
+}
+
+/// A typed key replaces the stored credential and an edited key file
+/// replaces it; clearing the key file clears it. Anything else keeps it.
+fn credential_update(
+    api_key: &str,
+    api_key_file: &str,
+    stored: Option<&AssistantConnectionProfile>,
+) -> Option<CredentialUpdate> {
+    let (api_key, api_key_file) = (api_key.trim(), api_key_file.trim());
+    let stored_file = stored
+        .and_then(|profile| profile.api_key_file.as_deref())
+        .unwrap_or("");
+    if !api_key.is_empty() {
+        Some(CredentialUpdate::Direct(api_key.into()))
+    } else if api_key_file == stored_file {
+        None
+    } else if api_key_file.is_empty() {
+        Some(CredentialUpdate::Clear)
+    } else {
+        Some(CredentialUpdate::File(api_key_file.into()))
+    }
+}
+
+fn connection_patch(
+    stored: &AssistantConnectionProfile,
+    profile: &AssistantConnectionProfile,
+    credential: Option<CredentialUpdate>,
+) -> AssistantConnectionPatch {
+    AssistantConnectionPatch {
+        id: profile.id.clone(),
+        name: changed(&stored.name, &profile.name),
+        protocol: changed(&stored.protocol, &profile.protocol),
+        base_url: changed(&stored.base_url, &profile.base_url),
+        model: changed(&stored.model, &profile.model),
+        auth_mode: changed(&stored.auth_mode, &profile.auth_mode),
+        context_window_tokens: changed(
+            &stored.context_window_tokens,
+            &profile.context_window_tokens,
+        ),
+        timeout_ms: changed(&stored.timeout_ms, &profile.timeout_ms),
+        max_output_tokens: changed(&stored.max_output_tokens, &profile.max_output_tokens),
+        credential,
+    }
+}
+
+pub(crate) fn settings_error_text(locale: i18n::Locale, error: &AssistantUiError) -> String {
+    if error.is_settings_conflict() {
+        i18n::text(locale, "settings_conflict").into()
+    } else {
+        i18n::message(locale, "settings_failed", &error.to_string())
+    }
+}
+
 fn selected_index(items: &[String], value: Option<&str>) -> Option<IndexPath> {
     value
         .and_then(|value| items.iter().position(|item| item == value))
@@ -2265,4 +2589,64 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
             .expect("failed to open meetnote window");
             cx.activate(true);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_options_are_selected_and_labelled_in_both_locales() {
+        let first = Some(IndexPath::default().row(0));
+        for (locale, auto) in [(i18n::Locale::ZhCn, "自动"), (i18n::Locale::EnUs, "Auto")] {
+            let devices = compute_device_items(locale);
+            assert_eq!(
+                selected_index(&devices, Some(i18n::device(locale, ComputeDevice::Auto))),
+                first,
+                "{locale:?} device select must mark Auto"
+            );
+            assert_eq!(devices[0], auto, "{locale:?} device label");
+            let languages = transcription_language_items(locale);
+            assert_eq!(
+                selected_index(&languages, Some(transcription_language_label(locale, None))),
+                first,
+                "{locale:?} transcription language select must mark Auto"
+            );
+            assert_eq!(
+                languages[0], auto,
+                "{locale:?} transcription language label"
+            );
+            let speakers = expected_speaker_items(locale);
+            assert_eq!(
+                selected_index(&speakers, Some(auto_label(locale))),
+                first,
+                "{locale:?} expected speakers select must mark Auto"
+            );
+            assert_eq!(speakers[0], auto, "{locale:?} expected speakers label");
+        }
+    }
+
+    #[test]
+    fn install_status_labels_follow_the_locale() {
+        let option = |installed, locale| ModelOption {
+            id: "model".into(),
+            installed,
+            locale,
+        };
+        assert_eq!(option(true, i18n::Locale::ZhCn).status_label(), "已下载");
+        assert_eq!(option(false, i18n::Locale::ZhCn).status_label(), "未下载");
+        assert_eq!(
+            option(true, i18n::Locale::EnUs).status_label(),
+            "Downloaded"
+        );
+        assert_eq!(
+            StageModelOption {
+                id: "stage".into(),
+                installed: false,
+                locale: i18n::Locale::EnUs,
+            }
+            .status_label(),
+            "Not downloaded"
+        );
+    }
 }

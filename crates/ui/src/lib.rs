@@ -14,9 +14,9 @@ mod tests {
     use super::*;
     use crate::assistant_ui::{
         AssistantCancellation, AssistantMutationSummary, AssistantPendingReview,
-        AssistantRunRequest, AssistantRunResult, AssistantScopeMode, AssistantTaskState,
-        AssistantUiError, AssistantUiService, ConnectionDiagnostic, ConnectionProbeKind,
-        PendingReviewState,
+        AssistantRunRequest, AssistantRunResult, AssistantScopeMode, AssistantSettingsSave,
+        AssistantTaskState, AssistantUiError, AssistantUiService, ConnectionDiagnostic,
+        ConnectionProbeKind, PendingReviewState,
     };
     use application::{BackendInventory, DocumentService, ProcessingService, WorkspaceService};
     use asr_whisper_rs::WhisperRsBackend;
@@ -36,6 +36,8 @@ mod tests {
         confirm_result: Arc<Mutex<Option<AssistantRunResult>>>,
         /// `(operation, authorized_document_ids)` for every service call.
         grants: Arc<Mutex<Vec<(&'static str, Vec<String>)>>>,
+        /// Settings that `save_assistant_settings` writes to, when exercised.
+        settings: Option<SettingsService>,
     }
 
     impl FakeAssistantUiService {
@@ -55,11 +57,24 @@ mod tests {
     }
 
     impl AssistantUiService for FakeAssistantUiService {
+        /// Edits of existing profiles, committed as the desktop service does.
         fn save_assistant_settings(
             &self,
-            settings: settings::AssistantSettings,
-        ) -> Result<settings::AssistantSettings, AssistantUiError> {
-            Ok(settings)
+            expected_revision: String,
+            save: AssistantSettingsSave,
+        ) -> Result<settings::AppSettings, AssistantUiError> {
+            let service = self
+                .settings
+                .as_ref()
+                .ok_or_else(|| AssistantUiError::unavailable("not exercised"))?;
+            assert!(save.new_connection.is_none(), "not exercised");
+            service
+                .patch_if_equal(
+                    &expected_revision,
+                    save.patch,
+                    settings::SettingsGrant::full(),
+                )
+                .map_err(|error| AssistantUiError::from_settings(&error))
         }
 
         fn probe_connection(
@@ -299,9 +314,73 @@ mod tests {
         );
     }
 
+    /// Settings in a directory of their own, so parallel tests never share a file.
+    fn test_settings() -> SettingsService {
+        static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "meetnote-ui-test-{}-{}-{}",
+            std::process::id(),
+            SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        SettingsService::open(Arc::new(JsonSettingsRepository::open(
+            directory.join("settings.json"),
+        )))
+        .unwrap()
+    }
+
+    const STORED_KEY: &str = "stored-secret";
+
+    /// Settings whose active connection `local` has a stored API key.
+    fn stored_key_settings() -> SettingsService {
+        let settings = test_settings();
+        let mut value = settings.snapshot().unwrap();
+        value.assistant.active_connection_id = Some("local".into());
+        value.assistant.connections = vec![settings::AssistantConnectionProfile {
+            id: "local".into(),
+            name: "Local".into(),
+            protocol: settings::LlmProtocol::OpenAiChatCompletions,
+            base_url: "http://127.0.0.1:4000".into(),
+            model: "assistant-default".into(),
+            auth_mode: settings::AssistantAuthMode::Bearer,
+            api_key: Some(STORED_KEY.into()),
+            api_key_file: None,
+            context_window_tokens: None,
+            timeout_ms: 120_000,
+            max_output_tokens: 4_096,
+        }];
+        settings.update(value).unwrap();
+        settings
+    }
+
+    /// An Agent changes a settings field after the desktop loaded them.
+    fn external_patch(settings: &SettingsService, patch: settings::SettingsPatch) {
+        settings
+            .patch_if_equal(
+                &settings.revision().unwrap(),
+                patch,
+                settings::SettingsGrant::full(),
+            )
+            .unwrap();
+    }
+
     fn open_desktop(
         cx: &mut TestAppContext,
         assistant: Arc<FakeAssistantUiService>,
+    ) -> (
+        gpui::Entity<controller::RootView>,
+        &mut gpui::VisualTestContext,
+    ) {
+        open_desktop_with(cx, assistant, test_settings())
+    }
+
+    fn open_desktop_with(
+        cx: &mut TestAppContext,
+        assistant: Arc<FakeAssistantUiService>,
+        settings: SettingsService,
     ) -> (
         gpui::Entity<controller::RootView>,
         &mut gpui::VisualTestContext,
@@ -313,18 +392,9 @@ mod tests {
             ),
             DocumentService::new(Arc::new(InMemoryDocumentRepository::default())),
         );
-        static SETTINGS_SEQUENCE: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
         let services = DesktopServices {
             workspace,
-            settings: SettingsService::open(Arc::new(JsonSettingsRepository::open(
-                std::env::temp_dir().join(format!(
-                    "meetnote-ui-assistant-test-settings-{}-{}.json",
-                    std::process::id(),
-                    SETTINGS_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                )),
-            )))
-            .unwrap(),
+            settings,
             model_manager: ModelManager::new(
                 ModelCatalog::from_path(
                     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -534,6 +604,238 @@ mod tests {
         assert_eq!(
             view.read_with(cx, |root, _| root.assistant.pending.clone()),
             Some(PendingReviewState::Expired)
+        );
+    }
+
+    fn click_save_assistant_settings(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<controller::RootView>,
+    ) {
+        view.update_in(cx, |root, window, cx| {
+            root.save_assistant_settings(&gpui::ClickEvent::default(), window, cx)
+        });
+    }
+
+    fn rename_connection(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<controller::RootView>,
+        name: &str,
+    ) {
+        view.update(cx, |root, cx| {
+            root.assistant_inputs
+                .connection_name
+                .update(cx, |input, _| input.set_value(name))
+        });
+    }
+
+    #[gpui::test]
+    fn saving_a_profile_with_an_empty_secret_keeps_the_stored_key(cx: &mut TestAppContext) {
+        let settings = stored_key_settings();
+        let assistant = Arc::new(FakeAssistantUiService {
+            settings: Some(settings.clone()),
+            ..Default::default()
+        });
+        let (view, cx) = open_desktop_with(cx, assistant, settings.clone());
+        rename_connection(cx, &view, "Renamed");
+        click_save_assistant_settings(cx, &view);
+        wait_for(cx, &view, |_| {
+            settings.snapshot().unwrap().assistant.connections[0].name == "Renamed"
+        });
+
+        let saved = settings.snapshot().unwrap().assistant.connections[0].clone();
+        assert_eq!(saved.api_key.as_deref(), Some(STORED_KEY));
+        assert_eq!(
+            view.read_with(cx, |root, cx| root
+                .assistant_inputs
+                .api_key
+                .read(cx)
+                .value()),
+            ""
+        );
+    }
+
+    #[gpui::test]
+    fn loading_a_profile_never_puts_the_stored_key_into_the_secret_field(cx: &mut TestAppContext) {
+        let (view, cx) = open_desktop_with(
+            cx,
+            Arc::new(FakeAssistantUiService::default()),
+            stored_key_settings(),
+        );
+        view.update(cx, |root, cx| root.edit_assistant_profile("local", cx));
+
+        view.read_with(cx, |root, cx| {
+            assert_eq!(root.assistant_inputs.api_key.read(cx).value(), "");
+            assert_eq!(
+                root.assistant_inputs.connection_name.read(cx).value(),
+                "Local"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn a_stale_assistant_save_conflicts_and_succeeds_after_the_reload(cx: &mut TestAppContext) {
+        let settings = stored_key_settings();
+        let assistant = Arc::new(FakeAssistantUiService {
+            settings: Some(settings.clone()),
+            ..Default::default()
+        });
+        let (view, cx) = open_desktop_with(cx, assistant, settings.clone());
+        view.update(cx, |root, cx| root.navigate(route::Route::Settings, cx));
+        let initial_notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+        external_patch(
+            &settings,
+            settings::SettingsPatch {
+                write_mode: Some(contracts::AgentWriteMode::ConfirmEach),
+                ..Default::default()
+            },
+        );
+
+        rename_connection(cx, &view, "Renamed");
+        click_save_assistant_settings(cx, &view);
+        wait_for(cx, &view, |root| root.ui.notice != initial_notice);
+
+        let persisted = settings.snapshot().unwrap().assistant;
+        assert_eq!(
+            persisted.write_mode,
+            contracts::AgentWriteMode::ConfirmEach,
+            "the external change must survive a stale save"
+        );
+        assert_eq!(persisted.connections[0].name, "Local");
+        let error = view
+            .read_with(cx, |root, _| root.settings_error.clone())
+            .expect("the conflict must be reported");
+        assert_eq!(error.code, "SETTINGS_REVISION_CONFLICT");
+        assert!(error.retryable);
+        assert!(cx.debug_bounds("settings-error").is_some());
+
+        click_save_assistant_settings(cx, &view);
+        wait_for(cx, &view, |root| root.settings_error.is_none());
+        let persisted = settings.snapshot().unwrap().assistant;
+        assert_eq!(persisted.connections[0].name, "Renamed");
+        assert_eq!(
+            persisted.connections[0].api_key.as_deref(),
+            Some(STORED_KEY)
+        );
+        assert_eq!(persisted.write_mode, contracts::AgentWriteMode::ConfirmEach);
+    }
+
+    #[gpui::test]
+    fn a_stale_instant_save_conflicts_and_succeeds_after_the_reload(cx: &mut TestAppContext) {
+        let settings = test_settings();
+        let (view, cx) = open_desktop_with(
+            cx,
+            Arc::new(FakeAssistantUiService::default()),
+            settings.clone(),
+        );
+        external_patch(
+            &settings,
+            settings::SettingsPatch {
+                max_tool_rounds: Some(5),
+                ..Default::default()
+            },
+        );
+        let asr_backend = |settings: &SettingsService| settings.snapshot().unwrap().asr_backend_id;
+
+        view.update(cx, |root, cx| {
+            root.select_asr_backend("test-asr".into(), cx)
+        });
+        wait_for(cx, &view, |root| {
+            root.settings_error.is_some() || asr_backend(&settings).as_deref() == Some("test-asr")
+        });
+
+        assert_eq!(
+            settings.snapshot().unwrap().assistant.max_tool_rounds,
+            5,
+            "the external change must survive a stale save"
+        );
+        assert_ne!(asr_backend(&settings).as_deref(), Some("test-asr"));
+        let error = view
+            .read_with(cx, |root, _| root.settings_error.clone())
+            .expect("the conflict must be reported");
+        assert_eq!(error.code, "SETTINGS_REVISION_CONFLICT");
+        assert!(error.retryable);
+
+        view.update(cx, |root, cx| {
+            root.select_asr_backend("test-asr".into(), cx)
+        });
+        wait_for(cx, &view, |root| {
+            root.settings_error.is_none() && asr_backend(&settings).as_deref() == Some("test-asr")
+        });
+        assert_eq!(settings.snapshot().unwrap().assistant.max_tool_rounds, 5);
+    }
+
+    #[gpui::test]
+    fn an_instant_save_does_not_persist_the_unsaved_assistant_draft(cx: &mut TestAppContext) {
+        let settings = test_settings();
+        let (view, cx) = open_desktop_with(
+            cx,
+            Arc::new(FakeAssistantUiService::default()),
+            settings.clone(),
+        );
+        view.update(cx, |root, cx| {
+            root.set_assistant_enabled(false, cx);
+            root.set_assistant_write_mode(contracts::AgentWriteMode::ConfirmEach, cx);
+            root.select_asr_backend("test-asr".into(), cx);
+        });
+        wait_for(cx, &view, |_| {
+            settings.snapshot().unwrap().asr_backend_id.as_deref() == Some("test-asr")
+        });
+
+        let persisted = settings.snapshot().unwrap().assistant;
+        assert_eq!(persisted.write_mode, contracts::AgentWriteMode::Automatic);
+        assert!(persisted.enabled);
+        view.read_with(cx, |root, _| {
+            assert_eq!(
+                root.settings_draft.assistant.write_mode,
+                contracts::AgentWriteMode::ConfirmEach
+            );
+            assert!(!root.settings_draft.assistant.enabled);
+        });
+    }
+
+    #[gpui::test]
+    fn changing_the_locale_rebuilds_the_localized_selects(cx: &mut TestAppContext) {
+        let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
+        let selected = |cx: &mut gpui::VisualTestContext| {
+            view.read_with(cx, |root, cx| {
+                let selectors = root
+                    .settings_selectors
+                    .as_ref()
+                    .expect("selectors are built on render");
+                [
+                    &selectors.compute_device,
+                    &selectors.transcription_language,
+                    &selectors.expected_speakers,
+                ]
+                .map(|select| select.read(cx).selected_value().cloned())
+            })
+        };
+        cx.run_until_parked();
+        assert_eq!(
+            selected(cx),
+            [
+                Some("自动".to_string()),
+                Some("自动".into()),
+                Some("自动".into())
+            ]
+        );
+
+        let language = view.read_with(cx, |root, _| {
+            root.settings_selectors.as_ref().unwrap().language.clone()
+        });
+        language.update(cx, |_, cx| {
+            cx.emit(gpui_component::select::SelectEvent::Confirm(Some(
+                "English".to_string(),
+            )))
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            selected(cx),
+            [
+                Some("Auto".to_string()),
+                Some("Auto".into()),
+                Some("Auto".into())
+            ]
         );
     }
 }

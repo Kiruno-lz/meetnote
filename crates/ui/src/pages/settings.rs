@@ -1,7 +1,7 @@
 use crate::{
     assistant_ui::ConnectionProbeKind,
     components::{setting_control_row, settings_section},
-    controller::{ModelOption, RootView},
+    controller::{settings_error_text, ModelOption, RootView},
     i18n::text as tr,
 };
 use contracts::AgentWriteMode;
@@ -156,6 +156,14 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .text_2xl()
                 .child(tr(root.ui.locale, "settings")),
         )
+        .children(root.settings_error.as_ref().map(|error| {
+            div()
+                .id("settings-error")
+                .debug_selector(|| "settings-error".into())
+                .flex_shrink_0()
+                .text_sm()
+                .child(settings_error_text(root.ui.locale, error))
+        }))
         .child(body)
         .into_any_element()
 }

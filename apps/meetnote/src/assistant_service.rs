@@ -15,15 +15,16 @@ use llm::{
 use runtime::{JobRuntime, Progress};
 use settings::{
     AppSettings, AssistantAuthMode, AssistantConnectionProfile, AssistantSettings, LlmProtocol,
-    SettingsError, SettingsService,
+    SettingsError, SettingsGrant, SettingsPatch, SettingsRepository, SettingsService,
 };
 use std::io::Read;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use ui::assistant_ui::{
     AssistantDocumentChange, AssistantFieldDiff, AssistantMutationSummary, AssistantPendingReview,
     AssistantProgress, AssistantProgressHandler, AssistantRangePreview, AssistantRunDiagnostics,
-    AssistantRunRequest, AssistantRunResult, AssistantTreeChange, AssistantUiError,
-    AssistantUiService, AssistantUsage, ConnectionDiagnostic, ConnectionProbeKind,
+    AssistantRunRequest, AssistantRunResult, AssistantSettingsSave, AssistantTreeChange,
+    AssistantUiError, AssistantUiService, AssistantUsage, ConnectionDiagnostic,
+    ConnectionProbeKind,
 };
 
 #[derive(Clone)]
@@ -182,6 +183,34 @@ impl DesktopAssistantService {
         self.provider(&profile).map(Some)
     }
 
+    /// Adds `profile` without a credential, applies `patch` (write policy and
+    /// credential) to that candidate under the same typed rules as
+    /// `patch_if_equal`, and commits the result with one compare-and-swap.
+    fn create_connection(
+        &self,
+        expected_revision: &str,
+        profile: AssistantConnectionProfile,
+        patch: SettingsPatch,
+    ) -> Result<AppSettings, SettingsError> {
+        let current = self.settings.snapshot()?;
+        if SettingsService::revision_of(&current) != expected_revision {
+            return Err(SettingsError::RevisionConflict);
+        }
+        let mut candidate = current.clone();
+        candidate
+            .assistant
+            .connections
+            .push(AssistantConnectionProfile {
+                api_key: None,
+                api_key_file: None,
+                ..profile
+            });
+        let revision = SettingsService::revision_of(&candidate);
+        let next = SettingsService::open(Arc::new(CandidateSettings(Mutex::new(candidate))))?
+            .patch_if_equal(&revision, patch, SettingsGrant::full())?;
+        self.settings.update_if_equal(&current, next)
+    }
+
     fn verify_source_revisions(
         &self,
         request: &AssistantRunRequest,
@@ -262,20 +291,38 @@ impl DesktopAssistantService {
     }
 }
 
+/// Settings held only in memory: the candidate a new connection is patched in
+/// before it is committed.
+struct CandidateSettings(Mutex<AppSettings>);
+
+impl SettingsRepository for CandidateSettings {
+    fn load(&self) -> Result<AppSettings, SettingsError> {
+        self.0
+            .lock()
+            .map(|settings| settings.clone())
+            .map_err(|_| SettingsError::LockPoisoned)
+    }
+
+    fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
+        *self.0.lock().map_err(|_| SettingsError::LockPoisoned)? = settings.clone();
+        Ok(())
+    }
+}
+
 impl AssistantUiService for DesktopAssistantService {
     fn save_assistant_settings(
         &self,
-        assistant: AssistantSettings,
-    ) -> Result<AssistantSettings, AssistantUiError> {
-        assistant
-            .validate()
-            .map_err(|error| settings_ui_error(error.to_string()))?;
-        let mut next = self.settings_snapshot()?;
-        next.assistant = assistant.clone();
-        self.settings
-            .update(next)
-            .map_err(|error| settings_ui_error(error.to_string()))?;
-        Ok(assistant)
+        expected_revision: String,
+        save: AssistantSettingsSave,
+    ) -> Result<AppSettings, AssistantUiError> {
+        match save.new_connection {
+            None => {
+                self.settings
+                    .patch_if_equal(&expected_revision, save.patch, SettingsGrant::full())
+            }
+            Some(profile) => self.create_connection(&expected_revision, profile, save.patch),
+        }
+        .map_err(|error| AssistantUiError::from_settings(&error))
     }
 
     fn probe_connection(
@@ -665,7 +712,10 @@ mod tests {
     };
     use domain::DocumentState;
     use persistence::InMemoryDocumentRepository;
-    use settings::{SettingsError, SettingsRepository};
+    use settings::{
+        AssistantConnectionPatch, CredentialUpdate, SettingsError, SettingsGrant, SettingsPatch,
+        SettingsRepository,
+    };
     use std::fs;
     use std::sync::Mutex;
 
@@ -710,20 +760,135 @@ mod tests {
         )
     }
 
+    /// The settings form's save for a new `profile()` with its direct key.
+    fn new_connection_save(credential: CredentialUpdate) -> AssistantSettingsSave {
+        AssistantSettingsSave {
+            patch: SettingsPatch {
+                active_connection_id: Some(Some("local".into())),
+                connection: Some(AssistantConnectionPatch {
+                    id: "local".into(),
+                    credential: Some(credential),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            new_connection: Some(AssistantConnectionProfile {
+                api_key: None,
+                ..profile()
+            }),
+        }
+    }
+
+    fn save(
+        service: &DesktopAssistantService,
+        save: AssistantSettingsSave,
+    ) -> Result<AppSettings, AssistantUiError> {
+        service.save_assistant_settings(service.settings.revision().unwrap(), save)
+    }
+
+    fn rename(name: &str) -> AssistantSettingsSave {
+        AssistantSettingsSave {
+            patch: SettingsPatch {
+                connection: Some(AssistantConnectionPatch {
+                    id: "local".into(),
+                    name: Some(name.into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            new_connection: None,
+        }
+    }
+
     #[test]
     fn saves_profile_metadata_and_api_key_in_settings() {
         let (service, _) = service();
-        let assistant = AssistantSettings {
+        let saved = save(
+            &service,
+            new_connection_save(CredentialUpdate::Direct("private-token".into())),
+        )
+        .unwrap();
+
+        let expected = AssistantSettings {
             active_connection_id: Some("local".into()),
             connections: vec![profile()],
             ..Default::default()
         };
-        service.save_assistant_settings(assistant.clone()).unwrap();
+        assert_eq!(saved.assistant, expected);
+        assert_eq!(service.settings_snapshot().unwrap().assistant, expected);
+    }
 
-        assert_eq!(service.settings_snapshot().unwrap().assistant, assistant);
-        assert!(serde_json::to_string(&service.settings_snapshot().unwrap())
+    #[test]
+    fn a_new_connection_credential_follows_the_typed_patch_rules() {
+        let (service, _) = service();
+        let error = save(
+            &service,
+            new_connection_save(CredentialUpdate::File("/etc/meetnote-key".into())),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "ASSISTANT_SETTINGS_INVALID");
+        assert!(!error.retryable);
+        assert!(service
+            .settings_snapshot()
             .unwrap()
-            .contains("private-token"));
+            .assistant
+            .connections
+            .is_empty());
+    }
+
+    /// Desktop service whose active connection `local` stores `private-token`.
+    fn service_with_stored_key() -> DesktopAssistantService {
+        let (service, _) = service();
+        let mut settings = service.settings_snapshot().unwrap();
+        settings.assistant.active_connection_id = Some("local".into());
+        settings.assistant.connections = vec![profile()];
+        service.settings.update(settings).unwrap();
+        service
+    }
+
+    #[test]
+    fn an_unchanged_credential_keeps_the_stored_key() {
+        let service = service_with_stored_key();
+        save(&service, rename("Renamed")).unwrap();
+
+        let saved = &service.settings_snapshot().unwrap().assistant.connections[0];
+        assert_eq!(saved.name, "Renamed");
+        assert_eq!(saved.api_key.as_deref(), Some("private-token"));
+    }
+
+    #[test]
+    fn a_stale_revision_is_a_retryable_conflict_that_keeps_the_external_change() {
+        let service = service_with_stored_key();
+        let loaded_revision = service.settings.revision().unwrap();
+        service
+            .settings
+            .patch_if_equal(
+                &loaded_revision,
+                SettingsPatch {
+                    write_mode: Some(contracts::AgentWriteMode::ConfirmEach),
+                    ..Default::default()
+                },
+                SettingsGrant::full(),
+            )
+            .unwrap();
+        let error = service
+            .save_assistant_settings(loaded_revision, rename("Renamed"))
+            .unwrap_err();
+
+        assert_eq!(error.code, "SETTINGS_REVISION_CONFLICT");
+        assert!(error.retryable);
+        let persisted = service.settings_snapshot().unwrap().assistant;
+        assert_eq!(persisted.write_mode, contracts::AgentWriteMode::ConfirmEach);
+        assert_eq!(persisted.connections[0].name, "Local LiteLLM");
+
+        let saved = save(&service, rename("Renamed")).unwrap().assistant;
+        assert_eq!(saved.write_mode, contracts::AgentWriteMode::ConfirmEach);
+        assert_eq!(saved.connections[0].name, "Renamed");
+        assert_eq!(
+            saved.connections[0].api_key.as_deref(),
+            Some("private-token")
+        );
     }
 
     #[test]
@@ -798,12 +963,11 @@ mod tests {
     #[test]
     fn run_rejects_a_stale_ui_document_before_contacting_the_provider() {
         let (service, documents) = service();
-        let assistant = AssistantSettings {
-            active_connection_id: Some("local".into()),
-            connections: vec![profile()],
-            ..Default::default()
-        };
-        service.save_assistant_settings(assistant).unwrap();
+        save(
+            &service,
+            new_connection_save(CredentialUpdate::Direct("private-token".into())),
+        )
+        .unwrap();
         documents
             .save(
                 DocumentState::new(DocumentId::new("doc"), "Document", "audio.wav"),
