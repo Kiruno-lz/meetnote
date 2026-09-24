@@ -2695,15 +2695,7 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
     application()
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx: &mut App| {
-            gpui_component::init(cx);
-            gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
-            cx.bind_keys([
-                KeyBinding::new("backspace", crate::text_input::Backspace, None),
-                KeyBinding::new("delete", crate::text_input::Delete, None),
-                KeyBinding::new("left", crate::text_input::Left, None),
-                KeyBinding::new("right", crate::text_input::Right, None),
-                KeyBinding::new("cmd-a", crate::text_input::SelectAll, None),
-            ]);
+            init_app(cx);
             let bounds = Bounds::centered(None, gpui::size(gpui::px(1_180.), gpui::px(760.)), cx);
             open_main_window(
                 inventory.clone(),
@@ -2717,6 +2709,20 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
             .expect("failed to open meetnote window");
             cx.activate(true);
         });
+}
+
+/// The app-wide setup `run` performs before it opens the window; the route
+/// tests under `crates/ui/tests` perform the same setup.
+pub(crate) fn init_app(cx: &mut App) {
+    gpui_component::init(cx);
+    gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+    cx.bind_keys([
+        KeyBinding::new("backspace", crate::text_input::Backspace, None),
+        KeyBinding::new("delete", crate::text_input::Delete, None),
+        KeyBinding::new("left", crate::text_input::Left, None),
+        KeyBinding::new("right", crate::text_input::Right, None),
+        KeyBinding::new("cmd-a", crate::text_input::SelectAll, None),
+    ]);
 }
 
 /// Opens the desktop window and starts following document changes; `run`

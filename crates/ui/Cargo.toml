@@ -20,4 +20,13 @@ settings = { path = "../settings" }
 asr-whisper-rs = { path = "../asr-whisper-rs" }
 diarization-sherpa-onnx = { path = "../diarization-sherpa-onnx" }
 gpui = { workspace = true, features = ["test-support"] }
+# `test-support` adds the Metal `render_to_image` the L3 screenshots use.
+gpui_platform = { workspace = true, features = ["test-support"] }
 persistence = { path = "../persistence" }
+
+# L3 screenshots drive AppKit, which must run on the process main thread;
+# libtest runs every test on a spawned thread. See `tests/visual.rs`.
+[[test]]
+name = "visual"
+path = "tests/visual.rs"
+harness = false

@@ -32,6 +32,7 @@ pub(crate) fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         )
         .child(
             div()
+                .debug_selector(|| "nav".into())
                 .flex()
                 .items_center()
                 .gap_2()
@@ -62,6 +63,7 @@ pub(crate) fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
 
 fn nav_button(label: &'static str, route: Route, cx: &mut Context<RootView>) -> impl IntoElement {
     Button::new(format!("nav-{route:?}"))
+        .debug_selector(move || format!("nav-{route:?}"))
         .ghost()
         .compact()
         .label(label)

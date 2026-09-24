@@ -1,0 +1,8 @@
+{
+  "gpui": "669bede5c582140d2f3917e2c5fae5b764f9023f",
+  "gpui_component": "1081d2b272c653a90b92184521c224d1200b6f72",
+  "scale_factor": 2.0,
+  "window": { "width": 1180, "height": 760 },
+  "locale": "zh-CN",
+  "routes": ["assistant", "meetings", "models", "settings"]
+}

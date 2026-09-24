@@ -26,6 +26,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
 
     let mut content = div()
         .id("models-scroll")
+        .debug_selector(|| "models-scroll".into())
         .flex_1()
         .min_h_0()
         .overflow_y_scrollbar()
@@ -57,6 +58,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                     .child(
                         div()
                             .id(format!("model-family-{family}"))
+                            .debug_selector(|| format!("model-family-{family}"))
                             .cursor_pointer()
                             .p_4()
                             .flex()
@@ -94,6 +96,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
     }
 
     div()
+        .debug_selector(|| "models-page".into())
         .flex_1()
         .h_full()
         .min_h_0()

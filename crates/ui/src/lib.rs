@@ -5,6 +5,8 @@ mod i18n;
 mod pages;
 mod route;
 mod state;
+#[doc(hidden)]
+pub mod test_support;
 mod text_input;
 
 pub use controller::{run, DesktopServices};

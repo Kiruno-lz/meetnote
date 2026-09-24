@@ -22,6 +22,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
 
     let body = div()
         .id("settings-scroll")
+        .debug_selector(|| "settings-scroll".into())
         .flex_1()
         .min_h_0()
         .overflow_y_scrollbar()
@@ -143,6 +144,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .child(assistant);
 
     div()
+        .debug_selector(|| "settings-page".into())
         .flex_1()
         .h_full()
         .min_h_0()
@@ -557,10 +559,17 @@ fn select_control(
     state: &gpui::Entity<gpui_component::select::SelectState<Vec<String>>>,
     id: &'static str,
 ) -> gpui::AnyElement {
-    Select::new(state)
-        .w(px(280.))
-        .menu_width(px(280.))
-        .accessibility_label(id)
+    // The wrapper takes the full size, as `Select` does, so it only adds the
+    // test selector and leaves the row layout unchanged.
+    div()
+        .size_full()
+        .debug_selector(|| format!("select-{id}"))
+        .child(
+            Select::new(state)
+                .w(px(280.))
+                .menu_width(px(280.))
+                .accessibility_label(id),
+        )
         .into_any_element()
 }
 

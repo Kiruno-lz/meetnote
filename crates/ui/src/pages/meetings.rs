@@ -20,6 +20,7 @@ pub(crate) fn render(
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     div()
+        .debug_selector(|| "meetings-page".into())
         .flex_1()
         .flex()
         .child(sidebar(root, cx))
@@ -29,6 +30,7 @@ pub(crate) fn render(
 fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let mut tree = div()
         .id("project-tree")
+        .debug_selector(|| "project-tree".into())
         .flex_1()
         .overflow_y_scrollbar()
         .flex()
@@ -121,6 +123,7 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                 }));
             let row = div()
                 .id(project.id().as_str().to_string())
+                .debug_selector(|| format!("project-row-{}", project.id().as_str()))
                 .cursor_pointer()
                 .p_3()
                 .ml(px((depth as f32) * 16.))
@@ -194,6 +197,7 @@ fn main_panel(
     if let Some(project) = project {
         let mut content = div()
             .id("meeting-content")
+            .debug_selector(|| "meeting-content".into())
             .flex_1()
             .overflow_y_scrollbar()
             .p_5()
@@ -269,6 +273,7 @@ fn main_panel(
                     )
                     .child(
                         Button::new("process-project")
+                            .debug_selector(|| "process-project".into())
                             .primary()
                             .compact()
                             .label(if root.ui.processing {

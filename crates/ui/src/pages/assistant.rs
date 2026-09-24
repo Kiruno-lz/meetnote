@@ -59,6 +59,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
     let pending = root.assistant.pending.clone();
 
     div()
+        .debug_selector(|| "assistant-page".into())
         .flex_1()
         .min_h_0()
         .p_6()
@@ -169,6 +170,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .child(
             div()
                 .id("assistant-input")
+                .debug_selector(|| "assistant-input".into())
                 .w_full()
                 .min_h(px(92.))
                 .p_4()
@@ -185,6 +187,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .gap_3()
                 .child(
                     Button::new("assistant-submit")
+                        .debug_selector(|| "assistant-submit".into())
                         .primary()
                         .label(tr(root.ui.locale, "send"))
                         .disabled(matches!(
