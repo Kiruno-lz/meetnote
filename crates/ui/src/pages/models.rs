@@ -14,7 +14,7 @@ use models::{manager::DownloadProgress, ModelAvailability, ModelInstallState};
 use std::collections::BTreeMap;
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
-    let entries = root.services.model_manager.browse(None, None);
+    let entries = root.installation.catalog.clone();
     let downloads = root.services.model_manager.list().unwrap_or_default();
     let mut groups: BTreeMap<String, Vec<ModelAvailability>> = BTreeMap::new();
     for entry in entries {

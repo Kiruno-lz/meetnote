@@ -38,6 +38,8 @@ mod tests {
         grants: Arc<Mutex<Vec<(&'static str, Vec<String>)>>>,
         /// Settings that `save_assistant_settings` writes to, when exercised.
         settings: Option<SettingsService>,
+        /// The write mode of every run request.
+        write_modes: Arc<Mutex<Vec<contracts::AgentWriteMode>>>,
     }
 
     impl FakeAssistantUiService {
@@ -102,6 +104,7 @@ mod tests {
             request: AssistantRunRequest,
             _: AssistantCancellation,
         ) -> Result<AssistantRunResult, AssistantUiError> {
+            self.write_modes.lock().unwrap().push(request.write_mode);
             self.record(
                 "run",
                 request
@@ -157,45 +160,10 @@ mod tests {
 
     #[gpui::test]
     fn boots_an_empty_desktop_workspace(cx: &mut TestAppContext) {
-        let repository = Arc::new(InMemoryDocumentRepository::default());
-        let documents = DocumentService::new(repository);
-        let workspace = WorkspaceService::new(
-            ProcessingService::new(
-                Arc::new(WhisperRsBackend::default()),
-                Arc::new(SherpaOnnxDiarizationBackend::default()),
-            ),
-            documents.clone(),
-        );
-        let services = DesktopServices {
-            workspace,
-            settings: SettingsService::open(Arc::new(JsonSettingsRepository::open(
-                std::env::temp_dir().join("meetnote-ui-test-settings.json"),
-            )))
-            .unwrap(),
-            model_manager: ModelManager::new(
-                ModelCatalog::from_path(
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../resources/models/catalog.json"),
-                )
-                .unwrap(),
-                "models",
-            ),
-            asr_model: ModelRef {
-                backend_id: "whisper-rs".into(),
-                model_id: "fixture".into(),
-                revision: None,
-                artifact_path: "missing-model".into(),
-                artifacts: Vec::new(),
-            },
-            diarization_model: ModelRef {
-                backend_id: "sherpa-onnx".into(),
-                model_id: "fixture".into(),
-                revision: None,
-                artifact_path: "missing-bundle".into(),
-                artifacts: Vec::new(),
-            },
-            assistant: Arc::new(FakeAssistantUiService::default()),
-        };
+        let services =
+            desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+        // The startup installation probe completes on a worker thread.
+        cx.executor().allow_parking();
         let assistant_input = cx.new(|cx| text_input::TextInput::new(cx, "Ask…"));
         let view = cx.new(|cx| {
             controller::RootView::new(
@@ -211,53 +179,8 @@ mod tests {
 
     #[gpui::test]
     fn renders_assistant_mutation_and_dispatches_undo_click(cx: &mut TestAppContext) {
-        let repository = Arc::new(InMemoryDocumentRepository::default());
-        let documents = DocumentService::new(repository);
-        let workspace = WorkspaceService::new(
-            ProcessingService::new(
-                Arc::new(WhisperRsBackend::default()),
-                Arc::new(SherpaOnnxDiarizationBackend::default()),
-            ),
-            documents.clone(),
-        );
         let assistant = Arc::new(FakeAssistantUiService::default());
-        let services = DesktopServices {
-            workspace,
-            settings: SettingsService::open(Arc::new(JsonSettingsRepository::open(
-                std::env::temp_dir().join(format!(
-                    "meetnote-ui-render-test-settings-{}-{}.json",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos()
-                )),
-            )))
-            .unwrap(),
-            model_manager: ModelManager::new(
-                ModelCatalog::from_path(
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../resources/models/catalog.json"),
-                )
-                .unwrap(),
-                "models",
-            ),
-            asr_model: ModelRef {
-                backend_id: "whisper-rs".into(),
-                model_id: "fixture".into(),
-                revision: None,
-                artifact_path: "missing-model".into(),
-                artifacts: Vec::new(),
-            },
-            diarization_model: ModelRef {
-                backend_id: "sherpa-onnx".into(),
-                model_id: "fixture".into(),
-                revision: None,
-                artifact_path: "missing-bundle".into(),
-                artifacts: Vec::new(),
-            },
-            assistant: assistant.clone(),
-        };
+        let services = desktop_services(assistant.clone(), test_settings());
         // Undo runs on a `runtime::spawn_blocking` worker thread.
         cx.executor().allow_parking();
         cx.update(|cx| {
@@ -314,10 +237,10 @@ mod tests {
         );
     }
 
-    /// Settings in a directory of their own, so parallel tests never share a file.
-    fn test_settings() -> SettingsService {
+    /// A temporary directory no other test uses; it is not created.
+    fn temp_directory() -> std::path::PathBuf {
         static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let directory = std::env::temp_dir().join(format!(
+        std::env::temp_dir().join(format!(
             "meetnote-ui-test-{}-{}-{}",
             std::process::id(),
             SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
@@ -325,9 +248,13 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
-        ));
+        ))
+    }
+
+    /// Settings in a directory of their own, so parallel tests never share a file.
+    fn test_settings() -> SettingsService {
         SettingsService::open(Arc::new(JsonSettingsRepository::open(
-            directory.join("settings.json"),
+            temp_directory().join("settings.json"),
         )))
         .unwrap()
     }
@@ -377,14 +304,10 @@ mod tests {
         open_desktop_with(cx, assistant, test_settings())
     }
 
-    fn open_desktop_with(
-        cx: &mut TestAppContext,
+    fn desktop_services(
         assistant: Arc<FakeAssistantUiService>,
         settings: SettingsService,
-    ) -> (
-        gpui::Entity<controller::RootView>,
-        &mut gpui::VisualTestContext,
-    ) {
+    ) -> DesktopServices {
         let workspace = WorkspaceService::new(
             ProcessingService::new(
                 Arc::new(WhisperRsBackend::default()),
@@ -392,7 +315,7 @@ mod tests {
             ),
             DocumentService::new(Arc::new(InMemoryDocumentRepository::default())),
         );
-        let services = DesktopServices {
+        DesktopServices {
             workspace,
             settings,
             model_manager: ModelManager::new(
@@ -418,13 +341,28 @@ mod tests {
                 artifacts: Vec::new(),
             },
             assistant,
-        };
+        }
+    }
+
+    fn init_gpui(cx: &mut TestAppContext) {
         // Service calls complete on `runtime::spawn_blocking` worker threads.
         cx.executor().allow_parking();
         cx.update(|cx| {
             gpui_component::init(cx);
             gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
         });
+    }
+
+    fn open_desktop_with(
+        cx: &mut TestAppContext,
+        assistant: Arc<FakeAssistantUiService>,
+        settings: SettingsService,
+    ) -> (
+        gpui::Entity<controller::RootView>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let services = desktop_services(assistant, settings);
+        init_gpui(cx);
         let assistant_input = cx.new(|cx| text_input::TextInput::new(cx, "Ask…"));
         cx.add_window_view(|_window, cx| {
             controller::RootView::new(
@@ -436,8 +374,178 @@ mod tests {
         })
     }
 
+    /// The desktop window exactly as `run` opens it.
+    fn open_main_window(
+        cx: &mut TestAppContext,
+        services: DesktopServices,
+    ) -> (
+        gpui::Entity<controller::RootView>,
+        &mut gpui::VisualTestContext,
+    ) {
+        init_gpui(cx);
+        let (window, view) = cx
+            .update(|cx| {
+                controller::open_main_window(
+                    BackendInventory::new(vec![], vec![]),
+                    services,
+                    gpui::WindowOptions::default(),
+                    cx,
+                )
+            })
+            .unwrap();
+        let cx = gpui::VisualTestContext::from_window(window, cx).into_mut();
+        cx.run_until_parked();
+        (view, cx)
+    }
+
+    /// Drives the GPUI executor until the window satisfies `done`.
+    #[track_caller]
+    fn wait_until_window(
+        cx: &mut gpui::VisualTestContext,
+        done: impl Fn(&mut gpui::Window, &mut gpui::App) -> bool,
+    ) {
+        for _ in 0..500 {
+            cx.run_until_parked();
+            if cx.update(|window, cx| done(window, cx)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("window state did not settle");
+    }
+
+    /// Replaces the installation probe with a counting wrapper around the
+    /// real one; the count starts after the startup probe.
+    fn count_installation_probes(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<controller::RootView>,
+    ) -> Arc<std::sync::atomic::AtomicUsize> {
+        let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = probes.clone();
+        view.update(cx, |root, _| {
+            root.installation_probe = Arc::new(move |query| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                controller::probe_installation(query)
+            });
+        });
+        probes
+    }
+
+    #[gpui::test]
+    fn rendering_meetings_and_models_does_not_probe_installation(cx: &mut TestAppContext) {
+        let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
+        wait_for(cx, &view, |root| !root.installation.catalog.is_empty());
+        let probes = count_installation_probes(cx, &view);
+
+        for route in [route::Route::Meetings, route::Route::Models] {
+            view.update(cx, |root, cx| root.navigate(route, cx));
+            for _ in 0..5 {
+                view.update(cx, |_, cx| cx.notify());
+                cx.run_until_parked();
+            }
+        }
+        assert_eq!(
+            probes.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "rendering must read the cached installation state"
+        );
+
+        view.update(cx, |root, cx| root.refresh_installation(cx));
+        wait_for(cx, &view, |_| {
+            probes.load(std::sync::atomic::Ordering::SeqCst) == 1
+        });
+    }
+
+    #[gpui::test]
+    fn idle_change_and_download_waits_leave_blocking_workers_free(cx: &mut TestAppContext) {
+        let settings = test_settings();
+        let (view, cx) = open_desktop_with(
+            cx,
+            Arc::new(FakeAssistantUiService::default()),
+            settings.clone(),
+        );
+        // Twice as many idle waits as the shared `spawn_blocking` pool has
+        // workers (at most 4); the senders stay alive, so every wait idles.
+        let mut senders = Vec::new();
+        view.update(cx, |root, cx| {
+            for _ in 0..4 {
+                let (changes, receiver) = std::sync::mpsc::channel();
+                root.follow_document_changes(receiver, cx);
+                let (downloads, events) = std::sync::mpsc::channel();
+                root.follow_download(events, cx);
+                senders.push((changes, downloads));
+            }
+        });
+        cx.run_until_parked();
+
+        view.update(cx, |root, cx| {
+            root.select_asr_backend("test-asr".into(), cx)
+        });
+        wait_for(cx, &view, |_| {
+            settings.snapshot().unwrap().asr_backend_id.as_deref() == Some("test-asr")
+        });
+
+        // The waits still deliver their events.
+        let workspace = view.read_with(cx, |root, _| root.services.workspace.clone());
+        workspace.import_audio("idle-wait.wav").unwrap();
+        senders[0]
+            .0
+            .send(application::DocumentChange::Changed)
+            .unwrap();
+        wait_for(cx, &view, |root| root.projects.len() == 1);
+        senders[1]
+            .1
+            .send(models::manager::DownloadEvent::Updated(
+                models::manager::DownloadProgress {
+                    id: models::manager::DownloadId(1),
+                    model_id: "idle-model".into(),
+                    state: models::manager::DownloadState::Completed,
+                    completed_bytes: 1,
+                    speed_bytes_per_second: None,
+                    total_bytes: Some(1),
+                    artifact_index: 1,
+                    artifact_count: 1,
+                    eta_seconds: Some(0),
+                    retry_count: 0,
+                },
+            ))
+            .unwrap();
+        let installed = i18n::message(i18n::Locale::ZhCn, "installed", "idle-model");
+        wait_for(cx, &view, |root| root.ui.notice == installed);
+    }
+
+    #[gpui::test]
+    fn the_speaker_library_migration_dialog_opens_and_migrates(cx: &mut TestAppContext) {
+        use gpui_component::WindowExt as _;
+        let directory = temp_directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        let source = directory.join("library.json");
+        std::fs::write(&source, "{}").unwrap();
+        let destination = directory.join("moved").join("library.json");
+        let settings = test_settings();
+        let mut value = settings.snapshot().unwrap();
+        value.speaker_library_path = source.display().to_string();
+        settings.update(value).unwrap();
+        let services = desktop_services(Arc::new(FakeAssistantUiService::default()), settings);
+        let (view, cx) = open_main_window(cx, services.clone());
+
+        view.update(cx, |root, cx| {
+            root.change_speaker_library_path(destination.clone(), cx)
+        });
+        wait_until_window(cx, |window, cx| window.has_active_dialog(cx));
+
+        cx.dispatch_action(gpui_component::dialog::Confirm { secondary: false });
+        let expected = destination.display().to_string();
+        wait_for(cx, &view, |_| {
+            services.settings.snapshot().unwrap().speaker_library_path == expected
+        });
+        assert_eq!(std::fs::read_to_string(&destination).unwrap(), "{}");
+        std::fs::remove_dir_all(directory).ok();
+    }
+
     /// Drives the GPUI executor until `done` holds; service calls run on real
     /// worker threads, so parked GPUI tasks may still be waiting on them.
+    #[track_caller]
     fn wait_for(
         cx: &mut gpui::VisualTestContext,
         view: &gpui::Entity<controller::RootView>,
@@ -482,20 +590,54 @@ mod tests {
         }
     }
 
-    /// Selects the `first` document, enables a connection and starts a run.
+    /// Selects the `first` document and starts a run; the desktop must have
+    /// saved settings with an active connection (`stored_key_settings`).
     fn start_run(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<controller::RootView>) {
         view.update_in(cx, |root, window, cx| {
             let first = DocumentState::new(ProjectId::new("first"), "First", "first.wav");
             let second = DocumentState::new(ProjectId::new("second"), "Second", "second.wav");
             root.ui.selected_project = Some(first.id().clone());
             root.projects = vec![first, second];
-            root.settings_draft.assistant.enabled = true;
-            root.settings_draft.assistant.active_connection_id = Some("fixture".into());
             root.assistant_inputs
                 .prompt
                 .update(cx, |input, _| input.set_value("organize"));
             root.assistant_action(&gpui::ClickEvent::default(), window, cx);
         });
+    }
+
+    #[gpui::test]
+    fn the_assistant_uses_the_saved_settings_not_the_unsaved_draft(cx: &mut TestAppContext) {
+        let assistant = Arc::new(FakeAssistantUiService::default());
+        *assistant.run_result.lock().unwrap() = Some(empty_result());
+        let (view, cx) = open_desktop_with(cx, assistant.clone(), stored_key_settings());
+        view.update_in(cx, |root, window, cx| {
+            let document = DocumentState::new(ProjectId::new("first"), "First", "first.wav");
+            root.ui.selected_project = Some(document.id().clone());
+            root.projects = vec![document];
+            root.set_assistant_enabled(false, cx);
+            root.set_assistant_write_mode(contracts::AgentWriteMode::ConfirmEach, cx);
+            root.assistant_inputs
+                .prompt
+                .update(cx, |input, _| input.set_value("organize"));
+            root.assistant_action(&gpui::ClickEvent::default(), window, cx);
+        });
+        cx.run_until_parked();
+
+        assert!(
+            cx.debug_bounds("assistant-write-mode-automatic").is_some()
+                && cx
+                    .debug_bounds("assistant-write-mode-confirm-each")
+                    .is_none(),
+            "the Assistant page must show the saved write mode"
+        );
+        wait_for(cx, &view, |_| {
+            !assistant.write_modes.lock().unwrap().is_empty()
+        });
+        assert_eq!(
+            assistant.write_modes.lock().unwrap().as_slice(),
+            [contracts::AgentWriteMode::Automatic],
+            "runs must use the saved write mode"
+        );
     }
 
     #[gpui::test]
@@ -517,7 +659,7 @@ mod tests {
             }),
             ..empty_result()
         });
-        let (view, cx) = open_desktop(cx, assistant.clone());
+        let (view, cx) = open_desktop_with(cx, assistant.clone(), stored_key_settings());
         start_run(cx, &view);
         wait_for(cx, &view, |root| root.assistant.pending.is_some());
         assert_eq!(assistant.grants_for("run"), [vec!["first".to_string()]]);
@@ -573,7 +715,7 @@ mod tests {
                 .collect(),
             ..empty_result()
         });
-        let (view, cx) = open_desktop(cx, assistant);
+        let (view, cx) = open_desktop_with(cx, assistant, stored_key_settings());
         start_run(cx, &view);
         wait_for(cx, &view, |root| root.assistant.pending.is_some());
         (view, cx)

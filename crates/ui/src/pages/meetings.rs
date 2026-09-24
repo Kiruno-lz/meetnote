@@ -345,7 +345,7 @@ fn main_panel(
             .child(format!(
                 "{}: {}",
                 tr(locale, "models"),
-                root.services.model_status(locale)
+                root.installation.model_status(locale)
             )),
     )
 }

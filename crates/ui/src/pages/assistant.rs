@@ -38,8 +38,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         ),
     };
     let connection_summary = root
-        .settings_draft
-        .assistant
+        .saved_assistant()
         .active_connection()
         .map(|profile| {
             format!(
@@ -54,6 +53,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             )
         })
         .unwrap_or_else(|| tr(root.ui.locale, "assistant_connection_required").into());
+    let write_mode = root.saved_assistant().write_mode;
     let task = task_label(root.ui.locale, &root.assistant.task);
     let result = root.assistant.result.clone();
     let pending = root.assistant.pending.clone();
@@ -132,17 +132,30 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                     tr(root.ui.locale, "assistant_connection"),
                     connection_summary,
                 ))
-                .child(info_line(
-                    tr(root.ui.locale, "assistant_write_mode"),
-                    tr(
-                        root.ui.locale,
-                        match root.settings_draft.assistant.write_mode {
-                            contracts::AgentWriteMode::Automatic => "assistant_automatic",
-                            contracts::AgentWriteMode::ConfirmEach => "assistant_confirm_each",
-                        },
+                .child(
+                    info_line(
+                        tr(root.ui.locale, "assistant_write_mode"),
+                        tr(
+                            root.ui.locale,
+                            match write_mode {
+                                contracts::AgentWriteMode::Automatic => "assistant_automatic",
+                                contracts::AgentWriteMode::ConfirmEach => "assistant_confirm_each",
+                            },
+                        )
+                        .into(),
                     )
-                    .into(),
-                ))
+                    .debug_selector(move || {
+                        match write_mode {
+                            contracts::AgentWriteMode::Automatic => {
+                                "assistant-write-mode-automatic"
+                            }
+                            contracts::AgentWriteMode::ConfirmEach => {
+                                "assistant-write-mode-confirm-each"
+                            }
+                        }
+                        .into()
+                    }),
+                )
                 .child(div().text_xs().text_color(rgb(0x8992a3)).child(tr(
                     root.ui.locale,
                     match root.assistant.scope_mode {
@@ -287,7 +300,7 @@ fn projection_label(projection: DocumentProjection) -> &'static str {
     }
 }
 
-fn info_line(label: &'static str, value: String) -> impl IntoElement {
+fn info_line(label: &'static str, value: String) -> gpui::Div {
     div()
         .flex()
         .gap_2()

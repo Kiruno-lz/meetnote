@@ -5,14 +5,11 @@ use crate::{
     },
     i18n, pages,
     route::Route,
-    state::{ContentMode, Overlay, UiState},
+    state::{ContentMode, InstallationState, Overlay, UiState},
     text_input::TextInput,
 };
 use application::{BackendInventory, ProcessingOptions, WorkspaceService};
-use contracts::{
-    AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, DiarizationStageOption,
-    ModelRef,
-};
+use contracts::{AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, ModelRef};
 use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
@@ -27,8 +24,9 @@ use settings::{
     AppSettings, AssistantAuthMode, AssistantConnectionPatch, AssistantConnectionProfile,
     AssistantSettings, CredentialUpdate, LlmProtocol, SettingsService,
 };
+use std::collections::BTreeSet;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use gpui_component::{
     dialog::DialogButtonProps,
@@ -222,17 +220,43 @@ pub struct DesktopServices {
     pub assistant: Arc<dyn AssistantUiService>,
 }
 
-impl DesktopServices {
-    pub(crate) fn model_status(&self, locale: i18n::Locale) -> String {
-        let asr_ready = Path::new(&self.asr_model.artifact_path).is_file();
-        let diarization_ready = Path::new(&self.diarization_model.artifact_path).is_dir();
-        let ready = i18n::text(locale, "ready");
-        let missing = i18n::text(locale, "missing");
-        format!(
-            "ASR {} / DIA {}",
-            if asr_ready { ready } else { missing },
-            if diarization_ready { ready } else { missing }
-        )
+/// What `probe_installation` looks at.
+#[derive(Clone)]
+pub(crate) struct InstallationQuery {
+    model_manager: models::manager::ModelManager,
+    asr_model: ModelRef,
+    diarization_model: ModelRef,
+    /// The selected diarization model's directory.
+    stage_root: Option<String>,
+    /// Every artifact file a diarization stage option may need.
+    stage_files: BTreeSet<String>,
+}
+
+/// Produces `InstallationState`; tests wrap it to count probes.
+pub(crate) type InstallationProbe =
+    Arc<dyn Fn(&InstallationQuery) -> InstallationState + Send + Sync>;
+
+/// The file-system probe behind `InstallationState`. It runs on a
+/// `runtime::spawn_blocking` worker, never during render.
+pub(crate) fn probe_installation(query: &InstallationQuery) -> InstallationState {
+    let stage_files = query
+        .stage_root
+        .as_deref()
+        .map(|root| {
+            query
+                .stage_files
+                .iter()
+                .filter(|file| Path::new(root).join(file).is_file())
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    InstallationState {
+        catalog: query.model_manager.browse(None, None),
+        default_asr_ready: Path::new(&query.asr_model.artifact_path).is_file(),
+        default_diarization_ready: Path::new(&query.diarization_model.artifact_path).is_dir(),
+        stage_root: query.stage_root.clone(),
+        stage_files,
     }
 }
 
@@ -287,6 +311,10 @@ pub(crate) struct RootView {
     /// The last failed settings write, shown on the settings page.
     pub(crate) settings_error: Option<AssistantUiError>,
     pending_expiry: Option<Task<()>>,
+    /// Installation facts for rendering; see `refresh_installation`.
+    pub(crate) installation: InstallationState,
+    pub(crate) installation_probe: InstallationProbe,
+    installation_refresh: Option<Task<()>>,
 }
 
 #[derive(Clone, Copy)]
@@ -399,7 +427,7 @@ impl RootView {
                 .iter()
                 .map(|model| model.model_family.clone()),
         );
-        Self {
+        let mut this = Self {
             inventory,
             services,
             settings_base: settings_draft.clone(),
@@ -422,6 +450,56 @@ impl RootView {
             settings_selectors: None,
             settings_error: None,
             pending_expiry: None,
+            installation: InstallationState::default(),
+            installation_probe: Arc::new(probe_installation),
+            installation_refresh: None,
+        };
+        this.refresh_installation(cx);
+        this
+    }
+
+    /// Probes installation facts off the main thread. Call it whenever they
+    /// may have changed; a newer refresh replaces (cancels) an older one.
+    pub(crate) fn refresh_installation(&mut self, cx: &mut Context<Self>) {
+        let query = self.installation_query();
+        let probe = self.installation_probe.clone();
+        self.installation_refresh = Some(cx.spawn(async move |this, cx| {
+            let installation = runtime::spawn_blocking(move || probe(&query)).await;
+            this.update(cx, |this, cx| {
+                if installation != this.installation {
+                    this.installation = installation;
+                    // Model selects show install state; rebuild them.
+                    this.settings_selectors = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// The persisted Assistant settings; the settings form's unsaved draft
+    /// never drives the Assistant page or its runs.
+    pub(crate) fn saved_assistant(&self) -> &AssistantSettings {
+        &self.settings_base.assistant
+    }
+
+    fn installation_query(&self) -> InstallationQuery {
+        InstallationQuery {
+            model_manager: self.services.model_manager.clone(),
+            asr_model: self.services.asr_model.clone(),
+            diarization_model: self.services.diarization_model.clone(),
+            stage_root: self
+                .settings_draft
+                .diarization_model
+                .as_ref()
+                .map(|model| model.artifact_path.clone()),
+            stage_files: self
+                .inventory
+                .diarization
+                .iter()
+                .flat_map(|descriptor| &descriptor.diarization_stage_options)
+                .flat_map(|option| option.artifact_files.iter().cloned())
+                .collect(),
         }
     }
 
@@ -684,11 +762,9 @@ impl RootView {
     }
 
     fn model_options(&self, task: &str, backend_id: Option<&str>) -> Vec<ModelOption> {
-        self.services
-            .model_manager
-            .browse(Some(task), backend_id)
-            .into_iter()
-            .map(|entry| ModelOption::from_availability(&entry, self.ui.locale))
+        self.installation
+            .models(task, backend_id)
+            .map(|entry| ModelOption::from_availability(entry, self.ui.locale))
             .collect()
     }
 
@@ -715,7 +791,8 @@ impl RootView {
             .filter(|option| option.stage == stage)
             .map(|option| StageModelOption {
                 id: option.id.clone(),
-                installed: model.is_some_and(|model| self.stage_option_is_installed(model, option)),
+                installed: model
+                    .is_some_and(|model| self.installation.stage_installed(model, option)),
                 locale: self.ui.locale,
             })
             .collect()
@@ -736,14 +813,6 @@ impl RootView {
             .filter(|option| option.stage == DiarizationStageKind::Clustering)
             .map(|option| option.id.clone())
             .collect()
-    }
-
-    fn stage_option_is_installed(&self, model: &ModelRef, option: &DiarizationStageOption) -> bool {
-        let root = Path::new(&model.artifact_path);
-        option
-            .artifact_files
-            .iter()
-            .all(|filename| root.join(filename).is_file())
     }
 
     fn selected_diarization_descriptor(&self) -> Option<&contracts::BackendDescriptor> {
@@ -807,6 +876,7 @@ impl RootView {
             },
             cx,
         );
+        self.refresh_installation(cx);
         cx.notify();
     }
 
@@ -915,6 +985,7 @@ impl RootView {
         };
         self.settings_selectors = None;
         self.sync_locale(cx);
+        self.refresh_installation(cx);
         self.ui.notice = settings_error_text(self.ui.locale, &error);
         self.settings_error = Some(error);
     }
@@ -1278,7 +1349,6 @@ impl RootView {
             multiple: false,
             prompt: Some(i18n::text(self.ui.locale, "choose_directory").into()),
         });
-        let current_path = self.settings_draft.speaker_library_path.clone();
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = receiver.await else {
                 return;
@@ -1287,34 +1357,49 @@ impl RootView {
                 return;
             };
             let destination = directory.join("library.json");
-            this.update_in(cx, move |this, window, cx| {
-                this.handle_speaker_library_path_change(
-                    std::path::PathBuf::from(current_path),
-                    destination,
-                    window,
-                    cx,
-                );
+            this.update(cx, move |this, cx| {
+                this.change_speaker_library_path(destination, cx);
             })
             .ok();
         })
         .detach();
     }
 
-    fn handle_speaker_library_path_change(
+    /// Switches the Speaker Library to `destination`, offering to migrate the
+    /// current library when only the current path has one. Both paths are
+    /// probed off the main thread.
+    pub(crate) fn change_speaker_library_path(
+        &mut self,
+        destination: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let source = std::path::PathBuf::from(&self.settings_draft.speaker_library_path);
+        if source == destination {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let paths = (source.clone(), destination.clone());
+            let (source_present, destination_present) =
+                runtime::spawn_blocking(move || (paths.0.is_file(), paths.1.is_file())).await;
+            this.update_in(cx, move |this, window, cx| {
+                if destination_present || !source_present {
+                    this.commit_speaker_library_path(destination, cx);
+                } else {
+                    this.ask_speaker_library_migration(source, destination, window, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn ask_speaker_library_migration(
         &mut self,
         source: std::path::PathBuf,
         destination: std::path::PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if source == destination {
-            return;
-        }
-        if destination.is_file() || !source.is_file() {
-            self.commit_speaker_library_path(destination, cx);
-            return;
-        }
-
         let source_for_migration = source.clone();
         let destination_for_migration = destination.clone();
         let source_for_description = source.display().to_string();
@@ -1343,22 +1428,13 @@ impl RootView {
                         .show_cancel(true),
                 )
                 .on_ok(move |_, _, cx| {
-                    let result = application::migrate_file(
-                        &source_for_migration,
-                        &destination_for_migration,
-                    );
                     root_for_migration
-                        .update(cx, |this, cx| match result {
-                            Ok(()) => this
-                                .commit_speaker_library_path(destination_for_migration.clone(), cx),
-                            Err(error) => {
-                                this.ui.notice = i18n::message(
-                                    this.ui.locale,
-                                    "speaker_library_migration_failed",
-                                    &error,
-                                );
-                                cx.notify();
-                            }
+                        .update(cx, |this, cx| {
+                            this.migrate_speaker_library(
+                                source_for_migration.clone(),
+                                destination_for_migration.clone(),
+                                cx,
+                            )
                         })
                         .ok();
                     true
@@ -1372,6 +1448,29 @@ impl RootView {
                     true
                 })
         });
+    }
+
+    fn migrate_speaker_library(
+        &mut self,
+        source: std::path::PathBuf,
+        destination: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let target = destination.clone();
+            let result =
+                runtime::spawn_blocking(move || application::migrate_file(&source, &target)).await;
+            this.update(cx, |this, cx| match result {
+                Ok(()) => this.commit_speaker_library_path(destination, cx),
+                Err(error) => {
+                    this.ui.notice =
+                        i18n::message(this.ui.locale, "speaker_library_migration_failed", &error);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn commit_speaker_library_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
@@ -1694,7 +1793,7 @@ impl RootView {
             }
         }
         let (request, cancellation) =
-            match self.assistant.begin(query, &self.settings_draft.assistant) {
+            match self.assistant.begin(query, &self.settings_base.assistant) {
                 Ok(started) => started,
                 Err(error) => {
                     self.ui.notice = error.to_string();
@@ -2073,51 +2172,8 @@ impl RootView {
         match self.services.model_manager.start(&model_id) {
             Ok(task) => {
                 self.ui.notice = i18n::message(self.ui.locale, "download_started", &model_id);
-                let events = Arc::new(Mutex::new(task.events));
+                self.follow_download(task.events, cx);
                 cx.notify();
-                cx.spawn(async move |this, cx| loop {
-                    let events = events.clone();
-                    let event = runtime::spawn_blocking(move || {
-                        events.lock().ok().and_then(|receiver| receiver.recv().ok())
-                    })
-                    .await;
-                    let Some(DownloadEvent::Updated(progress)) = event else {
-                        break;
-                    };
-                    let terminal = matches!(
-                        progress.state,
-                        DownloadState::Completed
-                            | DownloadState::Cancelled
-                            | DownloadState::Failed(_)
-                    );
-                    this.update(cx, |this, cx| {
-                        this.ui.notice = match &progress.state {
-                            DownloadState::Completed => {
-                                i18n::message(this.ui.locale, "installed", &progress.model_id)
-                            }
-                            DownloadState::Cancelled => {
-                                i18n::message(this.ui.locale, "cancelled", &progress.model_id)
-                            }
-                            DownloadState::Failed(error) => {
-                                i18n::message(this.ui.locale, "download_failed", error)
-                            }
-                            _ => i18n::download_progress(
-                                this.ui.locale,
-                                &progress.model_id,
-                                progress.artifact_index,
-                                progress.artifact_count,
-                                progress.completed_bytes,
-                                progress.speed_bytes_per_second,
-                            ),
-                        };
-                        cx.notify();
-                    })
-                    .ok();
-                    if terminal {
-                        break;
-                    }
-                })
-                .detach();
             }
             Err(error) => {
                 self.ui.notice = i18n::message(
@@ -2128,6 +2184,56 @@ impl RootView {
                 cx.notify();
             }
         }
+    }
+
+    /// Shows a download's progress until it ends.
+    pub(crate) fn follow_download(
+        &mut self,
+        events: std::sync::mpsc::Receiver<DownloadEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut events = forward_channel(events, |DownloadEvent::Updated(progress)| {
+            is_terminal_download(&progress.state)
+        });
+        cx.spawn(async move |this, cx| {
+            while let Some(DownloadEvent::Updated(progress)) = events.next().await {
+                let terminal = is_terminal_download(&progress.state);
+                let applied =
+                    this.update(cx, |this, cx| this.apply_download_progress(progress, cx));
+                if applied.is_err() || terminal {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn apply_download_progress(
+        &mut self,
+        progress: models::manager::DownloadProgress,
+        cx: &mut Context<Self>,
+    ) {
+        self.ui.notice = match &progress.state {
+            DownloadState::Completed => {
+                i18n::message(self.ui.locale, "installed", &progress.model_id)
+            }
+            DownloadState::Cancelled => {
+                i18n::message(self.ui.locale, "cancelled", &progress.model_id)
+            }
+            DownloadState::Failed(error) => i18n::message(self.ui.locale, "download_failed", error),
+            _ => i18n::download_progress(
+                self.ui.locale,
+                &progress.model_id,
+                progress.artifact_index,
+                progress.artifact_count,
+                progress.completed_bytes,
+                progress.speed_bytes_per_second,
+            ),
+        };
+        if is_terminal_download(&progress.state) {
+            self.refresh_installation(cx);
+        }
+        cx.notify();
     }
 
     pub(crate) fn control_download(
@@ -2324,6 +2430,34 @@ impl RootView {
         .detach();
     }
 
+    /// Reloads the project list whenever the document directory changes.
+    pub(crate) fn watch_documents(&mut self, cx: &mut Context<Self>) {
+        if let Ok(changes) = self.services.workspace.watch_documents() {
+            self.follow_document_changes(changes, cx);
+        }
+    }
+
+    pub(crate) fn follow_document_changes(
+        &mut self,
+        changes: std::sync::mpsc::Receiver<application::DocumentChange>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changes = forward_channel(changes, |_| false);
+        cx.spawn(async move |this, cx| {
+            while changes.next().await.is_some() {
+                let refreshed = this.update(cx, |view, cx| {
+                    view.projects = view.services.workspace.list_projects().unwrap_or_default();
+                    view.refresh_installation(cx);
+                    cx.notify();
+                });
+                if refreshed.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
     fn apply_job_event(&mut self, source: &str, event: JobEvent, cx: &mut Context<Self>) {
         self.ui.notice = match event {
             JobEvent::Started { .. } => i18n::message(self.ui.locale, "job_started", source),
@@ -2347,6 +2481,35 @@ impl RootView {
         };
         cx.notify();
     }
+}
+
+/// Forwards a blocking channel to an async stream on a plain thread, so an
+/// idle wait holds no `runtime::spawn_blocking` worker. The thread ends when
+/// the sender hangs up, the stream is dropped, or after the item `last` marks.
+fn forward_channel<T: Send + 'static>(
+    receiver: std::sync::mpsc::Receiver<T>,
+    last: impl Fn(&T) -> bool + Send + 'static,
+) -> futures::channel::mpsc::UnboundedReceiver<T> {
+    let (sender, stream) = futures::channel::mpsc::unbounded();
+    std::thread::Builder::new()
+        .name("meetnote-ui-channel".into())
+        .spawn(move || {
+            for item in receiver {
+                let done = last(&item);
+                if sender.unbounded_send(item).is_err() || done {
+                    break;
+                }
+            }
+        })
+        .expect("failed to spawn channel forwarder");
+    stream
+}
+
+fn is_terminal_download(state: &DownloadState) -> bool {
+    matches!(
+        state,
+        DownloadState::Completed | DownloadState::Cancelled | DownloadState::Failed(_)
+    )
 }
 
 fn auto_label(locale: i18n::Locale) -> &'static str {
@@ -2524,16 +2687,11 @@ impl Render for RootView {
         if self.ui.detail_overlay.is_some() && self.ui.route == Route::Meetings {
             shell = shell.child(pages::detail::render(selected.as_ref(), self.ui.locale, cx));
         }
-        shell
+        shell.children(gpui_component::Root::render_dialog_layer(window, cx))
     }
 }
 
 pub fn run(inventory: BackendInventory, services: DesktopServices) {
-    let initial_locale = services
-        .settings
-        .snapshot()
-        .map(|settings| i18n::Locale::from_code(&settings.ui_locale))
-        .unwrap_or(i18n::Locale::ZhCn);
     application()
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx: &mut App| {
@@ -2547,48 +2705,45 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
                 KeyBinding::new("cmd-a", crate::text_input::SelectAll, None),
             ]);
             let bounds = Bounds::centered(None, gpui::size(gpui::px(1_180.), gpui::px(760.)), cx);
-            cx.open_window(
+            open_main_window(
+                inventory.clone(),
+                services.clone(),
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
-                |_, cx| {
-                    let assistant_input = cx.new(|cx| {
-                        TextInput::new(cx, i18n::text(initial_locale, "ask_placeholder"))
-                    });
-                    let workspace = services.workspace.clone();
-                    let view = cx.new(|cx| {
-                        RootView::new(inventory.clone(), services.clone(), assistant_input, cx)
-                    });
-                    if let Ok(receiver) = workspace.watch_documents() {
-                        let receiver = Arc::new(Mutex::new(receiver));
-                        let watched_view = view.clone();
-                        cx.spawn(async move |cx| loop {
-                            let receiver = receiver.clone();
-                            let changed = runtime::spawn_blocking(move || {
-                                receiver
-                                    .lock()
-                                    .ok()
-                                    .and_then(|receiver| receiver.recv().ok())
-                            })
-                            .await;
-                            if changed.is_none() {
-                                break;
-                            }
-                            let workspace = workspace.clone();
-                            watched_view.update(cx, |view, cx| {
-                                view.projects = workspace.list_projects().unwrap_or_default();
-                                cx.notify();
-                            });
-                        })
-                        .detach();
-                    }
-                    view
-                },
+                cx,
             )
             .expect("failed to open meetnote window");
             cx.activate(true);
         });
+}
+
+/// Opens the desktop window and starts following document changes; `run`
+/// and the GPUI tests build the window the same way. The first layer is
+/// gpui-component's `Root`, which its dialogs and tooltips look up.
+pub(crate) fn open_main_window(
+    inventory: BackendInventory,
+    services: DesktopServices,
+    options: WindowOptions,
+    cx: &mut App,
+) -> gpui::Result<(gpui::AnyWindowHandle, Entity<RootView>)> {
+    let locale = services
+        .settings
+        .snapshot()
+        .map(|settings| i18n::Locale::from_code(&settings.ui_locale))
+        .unwrap_or(i18n::Locale::ZhCn);
+    let mut root_view = None;
+    let window = cx.open_window(options, |window, cx| {
+        let assistant_input =
+            cx.new(|cx| TextInput::new(cx, i18n::text(locale, "ask_placeholder")));
+        let view = cx.new(|cx| RootView::new(inventory, services, assistant_input, cx));
+        view.update(cx, |view, cx| view.watch_documents(cx));
+        root_view = Some(view.clone());
+        cx.new(|cx| gpui_component::Root::new(view, window, cx))
+    })?;
+    let view = root_view.expect("the window builds its root view");
+    Ok((window.into(), view))
 }
 
 #[cfg(test)]
