@@ -2,7 +2,7 @@
 
 ## UI 边界
 
-GPUI 是 MeetNote application/document service 的客户端，只负责交互与状态投影。它不执行音频 IO、模型下载协议、推理、聚类、语义拆分或 Agent 决策。
+GPUI 是 MeetNote application/document service 的客户端，只负责交互与状态投影。它不执行音频 IO、模型下载协议、推理、聚类、语义拆分或 Agent 决策；渲染路径不做文件系统探测，安装状态、路径有效性等由服务在事件发生时刷新到 UI 状态。
 
 ```text
 UI action
@@ -17,30 +17,147 @@ UI action
 ## 信息架构
 
 ```text
-MeetNote
+MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 ├── Assistant       内置 Agent 客户端
-├── Documents       三层项目树、文档内容与处理
-│   └── Detail      悬浮详情，不切换 route
+├── Documents       三层项目树（侧栏）、文档内容与处理
+│   └── Detail      右侧不透明详情面板，不切换 route
 ├── Models          catalog、安装与下载任务
-└── Settings        backend、模型、设备、语言与路径
+└── Settings        外观、backend、模型、设备、语言与路径
 ```
 
-导航文案可以暂时保留 `Meetings`，但代码和内容模型必须使用中性的 document/audio project。
+侧栏承载四个入口与导入音频；Documents 路由下侧栏内嵌项目树，内容平面只显示当前文档。导航文案为 `Meetings` 时，代码和内容模型仍使用中性的 document/audio project。
+
+## 技术栈与视觉系统
+
+### 依赖
+
+| crate | 来源与锁定 | 说明 |
+|---|---|---|
+| `gpui`、`gpui_platform` | `zeronsh/zui` rev `1561532176f54262e360acbb8bc00c6fcf183975`，`default-features = false`，features `font-kit`、`runtime_shaders` | Apache-2.0；macOS 由 Metal + MetalPerformanceShaders 渲染，wgpu 只用于 Linux/Web |
+| `gpui-component`、`gpui-component-assets` | `zeronsh/gpui-component` rev `5086ff4fb162ae97ca9d806876e7c6694ac3a81f` | Apache-2.0；Zeron 使用的同一 pin，已适配 zui API；其中 `gpui-base` 提供无样式交互原语 |
+| `gpui_tokio` | 不引入 | MeetNote 不使用 tokio；异步由 JobRuntime 与 gpui executor 承担 |
+
+- zui 独有 API（`Window::paint_backdrop_blur`、`Window::with_edge_fade`、`paint_image_fitted_masked`）只允许在 `crates/ui/src/theme/` 的玻璃原语中调用；原语在不透明材质下绘制 token 填充。
+- 不启用 `http_client/github-download`：它是 zui 中唯一把 GPL `path` 引入 gpui 依赖图的 feature。
+- fork 的 gpui-component 以 longbridge `da4f9369` 为基线，缺少当前 pin `1081d2b` 所含的 78 个上游提交，包括：
+  - #2810：masked Input 复制明文；
+  - #2809：IME undo；
+  - #2818：残留 `focused_input`；
+  - #2824：单行 Input 绘制滚动条；
+  - #2819：进度条边框；
+  - `Select`/`Progress::accessibility_label`。
+- //TODO - 密钥输入框拦截 Copy/Cut，不把明文写入剪贴板。验证：L2 测试设置 masked 值 → 全选 → Copy/Cut → `read_from_clipboard()` 不等于密钥。
+- 全局 git 配置把 `https://github.com/` 改写为 SSH 时，cargo 拉取 git 依赖需设置 `CARGO_NET_GIT_FETCH_WITH_CLI=true`。
+
+### 维护与退出
+
+- zui 与 fork 只按 Zeron `Cargo.toml` 中成对锁定的 rev 一起升级，每次升级都在 macOS 27 上运行完整门禁与离屏基线。
+- //TODO - `scripts/package-macos-app.sh` 声明的 `LSMinimumSystemVersion` 13.0 尚未验证。验证：在 macOS 13 设备或虚拟机上启动应用并运行 L3；不通过则把声明版本提高到已验证版本。
+- 退出条件，满足任一即评估回退上游 GPUI：
+  - zui 或 fork 连续 90 天无提交，且存在影响 MeetNote 的未修复缺陷；
+  - 上游 gpui 的安全修复 30 天内无法移植；
+  - 新 macOS 版本破坏渲染且 zui 无修复。
+- 回退成本：
+  - 恢复上游 gpui 与 longbridge gpui-component 版本对，以及 `accessibility_label` 调用；
+  - 玻璃原语退化为 token 填充，失去 in-window blur 与 edge fade；
+  - 窗口 blur 在 macOS 26+ 需要自行维护 `NSVisualEffectView` 材质补丁。
+
+### 视觉原则
+
+- 三层材质：
+  - 窗口玻璃：`WindowBackgroundAppearance::Blurred` 叠加半透明 `window_glass` 底色，承载标题栏与侧栏；zui 已修正 macOS 26+ 下 `NSVisualEffectView` 材质失效。
+  - 内容平面：不透明，承载文档阅读、transcript、Detail、表单和编辑。
+  - 浮层：菜单、下拉、对话框与 Assistant 输入条使用场景 backdrop blur。阅读与编辑内容不放在玻璃上。
+- 滚动列表、transcript 与标题栏下方使用 EdgeFade；超长标签用尾部渐隐代替截断省略号。浮层不加阴影，只有不透明回退时使用阴影。
+- blur 强度为 `BlurLevel` 枚举，最多两个常量值，同屏 blur kernel 数量由类型保证。开合动画只改变透明度与位置，不改变 blur 半径与浮层尺寸，避免每帧新建 MPS kernel 与纹理。
+- 设计 token 集中在 `crates/ui/src/theme/`：含 alpha 的颜色、hairline、wash、scrim、radius、spacing、控件高度、字号与 motion，深浅两套。
+  - token 经 gpui-component `ThemeConfig`/`apply_config` 写入，因为 `Root` 按 `tokens.background` 绘制整窗，直接改 `ThemeColor` 会遮住窗口玻璃。
+  - 玻璃材质下 `tokens.background` 的 alpha 为 0。
+  - 页面不写颜色字面量。
+- 玻璃底色透明度由纯函数按最坏桌面背景计算，保证正文对比度 ≥ 4.5:1、次要文字 ≥ 3:1。
+- 外观：
+  - 跟随系统浅色/深色；Settings 提供"跟随系统/浅色/深色"与"毛玻璃/不透明"，保存在 AppSettings 的 `appearance` 字段（`#[serde(default)]`），不经 Settings capability 暴露。
+  - 主题切换后重新应用窗口背景，因为 gpui 会移除原有 `NSVisualEffectView`。
+  - motion token 遵循 `cx.reduce_motion()`。
+  - //TODO - 读取 `NSWorkspace.accessibilityDisplayShouldReduceTransparency`，为真时强制不透明。验证：纯函数 `effective_material(preference, reduce_transparency)` 的 L1 测试覆盖四种组合。
+- Zeron（MIT）的 theme、frost、edge_fade、motion 代码可以移植，需在文件头保留版权与许可声明，并登记到仓库根 `THIRD_PARTY_NOTICES.md`。zui 的 `NOTICE` 按 Apache-2.0 §4(d) 一并收录。不复制 Zeron 标识、第三方品牌标识和许可未知的音频。
+- 字体默认 `.SystemUIFont`（SF/PingFang）；Geist（OFL）只作可选拉丁字体；引入前以 L3 截取选用 Geist 时的中英混排文本并通过视觉清单，确认中文回退到 PingFang，并在 `THIRD_PARTY_NOTICES.md` 附 OFL 文本。
+
+### 组件归属
+
+| 类别 | 实现 |
+|---|---|
+| 窗口外壳、标题栏拖拽区、侧栏、工具栏、列表行、状态 chip | MeetNote 自建，按 token 与 Zeron 布局配方实现 |
+| 下拉菜单、对话框、Assistant 输入条 | gpui-base 无样式原语（`Select`、`Dialog`、`popover`、`focus_trap`、`positioner`）+ MeetNote frosted 渲染，保留键盘、焦点与 `accessibility_label`；替换 gpui-component `Select` 弹层与 `open_alert_dialog` |
+| 按钮、分隔线、进度、折叠、滚动条 | gpui-component，经 `ThemeConfig` 映射 token |
+| 单行输入 | gpui-base `Input` 替换自研 `TextInput`，补齐粘贴、IME 与 secret 掩码；密钥框拦截 Copy/Cut |
+
+U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件保留到下一项完成。`Root` 属于 styled `ui` crate，其对话框与 tooltip 依赖它；只要仍使用该 crate 的组件，`Root` 就必须是窗口第一层。
+
+- //TODO - 把按钮、分隔线、进度、折叠与滚动条改为 gpui-base 原语加 MeetNote 渲染，移除 `gpui-component` 依赖与 `Root`，只保留 `gpui-base` 与 assets（与 Zeron 一致）。验证：`cargo tree -p ui -i gpui-component` 无结果，L2/L3 测试通过。
+
+### 验证分层
+
+- **L1**：controller/state/theme 纯函数测试。覆盖：
+  - 对比度与 `effective_material`；
+  - i18n key 源码扫描；
+  - 颜色字面量扫描：`crates/ui/src` 除 `theme/` 外不得出现 `rgb(`/`rgba(`/`hsla(`，测试用 `include_str!` 读取源码，初始红线为 61 处；
+  - 渲染函数中无 `std::fs`/`Path::is_file` 的源码扫描。
+- **L2**：`TestAppContext` + fake service 的 GPUI 交互测试。覆盖点击、键盘、焦点、异步完成与 `debug_bounds` 结构断言。
+- **L3**：`VisualTestAppContext::capture_screenshot`（`Window::render_to_image`，Metal 离屏）。
+  - 以固定窗口尺寸 1180×760、固定 locale 与 fixture 工作区渲染每个 route，覆盖深/浅 × 玻璃/不透明。
+  - 测试标记 `#[ignore]`，须在 macOS 主线程运行：`cargo test -p ui -- --ignored --test-threads=1`。
+  - 基线 PNG 存 `crates/ui/tests/visual/`，同时记录生成时的 display scale factor，只与相同 scale factor 的截图比较。
+  - 单通道差 > 2 的像素占比超过 0.5% 视为变化，需人工确认后更新基线。
+  - in-window blur 可以确定性截图；窗口背后桌面 blur 由 `NSVisualEffectView` 在进程外合成，只做手工检查。
+- **无障碍**：
+  - L2 测试窗口不启用 accessibility tree，因此交互控件一律经 MeetNote 包装创建，包装要求传入 label；由 L1 源码扫描保证页面不直接构造未包装控件。
+  - 发布前在 macOS 27 用 Accessibility Inspector 手工检查各 route。
+- **视觉清单**（L3 与手工检查共用）：
+  - 关键元素可见；
+  - 文案完整，无截断、无乱码；
+  - 无元素重叠、无溢出窗口、无样式崩坏；
+  - route 与窗口标题符合当前步骤；
+  - 玻璃材质下可见模糊，文字对比度满足上述阈值。
 
 ## 当前状态
 
-下表描述当前 UI。Assistant 当前只有输入和文档列表占位交互；场景、授权文档、连接测试、结果、confirm/undo 和凭据设置属于后续实现范围。
+下表描述当前工作树 UI。
 
 | 区域 | 已实现 | 当前缺口 |
 |---|---|---|
-| Application shell | 四个入口、暗色主题、基础路由 | 最终视觉、键盘导航与完整无障碍 |
-| Assistant | 输入框、通过 document service 读取列表 | provider、查询结果、自动写回与可选确认 |
+| Application shell | 顶部四个入口、暗色、基础路由；窗口只设 bounds；颜色为 61 处字面量 | zui 迁移、token、玻璃外壳、外观设置、键盘导航与无障碍 |
+| Assistant | 输入、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染 | 下文三项页面验收与已知缺陷 |
 | Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original、处理与取消 | 文档编辑、scanner issue、revision/provenance、通用 speaker 校正 |
 | Detail | overlay 打开/关闭、基础 transcript | 完整 JSON、来源、状态、处理记录和 Agent 变更来源 |
 | Models | catalog 分组、下载、暂停、继续、取消和进度 | license/source 展示、probe 结果和安装问题诊断 |
-| Settings | locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径 | 文档工作区路径、能力联动说明和完整校验反馈 |
+| Settings | locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径 | 外观、文档工作区路径、能力联动说明和完整校验反馈 |
 
-UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。Assistant 尚缺 provider、通用 session、统一 JobRuntime 与实时阶段事件投影。
+UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。Assistant 任务在 `DesktopAssistantService` 自建的 JobRuntime 中执行并联动取消，阶段进度经 `AgentProgress` 回调投影；该 JobRuntime 的 `JobEvent` 未被消费，也未与音频任务共用。通用 session 不属于当前范围。
+
+- //TODO - `DesktopAssistantService` 改用应用级共享 JobRuntime，并由 `JobEvent` 投影任务状态。验证：L2 测试在 `JobRuntime::with_max_concurrency(1)` 下，Assistant 任务与音频任务受同一并发上限约束。
+
+### 已知缺陷
+
+以下缺陷与 GPUI 版本无关，在 U1 按"复现 → 测试红线 → 修复 → 转绿"处理。测试写在 controller/state 层，保证 U4 替换控件后仍有效。
+
+- //TODO - 窗口根视图包一层 `gpui_component::Root`（`controller.rs` `run`）；否则 Speaker Library 迁移对话框会 panic（`Root::update` 要求第一层为 Root）。验证：L2 测试打开该对话框不 panic。
+- //TODO - UI 的全部 settings 写入改用 `patch_if_equal`/`update_if_equal`，并移出主线程（`controller.rs` `persist_settings`，`assistant_service.rs` `save_assistant_settings`）。Assistant 凭据经 `CredentialUpdate` 写入；密钥框为空表示不修改；已存密钥不回填明文（`controller.rs` `load_profile`）。验证：
+  - 保存 profile 后已存 key 保留；
+  - 外部 patch 之后，UI 以旧 revision 保存得到可重试冲突，且不覆盖外部修改。
+- //TODO - 区分即时保存与草稿：Assistant 开关、写策略、active profile 只在点击保存时写入。验证：修改 ASR 选择不会持久化未保存的 Assistant 草稿。
+- //TODO - 补齐 `assistant_awaiting_confirmation`、`assistant_warning`、`assistant_pending_queue` 翻译，i18n 测试改为扫描源码中的全部 key（`i18n.rs`）。验证：L1 扫描测试先因 3 个缺失 key 失败。
+- //TODO - 连接探测带 probe id，丢弃已取消或已被新请求替代的迟到结果（`assistant_ui.rs` `finish_probe`）。验证：L1 测试"取消后迟到 Ok 被忽略"。
+- //TODO - 每个运行结果记录发起时的文档授权，confirm/undo 使用该授权而非当前 scope。验证：运行后切换 scope，confirm 仍只作用于原授权。
+- //TODO - pending 超过 8 项时显示溢出提示；过期由定时器驱动，不依赖重绘（`assistant_ui.rs` pending 队列，`pages/assistant.rs`）。验证：L2 测试推进测试时钟后状态变为过期。
+- //TODO - 删除 undo 的 `#[cfg(test)]` 同步分支，L2 测试经 `run_until_parked` 走真实异步路径。验证：现有 undo 点击测试不改断言仍通过。
+- //TODO - 目录变化与下载进度的等待改为异步 channel，不占用 `runtime::spawn_blocking` 的共享 worker（上限 4）。验证：L2 测试在 `JobRuntime::with_max_concurrency(1)` 下，并行等待期间 UI 操作仍完成。
+- //TODO - 渲染路径中的文件探测改为事件刷新的缓存状态，包括模型安装状态、stage 模型、Speaker Library 路径和 Models 页 `browse()`；`migrate_file` 移出主线程。验证：L1 源码扫描，以及 L2 渲染计数测试确认渲染不触发服务 IO。
+- //TODO - 英文界面的设备下拉正确选中 Auto；下拉项与"已下载/未下载/自动"随 locale 本地化，并在切换 locale 后重建。验证：L1 测试两种 locale 下的选中索引与文案。
+- //TODO - GPUI 测试使用唯一临时目录保存 settings，不写固定文件名（`lib.rs` 测试）。验证：并行运行测试互不干扰。
+- //TODO - 删除 `ui.assistant_query`、`ui.downloading` 与仅测试使用的 `mutation_complete`、`select_mutation_for_undo`。验证：`rg` 引用检索确认非测试代码无读取。
+
+Speaker 合并目前在 UI 固定为 `speaker-1 → speaker-0`，随 U5 的通用 speaker 校正移除。
 
 ## Documents
 
@@ -60,17 +177,25 @@ root document
 - 编辑标题、标签、总结、正文或状态时携带当前 revision；冲突不得覆盖磁盘内容。
 - processing/results 只读，语义字段可编辑。
 
-Detail 作为右侧悬浮面板，展示 identity、audio source、hierarchy、document status、revision、processing provenance、结果统计和 Markdown；关闭面板不得取消处理或下载任务。
+Detail 作为右侧不透明面板，以 hairline 与内容区分隔；展示 identity、audio source、hierarchy、document status、revision、processing provenance、结果统计和 Markdown。关闭面板不得取消处理或下载任务。
 
 ## Assistant
 
+本节承担 Assistant 页面与 Settings 页面更新，不属于 [Assistant 构建计划](assistant-plan.md)的能力接口/最小 Loop 验收。依赖 Agent 层的 typed result/event，不能让 UI 反向实现工具循环。
+
+当前已有 warning、多 mutation、逐项 undo、pending 和进度渲染代码；按以下交互要求验收，不以字段或状态测试替代完整页面行为。
+
+- //TODO - 多写后失败与取消两条路径下，全部 receipt、warning 和逐项恢复入口可见，迟到结果不覆盖终态。验证：L2 页面测试覆盖两条路径（现有覆盖只有 controller 单元测试与一个 undo 点击测试）。
+- //TODO - pending 暂停/队列、接受/拒绝/过期与焦点、按钮状态；关闭自动写回时设置页给出明确反馈。验证：L2 渲染与点击测试；依赖上文草稿保存、翻译、溢出与过期定时器修复。
+- //TODO - 连接/授权字段、secret 输入、错误、取消与重试经 GPUI 异步完成，`retryable` 错误显示重试入口；复用服务，不创建 UI 专用调度器。验证：L2 测试经 `run_until_parked` 覆盖成功、失败、取消与重试；依赖上文凭据保存与 probe id 修复。
+
 ```text
 输入请求
-  -> Agent Host / backend + profile/Skill
+  -> Built-in 最小 Tool Loop + profile/Skill
   -> 读取文档
   -> 查询结果，或 typed write tool
   -> settings write policy：自动执行或用户确认
-  -> document service
+  -> Workspace capability
   -> watcher 刷新
 ```
 
@@ -78,8 +203,9 @@ Detail 作为右侧悬浮面板，展示 identity、audio source、hierarchy、d
 - 修改标题、标签、总结、正文、状态或树关系时，automatic 模式直接执行并显示结果与撤销入口；confirm_each 模式在执行前显示明确 diff/proposal。
 - Assistant 与外部 Agent 使用相同 document service，不允许直接编辑 processing/results。
 - provider 不可用时保留文档管理能力，并显示可操作的配置错误。
-- 区分 Agent backend、session 与文档 profile；恢复/流式等能力按 backend 真实支持情况显示。
-- Built-in connection profile、协议、模型和写回策略统一保存在 Settings；完整行为与验收见[Assistant 构建计划](assistant-plan.md)。
+- UI 投影 capability 结果与 JobRuntime 任务；外部 Agent 自管 Session/Context/Loop，不建设通用会话管理页。
+- 输入框为内容平面底部的 frosted 输入条；结果、diff 与 pending 卡片位于不透明内容平面。
+- Built-in connection profile、协议、模型和写回策略统一保存在 Settings；服务契约见 [Assistant 构建计划](assistant-plan.md)，页面与交互验收由本计划负责。
 
 ## Models
 
@@ -93,23 +219,66 @@ Detail 作为右侧悬浮面板，展示 identity、audio source、hierarchy、d
 
 设置项分为：
 
+- Appearance：跟随系统/浅色/深色、毛玻璃/不透明。
 - Workspace：文档目录、Speaker Library 路径、音频资产策略。
 - Interface：UI locale。
 - ASR：backend、model、transcription language。
 - Diarization：backend、model、segmentation、embedding、clustering、expected speakers。
 - Runtime：Auto/CPU/Metal/CoreML 与 backend 能力提示。
-- Assistant：Agent backend 与 profile；Built-in 使用现有 LiteLLM connection、协议、模型、credential reference 与 loop 上限；Workspace 写回策略独立于 backend。
+- Assistant：Skill/profile、能力授权与 Built-in connection、协议、模型、API key/API key file、loop 上限；Workspace 写回策略统一配置。
 
-UI locale 与 transcription language 独立。backend 不支持的设备或 stage 不显示为有效选择；修改后立即保存时必须给出成功或失败反馈。
+UI locale 与 transcription language 独立。backend 不支持的设备或 stage 不显示为有效选择。即时保存项在修改后给出成功或失败反馈；Assistant 连接区为草稿，点击保存才写入。
 
 ## 实施顺序
 
-1. 将 scanner issue、revision 和完整文档状态接入 Documents/Detail。
-2. 将全部树和文档写回切换到 revision-aware document service，并补齐冲突 UI。
-3. 完成通用文档编辑、speaker 校正和 Speaker Library 管理。
-4. 增加可选择的文档工作区与音频缺失恢复。
-5. 按架构对齐计划实现 Assistant UI，接入 Host 会话、JobRuntime 事件和 Workspace 结果；模型失败后仍显示已提交修改与 undo。
-6. 补齐 Models 的 license、来源、probe 与失败诊断。
-7. 完成键盘、焦点、无障碍、视觉系统和端到端 GPUI 验收。
+每阶段完成时运行 `cargo fmt --all -- --check`、`cargo check --workspace --all-targets` 和 `cargo test --workspace --no-fail-fast`。下列 14 个用例依赖尚未提交的实现，在对应实现提交前允许失败；出现任何其他失败即阻断当前阶段。
 
-UI 完成标准：完整产品流程不需要 CLI 或手工编辑 JSON；外部文件变化、版本冲突、模型失败和任务取消都有明确且可恢复的反馈。
+- Workspace Host 持久化（agent mutation journal）：
+  - `agent_cli`：`external_agent_moves_reorders_corrects_revisions_and_rejects_invalid_trees`、`external_agent_confirm_each_has_accept_and_reject_lifecycle`、`external_agent_executes_synthetic_gold_including_nested_pass_and_undo`、`external_agent_updates_replays_reads_back_corrects_an_error_and_undoes`；
+  - `agent_host`：`real_plugin_reaches_every_host_operation_shape`、`real_plugin_confirms_and_rejects_live_pending_mutations`、`real_plugin_exercises_confirm_each_through_host`、`control_operations_reject_unknown_arguments_before_consuming_state`、`response_driven_plugin_corrects_perturbed_fixture_and_reads_back`、`host_replays_the_same_mutation_receipt_idempotently`、`real_plugin_negative_calls_have_stable_errors_and_no_side_effects`。
+- Settings 存储层（`apiKeyFile` 解析与安全打开）：
+  - `host_probe`：`host_probe_reads_the_api_key_file_that_settings_validates`、`host_probe_rejects_an_unreadable_api_key_file_before_contacting_the_provider`；
+  - `meetnote` 二进制单元测试：`assistant_service::tests::resolves_api_key_file_from_the_settings_directory`。
+
+1. **U0 基线**
+   - 提交 `crates/ui/**`（含新增 `assistant_ui.rs`）、`apps/meetnote/src/main.rs` 的 `DesktopServices` 接线与 `DocumentCommandService` 导入调整、`apps/meetnote/src/assistant_service.rs` 的 `AssistantUiService` 实现与结果映射，恢复 `meetnote` 二进制编译。
+   - 验证：在干净 `git worktree` 中构建该提交并运行上述门禁。
+2. **U1 缺陷修复与测试基线**
+   - 在当前 GPUI 上完成"已知缺陷"各项，每项先有失败测试。
+   - 在当前 GPUI 上建立 L3 离屏截图 harness 与各 route 的 L2 结构测试，并生成迁移前基线。
+3. **U2 依赖迁移**
+   - 按依赖表写明 zui 与 fork 的 `rev`（原 zed 依赖只由 `Cargo.lock` 锁定）。
+   - 执行 `cargo update -p cocoa-foundation --precise 0.2.0`（zui 精确要求）；删除 4 处 `accessibility_label`：3 处下拉的 label 由 U4 的 gpui-base `Select` 恢复；进度条 label 在 U4 改为 MeetNote 包装后恢复。
+   - zui 基于 zed `f14fea9`，比原 pin `669bede5` 早 642 个提交；共享依赖随之变化，包括 strum 0.28→0.27、which 8→6、taffy 0.13→0.12。
+   - 验证：
+     - L2 结构测试全部通过，测试数量不少于 U1 结束时；
+     - L3 截图差异逐项审阅并记录；
+     - `cargo tree -i path` 与 `cargo tree -i ztracing` 均无结果；
+     - 应用在 macOS 27 启动，各 route 可达。
+4. **U3 token 与外壳**
+   - 建立 `crates/ui/src/theme/`、`THIRD_PARTY_NOTICES.md`，并由 `scripts/package-macos-app.sh` 打包进产物；61 处颜色字面量改为 token。
+   - 实现透明标题栏（拖拽区与交通灯位置）、玻璃侧栏与内容平面布局、Settings 外观项与系统外观跟随。
+   - 验证：
+     - L1 颜色扫描与对比度测试转绿，`effective_material` 测试通过；
+     - L2 测试断言玻璃材质下 `tokens.background.a == 0`；
+     - 四种外观组合的 L3 基线通过视觉清单；
+     - 桌面背后 blur 手工检查。
+5. **U4 玻璃原语与页面迁移**
+   - `frosted`、`edge_faded` 原语与不透明回退。
+   - 基于 gpui-base 的 frosted 下拉、对话框与 Assistant 输入条；gpui-base `Input` 替换 `TextInput`；各页面迁移到 token 与原语。
+   - 验证：
+     - L2 测试覆盖下拉的 Up/Down/Enter/Esc、点击外部关闭、焦点归还；
+     - L1 扫描确认下拉与进度条都经带 label 的包装创建；
+     - 对话框确认/取消；输入粘贴，以及经 `EntityInputHandler` 提交中文文本；密钥框 Copy/Cut 不泄露；
+     - 重新验证 U1 中设备下拉、secret 输入与对话框相关用例。
+   - //TODO - 增加 `#[ignore]` 的 macOS 资源探测。预热 10 次后，浮层开合 50 次，`MTLDevice.currentAllocatedSize` 增长 ≤ 8 MiB，帧时间 p95 ≤ 16.7 ms。验证：手动运行 `cargo test -p ui -- --ignored --test-threads=1 frosted_resource_probe` 并记录结果。
+6. **U5 产品功能**
+   - scanner issue、revision 和完整文档状态接入 Documents/Detail。验证：L2 测试以无效外部文件与 revision 变化驱动显示。
+   - 全部树和文档写回切换到 revision-aware document service，并补齐冲突 UI。验证：L2 测试在外部修改后写回，得到冲突提示且磁盘内容不变。
+   - 通用文档编辑、speaker 校正和 Speaker Library 管理，移除固定 speaker 合并。验证：L2 编辑与校正测试回读 revision 递增、processing 字段不变。
+   - 可选择的文档工作区与音频缺失恢复。验证：L2 测试切换工作区，并对缺失音频给出恢复入口。
+   - 完成 Assistant 三项页面验收（见 Assistant 节）。
+   - Models 的 license、来源、probe 与失败诊断。验证：L2 测试以 fake manager 的失败 probe 显示原因与重试。
+   - 键盘、焦点与无障碍。验证：L2 键盘遍历全部 route；L1 扫描确认交互控件均经带 label 的包装创建；L3 基线覆盖焦点态；macOS 27 Accessibility Inspector 手工检查。
+
+UI 完成标准：完整产品流程不需要 CLI 或手工编辑 JSON；外部文件变化、版本冲突、模型失败和任务取消都有明确且可恢复的反馈；每个 route 在四种外观组合下通过视觉清单。

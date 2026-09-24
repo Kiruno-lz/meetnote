@@ -34,8 +34,9 @@
 30. Workspace 的源文件音频、Markdown、项目 JSON 和 Speaker Library 是不可删除资产；全文索引、embedding index、解析状态和搜索缓存只能作为可重建派生状态存在。
 31. 插件通过 Workspace Host 的版本化 capability port 访问开放能力；port 执行 Workspace 的范围、revision、结构和资产保护，不提供任意文件系统删除权限。
 32. Assistant connection profile 直接在 `settings.json` 保存 `apiKey`，或保存包含 API key 的 `apiKeyFile` 路径；当前项目不建设操作系统 credential store、secret broker 或 credential 生命周期管理。计算费用、账户额度、计算配额和 billing budget 不属于当前项目职责；运行时只保留防止无限循环、超出协议上下文和结果失控所必需的硬上限。
+33. 桌面 GPUI 使用 `zeronsh/zui` 与配套 `zeronsh/gpui-component` 的固定 rev 对，不跟随上游 zed。理由是窗口级 blur 只需修正材质，而 in-window backdrop blur 与 edge fade 需要渲染器支持，zui 已提供。zui 独有 API 只在 UI 主题模块的玻璃原语中调用，并保留不透明回退；不启用引入 GPL crate 的 feature。窗口玻璃只承载 chrome 与浮层，阅读和编辑内容使用不透明平面。
 
-详细理由见[Agent Host](agent-host.md)、[Workspace Host](workspace-host.md)和[Extension](extension-system.md)。
+详细理由见[Agent Host](agent-host.md)、[Workspace Host](workspace-host.md)、[Extension](extension-system.md)和 [GPUI UI 计划](../plan/ui-plan.md)。
 
 ## 禁止偏离
 
