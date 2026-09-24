@@ -1,9 +1,11 @@
 use contracts::{
-    AsrRequest, AsrResult, BackendError, BackendTask, DiarizationRequest, DiarizationResult,
-    DiarizationStageConfiguration, DocumentRecord, ModelRef,
+    AgentMutationProvenance, AsrRequest, AsrResult, BackendError, BackendTask, DiarizationRequest,
+    DiarizationResult, DiarizationStageConfiguration, DocumentRecord, ModelRef,
 };
 use domain::{align_transcript_and_speakers, SpeakerTaggedSegment};
 use runtime::JobContext;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::future::Future;
 use std::path::Path;
@@ -11,10 +13,12 @@ use std::pin::Pin;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
+mod capabilities;
 mod document_commands;
 mod long_audio;
 mod speaker_identity;
 mod workspace;
+mod workspace_capability;
 
 pub use contracts::BackendDescriptor;
 pub use document_commands::{DocumentCommandError, DocumentCommandService};
@@ -29,6 +33,10 @@ pub use speaker_identity::{
 pub use workspace::{
     render_markdown, ProcessingContexts, ProcessingOptions, ProcessingRequest, ProcessingService,
     ProjectProcessingJob, WorkspaceService,
+};
+pub use workspace_capability::{
+    CapabilityProjectionPolicy, ToolRegistry, WorkspaceAccessPolicy, WorkspaceCapabilityPort,
+    MAX_CAPABILITY_RESULT_BYTES,
 };
 
 pub type BackendFuture<T> = Pin<Box<dyn Future<Output = Result<T, BackendError>> + Send>>;
@@ -152,6 +160,40 @@ pub struct DocumentSnapshot {
     pub issues: Vec<DocumentIssue>,
 }
 
+/// The bounded projection used by list/read capability consumers. It excludes
+/// transcript, diarization, and processing payloads so repositories can emit
+/// list rows without materializing complete document states.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentMetadata {
+    pub document_id: domain::DocumentId,
+    pub revision: u64,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub summary: Option<String>,
+    pub document_status: String,
+    pub parent_id: Option<domain::DocumentId>,
+    pub depth: u8,
+    pub sibling_order: u32,
+    pub audio_asset_id: Option<domain::DocumentId>,
+}
+
+impl From<&domain::DocumentState> for DocumentMetadata {
+    fn from(document: &domain::DocumentState) -> Self {
+        Self {
+            document_id: document.identity.id.clone(),
+            revision: document.revision(),
+            title: document.content.title.clone(),
+            tags: document.content.tags.clone(),
+            summary: document.content.summary.clone(),
+            document_status: document.document_status.value.clone(),
+            parent_id: document.hierarchy.parent_id.clone(),
+            depth: document.hierarchy.depth,
+            sibling_order: document.hierarchy.sibling_order,
+            audio_asset_id: document.source.audio_asset_id.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentChange {
     Changed,
@@ -159,6 +201,22 @@ pub enum DocumentChange {
 
 pub trait DocumentRepository: Send + Sync {
     fn snapshot(&self) -> Result<DocumentSnapshot, String>;
+
+    /// Visit metadata one row at a time. Implementations should avoid loading
+    /// complete document states; the default preserves compatibility for small
+    /// or legacy repositories that have no specialized scanner yet.
+    fn scan_metadata(
+        &self,
+        visitor: &mut dyn FnMut(DocumentMetadata) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        for document in self.snapshot()?.documents {
+            if !visitor(DocumentMetadata::from(&document))? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     fn get(
         &self,
         document_id: &domain::DocumentId,
@@ -167,6 +225,141 @@ pub trait DocumentRepository: Send + Sync {
     fn watch(&self) -> Result<Receiver<DocumentChange>, String>;
     fn save(&self, document: domain::DocumentState, markdown: Option<String>)
         -> Result<(), String>;
+
+    fn commit_agent_mutation(
+        &self,
+        _batch: DocumentMutationBatch,
+    ) -> Result<DocumentMutationCommit, DocumentMutationStoreError> {
+        Err(DocumentMutationStoreError::Transaction(
+            "repository does not support agent mutation transactions".into(),
+        ))
+    }
+
+    fn find_agent_mutation(
+        &self,
+        _mutation_id: &str,
+        _fingerprint: &str,
+    ) -> Result<Option<DocumentMutationCommit>, DocumentMutationStoreError> {
+        Ok(None)
+    }
+
+    fn agent_mutation_document_ids(
+        &self,
+        _undo_token: &str,
+    ) -> Result<Vec<String>, DocumentMutationStoreError> {
+        Err(DocumentMutationStoreError::UndoNotFound)
+    }
+
+    fn undo_agent_mutation(
+        &self,
+        _undo_token: &str,
+    ) -> Result<DocumentMutationCommit, DocumentMutationStoreError> {
+        Err(DocumentMutationStoreError::UndoNotFound)
+    }
+
+    fn save_pending_agent_mutation(
+        &self,
+        _pending: PendingDocumentMutation,
+    ) -> Result<(), DocumentMutationStoreError> {
+        Err(DocumentMutationStoreError::Transaction(
+            "repository does not support pending agent mutations".into(),
+        ))
+    }
+
+    fn take_pending_agent_mutation(
+        &self,
+        _confirmation_id: &str,
+    ) -> Result<Option<PendingDocumentMutation>, DocumentMutationStoreError> {
+        Err(DocumentMutationStoreError::Transaction(
+            "repository does not support pending agent mutations".into(),
+        ))
+    }
+
+    fn find_pending_agent_mutation(
+        &self,
+        _mutation_id: &str,
+        _fingerprint: &str,
+    ) -> Result<Option<PendingDocumentMutation>, DocumentMutationStoreError> {
+        Ok(None)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentMutationWrite {
+    pub record: DocumentRecord,
+    pub expected_revision: Option<u64>,
+    /// SHA-256 of the source Markdown read before preparing this write.
+    /// Repositories compare this value while holding their commit lock.
+    #[serde(default)]
+    pub source_markdown_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentMutationBatch {
+    pub mutation_id: String,
+    pub fingerprint: String,
+    pub undo_token: String,
+    pub tool_name: String,
+    pub provenance: AgentMutationProvenance,
+    pub writes: Vec<DocumentMutationWrite>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingDocumentMutation {
+    pub confirmation_id: String,
+    pub expires_at_ms: u64,
+    pub batch: DocumentMutationBatch,
+    pub uncovered_segment_ids: Vec<String>,
+    #[serde(default)]
+    pub ranges: Vec<contracts::AgentRangePreview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentMutationRevision {
+    pub document_id: String,
+    pub previous_revision: Option<u64>,
+    pub revision: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentMutationCommit {
+    pub mutation_id: String,
+    pub undo_token: String,
+    pub records: Vec<DocumentRecord>,
+    pub revisions: Vec<DocumentMutationRevision>,
+    pub provenance: AgentMutationProvenance,
+    pub replayed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DocumentMutationStoreError {
+    #[error("document was not found: {document_id}")]
+    NotFound { document_id: String },
+    #[error("document already exists: {document_id}")]
+    AlreadyExists { document_id: String },
+    #[error("document revision conflict for {document_id}: expected {expected}, found {actual}")]
+    RevisionConflict {
+        document_id: String,
+        expected: u64,
+        actual: u64,
+    },
+    #[error("document content conflict for {document_id}: expected {expected}, found {actual}")]
+    ContentConflict {
+        document_id: String,
+        expected: String,
+        actual: String,
+    },
+    #[error("idempotency key was reused with different arguments")]
+    IdempotencyConflict,
+    #[error("undo token was not found")]
+    UndoNotFound,
+    #[error("document transaction failed: {0}")]
+    Transaction(String),
 }
 
 #[derive(Clone)]
@@ -181,6 +374,13 @@ impl DocumentService {
 
     pub fn snapshot(&self) -> Result<DocumentSnapshot, String> {
         self.repository.snapshot()
+    }
+
+    pub fn scan_metadata(
+        &self,
+        visitor: &mut dyn FnMut(DocumentMetadata) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        self.repository.scan_metadata(visitor)
     }
 
     pub fn list(&self) -> Result<Vec<domain::DocumentState>, String> {
@@ -243,6 +443,94 @@ impl DocumentService {
             .ok_or_else(|| "document disappeared after save".to_string())
     }
 
+    pub fn commit_agent_mutation(
+        &self,
+        batch: DocumentMutationBatch,
+    ) -> Result<DocumentMutationCommit, DocumentMutationStoreError> {
+        if let Some(commit) = self
+            .repository
+            .find_agent_mutation(&batch.mutation_id, &batch.fingerprint)?
+        {
+            return Ok(commit);
+        }
+        self.validate_agent_mutation_sources(&batch)?;
+        self.repository.commit_agent_mutation(batch)
+    }
+
+    pub fn validate_agent_mutation_sources(
+        &self,
+        batch: &DocumentMutationBatch,
+    ) -> Result<(), DocumentMutationStoreError> {
+        for write in &batch.writes {
+            let Some(expected) = write.source_markdown_sha256.as_deref() else {
+                continue;
+            };
+            let document_id = write.record.state.id();
+            let current = self
+                .repository
+                .read(document_id)
+                .map_err(DocumentMutationStoreError::Transaction)?
+                .ok_or_else(|| DocumentMutationStoreError::NotFound {
+                    document_id: document_id.as_str().into(),
+                })?;
+            let actual = markdown_sha256(&current.markdown);
+            if actual != expected {
+                return Err(DocumentMutationStoreError::ContentConflict {
+                    document_id: document_id.as_str().into(),
+                    expected: expected.into(),
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub fn find_agent_mutation(
+        &self,
+        mutation_id: &str,
+        fingerprint: &str,
+    ) -> Result<Option<DocumentMutationCommit>, DocumentMutationStoreError> {
+        self.repository
+            .find_agent_mutation(mutation_id, fingerprint)
+    }
+
+    pub fn undo_agent_mutation(
+        &self,
+        undo_token: &str,
+    ) -> Result<DocumentMutationCommit, DocumentMutationStoreError> {
+        self.repository.undo_agent_mutation(undo_token)
+    }
+
+    pub fn agent_mutation_document_ids(
+        &self,
+        undo_token: &str,
+    ) -> Result<Vec<String>, DocumentMutationStoreError> {
+        self.repository.agent_mutation_document_ids(undo_token)
+    }
+
+    pub fn save_pending_agent_mutation(
+        &self,
+        pending: PendingDocumentMutation,
+    ) -> Result<(), DocumentMutationStoreError> {
+        self.repository.save_pending_agent_mutation(pending)
+    }
+
+    pub fn take_pending_agent_mutation(
+        &self,
+        confirmation_id: &str,
+    ) -> Result<Option<PendingDocumentMutation>, DocumentMutationStoreError> {
+        self.repository.take_pending_agent_mutation(confirmation_id)
+    }
+
+    pub fn find_pending_agent_mutation(
+        &self,
+        mutation_id: &str,
+        fingerprint: &str,
+    ) -> Result<Option<PendingDocumentMutation>, DocumentMutationStoreError> {
+        self.repository
+            .find_pending_agent_mutation(mutation_id, fingerprint)
+    }
+
     fn prepare(
         &self,
         mut document: domain::DocumentState,
@@ -260,6 +548,13 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
+}
+
+fn markdown_sha256(markdown: &str) -> String {
+    Sha256::digest(markdown.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

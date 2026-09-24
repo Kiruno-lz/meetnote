@@ -9,7 +9,9 @@ contracts = { path = "../contracts" }
 domain = { path = "../domain" }
 runtime = { path = "../runtime" }
 futures.workspace = true
+schemars.workspace = true
 sha2.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
