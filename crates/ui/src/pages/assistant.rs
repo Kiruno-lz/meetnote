@@ -1,7 +1,7 @@
 use crate::{
     assistant_ui::{
-        now_ms, AssistantController, AssistantMutationSummary, AssistantRunResult,
-        AssistantScopeMode, AssistantTaskState, AssistantUiError, PendingReviewState,
+        AssistantController, AssistantMutationSummary, AssistantRunResult, AssistantScopeMode,
+        AssistantTaskState, AssistantUiError, PendingReviewState,
     },
     controller::RootView,
     i18n::{text as tr, Locale},
@@ -15,7 +15,6 @@ use gpui_component::{
 };
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
-    root.assistant.refresh_pending_expiration(now_ms());
     let selected = root
         .ui
         .selected_project
@@ -214,6 +213,9 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         root.ui.locale,
                         cx,
                     )
+                }))
+                .children((root.assistant.pending_overflow_count() > 0).then(|| {
+                    render_pending_overflow(root.assistant.pending_overflow_count(), root.ui.locale)
                 }))
                 .child(
                     div()
@@ -617,6 +619,18 @@ fn render_pending(
                         .on_click(cx.listener(RootView::reject_assistant_pending)),
                 ),
         )
+        .into_any_element()
+}
+
+fn render_pending_overflow(count: usize, locale: Locale) -> gpui::AnyElement {
+    div()
+        .id("assistant-pending-overflow")
+        .debug_selector(|| "assistant-pending-overflow".into())
+        .p_3()
+        .child(info_line(
+            tr(locale, "assistant_pending_overflow"),
+            count.to_string(),
+        ))
         .into_any_element()
 }
 

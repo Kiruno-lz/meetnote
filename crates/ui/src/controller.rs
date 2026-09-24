@@ -16,7 +16,7 @@ use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
     prelude::*, App, Bounds, ClickEvent, Context, Entity, KeyBinding, PathPromptOptions,
-    SharedString, Window, WindowBounds, WindowOptions,
+    SharedString, Task, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use models::manager::{DownloadEvent, DownloadState};
@@ -244,6 +244,7 @@ pub(crate) struct RootView {
     pub(crate) assistant_auth_mode: AssistantAuthMode,
     pub(crate) cancel_contexts: Option<(JobContext, JobContext)>,
     pub(crate) settings_selectors: Option<SettingsSelectors>,
+    pending_expiry: Option<Task<()>>,
 }
 
 #[derive(Clone, Copy)]
@@ -374,6 +375,7 @@ impl RootView {
                 .unwrap_or(AssistantAuthMode::Bearer),
             cancel_contexts: None,
             settings_selectors: None,
+            pending_expiry: None,
         }
     }
 
@@ -1406,7 +1408,7 @@ impl RootView {
                 return;
             }
         };
-        let cancellation = self.assistant.begin_probe(kind);
+        let (probe_id, cancellation) = self.assistant.begin_probe(kind);
         let service = self.services.assistant.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -1415,7 +1417,7 @@ impl RootView {
             })
             .await;
             this.update(cx, |this, cx| {
-                this.assistant.finish_probe(result);
+                this.assistant.finish_probe(probe_id, result);
                 cx.notify();
             })
             .ok();
@@ -1460,7 +1462,6 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         let query = self.assistant_inputs.prompt.read(cx).value();
-        self.ui.assistant_query = query.clone();
         match self.assistant.scope_mode {
             AssistantScopeMode::CurrentDocument => {
                 let selected = self
@@ -1483,6 +1484,7 @@ impl RootView {
                     return;
                 }
             };
+        self.schedule_pending_expiry(cx);
         let request_id = request.request_id.clone();
         let service = self.services.assistant.clone();
         let (progress_sender, mut progress_receiver) =
@@ -1535,6 +1537,7 @@ impl RootView {
                         this.assistant.fail(&request_id, error);
                     }
                 }
+                this.schedule_pending_expiry(cx);
                 cx.notify();
             })
             .ok();
@@ -1591,12 +1594,7 @@ impl RootView {
             cx.notify();
             return;
         };
-        let authorized_document_ids = self
-            .assistant
-            .authorized_documents
-            .iter()
-            .map(|document| document.document_id.clone())
-            .collect();
+        let authorized_document_ids = self.assistant.result_authorized_document_ids();
         let service = self.services.assistant.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -1609,6 +1607,7 @@ impl RootView {
                     Ok(result) => this.assistant.confirmation_complete(result),
                     Err(error) => this.assistant.confirmation_failed(error),
                 }
+                this.schedule_pending_expiry(cx);
                 cx.notify();
             })
             .ok();
@@ -1626,12 +1625,7 @@ impl RootView {
             cx.notify();
             return;
         };
-        let authorized_document_ids = self
-            .assistant
-            .authorized_documents
-            .iter()
-            .map(|document| document.document_id.clone())
-            .collect();
+        let authorized_document_ids = self.assistant.result_authorized_document_ids();
         let service = self.services.assistant.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -1644,11 +1638,31 @@ impl RootView {
                     Ok(()) => this.assistant.rejection_complete(),
                     Err(error) => this.assistant.confirmation_failed(error),
                 }
+                this.schedule_pending_expiry(cx);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+
+    /// Replaces the expiry timer with one for the awaiting review, if any, so
+    /// expiry does not depend on a re-render.
+    fn schedule_pending_expiry(&mut self, cx: &mut Context<Self>) {
+        self.pending_expiry =
+            self.assistant
+                .pending_expiry_delay(now_ms())
+                .map(|(confirmation_id, delay)| {
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(delay).await;
+                        this.update(cx, |this, cx| {
+                            if this.assistant.expire_pending(&confirmation_id) {
+                                cx.notify();
+                            }
+                        })
+                        .ok();
+                    })
+                });
     }
 
     pub(crate) fn undo_assistant_mutation_for(
@@ -1659,27 +1673,9 @@ impl RootView {
         let Some((token, mutation_id)) = self.assistant.begin_mutation_undo(&mutation_id) else {
             return;
         };
-        let authorized_document_ids = self
-            .assistant
-            .authorized_documents
-            .iter()
-            .map(|document| document.document_id.clone())
-            .collect();
+        let authorized_document_ids = self.assistant.result_authorized_document_ids();
         let service = self.services.assistant.clone();
-
-        #[cfg(test)]
-        {
-            let result = service.undo(token, authorized_document_ids);
-            match result {
-                Ok(mutation) => self
-                    .assistant
-                    .mutation_undo_complete(&mutation_id, mutation),
-                Err(error) => self.assistant.mutation_undo_failed(&mutation_id, error),
-            }
-            cx.notify();
-        }
-
-        #[cfg(not(test))]
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let result =
                 runtime::spawn_blocking(move || service.undo(token, authorized_document_ids)).await;
@@ -1852,7 +1848,6 @@ impl RootView {
     pub(crate) fn download_model(&mut self, model_id: String, cx: &mut Context<Self>) {
         match self.services.model_manager.start(&model_id) {
             Ok(task) => {
-                self.ui.downloading = true;
                 self.ui.notice = i18n::message(self.ui.locale, "download_started", &model_id);
                 let events = Arc::new(Mutex::new(task.events));
                 cx.notify();
@@ -1891,9 +1886,6 @@ impl RootView {
                                 progress.speed_bytes_per_second,
                             ),
                         };
-                        if terminal {
-                            this.ui.downloading = false;
-                        }
                         cx.notify();
                     })
                     .ok();

@@ -5,7 +5,7 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub use application::AgentCancellation as AssistantCancellation;
 
@@ -16,6 +16,10 @@ pub enum ConnectionProbeKind {
     Readiness,
     Model,
 }
+
+/// Identifies one connection probe so late results of cancelled or superseded
+/// probes can be dropped.
+pub type ConnectionProbeId = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionDiagnostic {
@@ -304,10 +308,15 @@ pub struct AssistantController {
     pub progress: Option<AssistantProgress>,
     pub probe_running: Option<ConnectionProbeKind>,
     pending_queue: VecDeque<AssistantPendingReview>,
+    pending_overflow_ids: HashSet<String>,
+    /// Document ids authorized when the current result's run started.
+    result_grant: Vec<String>,
     undone_mutation_ids: HashSet<String>,
     undo_in_flight: HashSet<String>,
     cancellation: Option<AssistantCancellation>,
     probe_cancellation: Option<AssistantCancellation>,
+    probe_sequence: ConnectionProbeId,
+    active_probe: Option<ConnectionProbeId>,
 }
 
 impl Default for AssistantController {
@@ -324,10 +333,14 @@ impl Default for AssistantController {
             progress: None,
             probe_running: None,
             pending_queue: VecDeque::new(),
+            pending_overflow_ids: HashSet::new(),
+            result_grant: Vec::new(),
             undone_mutation_ids: HashSet::new(),
             undo_in_flight: HashSet::new(),
             cancellation: None,
             probe_cancellation: None,
+            probe_sequence: 0,
+            active_probe: None,
         }
     }
 }
@@ -410,8 +423,14 @@ impl AssistantController {
         };
         self.task = AssistantTaskState::Running { request_id };
         self.result = None;
+        self.result_grant = self
+            .authorized_documents
+            .iter()
+            .map(|document| document.document_id.clone())
+            .collect();
         self.pending = None;
         self.pending_queue.clear();
+        self.pending_overflow_ids.clear();
         self.undone_mutation_ids.clear();
         self.undo_in_flight.clear();
         self.progress = None;
@@ -565,35 +584,6 @@ impl AssistantController {
         }
     }
 
-    pub fn mutation_complete(&mut self, mutation: AssistantMutationSummary) {
-        if let Some(result) = self.result.as_mut() {
-            if !result
-                .mutations
-                .iter()
-                .any(|existing| existing.mutation_id == mutation.mutation_id)
-            {
-                result.mutations.push(mutation.clone());
-            }
-            result.mutation = Some(mutation);
-        } else {
-            self.result = Some(AssistantRunResult {
-                answer: None,
-                warning: None,
-                warnings: Vec::new(),
-                evidence_segment_ids: Vec::new(),
-                usage: None,
-                requested_model: None,
-                resolved_model: None,
-                mutation: Some(mutation.clone()),
-                mutations: vec![mutation],
-                pending: None,
-                pending_reviews: Vec::new(),
-                diagnostics: None,
-            });
-        }
-        self.task = AssistantTaskState::Completed;
-    }
-
     pub fn begin_mutation_undo(&mut self, mutation_id: &str) -> Option<(String, String)> {
         if self.undone_mutation_ids.contains(mutation_id)
             || self.undo_in_flight.contains(mutation_id)
@@ -638,30 +628,78 @@ impl AssistantController {
         self.undo_in_flight.contains(mutation_id)
     }
 
-    pub fn select_mutation_for_undo(&mut self, mutation_id: &str) -> Option<String> {
-        let result = self.result.as_mut()?;
-        let mutation = result
-            .all_mutations()
-            .into_iter()
-            .find(|mutation| mutation.mutation_id == mutation_id)?;
-        let token = mutation.undo_token.clone();
-        result.mutation = Some(mutation);
-        Some(token)
+    /// Authorization for confirm, reject and undo of the current result: the
+    /// documents granted when its run started, not the current scope.
+    pub fn result_authorized_document_ids(&self) -> Vec<String> {
+        self.result_grant.clone()
     }
 
     pub fn pending_queue_len(&self) -> usize {
         self.pending_queue.len()
     }
 
-    pub fn begin_probe(&mut self, kind: ConnectionProbeKind) -> AssistantCancellation {
+    /// Pending reviews of the current run beyond `MAX_PENDING_REVIEWS` that
+    /// were not queued and must be surfaced instead of dropped silently.
+    pub fn pending_overflow_count(&self) -> usize {
+        self.pending_overflow_ids.len()
+    }
+
+    /// The awaiting review and the delay until it expires, for the UI timer.
+    /// The delay is capped so `Instant + delay` cannot overflow.
+    pub fn pending_expiry_delay(&self, now_ms: u64) -> Option<(String, Duration)> {
+        match self.pending.as_ref()? {
+            PendingReviewState::Awaiting(pending) => Some((
+                pending.confirmation_id.clone(),
+                Duration::from_millis(
+                    pending
+                        .expires_at_ms
+                        .saturating_sub(now_ms)
+                        .min(MAX_PENDING_EXPIRY_DELAY_MS),
+                ),
+            )),
+            _ => None,
+        }
+    }
+
+    /// Marks the awaiting review expired when its timer fires; returns whether
+    /// the state changed.
+    pub fn expire_pending(&mut self, confirmation_id: &str) -> bool {
+        if !matches!(
+            self.pending.as_ref(),
+            Some(PendingReviewState::Awaiting(pending)) if pending.confirmation_id == confirmation_id
+        ) {
+            return false;
+        }
+        self.pending = Some(PendingReviewState::Expired);
+        true
+    }
+
+    pub fn begin_probe(
+        &mut self,
+        kind: ConnectionProbeKind,
+    ) -> (ConnectionProbeId, AssistantCancellation) {
+        if let Some(superseded) = self.probe_cancellation.take() {
+            superseded.cancel();
+        }
         let cancellation = AssistantCancellation::new();
+        self.probe_sequence += 1;
+        self.active_probe = Some(self.probe_sequence);
         self.probe_running = Some(kind);
         self.diagnostic = None;
         self.probe_cancellation = Some(cancellation.clone());
-        cancellation
+        (self.probe_sequence, cancellation)
     }
 
-    pub fn finish_probe(&mut self, result: Result<ConnectionDiagnostic, AssistantUiError>) {
+    /// Records a probe result unless the probe was cancelled or superseded.
+    pub fn finish_probe(
+        &mut self,
+        probe_id: ConnectionProbeId,
+        result: Result<ConnectionDiagnostic, AssistantUiError>,
+    ) {
+        if self.active_probe != Some(probe_id) {
+            return;
+        }
+        self.active_probe = None;
         self.probe_running = None;
         self.probe_cancellation = None;
         self.diagnostic = Some(result);
@@ -672,11 +710,12 @@ impl AssistantController {
             return false;
         };
         cancellation.cancel();
+        self.active_probe = None;
         self.probe_running = None;
         true
     }
 
-    pub fn refresh_pending_expiration(&mut self, now_ms: u64) {
+    fn refresh_pending_expiration(&mut self, now_ms: u64) {
         if matches!(
             self.pending.as_ref(),
             Some(PendingReviewState::Awaiting(pending)) if pending.expires_at_ms <= now_ms
@@ -689,11 +728,15 @@ impl AssistantController {
         self.pending_queue.clear();
         let mut seen = HashSet::new();
         pending_reviews.retain(|pending| seen.insert(pending.confirmation_id.clone()));
+        let overflow = pending_reviews.split_off(pending_reviews.len().min(MAX_PENDING_REVIEWS));
+        for pending in &pending_reviews {
+            self.pending_overflow_ids.remove(&pending.confirmation_id);
+        }
+        self.pending_overflow_ids
+            .extend(overflow.into_iter().map(|pending| pending.confirmation_id));
         let mut pending_reviews = pending_reviews.into_iter();
-        let current = pending_reviews.next();
-        self.pending = current.map(PendingReviewState::Awaiting);
-        self.pending_queue
-            .extend(pending_reviews.take(MAX_PENDING_REVIEWS - 1));
+        self.pending = pending_reviews.next().map(PendingReviewState::Awaiting);
+        self.pending_queue.extend(pending_reviews);
     }
 
     fn matches_active_request(&self, request_id: &str) -> bool {
@@ -707,6 +750,8 @@ impl AssistantController {
 }
 
 const MAX_PENDING_REVIEWS: usize = 8;
+/// About 49 days; runtime confirmations expire far sooner.
+const MAX_PENDING_EXPIRY_DELAY_MS: u64 = u32::MAX as u64;
 
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -984,11 +1029,11 @@ mod tests {
             max_output_tokens: 512,
         };
         let mut controller = AssistantController::default();
-        let cancellation = controller.begin_probe(ConnectionProbeKind::Model);
+        let (probe_id, cancellation) = controller.begin_probe(ConnectionProbeKind::Model);
         let diagnostic = service
             .probe_connection(profile, ConnectionProbeKind::Model, cancellation)
             .unwrap();
-        controller.finish_probe(Ok(diagnostic));
+        controller.finish_probe(probe_id, Ok(diagnostic));
         assert!(matches!(
             controller.diagnostic,
             Some(Ok(ConnectionDiagnostic {
@@ -1162,19 +1207,14 @@ mod tests {
                 .map(|mutation| mutation.mutation_id.as_str()),
             Some("automatic")
         );
-        controller.mutation_complete(
-            service
-                .undo("undo-automatic".into(), vec!["document".into()])
-                .unwrap(),
+        let (token, mutation_id) = controller.begin_mutation_undo("automatic").unwrap();
+        assert_eq!(token, "undo-automatic");
+        controller.mutation_undo_complete(
+            &mutation_id,
+            service.undo(token, vec!["document".into()]).unwrap(),
         );
-        assert_eq!(
-            controller
-                .result
-                .as_ref()
-                .and_then(|result| result.mutation.as_ref())
-                .map(|mutation| mutation.mutation_id.as_str()),
-            Some("undone")
-        );
+        assert!(controller.is_mutation_undone("automatic"));
+        assert_eq!(controller.task, AssistantTaskState::Completed);
 
         let (request, _) = controller.begin("confirm".into(), &settings()).unwrap();
         let request_id = request.request_id;
@@ -1372,10 +1412,128 @@ mod tests {
     #[test]
     fn probe_cancellation_is_visible_to_the_runtime_boundary() {
         let mut controller = AssistantController::default();
-        let cancellation = controller.begin_probe(ConnectionProbeKind::Readiness);
+        let (_, cancellation) = controller.begin_probe(ConnectionProbeKind::Readiness);
         assert!(controller.request_probe_cancel());
         assert!(cancellation.is_cancelled());
         assert!(controller.probe_running.is_none());
         assert!(!controller.request_probe_cancel());
+    }
+
+    #[test]
+    fn pending_overflow_is_reported_instead_of_dropped_silently() {
+        let document = DocumentState::new(ProjectId::new("queue"), "Queue", "queue.wav");
+        let mut controller = AssistantController::default();
+        controller.authorize_document(Some(&document));
+        let (request, _) = controller.begin("queue".into(), &settings()).unwrap();
+        controller.complete(
+            &request.request_id,
+            AssistantRunResult {
+                pending_reviews: (0..12)
+                    .map(|index| pending_with_id(&format!("confirmation-{index}")))
+                    .collect(),
+                ..empty_result()
+            },
+        );
+        assert_eq!(controller.pending_queue_len(), 7);
+        assert_eq!(controller.pending_overflow_count(), 4);
+
+        controller.pending_for_accept(0).unwrap();
+        controller.confirmation_complete(empty_result());
+        assert_eq!(controller.pending_queue_len(), 6);
+        assert_eq!(controller.pending_overflow_count(), 4);
+
+        let (request, _) = controller.begin("again".into(), &settings()).unwrap();
+        controller.complete(
+            &request.request_id,
+            AssistantRunResult {
+                pending_reviews: vec![pending_with_id("single")],
+                ..empty_result()
+            },
+        );
+        assert_eq!(controller.pending_overflow_count(), 0);
+    }
+
+    #[test]
+    fn pending_expiry_timer_targets_only_the_awaiting_review() {
+        let mut controller = AssistantController::default();
+        assert_eq!(controller.pending_expiry_delay(0), None);
+
+        let mut review = pending_with_id("due");
+        review.expires_at_ms = 1_500;
+        controller.pending = Some(PendingReviewState::Awaiting(review.clone()));
+        assert_eq!(
+            controller.pending_expiry_delay(1_000),
+            Some(("due".into(), Duration::from_millis(500)))
+        );
+        assert_eq!(
+            controller.pending_expiry_delay(2_000),
+            Some(("due".into(), Duration::ZERO))
+        );
+        controller.pending = Some(PendingReviewState::Awaiting(pending()));
+        assert_eq!(
+            controller.pending_expiry_delay(0),
+            Some((
+                "confirmation".into(),
+                Duration::from_millis(MAX_PENDING_EXPIRY_DELAY_MS)
+            ))
+        );
+
+        assert!(!controller.expire_pending("due"));
+        controller.pending = Some(PendingReviewState::Accepting(review.clone()));
+        assert_eq!(controller.pending_expiry_delay(0), None);
+        assert!(!controller.expire_pending("due"));
+        controller.pending = Some(PendingReviewState::Awaiting(review));
+        assert!(controller.expire_pending("due"));
+        assert_eq!(controller.pending, Some(PendingReviewState::Expired));
+    }
+
+    fn ready_diagnostic(kind: ConnectionProbeKind) -> ConnectionDiagnostic {
+        ConnectionDiagnostic {
+            kind,
+            ready: true,
+            local: true,
+            models: None,
+            text: Some(true),
+            client_tools: Some(true),
+            requested_model: "fixture".into(),
+            resolved_model: Some("fixture".into()),
+            context_window_tokens: None,
+            message: "ready".into(),
+        }
+    }
+
+    #[test]
+    fn late_ok_after_probe_cancel_is_ignored() {
+        let mut controller = AssistantController::default();
+        let (probe_id, _) = controller.begin_probe(ConnectionProbeKind::Readiness);
+        assert!(controller.request_probe_cancel());
+
+        controller.finish_probe(
+            probe_id,
+            Ok(ready_diagnostic(ConnectionProbeKind::Readiness)),
+        );
+
+        assert_eq!(controller.diagnostic, None);
+        assert_eq!(controller.probe_running, None);
+    }
+
+    #[test]
+    fn superseded_probe_result_is_ignored() {
+        let mut controller = AssistantController::default();
+        let (first, first_cancellation) = controller.begin_probe(ConnectionProbeKind::Readiness);
+        let (second, _) = controller.begin_probe(ConnectionProbeKind::Model);
+        assert_ne!(first, second);
+        assert!(first_cancellation.is_cancelled());
+
+        controller.finish_probe(first, Ok(ready_diagnostic(ConnectionProbeKind::Readiness)));
+        assert_eq!(controller.diagnostic, None);
+        assert_eq!(controller.probe_running, Some(ConnectionProbeKind::Model));
+
+        controller.finish_probe(second, Ok(ready_diagnostic(ConnectionProbeKind::Model)));
+        assert_eq!(
+            controller.diagnostic,
+            Some(Ok(ready_diagnostic(ConnectionProbeKind::Model)))
+        );
+        assert_eq!(controller.probe_running, None);
     }
 }

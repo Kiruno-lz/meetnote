@@ -1,163 +1,6 @@
 use contracts::ComputeDevice;
 use domain::ProjectStatus;
 
-#[cfg(test)]
-pub const KEYS: &[&str] = &[
-    "assistant",
-    "meetings",
-    "models",
-    "settings",
-    "local_intelligence",
-    "ask_library",
-    "ask_placeholder",
-    "send",
-    "organize_library",
-    "find_project",
-    "split_project",
-    "audio_projects",
-    "import_audio",
-    "no_projects",
-    "open_detail",
-    "process",
-    "cancel",
-    "summary",
-    "original",
-    "merge_speaker",
-    "no_summary",
-    "need_process",
-    "empty_meetings",
-    "project_detail",
-    "catalog_description",
-    "download",
-    "downloaded",
-    "not_downloaded",
-    "model_size",
-    "vram_estimate",
-    "no_models",
-    "interface",
-    "language",
-    "transcription",
-    "asr_backend",
-    "asr_model",
-    "transcription_language",
-    "speaker_separation",
-    "diarization_backend",
-    "diarization_model",
-    "diarization_segmentation_model",
-    "diarization_embedding_model",
-    "diarization_clustering",
-    "expected_speakers",
-    "runtime",
-    "compute_device",
-    "auto",
-    "not_selected",
-    "ready",
-    "processing",
-    "failed",
-    "ready_to_process",
-    "models_active",
-    "model_status",
-    "ask_notice",
-    "choose_audio",
-    "missing",
-    "interface_description",
-    "transcription_description",
-    "speaker_description",
-    "speaker_library_path",
-    "choose_directory",
-    "speaker_library_migration_title",
-    "speaker_library_migration_description",
-    "migrate",
-    "use_new_path",
-    "runtime_description",
-    "settings_description",
-    "saved_automatically",
-    "models_count",
-    "download_queue",
-    "pause",
-    "resume",
-    "empty_request",
-    "language_changed",
-    "hierarchy_updated",
-    "order_updated",
-    "download_updated",
-    "speaker_merged",
-    "cancellation_requested",
-    "select_project_first",
-    "project_missing",
-    "settings_saved",
-    "assistant_settings",
-    "assistant_enabled",
-    "enabled",
-    "disabled",
-    "assistant_profiles",
-    "assistant_new_profile",
-    "assistant_connection_id",
-    "assistant_connection_name",
-    "assistant_protocol",
-    "assistant_protocol_notice",
-    "assistant_base_url",
-    "assistant_model",
-    "assistant_auth_mode",
-    "assistant_api_key",
-    "assistant_api_key_file",
-    "assistant_context_window",
-    "assistant_timeout",
-    "assistant_max_output",
-    "assistant_write_mode",
-    "assistant_automatic",
-    "assistant_confirm_each",
-    "assistant_max_rounds",
-    "assistant_max_retries",
-    "assistant_connection_test",
-    "save",
-    "assistant_readiness",
-    "assistant_model_probe",
-    "assistant_settings_saved",
-    "assistant_connection_required",
-    "assistant_scene_ask",
-    "assistant_scene_organize",
-    "assistant_scene_partition",
-    "assistant_scene_extract",
-    "assistant_scene_move",
-    "assistant_authorized_document",
-    "assistant_current_document",
-    "assistant_all_visible_documents",
-    "assistant_no_document",
-    "assistant_projection",
-    "assistant_connection",
-    "assistant_local_connection",
-    "assistant_remote_connection",
-    "assistant_scope_notice",
-    "assistant_all_visible_scope_notice",
-    "assistant_idle",
-    "assistant_running",
-    "assistant_cancelling",
-    "assistant_completed",
-    "assistant_partial",
-    "assistant_cancelled",
-    "assistant_no_answer",
-    "assistant_evidence",
-    "assistant_no_evidence",
-    "assistant_model_route",
-    "assistant_usage",
-    "assistant_diagnostics",
-    "assistant_mutation",
-    "assistant_affected",
-    "assistant_uncovered",
-    "assistant_undo",
-    "assistant_undoing",
-    "assistant_undone",
-    "assistant_pending",
-    "assistant_field_diff",
-    "assistant_tree_change",
-    "assistant_range",
-    "assistant_accept",
-    "assistant_reject",
-    "assistant_rejected",
-    "assistant_expired",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Locale {
     ZhCn,
@@ -319,12 +162,14 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_completed") => "Assistant 任务已完成",
         (Locale::ZhCn, "assistant_partial") => "Assistant 任务部分完成",
         (Locale::ZhCn, "assistant_cancelled") => "Assistant 任务已取消",
+        (Locale::ZhCn, "assistant_awaiting_confirmation") => "等待确认写回",
         (Locale::ZhCn, "assistant_no_answer") => "本次任务没有文本回答。",
         (Locale::ZhCn, "assistant_evidence") => "证据 segment",
         (Locale::ZhCn, "assistant_no_evidence") => "无",
         (Locale::ZhCn, "assistant_model_route") => "请求/实际模型",
         (Locale::ZhCn, "assistant_usage") => "输入/输出/总 token",
         (Locale::ZhCn, "assistant_diagnostics") => "执行诊断",
+        (Locale::ZhCn, "assistant_warning") => "警告",
         (Locale::ZhCn, "assistant_mutation") => "变更",
         (Locale::ZhCn, "assistant_affected") => "受影响文档",
         (Locale::ZhCn, "assistant_uncovered") => "未覆盖 segment",
@@ -332,6 +177,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_undoing") => "正在撤销",
         (Locale::ZhCn, "assistant_undone") => "已撤销",
         (Locale::ZhCn, "assistant_pending") => "等待写回确认",
+        (Locale::ZhCn, "assistant_pending_queue") => "排队中的确认",
+        (Locale::ZhCn, "assistant_pending_overflow") => "超出队列上限、未列出的确认",
         (Locale::ZhCn, "assistant_field_diff") => "字段差异",
         (Locale::ZhCn, "assistant_tree_change") => "树结构变化",
         (Locale::ZhCn, "assistant_range") => "语义范围与证据",
@@ -491,12 +338,14 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_completed") => "Assistant task completed",
         (Locale::EnUs, "assistant_partial") => "Assistant task partially completed",
         (Locale::EnUs, "assistant_cancelled") => "Assistant task cancelled",
+        (Locale::EnUs, "assistant_awaiting_confirmation") => "Awaiting write confirmation",
         (Locale::EnUs, "assistant_no_answer") => "This task returned no text answer.",
         (Locale::EnUs, "assistant_evidence") => "Evidence segments",
         (Locale::EnUs, "assistant_no_evidence") => "None",
         (Locale::EnUs, "assistant_model_route") => "Requested/resolved model",
         (Locale::EnUs, "assistant_usage") => "Input/output/total tokens",
         (Locale::EnUs, "assistant_diagnostics") => "Execution diagnostics",
+        (Locale::EnUs, "assistant_warning") => "Warning",
         (Locale::EnUs, "assistant_mutation") => "Mutation",
         (Locale::EnUs, "assistant_affected") => "Affected documents",
         (Locale::EnUs, "assistant_uncovered") => "Uncovered segments",
@@ -504,6 +353,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_undoing") => "Undoing",
         (Locale::EnUs, "assistant_undone") => "Undone",
         (Locale::EnUs, "assistant_pending") => "Write confirmation pending",
+        (Locale::EnUs, "assistant_pending_queue") => "Queued confirmations",
+        (Locale::EnUs, "assistant_pending_overflow") => "Confirmations over the queue limit, not listed",
         (Locale::EnUs, "assistant_field_diff") => "Field differences",
         (Locale::EnUs, "assistant_tree_change") => "Tree changes",
         (Locale::EnUs, "assistant_range") => "Semantic ranges and evidence",
@@ -702,11 +553,192 @@ pub fn download_progress(
 mod tests {
     use super::*;
 
-    #[test]
-    fn every_ui_key_has_chinese_and_english_text() {
-        for key in KEYS {
-            assert!(!text(Locale::ZhCn, key).is_empty(), "missing zh key: {key}");
-            assert!(!text(Locale::EnUs, key).is_empty(), "missing en key: {key}");
+    const SOURCES: &[(&str, &str)] = &[
+        ("assistant_ui.rs", include_str!("assistant_ui.rs")),
+        ("components.rs", include_str!("components.rs")),
+        ("controller.rs", include_str!("controller.rs")),
+        ("i18n.rs", include_str!("i18n.rs")),
+        ("lib.rs", include_str!("lib.rs")),
+        ("route.rs", include_str!("route.rs")),
+        ("state.rs", include_str!("state.rs")),
+        ("text_input.rs", include_str!("text_input.rs")),
+        ("pages/assistant.rs", include_str!("pages/assistant.rs")),
+        ("pages/chrome.rs", include_str!("pages/chrome.rs")),
+        ("pages/detail.rs", include_str!("pages/detail.rs")),
+        ("pages/meetings.rs", include_str!("pages/meetings.rs")),
+        ("pages/mod.rs", include_str!("pages/mod.rs")),
+        ("pages/models.rs", include_str!("pages/models.rs")),
+        ("pages/settings.rs", include_str!("pages/settings.rs")),
+    ];
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Token<'a> {
+        Ident(&'a str),
+        Str(&'a str),
+        Punct(u8),
+    }
+
+    /// Minimal Rust lexer: identifiers, (raw) string literals and ASCII
+    /// punctuation. Line comments, char literals, lifetimes and numbers are skipped.
+    fn tokens(source: &str) -> Vec<Token<'_>> {
+        let bytes = source.as_bytes();
+        let mut tokens = Vec::new();
+        let mut index = 0;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            if byte == b'/' && bytes.get(index + 1) == Some(&b'/') {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            } else if byte == b'"' {
+                let start = index + 1;
+                index = start;
+                while bytes[index] != b'"' {
+                    index += if bytes[index] == b'\\' { 2 } else { 1 };
+                }
+                tokens.push(Token::Str(&source[start..index]));
+                index += 1;
+            } else if byte == b'\'' {
+                let escaped = bytes.get(index + 1) == Some(&b'\\');
+                let width = source[index + 1..].chars().next().map_or(1, char::len_utf8);
+                if escaped {
+                    index += 3;
+                    while bytes[index] != b'\'' {
+                        index += 1;
+                    }
+                    index += 1;
+                } else if bytes.get(index + 1 + width) == Some(&b'\'') {
+                    index += width + 2;
+                } else {
+                    index += 1;
+                }
+            } else if byte.is_ascii_alphabetic() || byte == b'_' {
+                let start = index;
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+                {
+                    index += 1;
+                }
+                let ident = &source[start..index];
+                if matches!(ident, "r" | "br") && matches!(bytes.get(index), Some(b'"' | b'#')) {
+                    let hashes = bytes[index..]
+                        .iter()
+                        .take_while(|byte| **byte == b'#')
+                        .count();
+                    let content = index + hashes + 1;
+                    let terminator = format!("\"{}", "#".repeat(hashes));
+                    let end = content + source[content..].find(&terminator).unwrap();
+                    tokens.push(Token::Str(&source[content..end]));
+                    index = end + terminator.len();
+                } else {
+                    tokens.push(Token::Ident(ident));
+                }
+            } else if byte.is_ascii_digit() {
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_alphanumeric() || bytes[index] == b'_')
+                {
+                    index += 1;
+                }
+            } else {
+                if byte.is_ascii_punctuation() {
+                    tokens.push(Token::Punct(byte));
+                }
+                index += 1;
+            }
         }
+        tokens
+    }
+
+    /// Key-shaped string literals inside the delimited group that starts at the
+    /// first `open` at or after `start`.
+    fn group_keys<'a>(tokens: &[Token<'a>], start: usize, open: u8, close: u8) -> Vec<&'a str> {
+        let mut keys = Vec::new();
+        let mut depth = 0usize;
+        for token in tokens[start..]
+            .iter()
+            .skip_while(|token| **token != Token::Punct(open))
+        {
+            match *token {
+                Token::Punct(byte) if byte == open => depth += 1,
+                Token::Punct(byte) if byte == close => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                Token::Str(value)
+                    if !value.is_empty()
+                        && value
+                            .bytes()
+                            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_')) =>
+                {
+                    keys.push(value)
+                }
+                _ => {}
+            }
+        }
+        keys
+    }
+
+    /// Keys passed to `text(`/`tr(` (including literals in nested `match`/`if`
+    /// arms) plus literals returned by local `fn *_key(..)` helpers.
+    fn translation_keys(source: &str) -> Vec<&str> {
+        let tokens = tokens(source);
+        let mut keys = Vec::new();
+        for (index, token) in tokens.iter().enumerate() {
+            let previous = index.checked_sub(1).map(|previous| tokens[previous]);
+            let call = matches!(token, Token::Ident("text" | "tr"))
+                && tokens.get(index + 1) == Some(&Token::Punct(b'('))
+                && !matches!(previous, Some(Token::Ident("fn") | Token::Punct(b'.')));
+            let key_helper = matches!(token, Token::Ident(name) if name.ends_with("_key"))
+                && previous == Some(Token::Ident("fn"));
+            if call {
+                keys.extend(group_keys(&tokens, index, b'(', b')'));
+            } else if key_helper {
+                keys.extend(group_keys(&tokens, index, b'{', b'}'));
+            }
+        }
+        keys
+    }
+
+    #[test]
+    fn scanner_finds_direct_nested_and_helper_keys_only() {
+        let source = r##"
+            fn text(locale: Locale, key: &str) {}
+            fn scene_key() -> &'static str { match x { A => "helper_key", _ => "other_helper" } }
+            // tr(locale, "commented_out")
+            let c = '"'; let q = '\''; let l: &'static str = "not_a_call";
+            let raw = r#"tr(locale, "raw_hidden")"#;
+            tr(locale, "direct"); i18n::text(locale, match m { A => "arm_a", B => "arm_b" });
+            value.text("method_call"); message(locale, "message_key", "Value");
+        "##;
+        assert_eq!(
+            translation_keys(source),
+            ["helper_key", "other_helper", "direct", "arm_a", "arm_b"]
+        );
+    }
+
+    #[test]
+    fn every_ui_key_in_source_has_chinese_and_english_text() {
+        let mut scanned = std::collections::BTreeSet::new();
+        let mut missing = Vec::new();
+        for (file, source) in SOURCES {
+            for key in translation_keys(source) {
+                if !scanned.insert(key) {
+                    continue;
+                }
+                for locale in [Locale::ZhCn, Locale::EnUs] {
+                    if text(locale, key).is_empty() {
+                        missing.push(format!("{file}: {key} ({})", locale.code()));
+                    }
+                }
+            }
+        }
+        assert!(
+            scanned.len() > 100,
+            "source scan found only {} keys",
+            scanned.len()
+        );
+        assert!(missing.is_empty(), "missing translations: {missing:#?}");
     }
 }
