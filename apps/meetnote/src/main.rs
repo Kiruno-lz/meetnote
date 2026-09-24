@@ -6,6 +6,8 @@ use application::{
 use asr::{AsrBackendManager, AsrBackendRegistry};
 use asr_sherpa_onnx::SherpaOnnxAsrBackend;
 use asr_whisper_rs::WhisperRsBackend;
+#[cfg(feature = "host-test-fake-audio")]
+use contracts::{AsrRequest, AsrResult, BackendError, DiarizationRequest, DiarizationResult};
 use contracts::{CapabilityCallRequest, CapabilityCallResponse, ModelRef};
 use diarization::{DiarizationBackendManager, DiarizationBackendRegistry};
 use diarization_native::{NativeDiarizationBackend, NativeDiarizationConfig};
@@ -61,8 +63,18 @@ fn main() {
     );
     let documents = DocumentService::new(repository);
     let document_commands = DocumentCommandService::new(documents.clone());
+    #[cfg(feature = "host-test-fake-audio")]
+    let processing = if is_agent && env::var("MEETNOTE_AGENT_HOST_FAKE_AUDIO").as_deref() == Ok("1")
+    {
+        ProcessingService::new(Arc::new(HostFakeAsr), Arc::new(HostFakeDiarization))
+    } else {
+        ProcessingService::new_with_providers(asr_manager.clone(), diarization_manager.clone())
+    };
+    #[cfg(not(feature = "host-test-fake-audio"))]
+    let processing =
+        ProcessingService::new_with_providers(asr_manager.clone(), diarization_manager.clone());
     let workspace = WorkspaceService::with_options(
-        ProcessingService::new_with_providers(asr_manager.clone(), diarization_manager.clone()),
+        processing,
         documents,
         ProcessingOptions {
             language: settings_snapshot.language.clone(),
@@ -152,6 +164,120 @@ fn main() {
         ),
         desktop_services,
     );
+}
+
+#[cfg(feature = "host-test-fake-audio")]
+struct HostFakeAsr;
+
+#[cfg(feature = "host-test-fake-audio")]
+impl application::AsrBackend for HostFakeAsr {
+    fn descriptor(&self) -> contracts::BackendDescriptor {
+        application::asr_descriptor("fake-asr", &["timestamps", "fixture"])
+    }
+
+    fn probe(&self, _model: &ModelRef) -> Result<(), BackendError> {
+        Ok(())
+    }
+
+    fn transcribe(
+        &self,
+        request: AsrRequest,
+        context: runtime::JobContext,
+    ) -> application::BackendFuture<AsrResult> {
+        Box::pin(async move {
+            for _ in 0..20 {
+                if context.is_cancelled() {
+                    return Err(BackendError {
+                        code: contracts::BackendErrorCode::Cancelled,
+                        message: "fixture ASR cancelled".into(),
+                    });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(AsrResult {
+                backend: application::asr_descriptor("fake-asr", &["timestamps", "fixture"]),
+                model: request.model,
+                language: request.language,
+                segments: vec![
+                    domain::TranscriptSegment {
+                        id: "segment-1".into(),
+                        start_ms: 0,
+                        end_ms: 1_000,
+                        text: "fixture fact one".into(),
+                    },
+                    domain::TranscriptSegment {
+                        id: "segment-2".into(),
+                        start_ms: 1_000,
+                        end_ms: 2_000,
+                        text: "fixture fact two".into(),
+                    },
+                ],
+            })
+        })
+    }
+}
+
+#[cfg(feature = "host-test-fake-audio")]
+struct HostFakeDiarization;
+
+#[cfg(feature = "host-test-fake-audio")]
+impl application::DiarizationBackend for HostFakeDiarization {
+    fn descriptor(&self) -> contracts::BackendDescriptor {
+        application::diarization_descriptor("fake-diarization", &["offline", "fixture"])
+    }
+
+    fn probe(&self, _model: &ModelRef) -> Result<(), BackendError> {
+        Ok(())
+    }
+
+    fn stage_provenance(&self, model: &ModelRef) -> application::DiarizationStageProvenance {
+        application::DiarizationStageProvenance {
+            segmentation: Some(model.clone()),
+            embedding: Some(model.clone()),
+            clustering: Some(domain::AlgorithmProvenance {
+                id: "fake-clustering".into(),
+                revision: Some("1".into()),
+                parameters: None,
+            }),
+        }
+    }
+
+    fn diarize(
+        &self,
+        request: DiarizationRequest,
+        context: runtime::JobContext,
+    ) -> application::BackendFuture<DiarizationResult> {
+        Box::pin(async move {
+            for _ in 0..20 {
+                if context.is_cancelled() {
+                    return Err(BackendError {
+                        code: contracts::BackendErrorCode::Cancelled,
+                        message: "fixture diarization cancelled".into(),
+                    });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Ok(DiarizationResult {
+                backend: application::diarization_descriptor(
+                    "fake-diarization",
+                    &["offline", "fixture"],
+                ),
+                model: request.model,
+                segments: vec![domain::DiarizationSegment {
+                    id: "speaker-segment-1".into(),
+                    speaker_id: "speaker-1".into(),
+                    speaker_profile_id: None,
+                    speaker_label: None,
+                    start_ms: 0,
+                    end_ms: 2_000,
+                    confidence: Some(1.0),
+                }],
+                speaker_count: Some(1),
+                embedding_observations: Vec::new(),
+                speaker_profile_candidates: Vec::new(),
+            })
+        })
+    }
 }
 
 fn run_agent_cli(

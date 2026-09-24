@@ -3,6 +3,9 @@ name = "meetnote"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+host-test-fake-audio = []
+
 [dependencies]
 application = { path = "../../crates/application" }
 asr = { path = "../../crates/asr" }
