@@ -3,25 +3,141 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
+
+#[derive(Clone, Debug)]
+pub struct CancellationToken {
+    state: Arc<CancellationState>,
+}
+
+struct CancellationState {
+    cancelled: AtomicBool,
+    changed: std::sync::Condvar,
+    linked: Mutex<Vec<std::sync::Weak<CancellationState>>>,
+    callbacks: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl std::fmt::Debug for CancellationState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CancellationState")
+            .field("cancelled", &self.cancelled.load(Ordering::Acquire))
+            .field(
+                "linked",
+                &self.linked.lock().map(|items| items.len()).unwrap_or(0),
+            )
+            .field(
+                "callbacks",
+                &self.callbacks.lock().map(|items| items.len()).unwrap_or(0),
+            )
+            .finish()
+    }
+}
+
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+fn wait_unpoisoned<'a, T>(condition: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
+    condition
+        .wait(guard)
+        .unwrap_or_else(|error| error.into_inner())
+}
+
+fn wait_timeout_unpoisoned<'a, T>(
+    condition: &Condvar,
+    guard: MutexGuard<'a, T>,
+    timeout: Duration,
+) -> MutexGuard<'a, T> {
+    condition
+        .wait_timeout(guard, timeout)
+        .map(|(guard, _)| guard)
+        .unwrap_or_else(|error| error.into_inner().0)
+}
+
+fn invoke_callback(callback: Arc<dyn Fn() + Send + Sync>) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback()));
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(CancellationState {
+                cancelled: AtomicBool::new(false),
+                changed: std::sync::Condvar::new(),
+                linked: Mutex::new(Vec::new()),
+                callbacks: Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    pub fn cancel(&self) {
+        if self.state.cancelled.swap(true, Ordering::Release) {
+            return;
+        }
+        self.state.changed.notify_all();
+        let callbacks = std::mem::take(&mut *lock_unpoisoned(&self.state.callbacks));
+        for callback in callbacks {
+            invoke_callback(callback);
+        }
+        let linked = lock_unpoisoned(&self.state.linked).clone();
+        for token in linked.into_iter().filter_map(|item| item.upgrade()) {
+            CancellationToken { state: token }.cancel();
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.state.cancelled.load(Ordering::Acquire)
+    }
+
+    pub fn link(&self, other: &Self) {
+        if Arc::ptr_eq(&self.state, &other.state) {
+            return;
+        }
+        lock_unpoisoned(&self.state.linked).push(Arc::downgrade(&other.state));
+        lock_unpoisoned(&other.state.linked).push(Arc::downgrade(&self.state));
+        if self.is_cancelled() || other.is_cancelled() {
+            self.cancel();
+            other.cancel();
+        }
+    }
+
+    pub fn on_cancel(&self, callback: impl Fn() + Send + Sync + 'static) {
+        let callback: Arc<dyn Fn() + Send + Sync> = Arc::new(callback);
+        if self.is_cancelled() {
+            invoke_callback(callback);
+            return;
+        }
+        let mut callbacks = lock_unpoisoned(&self.state.callbacks);
+        if self.is_cancelled() {
+            drop(callbacks);
+            invoke_callback(callback);
+        } else {
+            callbacks.push(callback);
+        }
+    }
+}
+
+impl Default for CancellationToken {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub fn spawn_blocking<T, F>(work: F) -> impl Future<Output = T> + Send
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    let (sender, receiver) = futures::channel::oneshot::channel();
-    std::thread::Builder::new()
-        .name("meetnote-inference".into())
-        .spawn(move || {
-            let _ = sender.send(work());
-        })
-        .expect("failed to spawn inference worker");
-
+    static RUNTIME: std::sync::OnceLock<JobRuntime> = std::sync::OnceLock::new();
+    let runtime = RUNTIME.get_or_init(JobRuntime::default).clone();
+    let (context, _) = runtime.create_job();
+    context.started();
     async move {
-        receiver
-            .await
-            .expect("inference worker dropped before returning a result")
+        let value = context.spawn_blocking_uncancellable(work).await;
+        context.completed();
+        value
     }
 }
 
@@ -69,7 +185,7 @@ pub struct JobContext {
 #[derive(Debug)]
 struct JobRecord {
     snapshot: Mutex<JobSnapshot>,
-    cancelled: Arc<AtomicBool>,
+    cancelled: CancellationToken,
     events: UnboundedSender<JobEvent>,
     worker_gate: Arc<WorkerGate>,
 }
@@ -86,13 +202,34 @@ struct WorkerPermit {
 }
 
 impl WorkerGate {
-    fn acquire(self: &Arc<Self>) -> WorkerPermit {
-        let mut active = self.active.lock().expect("worker gate lock poisoned");
+    fn acquire(
+        self: &Arc<Self>,
+        cancellation: &CancellationToken,
+    ) -> Result<WorkerPermit, JobCancelled> {
+        let gate = Arc::downgrade(self);
+        cancellation.on_cancel(move || {
+            if let Some(gate) = gate.upgrade() {
+                gate.changed.notify_all();
+            }
+        });
+        let mut active = lock_unpoisoned(&self.active);
         while *active >= self.limit {
-            active = self
-                .changed
-                .wait(active)
-                .expect("worker gate lock poisoned");
+            if cancellation.is_cancelled() {
+                return Err(JobCancelled);
+            }
+            active = wait_timeout_unpoisoned(&self.changed, active, Duration::from_millis(10));
+        }
+        if cancellation.is_cancelled() {
+            return Err(JobCancelled);
+        }
+        *active += 1;
+        Ok(WorkerPermit { gate: self.clone() })
+    }
+
+    fn acquire_uncancellable(self: &Arc<Self>) -> WorkerPermit {
+        let mut active = lock_unpoisoned(&self.active);
+        while *active >= self.limit {
+            active = wait_unpoisoned(&self.changed, active);
         }
         *active += 1;
         WorkerPermit { gate: self.clone() }
@@ -101,10 +238,39 @@ impl WorkerGate {
 
 impl Drop for WorkerPermit {
     fn drop(&mut self) {
-        if let Ok(mut active) = self.gate.active.lock() {
-            *active = active.saturating_sub(1);
-            self.gate.changed.notify_one();
+        let mut active = lock_unpoisoned(&self.gate.active);
+        *active = active.saturating_sub(1);
+        self.gate.changed.notify_one();
+    }
+}
+
+impl JobRecord {
+    fn mark_cancelled(&self) -> bool {
+        let changed = {
+            let mut snapshot = lock_unpoisoned(&self.snapshot);
+            if matches!(
+                snapshot.state,
+                JobState::Completed | JobState::Failed | JobState::Cancelled
+            ) {
+                false
+            } else {
+                snapshot.state = JobState::Cancelled;
+                snapshot.error = None;
+                true
+            }
+        };
+        if changed {
+            self.worker_gate.changed.notify_all();
+            let job_id = lock_unpoisoned(&self.snapshot).job_id;
+            let _ = self.events.unbounded_send(JobEvent::Cancelled { job_id });
         }
+        changed
+    }
+
+    fn cancel(&self) {
+        self.mark_cancelled();
+        self.cancelled.cancel();
+        self.worker_gate.changed.notify_all();
     }
 }
 
@@ -114,24 +280,29 @@ impl JobContext {
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.record.cancelled.load(Ordering::Relaxed)
+        self.record.cancelled.is_cancelled()
+    }
+
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.record.cancelled.clone()
     }
 
     pub fn cancel(&self) {
-        self.record.cancelled.store(true, Ordering::Relaxed);
-        if let Ok(mut snapshot) = self.record.snapshot.lock() {
-            snapshot.state = JobState::Cancelled;
-            snapshot.error = None;
-        }
-        let _ = self.record.events.unbounded_send(JobEvent::Cancelled {
-            job_id: self.job_id,
-        });
+        self.record.cancel();
     }
 
     pub fn report(&self, progress: Progress) {
-        if let Ok(mut snapshot) = self.record.snapshot.lock() {
-            snapshot.progress = Some(progress);
+        let mut snapshot = lock_unpoisoned(&self.record.snapshot);
+        if self.record.cancelled.is_cancelled()
+            || matches!(
+                snapshot.state,
+                JobState::Completed | JobState::Failed | JobState::Cancelled
+            )
+        {
+            return;
         }
+        snapshot.progress = Some(progress);
+        drop(snapshot);
         let _ = self.record.events.unbounded_send(JobEvent::Progress {
             job_id: self.job_id,
             progress,
@@ -139,20 +310,34 @@ impl JobContext {
     }
 
     pub fn started(&self) {
-        if let Ok(mut snapshot) = self.record.snapshot.lock() {
-            snapshot.state = JobState::Running;
-            snapshot.error = None;
+        let mut snapshot = lock_unpoisoned(&self.record.snapshot);
+        if self.record.cancelled.is_cancelled() || snapshot.state != JobState::Queued {
+            return;
         }
+        snapshot.state = JobState::Running;
+        snapshot.error = None;
+        drop(snapshot);
         let _ = self.record.events.unbounded_send(JobEvent::Started {
             job_id: self.job_id,
         });
     }
 
     pub fn completed(&self) {
-        if let Ok(mut snapshot) = self.record.snapshot.lock() {
-            snapshot.state = JobState::Completed;
-            snapshot.error = None;
+        let mut snapshot = lock_unpoisoned(&self.record.snapshot);
+        if self.record.cancelled.is_cancelled() {
+            drop(snapshot);
+            self.record.mark_cancelled();
+            return;
         }
+        if matches!(
+            snapshot.state,
+            JobState::Completed | JobState::Failed | JobState::Cancelled
+        ) {
+            return;
+        }
+        snapshot.state = JobState::Completed;
+        snapshot.error = None;
+        drop(snapshot);
         let _ = self.record.events.unbounded_send(JobEvent::Completed {
             job_id: self.job_id,
         });
@@ -160,10 +345,21 @@ impl JobContext {
 
     pub fn failed(&self, message: impl Into<String>) {
         let message = message.into();
-        if let Ok(mut snapshot) = self.record.snapshot.lock() {
-            snapshot.state = JobState::Failed;
-            snapshot.error = Some(message.clone());
+        let mut snapshot = lock_unpoisoned(&self.record.snapshot);
+        if self.record.cancelled.is_cancelled() {
+            drop(snapshot);
+            self.record.mark_cancelled();
+            return;
         }
+        if matches!(
+            snapshot.state,
+            JobState::Completed | JobState::Failed | JobState::Cancelled
+        ) {
+            return;
+        }
+        snapshot.state = JobState::Failed;
+        snapshot.error = Some(message.clone());
+        drop(snapshot);
         let _ = self.record.events.unbounded_send(JobEvent::Failed {
             job_id: self.job_id,
             message,
@@ -175,23 +371,75 @@ impl JobContext {
         T: Send + 'static,
         F: FnOnce() -> T + Send + 'static,
     {
+        let context = self.clone();
+        async move { context.spawn_blocking_uncancellable(work).await }
+    }
+
+    fn spawn_blocking_uncancellable<T, F>(&self, work: F) -> impl Future<Output = T> + Send
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
         let record = self.record.clone();
         let (sender, receiver) = futures::channel::oneshot::channel();
         std::thread::Builder::new()
             .name(format!("meetnote-job-{}", self.job_id.0))
             .spawn(move || {
-                let _permit = record.worker_gate.acquire();
+                let _permit = record.worker_gate.acquire_uncancellable();
                 let _ = sender.send(work());
             })
             .expect("failed to spawn job worker");
-
         async move {
             receiver
                 .await
                 .expect("job worker dropped before returning a result")
         }
     }
+
+    pub fn spawn_blocking_cancellable<T, F>(
+        &self,
+        work: F,
+    ) -> impl Future<Output = Result<T, JobCancelled>> + Send
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        let record = self.record.clone();
+        let cancellation = record.cancelled.clone();
+        let worker_cancellation = cancellation.clone();
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        std::thread::Builder::new()
+            .name(format!("meetnote-job-{}", self.job_id.0))
+            .spawn(move || {
+                let Ok(_permit) = record.worker_gate.acquire(&worker_cancellation) else {
+                    let _ = sender.send(Err(JobCancelled));
+                    return;
+                };
+                if worker_cancellation.is_cancelled() {
+                    let _ = sender.send(Err(JobCancelled));
+                    return;
+                }
+                let value = work();
+                let _ = sender.send(if worker_cancellation.is_cancelled() {
+                    Err(JobCancelled)
+                } else {
+                    Ok(value)
+                });
+            })
+            .expect("failed to spawn job worker");
+
+        async move {
+            match receiver.await.unwrap_or(Err(JobCancelled)) {
+                Ok(value) if !cancellation.is_cancelled() => Ok(value),
+                _ => Err(JobCancelled),
+            }
+        }
+    }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("job was cancelled before the worker started")]
+pub struct JobCancelled;
 
 #[derive(Debug, thiserror::Error)]
 pub enum JobRuntimeError {
@@ -231,7 +479,7 @@ impl JobRuntime {
                 progress: None,
                 error: None,
             }),
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled: CancellationToken::new(),
             events,
             worker_gate: self.worker_gate.clone(),
         });
@@ -387,6 +635,33 @@ mod tests {
             runtime.snapshot(job_id),
             Err(JobRuntimeError::NotFound(found)) if found == job_id
         ));
+    }
+
+    #[test]
+    fn terminal_state_is_monotonic_and_emits_only_one_terminal_event() {
+        let runtime = JobRuntime::default();
+        let (context, mut receiver) = runtime.create_job();
+        let job_id = context.job_id();
+
+        context.started();
+        context.cancel();
+        context.completed();
+        context.failed("late failure");
+        context.report(Progress {
+            completed: 1,
+            total: Some(1),
+        });
+
+        assert_eq!(runtime.snapshot(job_id).unwrap().state, JobState::Cancelled);
+        assert_eq!(
+            futures::executor::block_on(receiver.next()),
+            Some(JobEvent::Started { job_id })
+        );
+        assert_eq!(
+            futures::executor::block_on(receiver.next()),
+            Some(JobEvent::Cancelled { job_id })
+        );
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]
