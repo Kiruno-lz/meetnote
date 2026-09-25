@@ -13,6 +13,10 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("controls/mod.rs", include_str!("controls/mod.rs")),
     ("controls/progress.rs", include_str!("controls/progress.rs")),
     ("controls/select.rs", include_str!("controls/select.rs")),
+    (
+        "controls/text_field.rs",
+        include_str!("controls/text_field.rs"),
+    ),
     ("i18n.rs", include_str!("i18n.rs")),
     ("lib.rs", include_str!("lib.rs")),
     ("pages/assistant.rs", include_str!("pages/assistant.rs")),
@@ -26,7 +30,6 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("source_files.rs", include_str!("source_files.rs")),
     ("state.rs", include_str!("state.rs")),
     ("test_support.rs", include_str!("test_support.rs")),
-    ("text_input.rs", include_str!("text_input.rs")),
     ("theme/component.rs", include_str!("theme/component.rs")),
     ("theme/contrast.rs", include_str!("theme/contrast.rs")),
     ("theme/edge_fade.rs", include_str!("theme/edge_fade.rs")),

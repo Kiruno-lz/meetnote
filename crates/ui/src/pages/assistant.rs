@@ -5,10 +5,10 @@ use crate::{
     },
     controller::RootView,
     i18n::{text as tr, Locale},
-    theme::{self, Tokens},
+    theme::{self, BlurLevel, Tokens},
 };
 use contracts::{AgentScene, DocumentProjection};
-use gpui::{div, prelude::*, px, Context, IntoElement};
+use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
 use gpui_component::{
     button::{Button, ButtonVariants},
     scroll::ScrollableElement as _,
@@ -64,13 +64,105 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .map(|progress| job_progress_label(root.ui.locale, progress));
     let result = root.assistant.result.clone();
     let pending = root.assistant.pending.clone();
+    let busy = root.assistant_busy();
+    let scroll = root.scroll.assistant_results.clone();
+    // Results, diffs and pending cards stay on the opaque plane and scroll
+    // under the frosted input bar; the padding lets the last card clear it.
+    let results = div()
+        .id("assistant-results")
+        .debug_selector(|| "assistant-results".into())
+        .size_full()
+        .overflow_y_scroll()
+        .track_scroll(&scroll)
+        .pb(input_bar_height(&tokens) + tokens.spacing.xl + tokens.spacing.md)
+        .flex()
+        .flex_col()
+        .gap_3()
+        .children(result.map(|result| render_result(result, root.ui.locale, cx, &root.assistant)))
+        .children(pending.map(|pending| {
+            render_pending(
+                pending,
+                root.assistant.pending_queue_len(),
+                root.ui.locale,
+                cx,
+            )
+        }))
+        .children((root.assistant.pending_overflow_count() > 0).then(|| {
+            render_pending_overflow(
+                root.assistant.pending_overflow_count(),
+                root.ui.locale,
+                &tokens,
+            )
+        }))
+        .child(
+            div()
+                .text_xs()
+                .text_color(tokens.text_subtle)
+                .child(root.ui.notice.clone()),
+        );
+    let input_bar = div()
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.xs)
+        .child(
+            div()
+                .h(tokens.control_height.lg)
+                .flex()
+                .items_center()
+                .gap(tokens.spacing.sm)
+                .child(
+                    div()
+                        .debug_selector(|| "assistant-input".into())
+                        .flex_1()
+                        .min_w_0()
+                        .child(root.assistant_inputs.prompt.clone()),
+                )
+                .child(
+                    Button::new("assistant-submit")
+                        .debug_selector(|| "assistant-submit".into())
+                        .primary()
+                        .label(tr(root.ui.locale, "send"))
+                        .disabled(busy)
+                        .on_click(cx.listener(RootView::assistant_action)),
+                )
+                .child(
+                    Button::new("assistant-cancel")
+                        .secondary()
+                        .label(tr(root.ui.locale, "cancel"))
+                        .disabled(!busy)
+                        .on_click(cx.listener(RootView::cancel_assistant)),
+                ),
+        )
+        .child(
+            div()
+                .h(STATUS_HEIGHT)
+                .px(tokens.spacing.xs)
+                .flex()
+                .items_center()
+                .gap(tokens.spacing.md)
+                .text_xs()
+                .text_color(tokens.text_muted)
+                .child(
+                    div()
+                        .debug_selector(move || task_selector.into())
+                        .child(task),
+                )
+                .children(job_progress.map(|progress| {
+                    div()
+                        .debug_selector(|| "assistant-job-progress".into())
+                        .child(progress)
+                })),
+        );
 
     div()
         .debug_selector(|| "assistant-page".into())
         .flex_1()
         .min_w_0()
         .min_h_0()
-        .p_6()
+        // No bottom padding: the results scroll to the plane's edge, and the
+        // input bar floats above it.
+        .pt_6()
+        .px_6()
         .flex()
         .flex_col()
         .gap_4()
@@ -181,94 +273,36 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         )
         .child(
             div()
-                .id("assistant-input")
-                .debug_selector(|| "assistant-input".into())
-                .w_full()
-                .min_h(px(92.))
-                .p_4()
-                .rounded(tokens.radius.md)
-                .border_1()
-                .border_color(tokens.accent)
-                .bg(tokens.surface)
-                .child(root.assistant_inputs.prompt.clone()),
-        )
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    Button::new("assistant-submit")
-                        .debug_selector(|| "assistant-submit".into())
-                        .primary()
-                        .label(tr(root.ui.locale, "send"))
-                        .disabled(matches!(
-                            root.assistant.task,
-                            AssistantTaskState::Running { .. }
-                                | AssistantTaskState::Cancelling { .. }
-                        ))
-                        .on_click(cx.listener(RootView::assistant_action)),
-                )
-                .child(
-                    Button::new("assistant-cancel")
-                        .secondary()
-                        .label(tr(root.ui.locale, "cancel"))
-                        .disabled(!matches!(
-                            root.assistant.task,
-                            AssistantTaskState::Running { .. }
-                                | AssistantTaskState::Cancelling { .. }
-                        ))
-                        .on_click(cx.listener(RootView::cancel_assistant)),
-                )
-                .child(
-                    div()
-                        .debug_selector(move || task_selector.into())
-                        .text_sm()
-                        .text_color(tokens.text_muted)
-                        .child(task),
-                )
-                .children(job_progress.map(|progress| {
-                    div()
-                        .debug_selector(|| "assistant-job-progress".into())
-                        .text_sm()
-                        .text_color(tokens.text_muted)
-                        .child(progress)
-                })),
-        )
-        .child(
-            div()
-                .id("assistant-results")
+                .debug_selector(|| "assistant-body".into())
+                .relative()
                 .flex_1()
                 .min_h_0()
-                .overflow_y_scrollbar()
-                .flex()
-                .flex_col()
-                .gap_3()
-                .children(
-                    result.map(|result| render_result(result, root.ui.locale, cx, &root.assistant)),
-                )
-                .children(pending.map(|pending| {
-                    render_pending(
-                        pending,
-                        root.assistant.pending_queue_len(),
-                        root.ui.locale,
-                        cx,
-                    )
-                }))
-                .children((root.assistant.pending_overflow_count() > 0).then(|| {
-                    render_pending_overflow(
-                        root.assistant.pending_overflow_count(),
-                        root.ui.locale,
-                        &tokens,
-                    )
-                }))
+                // The scrollbar stays outside the fade.
+                .child(theme::scroll_faded(&scroll, tokens.content, results))
+                .vertical_scrollbar(&scroll)
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(tokens.text_subtle)
-                        .child(root.ui.notice.clone()),
+                        .debug_selector(|| "assistant-input-bar".into())
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .bottom(tokens.spacing.xl)
+                        .child(theme::frosted(
+                            tokens.radius.lg,
+                            BlurLevel::Menu,
+                            div().p(tokens.spacing.sm).child(theme::layered(input_bar)),
+                        )),
                 ),
         )
+}
+
+/// The status line under the prompt in the input bar.
+const STATUS_HEIGHT: Pixels = px(16.);
+
+/// The input bar's height: its padding and border around the prompt row and
+/// the status line.
+fn input_bar_height(tokens: &Tokens) -> Pixels {
+    tokens.control_height.lg + tokens.spacing.xs + STATUS_HEIGHT + tokens.spacing.sm * 2. + px(2.)
 }
 
 fn scope_button(

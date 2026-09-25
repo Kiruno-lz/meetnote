@@ -1,13 +1,12 @@
 use crate::{
     assistant_ui::{
-        now_ms, AssistantController, AssistantScopeMode, AssistantSettingsSave, AssistantUiError,
-        AssistantUiService, ConnectionProbeKind,
+        now_ms, AssistantController, AssistantScopeMode, AssistantSettingsSave, AssistantTaskState,
+        AssistantUiError, AssistantUiService, ConnectionProbeKind,
     },
-    controls::{ConfirmDialog, Dropdown, DropdownEvent, SelectOption},
+    controls::{ConfirmDialog, Dropdown, DropdownEvent, SelectOption, TextField, TextFieldEvent},
     i18n, pages,
     route::Route,
     state::{ContentMode, UiState},
-    text_input::TextInput,
     theme,
 };
 use application::{
@@ -18,8 +17,8 @@ use contracts::{AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind,
 use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
-    prelude::*, App, Bounds, ClickEvent, Context, Entity, FocusHandle, KeyBinding,
-    PathPromptOptions, ScrollHandle, Task, Window, WindowBounds, WindowOptions,
+    prelude::*, App, Bounds, ClickEvent, Context, Entity, FocusHandle, PathPromptOptions,
+    ScrollHandle, Task, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use models::manager::{
@@ -162,21 +161,92 @@ pub(crate) struct SettingsSelectors {
 }
 
 pub(crate) struct AssistantInputs {
-    pub(crate) prompt: Entity<TextInput>,
-    pub(crate) connection_id: Entity<TextInput>,
-    pub(crate) connection_name: Entity<TextInput>,
-    pub(crate) base_url: Entity<TextInput>,
-    pub(crate) model: Entity<TextInput>,
-    pub(crate) api_key: Entity<TextInput>,
-    pub(crate) api_key_file: Entity<TextInput>,
-    pub(crate) context_window_tokens: Entity<TextInput>,
-    pub(crate) timeout_ms: Entity<TextInput>,
-    pub(crate) max_output_tokens: Entity<TextInput>,
-    pub(crate) max_tool_rounds: Entity<TextInput>,
-    pub(crate) max_validation_retries: Entity<TextInput>,
+    pub(crate) prompt: Entity<TextField>,
+    pub(crate) connection_id: Entity<TextField>,
+    pub(crate) connection_name: Entity<TextField>,
+    pub(crate) base_url: Entity<TextField>,
+    pub(crate) model: Entity<TextField>,
+    pub(crate) api_key: Entity<TextField>,
+    pub(crate) api_key_file: Entity<TextField>,
+    pub(crate) context_window_tokens: Entity<TextField>,
+    pub(crate) timeout_ms: Entity<TextField>,
+    pub(crate) max_output_tokens: Entity<TextField>,
+    pub(crate) max_tool_rounds: Entity<TextField>,
+    pub(crate) max_validation_retries: Entity<TextField>,
 }
 
 impl AssistantInputs {
+    /// The fields loaded from `settings`: the active connection's profile,
+    /// or an empty profile, and the loop limits.
+    fn new(
+        locale: i18n::Locale,
+        settings: &AssistantSettings,
+        window: &mut Window,
+        cx: &mut Context<RootView>,
+    ) -> Self {
+        let mut field = |key: &'static str, placeholder: &'static str, secret: bool| {
+            let label = i18n::text(locale, key);
+            cx.new(|cx| {
+                if secret {
+                    TextField::secret(label, placeholder, window, cx)
+                } else {
+                    TextField::new(label, placeholder, window, cx)
+                }
+            })
+        };
+        let prompt = field(
+            "assistant_prompt",
+            i18n::text(locale, "ask_placeholder"),
+            false,
+        );
+        let this = Self {
+            connection_id: field("assistant_connection_id", "local-litellm", false),
+            connection_name: field("assistant_connection_name", "Local LiteLLM", false),
+            base_url: field("assistant_base_url", "http://127.0.0.1:4000", false),
+            model: field("assistant_model", "assistant-default", false),
+            api_key: field("assistant_api_key", "API key (stored in settings)", true),
+            api_key_file: field("assistant_api_key_file", "path/to/api-key.txt", false),
+            context_window_tokens: field("assistant_context_window", "128000", false),
+            timeout_ms: field("assistant_timeout", "120000", false),
+            max_output_tokens: field("assistant_max_output", "4096", false),
+            max_tool_rounds: field("assistant_max_rounds", "8", false),
+            max_validation_retries: field("assistant_max_retries", "3", false),
+            prompt,
+        };
+        this.prompt.update(cx, |prompt, cx| prompt.set_large(cx));
+        this.load_profile(settings.active_connection(), cx);
+        this.load_limits(settings, cx);
+        this
+    }
+
+    /// Every field with the translation key of its label.
+    pub(crate) fn labelled(&self) -> [(&Entity<TextField>, &'static str); 12] {
+        [
+            (&self.prompt, "assistant_prompt"),
+            (&self.connection_id, "assistant_connection_id"),
+            (&self.connection_name, "assistant_connection_name"),
+            (&self.base_url, "assistant_base_url"),
+            (&self.model, "assistant_model"),
+            (&self.api_key, "assistant_api_key"),
+            (&self.api_key_file, "assistant_api_key_file"),
+            (&self.context_window_tokens, "assistant_context_window"),
+            (&self.timeout_ms, "assistant_timeout"),
+            (&self.max_output_tokens, "assistant_max_output"),
+            (&self.max_tool_rounds, "assistant_max_rounds"),
+            (&self.max_validation_retries, "assistant_max_retries"),
+        ]
+    }
+
+    /// Relabels every field, and the prompt's placeholder, in `locale`.
+    fn follow_locale(&self, locale: i18n::Locale, cx: &mut Context<RootView>) {
+        for (field, key) in self.labelled() {
+            field.update(cx, |field, cx| field.set_label(i18n::text(locale, key), cx));
+        }
+        self.prompt.update(cx, |field, cx| {
+            field.set_placeholder(i18n::text(locale, "ask_placeholder"), cx)
+        });
+    }
+
     /// The secret field always starts empty: the stored key is never shown,
     /// and an empty field keeps it.
     fn load_profile(
@@ -205,8 +275,21 @@ impl AssistantInputs {
                 profile.max_output_tokens.to_string(),
             ),
         ] {
-            input.update(cx, |input, _| input.set_value(value));
+            input.update(cx, |input, cx| input.set_value(value, cx));
         }
+    }
+
+    fn load_limits(&self, settings: &AssistantSettings, cx: &mut Context<RootView>) {
+        let rounds = settings.max_tool_rounds.to_string();
+        let retries = settings.max_validation_retries.to_string();
+        self.max_tool_rounds
+            .update(cx, |input, cx| input.set_value(rounds, cx));
+        self.max_validation_retries
+            .update(cx, |input, cx| input.set_value(retries, cx));
+    }
+
+    fn value(field: &Entity<TextField>, cx: &App) -> String {
+        field.read(cx).value(cx)
     }
 }
 
@@ -264,18 +347,6 @@ impl ModelService for ModelManager {
     fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError> {
         ModelManager::cancel(self, id)
     }
-}
-
-fn text_input(
-    cx: &mut Context<RootView>,
-    placeholder: &'static str,
-    value: &str,
-) -> Entity<TextInput> {
-    cx.new(|cx| {
-        let mut input = TextInput::new(cx, placeholder);
-        input.set_value(value);
-        input
-    })
 }
 
 fn empty_connection_profile() -> AssistantConnectionProfile {
@@ -336,6 +407,7 @@ pub(crate) struct RootView {
 /// reads its list's handle at paint time.
 #[derive(Default)]
 pub(crate) struct ScrollAreas {
+    pub(crate) assistant_results: ScrollHandle,
     pub(crate) project_tree: ScrollHandle,
     pub(crate) meeting_content: ScrollHandle,
     pub(crate) detail_transcript: ScrollHandle,
@@ -360,7 +432,7 @@ impl RootView {
     pub(crate) fn new(
         inventory: BackendInventory,
         services: DesktopServices,
-        assistant_input: gpui::Entity<TextInput>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let locale = services
@@ -370,85 +442,15 @@ impl RootView {
             .unwrap_or(i18n::Locale::ZhCn);
         let settings_draft = services.settings.snapshot().unwrap_or_default();
         let active_profile = settings_draft.assistant.active_connection().cloned();
-        let assistant_inputs = AssistantInputs {
-            prompt: assistant_input,
-            connection_id: text_input(
-                cx,
-                "local-litellm",
-                active_profile.as_ref().map(|p| p.id.as_str()).unwrap_or(""),
-            ),
-            connection_name: text_input(
-                cx,
-                "Local LiteLLM",
-                active_profile
-                    .as_ref()
-                    .map(|p| p.name.as_str())
-                    .unwrap_or(""),
-            ),
-            base_url: text_input(
-                cx,
-                "http://127.0.0.1:4000",
-                active_profile
-                    .as_ref()
-                    .map(|p| p.base_url.as_str())
-                    .unwrap_or(""),
-            ),
-            model: text_input(
-                cx,
-                "assistant-default",
-                active_profile
-                    .as_ref()
-                    .map(|p| p.model.as_str())
-                    .unwrap_or(""),
-            ),
-            api_key: cx.new(|cx| TextInput::secret(cx, "API key (stored in settings)")),
-            api_key_file: text_input(
-                cx,
-                "path/to/api-key.txt",
-                active_profile
-                    .as_ref()
-                    .and_then(|p| p.api_key_file.as_deref())
-                    .unwrap_or(""),
-            ),
-            context_window_tokens: text_input(
-                cx,
-                "128000",
-                active_profile
-                    .as_ref()
-                    .and_then(|p| p.context_window_tokens)
-                    .map(|v| v.to_string())
-                    .as_deref()
-                    .unwrap_or(""),
-            ),
-            timeout_ms: text_input(
-                cx,
-                "120000",
-                &active_profile
-                    .as_ref()
-                    .map(|p| p.timeout_ms)
-                    .unwrap_or(120_000)
-                    .to_string(),
-            ),
-            max_output_tokens: text_input(
-                cx,
-                "4096",
-                &active_profile
-                    .as_ref()
-                    .map(|p| p.max_output_tokens)
-                    .unwrap_or(4_096)
-                    .to_string(),
-            ),
-            max_tool_rounds: text_input(
-                cx,
-                "8",
-                &settings_draft.assistant.max_tool_rounds.to_string(),
-            ),
-            max_validation_retries: text_input(
-                cx,
-                "3",
-                &settings_draft.assistant.max_validation_retries.to_string(),
-            ),
-        };
+        let assistant_inputs = AssistantInputs::new(locale, &settings_draft.assistant, window, cx);
+        cx.subscribe_in(
+            &assistant_inputs.prompt,
+            window,
+            |this, _, event, _, cx| match event {
+                TextFieldEvent::Submit => this.submit_assistant_prompt(cx),
+            },
+        )
+        .detach();
         let mut ui = UiState::new(locale);
         ui.expanded_model_families.extend(
             services
@@ -1084,9 +1086,7 @@ impl RootView {
         }
         self.ui.locale = locale;
         self.settings_selectors = None;
-        self.assistant_inputs.prompt.update(cx, |input, _| {
-            input.set_placeholder(i18n::text(locale, "ask_placeholder"));
-        });
+        self.assistant_inputs.follow_locale(locale, cx);
     }
 
     /// Follows the draft's appearance; the theme re-applies it to the window.
@@ -1097,8 +1097,6 @@ impl RootView {
     fn load_assistant_form(&mut self, cx: &mut Context<Self>) {
         let assistant = &self.settings_draft.assistant;
         let profile = assistant.active_connection().cloned();
-        let rounds = assistant.max_tool_rounds.to_string();
-        let retries = assistant.max_validation_retries.to_string();
         self.assistant_protocol = profile
             .as_ref()
             .map_or(LlmProtocol::OpenAiChatCompletions, |profile| {
@@ -1108,12 +1106,8 @@ impl RootView {
             .as_ref()
             .map_or(AssistantAuthMode::Bearer, |profile| profile.auth_mode);
         self.assistant_inputs.load_profile(profile.as_ref(), cx);
-        self.assistant_inputs
-            .max_tool_rounds
-            .update(cx, |input, _| input.set_value(rounds));
-        self.assistant_inputs
-            .max_validation_retries
-            .update(cx, |input, _| input.set_value(retries));
+        let assistant = self.settings_draft.assistant.clone();
+        self.assistant_inputs.load_limits(&assistant, cx);
     }
 
     fn refresh_model_selector(
@@ -1694,12 +1688,12 @@ impl RootView {
         cx: &Context<Self>,
     ) -> Result<Option<(AssistantConnectionProfile, Option<CredentialUpdate>)>, AssistantUiError>
     {
-        let id = self.assistant_inputs.connection_id.read(cx).value();
-        let name = self.assistant_inputs.connection_name.read(cx).value();
-        let base_url = self.assistant_inputs.base_url.read(cx).value();
-        let model = self.assistant_inputs.model.read(cx).value();
-        let api_key = self.assistant_inputs.api_key.read(cx).value();
-        let api_key_file = self.assistant_inputs.api_key_file.read(cx).value();
+        let id = AssistantInputs::value(&self.assistant_inputs.connection_id, cx);
+        let name = AssistantInputs::value(&self.assistant_inputs.connection_name, cx);
+        let base_url = AssistantInputs::value(&self.assistant_inputs.base_url, cx);
+        let model = AssistantInputs::value(&self.assistant_inputs.model, cx);
+        let api_key = AssistantInputs::value(&self.assistant_inputs.api_key, cx);
+        let api_key_file = AssistantInputs::value(&self.assistant_inputs.api_key_file, cx);
         if [&id, &name, &base_url, &model, &api_key, &api_key_file]
             .iter()
             .all(|value| value.trim().is_empty())
@@ -1730,15 +1724,15 @@ impl RootView {
             api_key,
             api_key_file,
             context_window_tokens: parse_optional_u32(
-                &self.assistant_inputs.context_window_tokens.read(cx).value(),
+                &AssistantInputs::value(&self.assistant_inputs.context_window_tokens, cx),
                 "contextWindowTokens",
             )?,
             timeout_ms: parse_u64(
-                &self.assistant_inputs.timeout_ms.read(cx).value(),
+                &AssistantInputs::value(&self.assistant_inputs.timeout_ms, cx),
                 "timeoutMs",
             )?,
             max_output_tokens: parse_u32(
-                &self.assistant_inputs.max_output_tokens.read(cx).value(),
+                &AssistantInputs::value(&self.assistant_inputs.max_output_tokens, cx),
                 "maxOutputTokens",
             )?,
         };
@@ -1754,15 +1748,11 @@ impl RootView {
         let origin = &self.assistant_origin;
         let draft = &self.settings_draft.assistant;
         let max_tool_rounds = parse_u32(
-            &self.assistant_inputs.max_tool_rounds.read(cx).value(),
+            &AssistantInputs::value(&self.assistant_inputs.max_tool_rounds, cx),
             "maxToolRounds",
         )?;
         let max_validation_retries = parse_u32(
-            &self
-                .assistant_inputs
-                .max_validation_retries
-                .read(cx)
-                .value(),
+            &AssistantInputs::value(&self.assistant_inputs.max_validation_retries, cx),
             "maxValidationRetries",
         )?;
         let mut save = AssistantSettingsSave::default();
@@ -1879,13 +1869,32 @@ impl RootView {
         }
     }
 
+    /// Whether a run is in flight; the send button and Enter start none then.
+    pub(crate) fn assistant_busy(&self) -> bool {
+        matches!(
+            self.assistant.task,
+            AssistantTaskState::Running { .. } | AssistantTaskState::Cancelling { .. }
+        )
+    }
+
+    /// Enter in the prompt sends it, as the send button does.
+    fn submit_assistant_prompt(&mut self, cx: &mut Context<Self>) {
+        if !self.assistant_busy() {
+            self.start_assistant_run(cx);
+        }
+    }
+
     pub(crate) fn assistant_action(
         &mut self,
         _: &ClickEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let query = self.assistant_inputs.prompt.read(cx).value();
+        self.start_assistant_run(cx);
+    }
+
+    fn start_assistant_run(&mut self, cx: &mut Context<Self>) {
+        let query = AssistantInputs::value(&self.assistant_inputs.prompt, cx);
         match self.assistant.scope_mode {
             AssistantScopeMode::CurrentDocument => {
                 let selected = self
@@ -2894,13 +2903,6 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
 pub(crate) fn init_app(accessibility: theme::Accessibility, cx: &mut App) {
     gpui_component::init(cx);
     theme::init(accessibility, cx);
-    cx.bind_keys([
-        KeyBinding::new("backspace", crate::text_input::Backspace, None),
-        KeyBinding::new("delete", crate::text_input::Delete, None),
-        KeyBinding::new("left", crate::text_input::Left, None),
-        KeyBinding::new("right", crate::text_input::Right, None),
-        KeyBinding::new("cmd-a", crate::text_input::SelectAll, None),
-    ]);
 }
 
 /// Opens the desktop window in the saved appearance and starts following
@@ -2918,7 +2920,6 @@ pub(crate) fn open_main_window(
     cx: &mut App,
 ) -> gpui::Result<(gpui::AnyWindowHandle, Entity<RootView>)> {
     let saved = services.settings.snapshot().unwrap_or_default();
-    let locale = i18n::Locale::from_code(&saved.ui_locale);
     let options = WindowOptions {
         titlebar: Some(pages::chrome::titlebar_options()),
         app_owns_titlebar_drag: true,
@@ -2932,9 +2933,7 @@ pub(crate) fn open_main_window(
         // window records.
         window.set_window_title(pages::chrome::WINDOW_TITLE);
         theme::attach(saved.appearance, window, cx);
-        let assistant_input =
-            cx.new(|cx| TextInput::new(cx, i18n::text(locale, "ask_placeholder")));
-        let view = cx.new(|cx| RootView::new(inventory, services, assistant_input, cx));
+        let view = cx.new(|cx| RootView::new(inventory, services, window, cx));
         view.update(cx, |view, cx| view.watch_documents(cx));
         root_view = Some(view.clone());
         cx.new(|cx| gpui_component::Root::new(view, window, cx))

@@ -205,12 +205,32 @@ fn page_in_content_plane(cx: &mut VisualTestContext, route: Route) -> Bounds<Pix
 }
 
 #[gpui::test]
-fn the_assistant_route_shows_the_prompt_and_send_button(cx: &mut TestAppContext) {
+fn the_assistant_route_floats_the_input_bar_over_the_results(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Assistant);
+    let body = visible(cx, "assistant-body");
+    let results = scroll_content(cx, "assistant-results", body);
+    let bar = visible(cx, "assistant-input-bar");
     let prompt = visible(cx, "assistant-input");
     let send = visible(cx, "assistant-submit");
-    assert!(within(prompt, page) && within(send, page));
-    assert!(prompt.bottom() <= send.top(), "send sits below the prompt");
+    assert!(within(body, page) && within(bar, body));
+    assert!(
+        within(prompt, bar) && within(send, bar),
+        "the prompt and the send button are in the bar"
+    );
+    assert!(
+        prompt.right() <= send.left(),
+        "send sits right of the prompt"
+    );
+    // The results fill the body, bar included, so they scroll under it; the
+    // bar floats above the body's bottom edge.
+    assert!(
+        results.top() < bar.top() && results.bottom() >= bar.bottom(),
+        "the results run under the bar: {results:?} and {bar:?}"
+    );
+    assert!(
+        bar.bottom() < body.bottom() && body.bottom() == page.bottom(),
+        "the bar floats above the bottom of the page: {bar:?} in {body:?}"
+    );
 }
 
 #[gpui::test]

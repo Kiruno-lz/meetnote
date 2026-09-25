@@ -75,6 +75,23 @@ impl MainWindow {
         });
     }
 
+    /// Closes `overlay` again.
+    pub fn close_overlay(&self, overlay: Overlay, cx: &mut App) {
+        self.view.update(cx, |root, cx| match overlay {
+            Overlay::ThemeSelect => {
+                if let Some(selectors) = &root.settings_selectors {
+                    selectors
+                        .theme
+                        .update(cx, |select, cx| select.close_menu(cx));
+                }
+            }
+            Overlay::SpeakerLibraryDialog => {
+                root.speaker_library_prompt = None;
+                cx.notify();
+            }
+        });
+    }
+
     /// Whether the startup installation probe and project list, which load
     /// on worker threads, have reached the view.
     pub fn startup_loaded(&self, cx: &App) -> bool {

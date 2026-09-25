@@ -208,7 +208,7 @@ impl Dropdown {
         cx.notify();
     }
 
-    fn close_menu(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_menu(&mut self, cx: &mut Context<Self>) {
         if self.open {
             self.open = false;
             self.highlighted = None;

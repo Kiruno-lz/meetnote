@@ -30,6 +30,11 @@ gpui = { workspace = true, features = ["test-support"] }
 gpui_platform = { workspace = true, features = ["test-support"] }
 persistence = { path = "../persistence" }
 
+# The L3 resource probe reads `MTLDevice.currentAllocatedSize` of the device
+# gpui renders with; gpui already locks this crate.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+metal = "0.33"
+
 # L3 screenshots drive AppKit, which must run on the process main thread;
 # libtest runs every test on a spawned thread. See `tests/visual.rs`.
 [[test]]

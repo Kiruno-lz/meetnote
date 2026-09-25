@@ -8,14 +8,20 @@
 //! - `ProgressBar`: a linear progress bar on gpui-base's `Progress` root.
 //! - `ConfirmDialog`: a confirm/cancel dialog on gpui-base's `AlertDialog`
 //!   host with a frosted sheet.
+//! - `TextField`: a single-line text field on gpui-base's `InputState`, with
+//!   a secret mode that masks the value and keeps it off the clipboard.
 
 mod dialog;
 mod progress;
 mod select;
+mod text_field;
 
 pub(crate) use dialog::ConfirmDialog;
 pub(crate) use progress::ProgressBar;
 pub(crate) use select::{Dropdown, DropdownEvent, SelectOption};
+#[cfg(test)]
+pub(crate) use text_field::FieldInput;
+pub(crate) use text_field::{TextField, TextFieldEvent};
 
 use gpui::{prelude::*, Animation, AnimationExt as _, AnyElement, Div, Pixels};
 use std::time::Duration;
@@ -43,9 +49,10 @@ mod tests {
     use crate::source_files::SOURCES;
 
     /// Constructors of unlabelled controls: gpui-component's styled select,
-    /// progress and dialog, and gpui-base's unstyled roots. Only the wrappers
-    /// in `controls/` may build them.
-    const UNWRAPPED: [&str; 12] = [
+    /// progress, dialog and input, gpui-base's unstyled roots and editing
+    /// states, and the retired `TextInput`. Only the wrappers in `controls/`
+    /// may build them.
+    const UNWRAPPED: [&str; 22] = [
         "select::Select",
         "SelectState",
         "Select::new(",
@@ -58,6 +65,16 @@ mod tests {
         "gpui_base::Select",
         "gpui_base::Dialog",
         "gpui_base::Progress",
+        "gpui_base::input",
+        "gpui_base::Input",
+        "gpui_component::input",
+        "InputState",
+        "InputBase",
+        "Input::new(",
+        "EditorState",
+        "TextareaState",
+        "TextInput::new(",
+        "TextInput::secret(",
     ];
 
     /// Whether `line` names `pattern` as a whole path: `ConfirmDialog::new(`
@@ -77,10 +94,15 @@ mod tests {
         assert!(names("Dialog::new(cx)", "Dialog::new("));
         assert!(!names("ConfirmDialog::new(title, &focus)", "Dialog::new("));
         assert!(!names("AssistantProgress::new(", "Progress::new("));
+        assert!(!names("NumberInput::new(", "Input::new("));
+        assert!(names(
+            "gpui_base::input::InputState::new(window, cx)",
+            "InputState"
+        ));
     }
 
     #[test]
-    fn only_the_wrappers_construct_selects_progress_bars_and_dialogs() {
+    fn only_the_wrappers_construct_selects_progress_bars_dialogs_and_inputs() {
         let found = SOURCES
             .iter()
             .filter(|(path, _)| !path.starts_with("controls/"))

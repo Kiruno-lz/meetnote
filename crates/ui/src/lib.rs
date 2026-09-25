@@ -10,7 +10,6 @@ mod source_files;
 mod state;
 #[doc(hidden)]
 pub mod test_support;
-mod text_input;
 mod theme;
 
 pub use controller::{run, DesktopServices, ModelService};
@@ -29,7 +28,7 @@ mod tests {
     use contracts::ModelRef;
     use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
     use domain::{DocumentState, ProjectId};
-    use gpui::{AppContext, Modifiers, TestAppContext};
+    use gpui::{EntityInputHandler as _, Modifiers, TestAppContext};
     use models::{ModelCatalog, ModelManager};
     use persistence::InMemoryDocumentRepository;
     use settings::{JsonSettingsRepository, SettingsService};
@@ -201,14 +200,9 @@ mod tests {
             desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
         // The startup installation probe completes on a worker thread.
         cx.executor().allow_parking();
-        let assistant_input = cx.new(|cx| text_input::TextInput::new(cx, "Ask…"));
-        let view = cx.new(|cx| {
-            controller::RootView::new(
-                BackendInventory::new(vec![], vec![]),
-                services,
-                assistant_input,
-                cx,
-            )
+        cx.update(|cx| controller::init_app(theme::Accessibility::default(), cx));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            controller::RootView::new(BackendInventory::new(vec![], vec![]), services, window, cx)
         });
 
         assert_eq!(view.read_with(cx, |view, _| view.projects.len()), 0);
@@ -221,14 +215,8 @@ mod tests {
         // Undo runs on a `runtime::spawn_blocking` worker thread.
         cx.executor().allow_parking();
         cx.update(|cx| controller::init_app(theme::Accessibility::default(), cx));
-        let assistant_input = cx.new(|cx| text_input::TextInput::new(cx, "Ask…"));
-        let (view, cx) = cx.add_window_view(|_window, cx| {
-            controller::RootView::new(
-                BackendInventory::new(vec![], vec![]),
-                services,
-                assistant_input,
-                cx,
-            )
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            controller::RootView::new(BackendInventory::new(vec![], vec![]), services, window, cx)
         });
         view.update(cx, |root, cx| {
             root.assistant.result = Some(AssistantRunResult {
@@ -425,14 +413,8 @@ mod tests {
         &mut gpui::VisualTestContext,
     ) {
         init_gpui(cx);
-        let assistant_input = cx.new(|cx| text_input::TextInput::new(cx, "Ask…"));
-        cx.add_window_view(|_window, cx| {
-            controller::RootView::new(
-                BackendInventory::new(vec![], vec![]),
-                services,
-                assistant_input,
-                cx,
-            )
+        cx.add_window_view(|window, cx| {
+            controller::RootView::new(BackendInventory::new(vec![], vec![]), services, window, cx)
         })
     }
 
@@ -1221,7 +1203,7 @@ mod tests {
             root.projects = vec![first, second];
             root.assistant_inputs
                 .prompt
-                .update(cx, |input, _| input.set_value("organize"));
+                .update(cx, |input, cx| input.set_value("organize", cx));
             root.assistant_action(&gpui::ClickEvent::default(), window, cx);
         });
     }
@@ -1239,7 +1221,7 @@ mod tests {
             root.set_assistant_write_mode(contracts::AgentWriteMode::ConfirmEach, cx);
             root.assistant_inputs
                 .prompt
-                .update(cx, |input, _| input.set_value("organize"));
+                .update(cx, |input, cx| input.set_value("organize", cx));
             root.assistant_action(&gpui::ClickEvent::default(), window, cx);
         });
         cx.run_until_parked();
@@ -1501,7 +1483,7 @@ mod tests {
         view.update(cx, |root, cx| {
             root.assistant_inputs
                 .connection_name
-                .update(cx, |input, _| input.set_value(name))
+                .update(cx, |input, cx| input.set_value(name, cx))
         });
     }
 
@@ -1526,7 +1508,7 @@ mod tests {
                 .assistant_inputs
                 .api_key
                 .read(cx)
-                .value()),
+                .value(cx)),
             ""
         );
     }
@@ -1541,9 +1523,9 @@ mod tests {
         view.update(cx, |root, cx| root.edit_assistant_profile("local", cx));
 
         view.read_with(cx, |root, cx| {
-            assert_eq!(root.assistant_inputs.api_key.read(cx).value(), "");
+            assert_eq!(root.assistant_inputs.api_key.read(cx).value(cx), "");
             assert_eq!(
-                root.assistant_inputs.connection_name.read(cx).value(),
+                root.assistant_inputs.connection_name.read(cx).value(cx),
                 "Local"
             );
         });
@@ -2178,5 +2160,248 @@ mod tests {
             progress.accessibility_label().as_ref(),
             "Model download progress"
         );
+    }
+
+    // Text fields. The helpers keep the tests on the field API.
+
+    type Field = gpui::Entity<controls::TextField>;
+    type InputHandler = controls::FieldInput;
+
+    fn field_value(cx: &mut gpui::VisualTestContext, field: &Field) -> String {
+        field.read_with(cx, |field, cx| field.value(cx))
+    }
+
+    fn focus_field(cx: &mut gpui::VisualTestContext, field: &Field) {
+        cx.update(|window, cx| gpui::Focusable::focus_handle(field.read(cx), cx).focus(window, cx));
+        cx.run_until_parked();
+    }
+
+    /// Runs `edit` on the field's `EntityInputHandler`, the interface the
+    /// platform's text input system (and its IME) drives.
+    fn with_input_handler<R>(
+        cx: &mut gpui::VisualTestContext,
+        field: &Field,
+        edit: impl FnOnce(&mut InputHandler, &mut gpui::Window, &mut gpui::Context<InputHandler>) -> R,
+    ) -> R {
+        let input = field.read_with(cx, |field, _| field.input().clone());
+        input.update_in(cx, edit)
+    }
+
+    fn prompt(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<controller::RootView>,
+    ) -> Field {
+        view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone())
+    }
+
+    fn clipboard_text(cx: &mut gpui::VisualTestContext) -> Option<String> {
+        cx.read_from_clipboard().and_then(|item| item.text())
+    }
+
+    /// Selects the `first` document for the Assistant, whose saved settings
+    /// have an active connection (`stored_key_settings`).
+    fn select_first_document(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<controller::RootView>,
+    ) {
+        view.update(cx, |root, cx| {
+            let first = DocumentState::new(ProjectId::new("first"), "First", "first.wav");
+            root.ui.selected_project = Some(first.id().clone());
+            root.projects = vec![first];
+            cx.notify();
+        });
+        cx.run_until_parked();
+    }
+
+    /// Waits a bounded time for the service to receive a run.
+    fn run_started(cx: &mut gpui::VisualTestContext, assistant: &FakeAssistantUiService) -> bool {
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if !assistant.run_request_ids.lock().unwrap().is_empty() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        false
+    }
+
+    #[gpui::test]
+    fn the_prompt_pastes_undoes_and_redoes(cx: &mut TestAppContext) {
+        let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
+        let prompt = prompt(cx, &view);
+        focus_field(cx, &prompt);
+        cx.simulate_input("draft");
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(" 本周会议".into()));
+        cx.simulate_keystrokes("cmd-v");
+        assert_eq!(
+            field_value(cx, &prompt),
+            "draft 本周会议",
+            "paste inserts the clipboard text"
+        );
+        cx.simulate_keystrokes("cmd-z");
+        assert_eq!(field_value(cx, &prompt), "draft", "undo removes the paste");
+        cx.simulate_keystrokes("cmd-shift-z");
+        assert_eq!(
+            field_value(cx, &prompt),
+            "draft 本周会议",
+            "redo restores it"
+        );
+    }
+
+    #[gpui::test]
+    fn chinese_text_commits_through_the_input_handler(cx: &mut TestAppContext) {
+        let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
+        let prompt = prompt(cx, &view);
+        focus_field(cx, &prompt);
+        // An IME first marks its composition, then replaces it with the
+        // committed text.
+        let marked = with_input_handler(cx, &prompt, |handler, window, cx| {
+            handler.replace_and_mark_text_in_range(None, "zhong wen", Some(9..9), window, cx);
+            handler.marked_text_range(window, cx)
+        });
+        assert_eq!(marked, Some(0..9), "the composition is marked");
+        assert_eq!(field_value(cx, &prompt), "zhong wen");
+        let marked = with_input_handler(cx, &prompt, |handler, window, cx| {
+            handler.replace_text_in_range(None, "中文", window, cx);
+            handler.marked_text_range(window, cx)
+        });
+        assert_eq!(marked, None, "committing ends the composition");
+        assert_eq!(field_value(cx, &prompt), "中文");
+        // Typed text reaches the field through the window's input handler.
+        cx.simulate_input("好");
+        assert_eq!(field_value(cx, &prompt), "中文好");
+    }
+
+    #[gpui::test]
+    fn the_secret_field_keeps_the_key_off_the_clipboard(cx: &mut TestAppContext) {
+        let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
+        view.update(cx, |root, cx| root.navigate(route::Route::Settings, cx));
+        cx.run_until_parked();
+        let (api_key, name) = view.read_with(cx, |root, _| {
+            (
+                root.assistant_inputs.api_key.clone(),
+                root.assistant_inputs.connection_name.clone(),
+            )
+        });
+
+        // A plain field copies its selection.
+        focus_field(cx, &name);
+        cx.simulate_input("Local");
+        cx.simulate_keystrokes("cmd-a cmd-c");
+        assert_eq!(
+            clipboard_text(cx).as_deref(),
+            Some("Local"),
+            "plain fields copy"
+        );
+
+        focus_field(cx, &api_key);
+        cx.simulate_input("sk-secret");
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()));
+        cx.simulate_keystrokes("cmd-a cmd-c");
+        assert_eq!(
+            clipboard_text(cx).as_deref(),
+            Some("sentinel"),
+            "Copy keeps the key off"
+        );
+        assert_eq!(
+            field_value(cx, &api_key),
+            "sk-secret",
+            "Copy leaves the value"
+        );
+        cx.simulate_keystrokes("cmd-x");
+        assert_eq!(
+            clipboard_text(cx).as_deref(),
+            Some("sentinel"),
+            "Cut keeps the key off"
+        );
+        assert_eq!(field_value(cx, &api_key), "sk-secret", "Cut does nothing");
+    }
+
+    #[gpui::test]
+    fn typed_connection_fields_save_through_the_assistant_form(cx: &mut TestAppContext) {
+        let settings = stored_key_settings();
+        let assistant = Arc::new(FakeAssistantUiService {
+            settings: Some(settings.clone()),
+            ..Default::default()
+        });
+        let (view, cx) = open_desktop_with(cx, assistant, settings.clone());
+        view.update(cx, |root, cx| {
+            root.navigate(route::Route::Settings, cx);
+            root.edit_assistant_profile("local", cx);
+        });
+        cx.run_until_parked();
+        let fields = view.read_with(cx, |root, _| {
+            [
+                (root.assistant_inputs.connection_name.clone(), "Typed name"),
+                (
+                    root.assistant_inputs.base_url.clone(),
+                    "http://127.0.0.1:4010",
+                ),
+                (root.assistant_inputs.model.clone(), "typed-model"),
+                // A new endpoint or model needs the key again.
+                (root.assistant_inputs.api_key.clone(), "sk-typed"),
+            ]
+        });
+        for (field, text) in &fields {
+            focus_field(cx, field);
+            cx.simulate_keystrokes("cmd-a");
+            cx.simulate_input(text);
+            assert_eq!(field_value(cx, field), *text);
+        }
+        click_save_assistant_settings(cx, &view);
+        wait_for(cx, &view, |_| {
+            settings.snapshot().unwrap().assistant.connections[0].name == "Typed name"
+        });
+
+        let saved = settings.snapshot().unwrap().assistant.connections[0].clone();
+        assert_eq!(saved.base_url, "http://127.0.0.1:4010");
+        assert_eq!(saved.model, "typed-model");
+        assert_eq!(saved.api_key.as_deref(), Some("sk-typed"));
+    }
+
+    #[gpui::test]
+    fn enter_in_the_prompt_starts_an_assistant_run(cx: &mut TestAppContext) {
+        let assistant = Arc::new(FakeAssistantUiService::default());
+        *assistant.run_result.lock().unwrap() = Some(empty_result());
+        let (view, cx) = open_desktop_with(cx, assistant.clone(), stored_key_settings());
+        select_first_document(cx, &view);
+        click_selector(cx, "assistant-input");
+        cx.simulate_input("organize");
+        cx.simulate_keystrokes("enter");
+        assert!(run_started(cx, &assistant), "Enter starts a run");
+    }
+
+    #[gpui::test]
+    fn the_send_button_starts_an_assistant_run(cx: &mut TestAppContext) {
+        let assistant = Arc::new(FakeAssistantUiService::default());
+        *assistant.run_result.lock().unwrap() = Some(empty_result());
+        let (view, cx) = open_desktop_with(cx, assistant.clone(), stored_key_settings());
+        select_first_document(cx, &view);
+        click_selector(cx, "assistant-input");
+        cx.simulate_input("organize");
+        click_selector(cx, "assistant-submit");
+        assert!(run_started(cx, &assistant), "the send button starts a run");
+    }
+
+    #[gpui::test]
+    fn every_text_field_carries_its_label_in_the_current_locale(cx: &mut TestAppContext) {
+        let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
+        let labels = |cx: &mut gpui::VisualTestContext, locale| {
+            view.read_with(cx, |root, cx| {
+                root.assistant_inputs.labelled().map(|(field, key)| {
+                    let expected = i18n::text(locale, key);
+                    assert!(!expected.is_empty(), "{key} has a {locale:?} label");
+                    (field.read(cx).accessibility_label().to_string(), expected)
+                })
+            })
+        };
+        for (label, expected) in labels(cx, i18n::Locale::ZhCn) {
+            assert_eq!(label, expected);
+        }
+        view.update(cx, |root, cx| root.set_locale(i18n::Locale::EnUs, cx));
+        cx.run_until_parked();
+        for (label, expected) in labels(cx, i18n::Locale::EnUs) {
+            assert_eq!(label, expected, "a locale change relabels the fields");
+        }
     }
 }

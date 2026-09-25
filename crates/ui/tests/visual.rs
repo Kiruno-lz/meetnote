@@ -40,6 +40,15 @@
 //! the same scale factor. `pixels.rs` defines a change; the actual and diff
 //! images of a changed route are written to a temporary directory whose
 //! paths are printed.
+//!
+//! With `MEETNOTE_RESOURCE_PROBE=1` as well, the target then probes the
+//! floating surfaces' GPU cost (`resource_probe`). The probe measures frame
+//! time, which only an optimized build shows, so it runs in release; a build
+//! with debug assertions refuses it and fails at once:
+//!
+//! ```text
+//! MEETNOTE_VISUAL=1 MEETNOTE_RESOURCE_PROBE=1 cargo test --release -p ui --test visual
+//! ```
 
 #[cfg(target_os = "macos")]
 #[path = "support/pixels.rs"]
@@ -61,7 +70,27 @@ fn main() -> ExitCode {
         println!("visual: skipped; set MEETNOTE_VISUAL=1 to compare the L3 route screenshots");
         return ExitCode::SUCCESS;
     }
-    screenshots::run(std::env::var("MEETNOTE_VISUAL_UPDATE").as_deref() == Ok("1"))
+    let probe_requested = std::env::var("MEETNOTE_RESOURCE_PROBE").as_deref() == Ok("1");
+    if probe_requested && cfg!(debug_assertions) {
+        println!(
+            "resource probe: the resource probe measures frame time; run it with \
+             `cargo test --release -p ui --test visual`"
+        );
+        return ExitCode::FAILURE;
+    }
+    let mut cx = screenshots::context();
+    let screenshots = screenshots::run(
+        &mut cx,
+        std::env::var("MEETNOTE_VISUAL_UPDATE").as_deref() == Ok("1"),
+    );
+    if !probe_requested {
+        return screenshots;
+    }
+    let probe = resource_probe::run(&mut cx);
+    if screenshots == ExitCode::SUCCESS && !probe {
+        return ExitCode::FAILURE;
+    }
+    screenshots
 }
 
 #[cfg(target_os = "macos")]
@@ -124,13 +153,26 @@ mod screenshots {
         fn pthread_main_np() -> i32;
     }
 
-    pub fn run(update: bool) -> ExitCode {
+    /// The app on the real macOS platform and Metal renderer, set up as
+    /// `run` does. It must be created on the process main thread.
+    pub fn context() -> VisualTestAppContext {
         // SAFETY: `pthread_main_np` only reads the calling thread's identity.
         assert_eq!(
             unsafe { pthread_main_np() },
             1,
             "the L3 screenshots must run on the process main thread"
         );
+        let mut cx = VisualTestAppContext::with_asset_source(
+            gpui_platform::current_platform(false),
+            Arc::new(gpui_component_assets::Assets),
+        );
+        // Service calls complete on worker threads outside the scheduler.
+        cx.executor().allow_parking();
+        cx.update(support::init);
+        cx
+    }
+
+    pub fn run(cx: &mut VisualTestAppContext, update: bool) -> ExitCode {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
         let baselines = manifest.join("tests/visual");
         let lock = std::fs::read_to_string(manifest.join("../../Cargo.lock"))
@@ -153,14 +195,6 @@ mod screenshots {
             }
         }
 
-        let mut cx = VisualTestAppContext::with_asset_source(
-            gpui_platform::current_platform(false),
-            Arc::new(gpui_component_assets::Assets),
-        );
-        // Service calls complete on worker threads outside the scheduler.
-        cx.executor().allow_parking();
-        cx.update(support::init);
-
         let failures_directory =
             std::env::temp_dir().join(format!("meetnote-visual-{}", std::process::id()));
         let mut scale_factor = None;
@@ -177,7 +211,7 @@ mod screenshots {
             let name = format!("{route_name}-{appearance_name}");
             let appearance = AppearanceSettings { theme, material };
             let window = cx.update(|cx| support::open_main_window_in(appearance, cx));
-            wait_for_startup(&mut cx, &window);
+            wait_for_startup(cx, &window);
             cx.update(|cx| window.navigate(route, cx));
             let handle = window.window();
             if let Some(overlay) = overlay {
@@ -306,7 +340,7 @@ mod screenshots {
 
     /// Drives the scheduler until the startup installation probe and project
     /// list, which load on worker threads, have reached the view.
-    fn wait_for_startup(cx: &mut VisualTestAppContext, window: &MainWindow) {
+    pub fn wait_for_startup(cx: &mut VisualTestAppContext, window: &MainWindow) {
         for _ in 0..1_000 {
             cx.run_until_parked();
             if cx.read(|cx| window.startup_loaded(cx)) {
@@ -383,5 +417,157 @@ mod screenshots {
             Some(string) => string.split('"').next(),
             None => value.split([',', '}', '\n']).next().map(str::trim),
         }
+    }
+}
+
+/// The GPU cost of the floating surfaces: each overlay over the Settings
+/// route, under dark glass so its backdrop blur runs, opens and closes
+/// `WARMUP_CYCLES` times, then `MEASURED_CYCLES` times more. Every frame is
+/// drawn (`Window::draw`, the frame's CPU work) and rendered by the window's
+/// Metal renderer (`Window::render_to_image`: encoding, GPU execution and a
+/// pixel readback that presenting would not do). The probe prints the
+/// measured cycles' growth of `MTLDevice.currentAllocatedSize` and the p95 of
+/// the frame times, and fails when the growth exceeds `MAX_GROWTH` or the
+/// draw p95 exceeds `MAX_DRAW_P95`.
+#[cfg(target_os = "macos")]
+mod resource_probe {
+    use crate::{screenshots, support};
+    use gpui::{AnyWindowHandle, VisualTestAppContext};
+    use settings::{AppearanceSettings, MaterialPreference, ThemePreference};
+    use std::time::{Duration, Instant};
+    use ui::test_support::{Overlay, Route};
+
+    const WARMUP_CYCLES: usize = 10;
+    const MEASURED_CYCLES: usize = 50;
+    /// The most `currentAllocatedSize` may grow over the measured cycles.
+    const MAX_GROWTH: i64 = 8 * 1024 * 1024;
+    /// One frame at 60 Hz.
+    const MAX_DRAW_P95: Duration = Duration::from_micros(16_700);
+    /// Frames are drawn for this long after each open, past the longest
+    /// entrance animation (the dialog's 180 ms).
+    const OPEN_FRAMES_FOR: Duration = Duration::from_millis(200);
+    /// Frames drawn after each close.
+    const CLOSE_FRAMES: usize = 2;
+    const OVERLAYS: [(Overlay, &str); 2] = [
+        (Overlay::ThemeSelect, "settings-select"),
+        (Overlay::SpeakerLibraryDialog, "settings-dialog"),
+    ];
+
+    #[derive(Default)]
+    struct Frames {
+        draw: Vec<Duration>,
+        render: Vec<Duration>,
+    }
+
+    /// Whether every overlay stays within the bounds.
+    pub fn run(cx: &mut VisualTestAppContext) -> bool {
+        let device = renderer_device();
+        println!(
+            "resource probe: {} ({WARMUP_CYCLES} warm-up + {MEASURED_CYCLES} measured \
+             open/close cycles per overlay, dark glass)",
+            device.name()
+        );
+        let appearance = AppearanceSettings {
+            theme: ThemePreference::Dark,
+            material: MaterialPreference::Glass,
+        };
+        let mut passed = true;
+        for (overlay, name) in OVERLAYS {
+            let window = cx.update(|cx| support::open_main_window_in(appearance, cx));
+            screenshots::wait_for_startup(cx, &window);
+            cx.update(|cx| window.navigate(Route::Settings, cx));
+            let handle = window.window();
+            // The route draws once, so the select knows where its trigger is.
+            frame(cx, handle, &mut Frames::default());
+            let mut frames = Frames::default();
+            let mut start = 0;
+            for cycle in 0..WARMUP_CYCLES + MEASURED_CYCLES {
+                if cycle == WARMUP_CYCLES {
+                    start = device.current_allocated_size();
+                    frames = Frames::default();
+                }
+                cx.update(|cx| window.open_overlay(overlay, cx));
+                let opened = Instant::now();
+                while opened.elapsed() < OPEN_FRAMES_FOR {
+                    frame(cx, handle, &mut frames);
+                }
+                cx.update(|cx| window.close_overlay(overlay, cx));
+                for _ in 0..CLOSE_FRAMES {
+                    frame(cx, handle, &mut frames);
+                }
+            }
+            let end = device.current_allocated_size();
+            cx.update_window(handle, |_, window, _| window.remove_window())
+                .expect("the probe window closes");
+            cx.run_until_parked();
+
+            let growth = end as i64 - start as i64;
+            let draw = p95(&mut frames.draw);
+            let render = p95(&mut frames.render);
+            println!(
+                "resource probe: {name}: currentAllocatedSize {} → {} ({:+.2} MiB); \
+                 {} frames, draw p95 {:.2} ms, render p95 {:.2} ms",
+                mebibytes(start as i64),
+                mebibytes(end as i64),
+                growth as f64 / (1024. * 1024.),
+                frames.draw.len(),
+                milliseconds(draw),
+                milliseconds(render),
+            );
+            if growth > MAX_GROWTH {
+                println!("resource probe: {name}: allocation grew past 8 MiB");
+                passed = false;
+            }
+            if draw > MAX_DRAW_P95 {
+                println!("resource probe: {name}: draw p95 exceeds 16.7 ms");
+                passed = false;
+            }
+        }
+        passed
+    }
+
+    /// Draws and renders one frame, recording both times. The frame runs
+    /// in its own autorelease pool, as gpui's presented frames do: this
+    /// harness runs no AppKit run loop to drain one, and each rendered frame
+    /// autoreleases a drawable of the window's full size.
+    fn frame(cx: &mut VisualTestAppContext, handle: AnyWindowHandle, frames: &mut Frames) {
+        cx.run_until_parked();
+        metal::objc::rc::autoreleasepool(|| {
+            let started = Instant::now();
+            cx.update_window(handle, |_, window, cx| window.draw(cx).clear())
+                .expect("the probe window draws");
+            let drawn = Instant::now();
+            cx.capture_screenshot(handle)
+                .expect("the Metal renderer renders the probe window");
+            frames.draw.push(drawn - started);
+            frames.render.push(drawn.elapsed());
+        });
+    }
+
+    /// The nearest-rank 95th percentile.
+    fn p95(samples: &mut [Duration]) -> Duration {
+        samples.sort_unstable();
+        let rank = (samples.len() * 95).div_ceil(100).max(1);
+        samples[rank - 1]
+    }
+
+    fn milliseconds(duration: Duration) -> f64 {
+        duration.as_secs_f64() * 1_000.
+    }
+
+    fn mebibytes(bytes: i64) -> String {
+        format!("{:.2} MiB", bytes as f64 / (1024. * 1024.))
+    }
+
+    /// The device gpui's Metal renderer picks (`MetalRenderer::create_device`
+    /// in `gpui_macos`): the first non-removable, non-low-power device, or the
+    /// system default. Metal returns the same device object to every caller
+    /// in the process, so its allocation count includes gpui's.
+    fn renderer_device() -> metal::Device {
+        metal::Device::all()
+            .into_iter()
+            .min_by_key(|device| (device.is_removable(), !device.is_low_power()))
+            .or_else(metal::Device::system_default)
+            .expect("a Metal device")
     }
 }

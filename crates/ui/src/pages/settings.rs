@@ -2,7 +2,7 @@ use crate::{
     assistant_ui::ConnectionProbeKind,
     components::{setting_control_row, settings_section, SETTING_CONTROL_WIDTH},
     controller::{settings_error_text, RootView},
-    controls::Dropdown,
+    controls::{Dropdown, TextField},
     i18n::text as tr,
     theme::{self, Tokens},
 };
@@ -427,23 +427,17 @@ fn assistant_settings_section(
     .into_any_element()
 }
 
+/// A row whose control is `field`, which carries the row's label.
 fn assistant_text_row(
     label: &'static str,
-    input: &gpui::Entity<crate::text_input::TextInput>,
+    field: &gpui::Entity<TextField>,
     tokens: &Tokens,
 ) -> gpui::AnyElement {
     setting_control_row(
         label,
         div()
             .w(SETTING_CONTROL_WIDTH)
-            .min_h(px(34.))
-            .px_3()
-            .py_2()
-            .rounded(tokens.radius.sm)
-            .border_1()
-            .border_color(tokens.border)
-            .bg(tokens.surface)
-            .child(input.clone())
+            .child(field.clone())
             .into_any_element(),
         tokens,
     )
