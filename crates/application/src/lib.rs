@@ -18,6 +18,7 @@ mod assistant_runtime;
 mod assistant_skills;
 mod capabilities;
 mod document_commands;
+mod document_issues;
 mod installation;
 mod long_audio;
 mod speaker_identity;
@@ -41,6 +42,7 @@ pub use capabilities::{
 };
 pub use contracts::BackendDescriptor;
 pub use document_commands::{DocumentCommandError, DocumentCommandService};
+pub use document_issues::DocumentIssueKind;
 pub use installation::{
     InstallationProbe, InstallationQuery, InstallationService, InstallationState,
 };

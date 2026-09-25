@@ -312,6 +312,23 @@ pub enum DocumentCommand {
         target_id: domain::DocumentId,
         before: bool,
     },
+    /// Manual correction: attribute every segment of one speaker to another.
+    /// Only speaker fields of `results.diarization` and
+    /// `results.speaker_segments` change.
+    MergeSpeaker {
+        document_id: domain::DocumentId,
+        expected_revision: u64,
+        from_speaker_id: String,
+        into_speaker_id: String,
+    },
+    /// Manual correction: set or clear (`None`) one speaker's display label.
+    SetSpeakerLabel {
+        document_id: domain::DocumentId,
+        expected_revision: u64,
+        speaker_id: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -779,6 +796,38 @@ mod tests {
         let mut unknown = legacy;
         unknown.legacy_feature_config = Some("unknown-feature-config".into());
         assert!(!unknown.compatible_with(&structured));
+    }
+
+    #[test]
+    fn speaker_correction_commands_round_trip() {
+        for (command, tag) in [
+            (
+                DocumentCommand::MergeSpeaker {
+                    document_id: domain::DocumentId::new("doc"),
+                    expected_revision: 3,
+                    from_speaker_id: "speaker-1".into(),
+                    into_speaker_id: "speaker-0".into(),
+                },
+                "mergeSpeaker",
+            ),
+            (
+                DocumentCommand::SetSpeakerLabel {
+                    document_id: domain::DocumentId::new("doc"),
+                    expected_revision: 3,
+                    speaker_id: "speaker-1".into(),
+                    label: None,
+                },
+                "setSpeakerLabel",
+            ),
+        ] {
+            let json = serde_json::to_value(&command).unwrap();
+            assert_eq!(json["type"], tag);
+            assert_eq!(json["payload"]["expected_revision"], 3);
+            assert_eq!(
+                serde_json::from_value::<DocumentCommand>(json).unwrap(),
+                command
+            );
+        }
     }
 
     #[test]

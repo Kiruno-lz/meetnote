@@ -330,6 +330,13 @@ impl WorkspaceService {
         self.documents.clone()
     }
 
+    /// Revision-checked update, tree move and speaker correction commands on
+    /// this workspace's documents; a stale revision fails with
+    /// [`crate::DocumentCommandError::RevisionConflict`].
+    pub fn document_commands(&self) -> crate::DocumentCommandService {
+        crate::DocumentCommandService::new(self.documents.clone())
+    }
+
     pub fn processing(&self) -> ProcessingService {
         self.processing.clone()
     }
@@ -379,6 +386,9 @@ impl WorkspaceService {
         self.documents.get(project_id)
     }
 
+    /// Deprecated: rewrites every document without revision checks. Use
+    /// [`Self::document_commands`] and
+    /// [`crate::DocumentCommandService::reparent_document`].
     pub fn reparent_project(
         &self,
         project_id: &ProjectId,
@@ -394,6 +404,9 @@ impl WorkspaceService {
         Ok(projects)
     }
 
+    /// Deprecated: rewrites every document without revision checks. Use
+    /// [`Self::document_commands`] and
+    /// [`crate::DocumentCommandService::reorder_document`].
     pub fn reorder_project(
         &self,
         project_id: &ProjectId,
@@ -439,6 +452,9 @@ impl WorkspaceService {
         Ok(child)
     }
 
+    /// Deprecated: overwrites without a revision check. Use
+    /// [`Self::document_commands`] and
+    /// [`crate::DocumentCommandService::update_document`].
     pub fn update_summary(
         &self,
         project_id: &ProjectId,
@@ -453,6 +469,9 @@ impl WorkspaceService {
         Ok(project)
     }
 
+    /// Deprecated: no revision check, accepts unknown speaker ids and
+    /// replaces an edited body. Use [`Self::document_commands`] and
+    /// [`crate::DocumentCommandService::merge_speaker`].
     pub fn merge_speaker(
         &self,
         project_id: &ProjectId,
@@ -1119,6 +1138,42 @@ mod tests {
         assert_eq!(processing.runtime.language.as_deref(), Some("zh"));
         assert_eq!(processing.runtime.expected_speakers, Some(2));
         std::fs::remove_file(audio_path).unwrap();
+    }
+
+    #[test]
+    fn document_commands_write_the_workspace_documents_with_revisions() {
+        let repository = Arc::new(MemoryRepository::default());
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(repository.clone()),
+        );
+        let project = workspace.import_audio("meeting.wav").unwrap();
+        let commands = workspace.document_commands();
+
+        let updated = commands
+            .update_document(
+                project.id(),
+                project.revision(),
+                contracts::DocumentPatch {
+                    title: Some("Renamed".into()),
+                    ..contracts::DocumentPatch::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.state.revision(), project.revision() + 1);
+        assert_eq!(
+            workspace.project(project.id()).unwrap().unwrap().title(),
+            "Renamed"
+        );
+        assert!(matches!(
+            commands.update_document(
+                project.id(),
+                project.revision(),
+                contracts::DocumentPatch::default()
+            ),
+            Err(crate::DocumentCommandError::RevisionConflict { .. })
+        ));
     }
 
     #[test]
