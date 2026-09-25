@@ -209,6 +209,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "capability_no") => "不支持",
         (Locale::ZhCn, "capability_unknown") => "未知",
         (Locale::ZhCn, "select_placeholder") => "请选择",
+        (Locale::ZhCn, "model_download_progress") => "模型下载进度",
         (Locale::EnUs, "assistant") => "Assistant",
         (Locale::EnUs, "meetings") => "Meetings",
         (Locale::EnUs, "models") => "Models",
@@ -410,6 +411,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "capability_no") => "no",
         (Locale::EnUs, "capability_unknown") => "unknown",
         (Locale::EnUs, "select_placeholder") => "Select…",
+        (Locale::EnUs, "model_download_progress") => "Model download progress",
         _ => "",
     }
 }

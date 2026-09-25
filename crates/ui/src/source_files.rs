@@ -9,6 +9,10 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("assistant_ui.rs", include_str!("assistant_ui.rs")),
     ("components.rs", include_str!("components.rs")),
     ("controller.rs", include_str!("controller.rs")),
+    ("controls/dialog.rs", include_str!("controls/dialog.rs")),
+    ("controls/mod.rs", include_str!("controls/mod.rs")),
+    ("controls/progress.rs", include_str!("controls/progress.rs")),
+    ("controls/select.rs", include_str!("controls/select.rs")),
     ("i18n.rs", include_str!("i18n.rs")),
     ("lib.rs", include_str!("lib.rs")),
     ("pages/assistant.rs", include_str!("pages/assistant.rs")),
@@ -25,6 +29,8 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("text_input.rs", include_str!("text_input.rs")),
     ("theme/component.rs", include_str!("theme/component.rs")),
     ("theme/contrast.rs", include_str!("theme/contrast.rs")),
+    ("theme/edge_fade.rs", include_str!("theme/edge_fade.rs")),
+    ("theme/frost.rs", include_str!("theme/frost.rs")),
     ("theme/material.rs", include_str!("theme/material.rs")),
     ("theme/mod.rs", include_str!("theme/mod.rs")),
     ("theme/platform.rs", include_str!("theme/platform.rs")),
@@ -46,10 +52,11 @@ fn declared_modules(source: &str) -> Vec<&str> {
         .collect()
 }
 
-/// The file of every module declared from `lib.rs` down. `pages` and
-/// `theme` are the directory modules.
+/// The file of every module declared from `lib.rs` down. `controls`,
+/// `pages` and `theme` are the directory modules.
 fn declared_source_files() -> BTreeSet<String> {
     let directories = [
+        ("controls", include_str!("controls/mod.rs")),
         ("pages", include_str!("pages/mod.rs")),
         ("theme", include_str!("theme/mod.rs")),
     ];

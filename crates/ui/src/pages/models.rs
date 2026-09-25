@@ -1,6 +1,7 @@
 use crate::{
     components::empty_card,
     controller::{DownloadAction, RootView},
+    controls::ProgressBar,
     i18n::{self, text as tr},
     theme,
 };
@@ -8,7 +9,6 @@ use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
 use gpui_component::{
     button::{Button, ButtonVariants},
     collapsible::Collapsible,
-    progress::Progress,
     scroll::ScrollableElement as _,
 };
 use models::{manager::DownloadProgress, ModelAvailability, ModelInstallState};
@@ -32,12 +32,13 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             .push(entry);
     }
 
+    let scroll = root.scroll.models.clone();
     let mut content = div()
         .id("models-scroll")
         .debug_selector(|| "models-scroll".into())
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scrollbar()
+        .size_full()
+        .overflow_y_scroll()
+        .track_scroll(&scroll)
         .flex()
         .flex_col()
         .gap_4();
@@ -128,7 +129,15 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .text_color(tokens.text_muted)
                 .child(tr(root.ui.locale, "catalog_description")),
         )
-        .child(content)
+        // The scrollbar stays outside the fade.
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(theme::scroll_faded(&scroll, tokens.content, content))
+                .vertical_scrollbar(&scroll),
+        )
         .child(
             div()
                 .flex_shrink_0()
@@ -295,9 +304,12 @@ fn download_progress_view(
                 .flex_col()
                 .gap_1()
                 .child(
-                    Progress::new(format!("download-progress-{model_id}"))
-                        .value(percent)
-                        .loading(loading),
+                    ProgressBar::new(
+                        format!("download-progress-{model_id}"),
+                        tr(root.ui.locale, "model_download_progress"),
+                    )
+                    .value(percent)
+                    .indeterminate(loading),
                 )
                 .child(div().text_xs().text_color(tokens.text_muted).child(
                     i18n::download_progress(

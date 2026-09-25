@@ -1,7 +1,7 @@
 //! gpui-component follows the tokens through its `ThemeConfig`: `Theme::change`
 //! resolves the config through `Theme::apply_config` and derives the
-//! `gpui_base` theme, so buttons, selects, dialogs and `Root` paint token
-//! colors. Writing `ThemeColor` directly would leave `tokens.background`,
+//! `gpui_base` theme, so buttons, collapsibles, separators, scrollbars and
+//! `Root` paint token colors. Writing `ThemeColor` directly would leave `tokens.background`,
 //! which `Root` paints over the whole window, opaque and hide the glass.
 //!
 //! gpui-component blends several unset hover fills onto `background`, keeping

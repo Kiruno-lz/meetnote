@@ -27,12 +27,13 @@ pub(crate) fn render(
 /// between rows reorders.
 pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
+    let scroll = root.scroll.project_tree.clone();
     let mut tree = div()
         .id("project-tree")
         .debug_selector(|| "project-tree".into())
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scrollbar()
+        .size_full()
+        .overflow_y_scroll()
+        .track_scroll(&scroll)
         .flex()
         .flex_col();
     if root.projects.is_empty() {
@@ -118,46 +119,57 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                         cx,
                     )
                 }));
-            let row = div()
-                .id(project.id().as_str().to_string())
-                .debug_selector(|| format!("project-row-{}", project.id().as_str()))
-                .cursor_pointer()
-                .px(tokens.spacing.sm)
-                .py(tokens.spacing.xs)
-                .ml(px((depth as f32) * 16.))
-                .rounded(tokens.radius.sm)
-                .map(|row| {
-                    if selected {
-                        row.bg(tokens.selection)
-                    } else {
-                        row.hover(|style| style.bg(tokens.wash))
-                    }
-                })
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .child(drag_handle)
-                        .child(expand_handle)
-                        .child(div().text_sm().child(format!(
-                            "{} {}",
-                            if depth > 0 { "↳" } else { "◈" },
-                            project.title()
-                        ))),
-                )
-                .child(
-                    div()
-                        .mt_1()
-                        .text_xs()
-                        .text_color(tokens.text_muted)
-                        .child(status_label(root.ui.locale, display_status)),
-                )
-                .on_click(
-                    cx.listener(move |this, _, _, cx| this.select_project(project_id.clone(), cx)),
-                )
-                .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
-                    this.move_project(dragged.project_id.clone(), target_id.clone(), cx)
-                }));
+            let row =
+                div()
+                    .id(project.id().as_str().to_string())
+                    .debug_selector(|| format!("project-row-{}", project.id().as_str()))
+                    .cursor_pointer()
+                    .px(tokens.spacing.sm)
+                    .py(tokens.spacing.xs)
+                    .ml(px((depth as f32) * 16.))
+                    .rounded(tokens.radius.sm)
+                    .map(|row| {
+                        if selected {
+                            row.bg(tokens.selection)
+                        } else {
+                            row.hover(|style| style.bg(tokens.wash))
+                        }
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .child(drag_handle)
+                            .child(expand_handle)
+                            .child(div().flex_1().min_w_0().text_sm().child(
+                                theme::tail_faded_label(
+                                    format!("project-title-{}", project.id().as_str()),
+                                    format!(
+                                        "{} {}",
+                                        if depth > 0 { "↳" } else { "◈" },
+                                        project.title()
+                                    ),
+                                    if selected {
+                                        tokens.selection
+                                    } else {
+                                        tokens.window
+                                    },
+                                ),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .mt_1()
+                            .text_xs()
+                            .text_color(tokens.text_muted)
+                            .child(status_label(root.ui.locale, display_status)),
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.select_project(project_id.clone(), cx)
+                    }))
+                    .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
+                        this.move_project(dragged.project_id.clone(), target_id.clone(), cx)
+                    }));
             tree = tree.child(div().child(before_drop).child(row).child(after_drop));
         }
     }
@@ -181,7 +193,15 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .text_color(tokens.text_muted)
                 .child(tr(root.ui.locale, "audio_projects")),
         )
-        .child(tree)
+        // The scrollbar stays outside the fade.
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(theme::scroll_faded(&scroll, tokens.window, tree))
+                .vertical_scrollbar(&scroll),
+        )
 }
 
 fn main_panel(
@@ -207,11 +227,13 @@ fn main_panel(
         .flex_col()
         .gap_4();
     if let Some(project) = project {
+        let scroll = root.scroll.meeting_content.clone();
         let mut content = div()
             .id("meeting-content")
             .debug_selector(|| "meeting-content".into())
-            .flex_1()
-            .overflow_y_scrollbar()
+            .size_full()
+            .overflow_y_scroll()
+            .track_scroll(&scroll)
             .p_5()
             .rounded(tokens.radius.md)
             .bg(tokens.surface);
@@ -338,7 +360,17 @@ fn main_panel(
             }
             panel = panel.child(controls);
         }
-        panel = panel.child(content);
+        // The scrollbar stays outside the fade.
+        panel = panel.child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(
+                    theme::scroll_faded(&scroll, tokens.surface, content).rounded(tokens.radius.md),
+                )
+                .vertical_scrollbar(&scroll),
+        );
     } else {
         panel = panel
             .child(

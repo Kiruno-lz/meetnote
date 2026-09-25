@@ -23,7 +23,10 @@
 //! `--test-threads=1`; `main` asserts it is on the main thread.
 //!
 //! Each route renders in each of the four pinned appearances, dark/light ×
-//! glass/opaque, into `<route>-<dark|light>-<glass|opaque>.png`. Under glass
+//! glass/opaque, into `<route>-<dark|light>-<glass|opaque>.png`; so do the
+//! overlays over their route (an open Settings select and the migration
+//! dialog), into `<overlay>-<appearance>.png`, once their entrance animation
+//! has finished. Under glass
 //! the window background is clear, so the chrome's pixels carry the glass
 //! alpha: the capture has no desktop behind it, and the desktop blur is
 //! checked by hand.
@@ -69,7 +72,7 @@ mod screenshots {
     use std::path::Path;
     use std::process::ExitCode;
     use std::sync::Arc;
-    use ui::test_support::{MainWindow, Route};
+    use ui::test_support::{MainWindow, Overlay, Route};
 
     /// Every appearance with its baseline file name suffix; pinned, never
     /// `ThemePreference::System`.
@@ -102,8 +105,20 @@ mod screenshots {
         (Route::Models, "models"),
         (Route::Settings, "settings"),
     ];
+    /// Overlays captured over a route, with their baseline file name prefix.
+    const OVERLAYS: [(Route, Overlay, &str); 2] = [
+        (Route::Settings, Overlay::ThemeSelect, "settings-select"),
+        (
+            Route::Settings,
+            Overlay::SpeakerLibraryDialog,
+            "settings-dialog",
+        ),
+    ];
     /// Frames drawn at most while waiting for two identical ones.
     const MAX_FRAMES: usize = 8;
+    /// Longer than every overlay entrance animation, which runs on the wall
+    /// clock.
+    const OVERLAY_SETTLE: std::time::Duration = std::time::Duration::from_millis(400);
 
     unsafe extern "C" {
         fn pthread_main_np() -> i32;
@@ -153,15 +168,29 @@ mod screenshots {
         let screenshots = APPEARANCES.iter().flat_map(|appearance| {
             ROUTES
                 .iter()
-                .map(move |(route, route_name)| (*appearance, *route, *route_name))
+                .map(move |(route, route_name)| (*appearance, *route, None, *route_name))
+                .chain(OVERLAYS.iter().map(move |(route, overlay, name)| {
+                    (*appearance, *route, Some(*overlay), *name)
+                }))
         });
-        for ((appearance_name, theme, material), route, route_name) in screenshots {
+        for ((appearance_name, theme, material), route, overlay, route_name) in screenshots {
             let name = format!("{route_name}-{appearance_name}");
             let appearance = AppearanceSettings { theme, material };
             let window = cx.update(|cx| support::open_main_window_in(appearance, cx));
             wait_for_startup(&mut cx, &window);
             cx.update(|cx| window.navigate(route, cx));
             let handle = window.window();
+            if let Some(overlay) = overlay {
+                // The route draws once, so a select knows where its trigger is.
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| window.draw(cx).clear())
+                    .expect("the route window draws");
+                cx.update(|cx| window.open_overlay(overlay, cx));
+                cx.run_until_parked();
+                cx.update_window(handle, |_, window, cx| window.draw(cx).clear())
+                    .expect("the route window draws");
+                std::thread::sleep(OVERLAY_SETTLE);
+            }
             let mut previous: Option<Vec<u8>> = None;
             let mut stable = None;
             for _ in 0..MAX_FRAMES {
@@ -263,7 +292,7 @@ mod screenshots {
             );
             return ExitCode::SUCCESS;
         }
-        let total = APPEARANCES.len() * ROUTES.len();
+        let total = APPEARANCES.len() * (ROUTES.len() + OVERLAYS.len());
         if failures > 0 {
             println!(
                 "visual: {failures} of {total} screenshots changed by more than {}‰ of their pixels",
@@ -337,9 +366,10 @@ mod screenshots {
                 .join(", ")
         };
         let routes = list(ROUTES.iter().map(|(_, name)| *name).collect());
+        let overlays = list(OVERLAYS.iter().map(|(_, _, name)| *name).collect());
         let appearances = list(APPEARANCES.iter().map(|(name, ..)| *name).collect());
         format!(
-            "{{\n{revisions}  \"scale_factor\": {scale_factor:?},\n  \"window\": {{ \"width\": {}, \"height\": {} }},\n  \"locale\": \"{}\",\n  \"routes\": [{routes}],\n  \"appearances\": [{appearances}]\n}}\n",
+            "{{\n{revisions}  \"scale_factor\": {scale_factor:?},\n  \"window\": {{ \"width\": {}, \"height\": {} }},\n  \"locale\": \"{}\",\n  \"routes\": [{routes}],\n  \"overlays\": [{overlays}],\n  \"appearances\": [{appearances}]\n}}\n",
             support::WINDOW_WIDTH,
             support::WINDOW_HEIGHT,
             support::LOCALE,

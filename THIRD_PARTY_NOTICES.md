@@ -7,16 +7,20 @@ the license it is used under and where the code comes from.
 
 - Source: https://github.com/zeronsh/zeron
 - License: MIT
-- Use: design tokens, contrast arithmetic, material resolution and the window
-  shell (titlebar drag strips, sidebar and content plane) are adapted from
-  Zeron's `crates/ui`. Zeron branding is not used.
+- Use: design tokens, contrast arithmetic, material resolution, the window
+  shell (titlebar drag strips, sidebar and content plane), the frosted and
+  edge-faded primitives and the settings select's trigger and menu rows are
+  adapted from Zeron's `crates/ui`. Zeron branding is not used.
 - Files carrying ported code (each starts with the notice
   "Portions adapted from Zeron (https://github.com/zeronsh/zeron), Copyright
   (c) 2026 Wing, MIT License"):
   - `crates/ui/src/theme/contrast.rs`
+  - `crates/ui/src/theme/edge_fade.rs`
+  - `crates/ui/src/theme/frost.rs`
   - `crates/ui/src/theme/material.rs`
   - `crates/ui/src/theme/tokens.rs`
   - `crates/ui/src/pages/chrome.rs`
+  - `crates/ui/src/controls/select.rs`
 
 ```text
 MIT License

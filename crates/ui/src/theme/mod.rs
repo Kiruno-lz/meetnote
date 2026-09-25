@@ -10,10 +10,14 @@
 
 mod component;
 mod contrast;
+mod edge_fade;
+mod frost;
 mod material;
 mod platform;
 mod tokens;
 
+pub(crate) use edge_fade::{scroll_faded, tail_faded_label};
+pub(crate) use frost::{frosted, layered};
 pub(crate) use material::{Material, Mode};
 pub(crate) use platform::{system_accessibility, Accessibility};
 pub(crate) use tokens::Tokens;
@@ -23,10 +27,6 @@ use settings::AppearanceSettings;
 
 /// Backdrop blur strength of floating surfaces. Two levels bound the blur
 /// kernels on screen; open/close animations never change the radius.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the U4 frosted primitives paint the blur")
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BlurLevel {
     /// Menus, dropdowns and the Assistant input bar.
@@ -35,10 +35,6 @@ pub(crate) enum BlurLevel {
     Sheet,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the U4 frosted primitives paint the blur")
-)]
 impl BlurLevel {
     /// Blur radius in pixels.
     pub(crate) const fn radius(self) -> f32 {
@@ -137,6 +133,17 @@ fn apply_for(system: WindowAppearance, window: &mut Window, cx: &mut App) {
     // Re-applied on every change: gpui's macOS window removes its
     // `NSVisualEffectView` whenever the value is not `Blurred`.
     window.set_background_appearance(background);
+}
+
+/// Installs `tokens` alone, without gpui-component, for primitive tests.
+#[cfg(test)]
+pub(crate) fn install_for_test(tokens: Tokens, cx: &mut App) {
+    cx.set_global(ThemeState {
+        preference: AppearanceSettings::default(),
+        accessibility: Accessibility::default(),
+        tokens,
+        background: tokens.material.window_background_appearance(),
+    });
 }
 
 /// The background appearance the last `apply` set on the window. gpui's

@@ -1,6 +1,7 @@
 pub mod assistant_ui;
 mod components;
 mod controller;
+mod controls;
 mod i18n;
 mod pages;
 mod route;
@@ -458,22 +459,6 @@ mod tests {
         let cx = gpui::VisualTestContext::from_window(window, cx).into_mut();
         wait_for(cx, &view, |root| root.projects_loaded);
         (view, cx)
-    }
-
-    /// Drives the GPUI executor until the window satisfies `done`.
-    #[track_caller]
-    fn wait_until_window(
-        cx: &mut gpui::VisualTestContext,
-        done: impl Fn(&mut gpui::Window, &mut gpui::App) -> bool,
-    ) {
-        for _ in 0..500 {
-            cx.run_until_parked();
-            if cx.update(|window, cx| done(window, cx)) {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        panic!("window state did not settle");
     }
 
     #[gpui::test]
@@ -982,9 +967,17 @@ mod tests {
         wait_for(cx, &view, |root| root.ui.notice == installed);
     }
 
-    #[gpui::test]
-    fn the_speaker_library_migration_dialog_opens_and_migrates(cx: &mut TestAppContext) {
-        use gpui_component::WindowExt as _;
+    /// A desktop whose Speaker Library lives in a fresh directory, asked to
+    /// move it to a path without a library: the migration dialog opens.
+    /// Returns the view, the services, the directory and both paths.
+    fn open_speaker_library_prompt(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<controller::RootView>,
+        &mut gpui::VisualTestContext,
+        DesktopServices,
+        [std::path::PathBuf; 3],
+    ) {
         let directory = temp_directory();
         std::fs::create_dir_all(&directory).unwrap();
         let source = directory.join("library.json");
@@ -1000,15 +993,93 @@ mod tests {
         view.update(cx, |root, cx| {
             root.change_speaker_library_path(destination.clone(), cx)
         });
-        wait_until_window(cx, |window, cx| window.has_active_dialog(cx));
+        wait_for(cx, &view, |root| root.speaker_library_prompt.is_some());
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("confirm-dialog").is_some(),
+            "the migration dialog is shown"
+        );
+        (view, cx, services, [directory, source, destination])
+    }
 
-        cx.dispatch_action(gpui_component::dialog::Confirm { secondary: false });
+    #[track_caller]
+    fn click_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+        let bounds = cx
+            .debug_bounds(selector)
+            .unwrap_or_else(|| panic!("`{selector}` is not rendered"));
+        cx.simulate_click(bounds.center(), Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn the_speaker_library_migration_dialog_opens_and_migrates(cx: &mut TestAppContext) {
+        let (view, cx, services, [directory, _, destination]) = open_speaker_library_prompt(cx);
+        // The scrim keeps presses from reaching the page behind the dialog.
+        let route = view.read_with(cx, |root, _| root.ui.route);
+        assert_ne!(route, route::Route::Models);
+        click_selector(cx, "nav-Models");
+        assert_eq!(view.read_with(cx, |root, _| root.ui.route), route);
+        assert!(cx.debug_bounds("confirm-dialog").is_some());
+
+        click_selector(cx, "dialog-confirm");
         let expected = destination.display().to_string();
         wait_for(cx, &view, |_| {
             services.settings.snapshot().unwrap().speaker_library_path == expected
         });
         assert_eq!(std::fs::read_to_string(&destination).unwrap(), "{}");
+        assert!(
+            cx.debug_bounds("confirm-dialog").is_none(),
+            "the dialog closed"
+        );
         std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[gpui::test]
+    fn cancelling_the_migration_dialog_switches_the_path_without_migrating(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx, services, [directory, source, destination]) =
+            open_speaker_library_prompt(cx);
+
+        click_selector(cx, "dialog-cancel");
+        let expected = destination.display().to_string();
+        wait_for(cx, &view, |_| {
+            services.settings.snapshot().unwrap().speaker_library_path == expected
+        });
+        assert!(!destination.exists(), "cancel must not migrate the library");
+        assert_eq!(std::fs::read_to_string(&source).unwrap(), "{}");
+        assert!(
+            cx.debug_bounds("confirm-dialog").is_none(),
+            "the dialog closed"
+        );
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    /// Answers the migration dialog with `key` alone: the dialog holds
+    /// focus from the moment it opens.
+    fn answer_migration_with_key(cx: &mut TestAppContext, key: &str, migrates: bool) {
+        let (view, cx, services, [directory, source, destination]) =
+            open_speaker_library_prompt(cx);
+
+        cx.simulate_keystrokes(key);
+        let expected = destination.display().to_string();
+        wait_for(cx, &view, |_| {
+            services.settings.snapshot().unwrap().speaker_library_path == expected
+        });
+        assert_eq!(destination.exists(), migrates, "{key} migrates: {migrates}");
+        assert!(source.exists());
+        assert!(view.read_with(cx, |root, _| root.speaker_library_prompt.is_none()));
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[gpui::test]
+    fn enter_confirms_the_migration_dialog(cx: &mut TestAppContext) {
+        answer_migration_with_key(cx, "enter", true);
+    }
+
+    #[gpui::test]
+    fn escape_cancels_the_migration_dialog(cx: &mut TestAppContext) {
+        answer_migration_with_key(cx, "escape", false);
     }
 
     #[gpui::test]
@@ -1598,7 +1669,7 @@ mod tests {
                 .expected_speakers
                 .read(cx)
                 .selected_value()
-                .cloned()
+                .map(str::to_owned)
         });
         assert_eq!(
             shown.as_deref(),
@@ -1748,14 +1819,12 @@ mod tests {
         };
         let confirm = |cx: &mut gpui::VisualTestContext, material: bool, label: &str| {
             select(cx, material).update(cx, |_, cx| {
-                cx.emit(gpui_component::select::SelectEvent::Confirm(Some(
-                    label.to_string(),
-                )))
+                cx.emit(controls::DropdownEvent::Confirm(label.to_string()))
             })
         };
         let appearance = |settings: &SettingsService| settings.snapshot().unwrap().appearance;
         assert_eq!(
-            select(cx, false).read_with(cx, |state, _| state.selected_value().cloned()),
+            select(cx, false).read_with(cx, |state, _| state.selected_value().map(str::to_owned)),
             Some("跟随系统".to_string())
         );
 
@@ -1863,7 +1932,7 @@ mod tests {
                     &selectors.transcription_language,
                     &selectors.expected_speakers,
                 ]
-                .map(|select| select.read(cx).selected_value().cloned())
+                .map(|select| select.read(cx).selected_value().map(str::to_owned))
             })
         };
         cx.run_until_parked();
@@ -1880,9 +1949,7 @@ mod tests {
             root.settings_selectors.as_ref().unwrap().language.clone()
         });
         language.update(cx, |_, cx| {
-            cx.emit(gpui_component::select::SelectEvent::Confirm(Some(
-                "English".to_string(),
-            )))
+            cx.emit(controls::DropdownEvent::Confirm("English".to_string()))
         });
         cx.run_until_parked();
         assert_eq!(
@@ -1892,6 +1959,224 @@ mod tests {
                 Some("Auto".into()),
                 Some("Auto".into())
             ]
+        );
+    }
+
+    /// The Settings route of the desktop window as `run` opens it, once the
+    /// startup installation state, which rebuilds every select, has arrived.
+    fn open_settings_route(
+        cx: &mut TestAppContext,
+    ) -> (
+        gpui::Entity<controller::RootView>,
+        &mut gpui::VisualTestContext,
+        SettingsService,
+    ) {
+        let settings = test_settings();
+        let services = desktop_services(
+            Arc::new(FakeAssistantUiService::default()),
+            settings.clone(),
+        );
+        let (view, cx) = open_main_window(cx, services);
+        wait_for(cx, &view, |root| !root.installation.catalog.is_empty());
+        view.update(cx, |root, cx| root.navigate(route::Route::Settings, cx));
+        cx.run_until_parked();
+        (view, cx, settings)
+    }
+
+    fn settings_select(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<controller::RootView>,
+        pick: impl Fn(&controller::SettingsSelectors) -> &gpui::Entity<controls::Dropdown>,
+    ) -> gpui::Entity<controls::Dropdown> {
+        view.read_with(cx, |root, _| {
+            pick(
+                root.settings_selectors
+                    .as_ref()
+                    .expect("selectors are built on render"),
+            )
+            .clone()
+        })
+    }
+
+    fn trigger_focused(
+        cx: &mut gpui::VisualTestContext,
+        select: &gpui::Entity<controls::Dropdown>,
+    ) -> bool {
+        cx.update(|window, cx| {
+            gpui::Focusable::focus_handle(select.read(cx), cx).is_focused(window)
+        })
+    }
+
+    #[track_caller]
+    fn assert_select(
+        cx: &mut gpui::VisualTestContext,
+        select: &gpui::Entity<controls::Dropdown>,
+        open: bool,
+        highlighted: Option<&str>,
+        selected: &str,
+    ) {
+        select.read_with(cx, |select, _| {
+            assert_eq!(select.is_open(), open, "open");
+            assert_eq!(select.highlighted_value(), highlighted, "highlight");
+            assert_eq!(select.selected_value(), Some(selected), "selection");
+        });
+        assert_eq!(
+            cx.debug_bounds("select-menu").is_some(),
+            open,
+            "the menu is rendered exactly while open"
+        );
+    }
+
+    #[gpui::test]
+    fn the_device_select_opens_moves_and_saves_with_the_keyboard(cx: &mut TestAppContext) {
+        let (view, cx, settings) = open_settings_route(cx);
+        let select = settings_select(cx, &view, |selectors| &selectors.compute_device);
+        let revision = settings.revision().unwrap();
+        cx.update(|window, cx| {
+            gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx)
+        });
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("enter");
+        assert_select(cx, &select, true, Some("自动"), "自动");
+        assert!(!trigger_focused(cx, &select), "the open menu holds focus");
+        cx.simulate_keystrokes("down");
+        assert_select(cx, &select, true, Some("CPU"), "自动");
+        cx.simulate_keystrokes("down down up");
+        assert_select(cx, &select, true, Some("Metal"), "自动");
+
+        cx.simulate_keystrokes("enter");
+        assert_select(cx, &select, false, None, "Metal");
+        assert!(trigger_focused(cx, &select), "focus returns to the trigger");
+        wait_for(cx, &view, |_| {
+            settings.snapshot().unwrap().compute_device == contracts::ComputeDevice::Metal
+        });
+        assert_ne!(
+            settings.revision().unwrap(),
+            revision,
+            "a revision-checked save"
+        );
+        assert!(view.read_with(cx, |root, _| root.settings_error.is_none()));
+        assert_eq!(
+            view.read_with(cx, |root, _| root.settings_draft.compute_device),
+            contracts::ComputeDevice::Metal
+        );
+    }
+
+    #[gpui::test]
+    fn escape_dismisses_the_device_select_without_changing_it(cx: &mut TestAppContext) {
+        let (view, cx, settings) = open_settings_route(cx);
+        let select = settings_select(cx, &view, |selectors| &selectors.compute_device);
+        let revision = settings.revision().unwrap();
+        cx.update(|window, cx| {
+            gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx)
+        });
+        cx.run_until_parked();
+
+        // Down opens a closed select on its selection.
+        cx.simulate_keystrokes("down");
+        assert_select(cx, &select, true, Some("自动"), "自动");
+        cx.simulate_keystrokes("down");
+        assert_select(cx, &select, true, Some("CPU"), "自动");
+        cx.simulate_keystrokes("escape");
+        assert_select(cx, &select, false, None, "自动");
+        assert!(trigger_focused(cx, &select), "focus returns to the trigger");
+        cx.run_until_parked();
+        assert_eq!(settings.revision().unwrap(), revision, "nothing is saved");
+        assert_eq!(
+            settings.snapshot().unwrap().compute_device,
+            contracts::ComputeDevice::Auto
+        );
+    }
+
+    #[gpui::test]
+    fn a_click_opens_the_theme_select_and_a_click_outside_closes_it(cx: &mut TestAppContext) {
+        let (view, cx, settings) = open_settings_route(cx);
+        let select = settings_select(cx, &view, |selectors| &selectors.theme);
+        let revision = settings.revision().unwrap();
+
+        click_selector(cx, "select-theme");
+        assert_select(cx, &select, true, Some("跟随系统"), "跟随系统");
+        let menu = cx.debug_bounds("select-menu").unwrap();
+        let trigger = cx.debug_bounds("select-theme").unwrap();
+        assert!(
+            menu.top() >= trigger.bottom()
+                && menu.left() >= trigger.left()
+                && menu.right() <= trigger.right()
+                && menu.left() - trigger.left() <= gpui::px(1.),
+            "the menu opens below the trigger at its width: {menu:?} under {trigger:?}"
+        );
+        // A press on the page beside the settings title.
+        let page = cx.debug_bounds("settings-page").unwrap();
+        cx.simulate_click(
+            gpui::point(page.right() - gpui::px(24.), page.top() + gpui::px(12.)),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+        assert_select(cx, &select, false, None, "跟随系统");
+        assert!(trigger_focused(cx, &select), "focus returns to the trigger");
+        assert_eq!(settings.revision().unwrap(), revision, "nothing is saved");
+
+        // A click on the trigger of an open select only closes it.
+        click_selector(cx, "select-theme");
+        assert_select(cx, &select, true, Some("跟随系统"), "跟随系统");
+        click_selector(cx, "select-theme");
+        assert_select(cx, &select, false, None, "跟随系统");
+
+        click_selector(cx, "select-theme");
+        click_selector(cx, "select-option-2");
+        assert_select(cx, &select, false, None, "深色");
+        assert!(trigger_focused(cx, &select), "focus returns to the trigger");
+        wait_for(cx, &view, |_| {
+            settings.snapshot().unwrap().appearance.theme == settings::ThemePreference::Dark
+        });
+        cx.update(|_, cx| assert_eq!(theme::tokens(cx).mode, theme::Mode::Dark));
+    }
+
+    #[gpui::test]
+    fn every_settings_select_carries_its_row_label(cx: &mut TestAppContext) {
+        let (view, cx, _settings) = open_settings_route(cx);
+        let labels = view.read_with(cx, |root, cx| {
+            let selectors = root.settings_selectors.as_ref().unwrap();
+            [
+                (&selectors.theme, "theme"),
+                (&selectors.material, "material"),
+                (&selectors.language, "language"),
+                (&selectors.asr_backend, "asr_backend"),
+                (&selectors.asr_model, "asr_model"),
+                (&selectors.transcription_language, "transcription_language"),
+                (&selectors.diarization_backend, "diarization_backend"),
+                (&selectors.diarization_model, "diarization_model"),
+                (
+                    &selectors.diarization_segmentation_model,
+                    "diarization_segmentation_model",
+                ),
+                (
+                    &selectors.diarization_embedding_model,
+                    "diarization_embedding_model",
+                ),
+                (&selectors.diarization_clustering, "diarization_clustering"),
+                (&selectors.expected_speakers, "expected_speakers"),
+                (&selectors.compute_device, "compute_device"),
+            ]
+            .map(|(select, key)| {
+                (
+                    select.read(cx).accessibility_label().to_string(),
+                    i18n::text(i18n::Locale::ZhCn, key),
+                )
+            })
+        });
+        for (label, expected) in labels {
+            assert!(!expected.is_empty());
+            assert_eq!(label, expected);
+        }
+        let progress = controls::ProgressBar::new(
+            "download-progress",
+            i18n::text(i18n::Locale::EnUs, "model_download_progress"),
+        );
+        assert_eq!(
+            progress.accessibility_label().as_ref(),
+            "Model download progress"
         );
     }
 }

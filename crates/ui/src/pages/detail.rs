@@ -5,7 +5,7 @@ use crate::{
     theme,
 };
 use domain::DocumentState;
-use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
+use gpui::{div, prelude::*, px, Context, IntoElement, Pixels, ScrollHandle};
 use gpui_component::{
     button::{Button, ButtonVariants},
     scroll::ScrollableElement as _,
@@ -19,17 +19,18 @@ const DETAIL_WIDTH: Pixels = px(400.);
 pub(crate) fn render(
     project: Option<&DocumentState>,
     locale: Locale,
+    scroll: &ScrollHandle,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
     let content = project
         .map(|project| {
-            let transcript = div()
+            let segments = div()
                 .id("detail-transcript")
-                .mt_4()
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scrollbar()
+                .debug_selector(|| "detail-transcript".into())
+                .size_full()
+                .overflow_y_scroll()
+                .track_scroll(scroll)
                 .children(project.results.speaker_segments.iter().map(|segment| {
                     div()
                         .pb_3()
@@ -40,6 +41,14 @@ pub(crate) fn render(
                         ))
                         .child(div().text_sm().child(segment.text.clone()))
                 }));
+            // The scrollbar stays outside the fade.
+            let transcript = div()
+                .relative()
+                .mt_4()
+                .flex_1()
+                .min_h_0()
+                .child(theme::scroll_faded(scroll, tokens.raised, segments))
+                .vertical_scrollbar(scroll);
             div()
                 .mt_3()
                 .flex_1()

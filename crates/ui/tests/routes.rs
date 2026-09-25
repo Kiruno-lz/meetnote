@@ -13,7 +13,7 @@ mod support;
 
 use gpui::{Bounds, Modifiers, Pixels, TestAppContext, VisualTestContext};
 use support::{DOCUMENT_IDS, WINDOW_HEIGHT, WINDOW_WIDTH};
-use ui::test_support::{MainWindow, Route};
+use ui::test_support::{MainWindow, Overlay, Route};
 
 /// The page root of every route; each route renders only its own.
 const ROUTE_PAGES: [(Route, &str); 4] = [
@@ -387,4 +387,39 @@ fn the_window_is_titled_and_both_columns_start_with_a_drag_strip(cx: &mut TestAp
         sidebar_strip.bottom() <= visible(cx, "nav").top(),
         "the entries start below the strip and the traffic lights"
     );
+}
+
+#[gpui::test]
+fn the_settings_overlays_open_inside_the_window_over_the_page(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Settings);
+    let page = visible(cx, "settings-page");
+
+    cx.update(|_, cx| window.open_overlay(Overlay::ThemeSelect, cx));
+    cx.run_until_parked();
+    let trigger = visible(cx, "select-theme");
+    let menu = visible(cx, "select-menu");
+    assert!(
+        menu.top() >= trigger.bottom() && within(menu, page),
+        "the theme menu opens below its trigger on the page: {menu:?}"
+    );
+    for option in 0..3 {
+        let row = visible(cx, leak(format!("select-option-{option}")));
+        assert!(within(row, menu), "option {option} is in the menu");
+    }
+
+    cx.update(|_, cx| window.open_overlay(Overlay::SpeakerLibraryDialog, cx));
+    cx.run_until_parked();
+    let dialog = visible(cx, "confirm-dialog");
+    let plane = visible(cx, "content-plane");
+    assert!(
+        dialog.center().x > plane.left() && dialog.center().x < plane.right(),
+        "the dialog is centered over the window: {dialog:?}"
+    );
+    for button in ["dialog-confirm", "dialog-cancel"] {
+        assert!(
+            within(visible(cx, button), dialog),
+            "`{button}` is in the dialog"
+        );
+    }
 }

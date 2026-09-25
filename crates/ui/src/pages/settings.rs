@@ -2,7 +2,8 @@ use crate::{
     assistant_ui::ConnectionProbeKind,
     components::{setting_control_row, settings_section, SETTING_CONTROL_WIDTH},
     controller::{settings_error_text, RootView},
-    i18n::{text as tr, Locale},
+    controls::Dropdown,
+    i18n::text as tr,
     theme::{self, Tokens},
 };
 use contracts::AgentWriteMode;
@@ -10,8 +11,6 @@ use gpui::{div, prelude::*, px, Context, IntoElement};
 use gpui_component::{
     button::{Button, ButtonVariants},
     scroll::ScrollableElement as _,
-    searchable_list::{SearchableListDelegate, SearchableListItem},
-    select::{Select, SelectState},
     Disableable,
 };
 use settings::{AssistantAuthMode, LlmProtocol};
@@ -37,13 +36,13 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             vec![
                 setting_control_row(
                     tr(root.ui.locale, "theme"),
-                    select_control(&selectors.theme, "theme", root.ui.locale, &tokens),
+                    select_control(&selectors.theme, "theme"),
                     &tokens,
                 )
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "material"),
-                    select_control(&selectors.material, "material", root.ui.locale, &tokens),
+                    select_control(&selectors.material, "material"),
                     &tokens,
                 )
                 .into_any_element(),
@@ -53,7 +52,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             tr(root.ui.locale, "interface"),
             vec![setting_control_row(
                 tr(root.ui.locale, "language"),
-                select_control(&selectors.language, "language", root.ui.locale, &tokens),
+                select_control(&selectors.language, "language"),
                 &tokens,
             )
             .into_any_element()],
@@ -63,29 +62,19 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             vec![
                 setting_control_row(
                     tr(root.ui.locale, "asr_backend"),
-                    select_control(
-                        &selectors.asr_backend,
-                        "asr-backend",
-                        root.ui.locale,
-                        &tokens,
-                    ),
+                    select_control(&selectors.asr_backend, "asr-backend"),
                     &tokens,
                 )
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "asr_model"),
-                    select_control(&selectors.asr_model, "asr-model", root.ui.locale, &tokens),
+                    select_control(&selectors.asr_model, "asr-model"),
                     &tokens,
                 )
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "transcription_language"),
-                    select_control(
-                        &selectors.transcription_language,
-                        "transcription-language",
-                        root.ui.locale,
-                        &tokens,
-                    ),
+                    select_control(&selectors.transcription_language, "transcription-language"),
                     &tokens,
                 )
                 .into_any_element(),
@@ -96,23 +85,13 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             vec![
                 setting_control_row(
                     tr(root.ui.locale, "diarization_backend"),
-                    select_control(
-                        &selectors.diarization_backend,
-                        "diarization-backend",
-                        root.ui.locale,
-                        &tokens,
-                    ),
+                    select_control(&selectors.diarization_backend, "diarization-backend"),
                     &tokens,
                 )
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "diarization_model"),
-                    select_control(
-                        &selectors.diarization_model,
-                        "diarization-model",
-                        root.ui.locale,
-                        &tokens,
-                    ),
+                    select_control(&selectors.diarization_model, "diarization-model"),
                     &tokens,
                 )
                 .into_any_element(),
@@ -122,8 +101,6 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         select_control(
                             &selectors.diarization_segmentation_model,
                             "diarization-segmentation-model",
-                            root.ui.locale,
-                            &tokens,
                         ),
                         &tokens,
                     )
@@ -137,8 +114,6 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         select_control(
                             &selectors.diarization_embedding_model,
                             "diarization-embedding-model",
-                            root.ui.locale,
-                            &tokens,
                         ),
                         &tokens,
                     )
@@ -149,12 +124,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 if root.show_diarization_stage_options() {
                     setting_control_row(
                         tr(root.ui.locale, "diarization_clustering"),
-                        select_control(
-                            &selectors.diarization_clustering,
-                            "diarization-clustering",
-                            root.ui.locale,
-                            &tokens,
-                        ),
+                        select_control(&selectors.diarization_clustering, "diarization-clustering"),
                         &tokens,
                     )
                     .into_any_element()
@@ -163,12 +133,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 },
                 setting_control_row(
                     tr(root.ui.locale, "expected_speakers"),
-                    select_control(
-                        &selectors.expected_speakers,
-                        "expected-speakers",
-                        root.ui.locale,
-                        &tokens,
-                    ),
+                    select_control(&selectors.expected_speakers, "expected-speakers"),
                     &tokens,
                 )
                 .into_any_element(),
@@ -202,12 +167,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             tr(root.ui.locale, "runtime"),
             vec![setting_control_row(
                 tr(root.ui.locale, "compute_device"),
-                select_control(
-                    &selectors.compute_device,
-                    "compute-device",
-                    root.ui.locale,
-                    &tokens,
-                ),
+                select_control(&selectors.compute_device, "compute-device"),
                 &tokens,
             )
             .into_any_element()],
@@ -660,29 +620,11 @@ fn capability_key(value: Option<bool>) -> &'static str {
     }
 }
 
-/// The select column of a settings row: `select-<id>` marks it for tests,
-/// and the placeholder shown with no selection is localized. The trigger is
-/// filled like the text fields beside it; gpui-component's light input fill
-/// is the window background, which differs between glass and opaque.
-fn select_control<D>(
-    state: &gpui::Entity<SelectState<D>>,
-    id: &'static str,
-    locale: Locale,
-    tokens: &Tokens,
-) -> gpui::AnyElement
-where
-    D: SearchableListDelegate + 'static,
-    <D::Item as SearchableListItem>::Value: PartialEq + Clone,
-{
+/// The select column of a settings row: `select-<id>` marks it for tests.
+fn select_control(dropdown: &gpui::Entity<Dropdown>, id: &'static str) -> gpui::AnyElement {
     div()
         .w(SETTING_CONTROL_WIDTH)
         .debug_selector(move || format!("select-{id}"))
-        .child(
-            Select::new(state)
-                .w_full()
-                .bg(tokens.surface)
-                .menu_width(SETTING_CONTROL_WIDTH)
-                .placeholder(tr(locale, "select_placeholder")),
-        )
+        .child(dropdown.clone())
         .into_any_element()
 }

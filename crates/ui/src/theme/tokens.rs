@@ -104,6 +104,19 @@ pub(crate) struct Tokens {
     pub(crate) surface: Hsla,
     /// Surfaces raised above a card: nested cards and the Detail panel.
     pub(crate) raised: Hsla,
+    /// Floating surfaces (menus, dropdowns, dialog sheets) under the opaque
+    /// material.
+    pub(crate) float: Hsla,
+    /// `float` at the least alpha that keeps text on it legible over any
+    /// backdrop: the tint of a frosted menu under glass.
+    pub(crate) frost: Hsla,
+    /// The tint of a frosted dialog sheet under glass. The sheet carries no
+    /// text (the dialog's text sits on an opaque panel on it), so the tint
+    /// only has to let the blurred page show through.
+    pub(crate) sheet_frost: Hsla,
+    /// The drop shadow of a floating surface; only the opaque fallback casts
+    /// one.
+    pub(crate) shadow: Hsla,
     /// 1px dividers.
     pub(crate) hairline: Hsla,
     /// Control and card borders.
@@ -139,6 +152,9 @@ pub(crate) struct Tokens {
     pub(crate) font_size: FontSize,
     pub(crate) motion: Motion,
 }
+
+/// The alpha of `sheet_frost`.
+const SHEET_FROST_ALPHA: f32 = 0.5;
 
 const RADIUS: Radius = Radius {
     sm: px(6.),
@@ -177,6 +193,12 @@ impl Tokens {
             Mode::Light => light(),
         };
         tokens.motion = Motion::new(reduce_motion);
+        tokens.frost = tokens.float.alpha(contrast::min_glass_alpha(
+            tokens.float.into(),
+            tokens.text.into(),
+            tokens.text_muted.into(),
+        ));
+        tokens.sheet_frost = tokens.float.alpha(SHEET_FROST_ALPHA);
         if material == Material::Glass {
             tokens.material = Material::Glass;
             tokens.window = tokens.window.alpha(glass_alpha(&tokens));
@@ -226,6 +248,10 @@ fn dark() -> Tokens {
         content: hex(0x111318),
         surface: hex(0x171b22),
         raised: hex(0x202733),
+        float: hex(0x1c222c),
+        frost: hex(0x1c222c),
+        sheet_frost: hex(0x1c222c),
+        shadow: hsla(0., 0., 0., 0.5),
         hairline: hex(0x2b303b),
         border: hex(0x303744),
         wash: hsla(0., 0., 1., 0.06),
@@ -268,6 +294,10 @@ fn light() -> Tokens {
         content: hex(0xffffff),
         surface: hex(0xf4f6f9),
         raised: hex(0xffffff),
+        float: hex(0xffffff),
+        frost: hex(0xffffff),
+        sheet_frost: hex(0xffffff),
+        shadow: hsla(0., 0., 0., 0.18),
         hairline: hex(0xdde1e8),
         border: hex(0xc9d0db),
         wash: hsla(0., 0., 0., 0.05),
@@ -342,6 +372,34 @@ mod tests {
                     contrast_ratio(glass.text_muted.into(), chrome) >= MUTED_TEXT_CONTRAST,
                     "{mode:?} muted text over {backdrop:?}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn frost_is_the_float_fill_at_the_least_legible_alpha() {
+        for mode in MODES {
+            for material in [Material::Glass, Material::Opaque] {
+                let tokens = Tokens::new(mode, material, false);
+                assert_eq!(tokens.float.a, 1., "{mode:?} float is opaque");
+                assert!(
+                    tokens.frost.a > 0. && tokens.frost.a < 1.,
+                    "{mode:?} frost is translucent: {}",
+                    tokens.frost.a
+                );
+                assert_eq!(tokens.frost.alpha(1.), tokens.float);
+                assert_eq!(tokens.sheet_frost.alpha(1.), tokens.float);
+                assert!(
+                    tokens.sheet_frost.a < tokens.frost.a,
+                    "{mode:?}: a sheet shows more of the page than a menu"
+                );
+                assert!(glass_is_legible(
+                    tokens.frost.into(),
+                    tokens.text.into(),
+                    tokens.text_muted.into()
+                ));
+                assert!(ratio(tokens.text, tokens.float) >= 4.5);
+                assert!(ratio(tokens.text_muted, tokens.float) >= 4.5);
             }
         }
     }

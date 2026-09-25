@@ -3,6 +3,7 @@ use crate::{
         now_ms, AssistantController, AssistantScopeMode, AssistantSettingsSave, AssistantUiError,
         AssistantUiService, ConnectionProbeKind,
     },
+    controls::{ConfirmDialog, Dropdown, DropdownEvent, SelectOption},
     i18n, pages,
     route::Route,
     state::{ContentMode, UiState},
@@ -17,8 +18,8 @@ use contracts::{AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind,
 use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
-    prelude::*, App, Bounds, ClickEvent, Context, Entity, KeyBinding, PathPromptOptions,
-    SharedString, Task, Window, WindowBounds, WindowOptions,
+    prelude::*, App, Bounds, ClickEvent, Context, Entity, FocusHandle, KeyBinding,
+    PathPromptOptions, ScrollHandle, Task, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 use models::manager::{
@@ -34,15 +35,6 @@ use settings::{
 use std::path::Path;
 use std::sync::Arc;
 
-use gpui_component::{
-    dialog::DialogButtonProps,
-    select::{SelectEvent, SelectItem, SelectState},
-    IndexPath, WindowExt,
-};
-
-type StringSelect = SelectState<Vec<String>>;
-type ModelSelect = SelectState<Vec<ModelOption>>;
-type StageModelSelect = SelectState<Vec<StageModelOption>>;
 type SettingsChange = Arc<dyn Fn(&mut AppSettings) + Send + Sync>;
 
 enum SettingsWrite {
@@ -122,29 +114,13 @@ fn install_status_label(locale: i18n::Locale, installed: bool) -> &'static str {
     )
 }
 
-impl SelectItem for ModelOption {
-    type Value = String;
-
-    fn title(&self) -> SharedString {
-        self.id.clone().into()
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.id
-    }
-
-    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        gpui::div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .child(self.id.clone())
-            .child(self.status_label())
-    }
-
-    fn disabled(&self) -> bool {
-        !self.installed
+impl ModelOption {
+    /// The menu entry: the model id with its install status; a model that is
+    /// not downloaded cannot be chosen.
+    fn option(&self) -> SelectOption {
+        SelectOption::text(self.id.clone())
+            .detail(self.status_label())
+            .disabled(!self.installed)
     }
 }
 
@@ -161,46 +137,28 @@ impl StageModelOption {
     }
 }
 
-impl SelectItem for StageModelOption {
-    type Value = String;
-
-    fn title(&self) -> SharedString {
-        self.id.clone().into()
-    }
-
-    fn value(&self) -> &Self::Value {
-        &self.id
-    }
-
-    fn render(&self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        gpui::div()
-            .flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
-            .child(self.id.clone())
-            .child(self.status_label())
-    }
-
-    fn disabled(&self) -> bool {
-        !self.installed
+impl StageModelOption {
+    fn option(&self) -> SelectOption {
+        SelectOption::text(self.id.clone())
+            .detail(self.status_label())
+            .disabled(!self.installed)
     }
 }
 
 pub(crate) struct SettingsSelectors {
-    pub(crate) theme: Entity<StringSelect>,
-    pub(crate) material: Entity<StringSelect>,
-    pub(crate) language: Entity<StringSelect>,
-    pub(crate) asr_backend: Entity<StringSelect>,
-    pub(crate) asr_model: Entity<ModelSelect>,
-    pub(crate) transcription_language: Entity<StringSelect>,
-    pub(crate) diarization_backend: Entity<StringSelect>,
-    pub(crate) diarization_model: Entity<ModelSelect>,
-    pub(crate) diarization_segmentation_model: Entity<StageModelSelect>,
-    pub(crate) diarization_embedding_model: Entity<StageModelSelect>,
-    pub(crate) diarization_clustering: Entity<StringSelect>,
-    pub(crate) expected_speakers: Entity<StringSelect>,
-    pub(crate) compute_device: Entity<StringSelect>,
+    pub(crate) theme: Entity<Dropdown>,
+    pub(crate) material: Entity<Dropdown>,
+    pub(crate) language: Entity<Dropdown>,
+    pub(crate) asr_backend: Entity<Dropdown>,
+    pub(crate) asr_model: Entity<Dropdown>,
+    pub(crate) transcription_language: Entity<Dropdown>,
+    pub(crate) diarization_backend: Entity<Dropdown>,
+    pub(crate) diarization_model: Entity<Dropdown>,
+    pub(crate) diarization_segmentation_model: Entity<Dropdown>,
+    pub(crate) diarization_embedding_model: Entity<Dropdown>,
+    pub(crate) diarization_clustering: Entity<Dropdown>,
+    pub(crate) expected_speakers: Entity<Dropdown>,
+    pub(crate) compute_device: Entity<Dropdown>,
 }
 
 pub(crate) struct AssistantInputs {
@@ -367,6 +325,28 @@ pub(crate) struct RootView {
     projects_generation: u64,
     /// Whether the project list has loaded since the window opened.
     pub(crate) projects_loaded: bool,
+    /// The open Speaker Library migration question, if any.
+    pub(crate) speaker_library_prompt: Option<SpeakerLibraryPrompt>,
+    pub(crate) scroll: ScrollAreas,
+    /// Holds focus while a dialog is open, so Enter and Esc reach it.
+    dialog_focus: FocusHandle,
+}
+
+/// The scroll positions of the lists that fade at their edges; each fade
+/// reads its list's handle at paint time.
+#[derive(Default)]
+pub(crate) struct ScrollAreas {
+    pub(crate) project_tree: ScrollHandle,
+    pub(crate) meeting_content: ScrollHandle,
+    pub(crate) detail_transcript: ScrollHandle,
+    pub(crate) models: ScrollHandle,
+}
+
+/// Asked when the Speaker Library moves to a path without a library while
+/// the current path has one: migrate it, or only switch to the new path.
+pub(crate) struct SpeakerLibraryPrompt {
+    pub(crate) source: std::path::PathBuf,
+    pub(crate) destination: std::path::PathBuf,
 }
 
 #[derive(Clone, Copy)]
@@ -504,6 +484,9 @@ impl RootView {
             installation: InstallationState::default(),
             projects_generation: 0,
             projects_loaded: false,
+            speaker_library_prompt: None,
+            scroll: ScrollAreas::default(),
+            dialog_focus: cx.focus_handle(),
         };
         // The tree stays empty until the list loads on a worker.
         this.reload_projects(cx);
@@ -667,182 +650,123 @@ impl RootView {
         let theme_items = theme_preference_items(locale);
         let material_items = material_preference_items(locale);
 
-        let theme = cx.new(|cx| {
-            SelectState::new(
-                theme_items.clone(),
-                selected_index(
-                    &theme_items,
-                    Some(i18n::text(
-                        locale,
-                        theme_preference_key(settings.appearance.theme),
-                    )),
-                ),
-                window,
-                cx,
-            )
-        });
-        let material = cx.new(|cx| {
-            SelectState::new(
-                material_items.clone(),
-                selected_index(
-                    &material_items,
-                    Some(i18n::text(
-                        locale,
-                        material_preference_key(settings.appearance.material),
-                    )),
-                ),
-                window,
-                cx,
-            )
-        });
-        let language = cx.new(|cx| {
-            SelectState::new(
-                language_items.clone(),
-                selected_index(
-                    &language_items,
-                    Some(if self.ui.locale == i18n::Locale::EnUs {
-                        "English"
-                    } else {
-                        "简体中文"
-                    }),
-                ),
-                window,
-                cx,
-            )
-        });
-        let asr_backend = cx.new(|cx| {
-            SelectState::new(
-                asr_backend_items.clone(),
-                selected_index(&asr_backend_items, settings.asr_backend_id.as_deref()),
-                window,
-                cx,
-            )
-        });
-        let asr_model = cx.new(|cx| {
-            SelectState::new(
-                asr_model_items.clone(),
-                selected_model_index(
-                    &asr_model_items,
-                    settings
-                        .asr_model
-                        .as_ref()
-                        .map(|model| model.model_id.as_str()),
-                ),
-                window,
-                cx,
-            )
-        });
-        let transcription_language = cx.new(|cx| {
-            SelectState::new(
-                transcription_language_items.clone(),
-                selected_index(
-                    &transcription_language_items,
-                    Some(transcription_language_label(
-                        locale,
-                        settings.language.as_deref(),
-                    )),
-                ),
-                window,
-                cx,
-            )
-        });
-        let diarization_backend = cx.new(|cx| {
-            SelectState::new(
-                diarization_backend_items.clone(),
-                selected_index(
-                    &diarization_backend_items,
-                    settings.diarization_backend_id.as_deref(),
-                ),
-                window,
-                cx,
-            )
-        });
-        let diarization_model = cx.new(|cx| {
-            SelectState::new(
-                diarization_model_items.clone(),
-                selected_model_index(
-                    &diarization_model_items,
-                    settings
-                        .diarization_model
-                        .as_ref()
-                        .map(|model| model.model_id.as_str()),
-                ),
-                window,
-                cx,
-            )
-        });
-        let diarization_segmentation_model = cx.new(|cx| {
-            SelectState::new(
-                segmentation_items.clone(),
-                selected_stage_model_index(
-                    &segmentation_items,
-                    settings
-                        .diarization_stages
-                        .segmentation_model
-                        .as_ref()
-                        .map(|model| model.model_id.as_str()),
-                ),
-                window,
-                cx,
-            )
-        });
-        let diarization_embedding_model = cx.new(|cx| {
-            SelectState::new(
-                embedding_items.clone(),
-                selected_stage_model_index(
-                    &embedding_items,
-                    settings
-                        .diarization_stages
-                        .embedding_model
-                        .as_ref()
-                        .map(|model| model.model_id.as_str()),
-                ),
-                window,
-                cx,
-            )
-        });
-        let diarization_clustering = cx.new(|cx| {
-            SelectState::new(
-                clustering_items.clone(),
-                selected_index(
-                    &clustering_items,
-                    settings
-                        .diarization_stages
-                        .clustering_algorithm
-                        .as_ref()
-                        .map(|algorithm| algorithm.id.as_str())
-                        .or_else(|| clustering_items.first().map(String::as_str)),
-                ),
-                window,
-                cx,
-            )
-        });
-        let expected_speakers = cx.new(|cx| {
-            SelectState::new(
-                expected_speakers_items.clone(),
-                selected_index(
-                    &expected_speakers_items,
-                    Some(
-                        expected_speakers_value
-                            .as_deref()
-                            .unwrap_or(auto_label(locale)),
-                    ),
-                ),
-                window,
-                cx,
-            )
-        });
-        let compute_device = cx.new(|cx| {
-            SelectState::new(
-                compute_device_items.clone(),
-                selected_index(
-                    &compute_device_items,
-                    Some(i18n::device(self.ui.locale, settings.compute_device)),
-                ),
-                window,
-                cx,
-            )
-        });
+        let placeholder = i18n::text(locale, "select_placeholder");
+        let mut dropdown =
+            |label_key: &'static str, options: Vec<SelectOption>, selected: Option<&str>| {
+                let label = i18n::text(locale, label_key);
+                cx.new(|cx| Dropdown::new(label, placeholder, options, selected, cx))
+            };
+        let theme = dropdown(
+            "theme",
+            text_options(theme_items),
+            Some(i18n::text(
+                locale,
+                theme_preference_key(settings.appearance.theme),
+            )),
+        );
+        let material = dropdown(
+            "material",
+            text_options(material_items),
+            Some(i18n::text(
+                locale,
+                material_preference_key(settings.appearance.material),
+            )),
+        );
+        let language = dropdown(
+            "language",
+            text_options(language_items),
+            Some(if locale == i18n::Locale::EnUs {
+                "English"
+            } else {
+                "简体中文"
+            }),
+        );
+        let asr_backend = dropdown(
+            "asr_backend",
+            text_options(asr_backend_items),
+            settings.asr_backend_id.as_deref(),
+        );
+        let asr_model = dropdown(
+            "asr_model",
+            asr_model_items,
+            settings
+                .asr_model
+                .as_ref()
+                .map(|model| model.model_id.as_str()),
+        );
+        let transcription_language = dropdown(
+            "transcription_language",
+            text_options(transcription_language_items),
+            Some(transcription_language_label(
+                locale,
+                settings.language.as_deref(),
+            )),
+        );
+        let diarization_backend = dropdown(
+            "diarization_backend",
+            text_options(diarization_backend_items),
+            settings.diarization_backend_id.as_deref(),
+        );
+        let diarization_model = dropdown(
+            "diarization_model",
+            diarization_model_items,
+            settings
+                .diarization_model
+                .as_ref()
+                .map(|model| model.model_id.as_str()),
+        );
+        let segmentation_selected = stage_selection(
+            &segmentation_items,
+            settings
+                .diarization_stages
+                .segmentation_model
+                .as_ref()
+                .map(|model| model.model_id.as_str()),
+        )
+        .map(str::to_owned);
+        let diarization_segmentation_model = dropdown(
+            "diarization_segmentation_model",
+            segmentation_items,
+            segmentation_selected.as_deref(),
+        );
+        let embedding_selected = stage_selection(
+            &embedding_items,
+            settings
+                .diarization_stages
+                .embedding_model
+                .as_ref()
+                .map(|model| model.model_id.as_str()),
+        )
+        .map(str::to_owned);
+        let diarization_embedding_model = dropdown(
+            "diarization_embedding_model",
+            embedding_items,
+            embedding_selected.as_deref(),
+        );
+        let diarization_clustering = dropdown(
+            "diarization_clustering",
+            text_options(clustering_items.clone()),
+            settings
+                .diarization_stages
+                .clustering_algorithm
+                .as_ref()
+                .map(|algorithm| algorithm.id.as_str())
+                .or_else(|| clustering_items.first().map(String::as_str)),
+        );
+        let expected_speakers = dropdown(
+            "expected_speakers",
+            text_options(expected_speakers_items),
+            Some(
+                expected_speakers_value
+                    .as_deref()
+                    .unwrap_or(auto_label(locale)),
+            ),
+        );
+        let compute_device = dropdown(
+            "compute_device",
+            text_options(compute_device_items),
+            Some(i18n::device(locale, settings.compute_device)),
+        );
 
         cx.subscribe_in(&theme, window, Self::on_theme_selected)
             .detach();
@@ -916,10 +840,10 @@ impl RootView {
         });
     }
 
-    fn model_options(&self, task: &str, backend_id: Option<&str>) -> Vec<ModelOption> {
+    fn model_options(&self, task: &str, backend_id: Option<&str>) -> Vec<SelectOption> {
         self.installation
             .models(task, backend_id)
-            .map(|entry| ModelOption::from_availability(entry, self.ui.locale))
+            .map(|entry| ModelOption::from_availability(entry, self.ui.locale).option())
             .collect()
     }
 
@@ -928,7 +852,7 @@ impl RootView {
         stage: DiarizationStageKind,
         backend_id: Option<&str>,
         model: Option<&ModelRef>,
-    ) -> Vec<StageModelOption> {
+    ) -> Vec<SelectOption> {
         let Some(descriptor) = backend_id.and_then(|id| {
             self.inventory
                 .diarization
@@ -950,6 +874,7 @@ impl RootView {
                     .is_some_and(|model| self.installation.stage_installed(model, option)),
                 locale: self.ui.locale,
             })
+            .map(|option| option.option())
             .collect()
     }
 
@@ -1195,303 +1120,272 @@ impl RootView {
         &mut self,
         task: &'static str,
         backend_id: Option<&str>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let items = self.model_options(task, backend_id);
-        let selected_model_id = match task {
-            "asr" => self
-                .settings_draft
-                .asr_model
-                .as_ref()
-                .map(|model| model.model_id.as_str()),
-            "diarization" => self
-                .settings_draft
-                .diarization_model
-                .as_ref()
-                .map(|model| model.model_id.as_str()),
+        let options = self.model_options(task, backend_id);
+        let selected = match task {
+            "asr" => self.settings_draft.asr_model.as_ref(),
+            "diarization" => self.settings_draft.diarization_model.as_ref(),
             _ => None,
-        };
-        let selected_index = selected_model_index(&items, selected_model_id);
+        }
+        .map(|model| model.model_id.clone());
         let selector = match (task, self.settings_selectors.as_ref()) {
             ("asr", Some(selectors)) => selectors.asr_model.clone(),
             ("diarization", Some(selectors)) => selectors.diarization_model.clone(),
             _ => return,
         };
-        selector.update(cx, |state, cx| {
-            state.set_items(items, window, cx);
-            state.set_selected_index(selected_index, window, cx);
+        selector.update(cx, |dropdown, cx| {
+            dropdown.set_options(options, selected.as_deref(), cx)
         });
     }
 
-    fn refresh_stage_selectors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn refresh_stage_selectors(&mut self, cx: &mut Context<Self>) {
         let backend_id = self.settings_draft.diarization_backend_id.clone();
         let model = self.settings_draft.diarization_model.clone();
-        let segmentation_items = self.stage_model_options(
+        let segmentation = self.stage_model_options(
             DiarizationStageKind::Segmentation,
             backend_id.as_deref(),
             model.as_ref(),
         );
-        let embedding_items = self.stage_model_options(
+        let embedding = self.stage_model_options(
             DiarizationStageKind::Embedding,
             backend_id.as_deref(),
             model.as_ref(),
         );
-        let clustering_items = self.clustering_options(backend_id.as_deref());
+        let clustering = self.clustering_options(backend_id.as_deref());
         let Some(selectors) = self.settings_selectors.as_ref() else {
             return;
         };
-        let segmentation_selected = selected_stage_model_index(
-            &segmentation_items,
-            self.settings_draft
-                .diarization_stages
+        let stages = &self.settings_draft.diarization_stages;
+        let segmentation_selected = stage_selection(
+            &segmentation,
+            stages
                 .segmentation_model
                 .as_ref()
                 .map(|model| model.model_id.as_str()),
-        );
-        selectors
-            .diarization_segmentation_model
-            .update(cx, |state, cx| {
-                state.set_items(segmentation_items, window, cx);
-                state.set_selected_index(segmentation_selected, window, cx);
-            });
-        let embedding_selected = selected_stage_model_index(
-            &embedding_items,
-            self.settings_draft
-                .diarization_stages
+        )
+        .map(str::to_owned);
+        let embedding_selected = stage_selection(
+            &embedding,
+            stages
                 .embedding_model
                 .as_ref()
                 .map(|model| model.model_id.as_str()),
-        );
+        )
+        .map(str::to_owned);
+        let clustering_selected = stages
+            .clustering_algorithm
+            .as_ref()
+            .map(|algorithm| algorithm.id.clone())
+            .or_else(|| clustering.first().cloned());
+        selectors
+            .diarization_segmentation_model
+            .update(cx, |dropdown, cx| {
+                dropdown.set_options(segmentation, segmentation_selected.as_deref(), cx)
+            });
         selectors
             .diarization_embedding_model
-            .update(cx, |state, cx| {
-                state.set_items(embedding_items, window, cx);
-                state.set_selected_index(embedding_selected, window, cx);
+            .update(cx, |dropdown, cx| {
+                dropdown.set_options(embedding, embedding_selected.as_deref(), cx)
             });
-        let clustering_selected = selected_index(
-            &clustering_items,
-            self.settings_draft
-                .diarization_stages
-                .clustering_algorithm
-                .as_ref()
-                .map(|algorithm| algorithm.id.as_str())
-                .or_else(|| clustering_items.first().map(String::as_str)),
-        );
-        selectors.diarization_clustering.update(cx, |state, cx| {
-            state.set_items(clustering_items, window, cx);
-            state.set_selected_index(clustering_selected, window, cx);
+        selectors.diarization_clustering.update(cx, |dropdown, cx| {
+            dropdown.set_options(text_options(clustering), clustering_selected.as_deref(), cx)
         });
     }
 
     fn on_theme_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            if let Some(theme) = theme_preference_from_label(self.ui.locale, value) {
-                self.persist_field(move |settings| settings.appearance.theme = theme, cx);
-            }
+        let DropdownEvent::Confirm(value) = event;
+        if let Some(theme) = theme_preference_from_label(self.ui.locale, value) {
+            self.persist_field(move |settings| settings.appearance.theme = theme, cx);
         }
     }
 
     fn on_material_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            if let Some(material) = material_preference_from_label(self.ui.locale, value) {
-                self.persist_field(move |settings| settings.appearance.material = material, cx);
-            }
+        let DropdownEvent::Confirm(value) = event;
+        if let Some(material) = material_preference_from_label(self.ui.locale, value) {
+            self.persist_field(move |settings| settings.appearance.material = material, cx);
         }
     }
 
     fn on_language_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            self.set_locale(
-                if value == "English" {
-                    i18n::Locale::EnUs
-                } else {
-                    i18n::Locale::ZhCn
-                },
-                cx,
-            );
-        }
+        let DropdownEvent::Confirm(value) = event;
+        self.set_locale(
+            if value == "English" {
+                i18n::Locale::EnUs
+            } else {
+                i18n::Locale::ZhCn
+            },
+            cx,
+        );
     }
 
     fn on_asr_backend_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
-        window: &mut Window,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            self.select_asr_backend(value.clone(), cx);
-            self.refresh_model_selector("asr", Some(value), window, cx);
-        }
+        let DropdownEvent::Confirm(value) = event;
+        self.select_asr_backend(value.clone(), cx);
+        self.refresh_model_selector("asr", Some(value), cx);
     }
 
     fn on_asr_model_selected(
         &mut self,
-        _: &Entity<ModelSelect>,
-        event: &SelectEvent<Vec<ModelOption>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            if let Some(backend_id) = self.settings_draft.asr_backend_id.clone() {
-                self.use_model(value.clone(), "asr".into(), backend_id, cx);
-            }
+        let DropdownEvent::Confirm(value) = event;
+        if let Some(backend_id) = self.settings_draft.asr_backend_id.clone() {
+            self.use_model(value.clone(), "asr".into(), backend_id, cx);
         }
     }
 
     fn on_transcription_language_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            let language: Option<String> = match value.as_str() {
-                "English" => Some("en".into()),
-                "中文" => Some("zh".into()),
-                _ => None,
-            };
-            self.persist_field(move |settings| settings.language = language.clone(), cx);
-        }
+        let DropdownEvent::Confirm(value) = event;
+        let language: Option<String> = match value.as_str() {
+            "English" => Some("en".into()),
+            "中文" => Some("zh".into()),
+            _ => None,
+        };
+        self.persist_field(move |settings| settings.language = language.clone(), cx);
     }
 
     fn on_diarization_backend_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
-        window: &mut Window,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            self.select_diarization_backend(value.clone(), cx);
-            self.refresh_model_selector("diarization", Some(value), window, cx);
-            self.refresh_stage_selectors(window, cx);
-        }
+        let DropdownEvent::Confirm(value) = event;
+        self.select_diarization_backend(value.clone(), cx);
+        self.refresh_model_selector("diarization", Some(value), cx);
+        self.refresh_stage_selectors(cx);
     }
 
     fn on_diarization_model_selected(
         &mut self,
-        _: &Entity<ModelSelect>,
-        event: &SelectEvent<Vec<ModelOption>>,
-        window: &mut Window,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            if let Some(backend_id) = self.settings_draft.diarization_backend_id.clone() {
-                self.use_model(value.clone(), "diarization".into(), backend_id, cx);
-                self.refresh_stage_selectors(window, cx);
-            }
+        let DropdownEvent::Confirm(value) = event;
+        if let Some(backend_id) = self.settings_draft.diarization_backend_id.clone() {
+            self.use_model(value.clone(), "diarization".into(), backend_id, cx);
+            self.refresh_stage_selectors(cx);
         }
     }
 
     fn on_diarization_segmentation_model_selected(
         &mut self,
-        _: &Entity<StageModelSelect>,
-        event: &SelectEvent<Vec<StageModelOption>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            let model = self.stage_model_ref(DiarizationStageKind::Segmentation, value);
-            self.persist_field(
-                move |settings| settings.diarization_stages.segmentation_model = model.clone(),
-                cx,
-            );
-        }
+        let DropdownEvent::Confirm(value) = event;
+        let model = self.stage_model_ref(DiarizationStageKind::Segmentation, value);
+        self.persist_field(
+            move |settings| settings.diarization_stages.segmentation_model = model.clone(),
+            cx,
+        );
     }
 
     fn on_diarization_embedding_model_selected(
         &mut self,
-        _: &Entity<StageModelSelect>,
-        event: &SelectEvent<Vec<StageModelOption>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            let model = self.stage_model_ref(DiarizationStageKind::Embedding, value);
-            self.persist_field(
-                move |settings| settings.diarization_stages.embedding_model = model.clone(),
-                cx,
-            );
-        }
+        let DropdownEvent::Confirm(value) = event;
+        let model = self.stage_model_ref(DiarizationStageKind::Embedding, value);
+        self.persist_field(
+            move |settings| settings.diarization_stages.embedding_model = model.clone(),
+            cx,
+        );
     }
 
     fn on_diarization_clustering_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            let option = self
-                .selected_diarization_descriptor()
-                .and_then(|descriptor| {
-                    descriptor.diarization_stage_options.iter().find(|option| {
-                        option.stage == DiarizationStageKind::Clustering && option.id == *value
-                    })
-                });
-            let algorithm = option.map(|option| contracts::AlgorithmRef {
-                id: option.id.clone(),
-                revision: option.revision.clone(),
-                parameters: None,
+        let DropdownEvent::Confirm(value) = event;
+        let option = self
+            .selected_diarization_descriptor()
+            .and_then(|descriptor| {
+                descriptor.diarization_stage_options.iter().find(|option| {
+                    option.stage == DiarizationStageKind::Clustering && option.id == *value
+                })
             });
-            self.persist_field(
-                move |settings| {
-                    settings.diarization_stages.clustering_algorithm = algorithm.clone()
-                },
-                cx,
-            );
-        }
+        let algorithm = option.map(|option| contracts::AlgorithmRef {
+            id: option.id.clone(),
+            revision: option.revision.clone(),
+            parameters: None,
+        });
+        self.persist_field(
+            move |settings| settings.diarization_stages.clustering_algorithm = algorithm.clone(),
+            cx,
+        );
     }
 
     fn on_expected_speakers_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            let expected_speakers = value.parse().ok();
-            self.persist_field(
-                move |settings| settings.expected_speakers = expected_speakers,
-                cx,
-            );
-        }
+        let DropdownEvent::Confirm(value) = event;
+        let expected_speakers = value.parse().ok();
+        self.persist_field(
+            move |settings| settings.expected_speakers = expected_speakers,
+            cx,
+        );
     }
 
     fn on_compute_device_selected(
         &mut self,
-        _: &Entity<StringSelect>,
-        event: &SelectEvent<Vec<String>>,
+        _: &Entity<Dropdown>,
+        event: &DropdownEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let SelectEvent::Confirm(Some(value)) = event {
-            let device = compute_device_from_label(self.ui.locale, value);
-            self.persist_field(move |settings| settings.compute_device = device, cx);
-        }
+        let DropdownEvent::Confirm(value) = event;
+        let device = compute_device_from_label(self.ui.locale, value);
+        self.persist_field(move |settings| settings.compute_device = device, cx);
     }
 
     pub(crate) fn import_audio(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
@@ -1607,57 +1501,59 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let source_for_migration = source.clone();
-        let destination_for_migration = destination.clone();
-        let source_for_description = source.display().to_string();
-        let destination_for_description = destination.display().to_string();
-        let locale = self.ui.locale;
-        let root = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |dialog, _, cx| {
-            let root_for_migration = root.clone();
-            let root_for_switch = root.clone();
-            let source_for_migration = source_for_migration.clone();
-            let destination_for_migration = destination_for_migration.clone();
-            let destination_for_switch = destination.clone();
-            // gpui-component paints the dialog with `background`, which glass
-            // clears; the panel sits on the opaque content plane instead.
-            dialog
-                .bg(theme::tokens(cx).content)
-                .confirm()
-                .title(i18n::text(locale, "speaker_library_migration_title"))
-                .description(format!(
-                    "{}\n{}\n{}",
-                    i18n::text(locale, "speaker_library_migration_description"),
-                    source_for_description,
-                    destination_for_description
-                ))
-                .button_props(
-                    DialogButtonProps::default()
-                        .ok_text(i18n::text(locale, "migrate"))
-                        .cancel_text(i18n::text(locale, "use_new_path"))
-                        .show_cancel(true),
-                )
-                .on_ok(move |_, _, cx| {
-                    root_for_migration
-                        .update(cx, |this, cx| {
-                            this.migrate_speaker_library(
-                                source_for_migration.clone(),
-                                destination_for_migration.clone(),
-                                cx,
-                            )
-                        })
-                        .ok();
-                    true
-                })
-                .on_cancel(move |_, _, cx| {
-                    root_for_switch
-                        .update(cx, |this, cx| {
-                            this.commit_speaker_library_path(destination_for_switch.clone(), cx)
-                        })
-                        .ok();
-                    true
-                })
+        self.speaker_library_prompt = Some(SpeakerLibraryPrompt {
+            source,
+            destination,
         });
+        self.dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Closes the migration question: `migrate` moves the library to the new
+    /// path, otherwise only the path changes.
+    pub(crate) fn answer_speaker_library_prompt(&mut self, migrate: bool, cx: &mut Context<Self>) {
+        let Some(SpeakerLibraryPrompt {
+            source,
+            destination,
+        }) = self.speaker_library_prompt.take()
+        else {
+            return;
+        };
+        if migrate {
+            self.migrate_speaker_library(source, destination, cx);
+        } else {
+            self.commit_speaker_library_path(destination, cx);
+        }
+        cx.notify();
+    }
+
+    fn speaker_library_dialog(&self, cx: &mut Context<Self>) -> Option<ConfirmDialog> {
+        let prompt = self.speaker_library_prompt.as_ref()?;
+        let locale = self.ui.locale;
+        let migrate = cx.entity().downgrade();
+        let switch = migrate.clone();
+        Some(
+            ConfirmDialog::new(
+                i18n::text(locale, "speaker_library_migration_title"),
+                &self.dialog_focus,
+            )
+            .description(format!(
+                "{}\n{}\n{}",
+                i18n::text(locale, "speaker_library_migration_description"),
+                prompt.source.display(),
+                prompt.destination.display()
+            ))
+            .on_confirm(i18n::text(locale, "migrate"), move |_, cx| {
+                migrate
+                    .update(cx, |this, cx| this.answer_speaker_library_prompt(true, cx))
+                    .ok();
+            })
+            .on_cancel(i18n::text(locale, "use_new_path"), move |_, cx| {
+                switch
+                    .update(cx, |this, cx| this.answer_speaker_library_prompt(false, cx))
+                    .ok();
+            }),
+        )
     }
 
     fn migrate_speaker_library(
@@ -2902,10 +2798,9 @@ pub(crate) fn settings_error_text(locale: i18n::Locale, error: &AssistantUiError
     }
 }
 
-fn selected_index(items: &[String], value: Option<&str>) -> Option<IndexPath> {
-    value
-        .and_then(|value| items.iter().position(|item| item == value))
-        .map(|row| IndexPath::default().row(row))
+/// Options shown as their values.
+fn text_options(items: Vec<String>) -> Vec<SelectOption> {
+    items.into_iter().map(SelectOption::text).collect()
 }
 
 fn parse_u32(value: &str, field: &str) -> Result<u32, AssistantUiError> {
@@ -2933,20 +2828,12 @@ fn parse_u64(value: &str, field: &str) -> Result<u64, AssistantUiError> {
     })
 }
 
-fn selected_model_index(items: &[ModelOption], value: Option<&str>) -> Option<IndexPath> {
-    value
-        .and_then(|value| items.iter().position(|item| item.id == value))
-        .map(|row| IndexPath::default().row(row))
-}
-
-fn selected_stage_model_index(
-    items: &[StageModelOption],
-    value: Option<&str>,
-) -> Option<IndexPath> {
-    value
-        .and_then(|value| items.iter().position(|item| item.id == value))
-        .or_else(|| (!items.is_empty()).then_some(0))
-        .map(|row| IndexPath::default().row(row))
+/// A stage select shows its saved model, or the first option until one is
+/// saved.
+fn stage_selection<'a>(options: &'a [SelectOption], saved: Option<&'a str>) -> Option<&'a str> {
+    saved
+        .filter(|saved| SelectOption::position(options, Some(saved)).is_some())
+        .or_else(|| options.first().map(SelectOption::value))
 }
 
 impl Render for RootView {
@@ -2967,9 +2854,16 @@ impl Render for RootView {
             Route::Settings => pages::settings::render(self, cx).into_any_element(),
         };
         let detail = (self.ui.detail_open && self.ui.route == Route::Meetings).then(|| {
-            pages::detail::render(selected.as_ref(), self.ui.locale, cx).into_any_element()
+            pages::detail::render(
+                selected.as_ref(),
+                self.ui.locale,
+                &self.scroll.detail_transcript,
+                cx,
+            )
+            .into_any_element()
         });
         pages::chrome::shell(self, body, detail, cx)
+            .children(self.speaker_library_dialog(cx))
             .children(gpui_component::Root::render_dialog_layer(window, cx))
     }
 }
@@ -3014,8 +2908,9 @@ pub(crate) fn init_app(accessibility: theme::Accessibility, cx: &mut App) {
 /// `options` supplies placement and visibility; this function owns the
 /// titlebar (the title, a transparent titlebar with content under it, and
 /// dragging through the shell's own strips) and the least size the shell
-/// fits. The first layer is gpui-component's `Root`, which its dialogs and
-/// tooltips look up.
+/// fits. The first layer is gpui-component's `Root`: it paints the window
+/// background, hosts the styled crate's tooltips and cycles Tab inside
+/// gpui-base focus traps such as the confirm dialog's.
 pub(crate) fn open_main_window(
     inventory: BackendInventory,
     services: DesktopServices,
@@ -3054,7 +2949,9 @@ mod tests {
 
     #[test]
     fn auto_options_are_selected_and_labelled_in_both_locales() {
-        let first = Some(IndexPath::default().row(0));
+        let first = Some(0);
+        let selected_index =
+            |items: &[String], value| SelectOption::position(&text_options(items.to_vec()), value);
         for (locale, auto) in [(i18n::Locale::ZhCn, "自动"), (i18n::Locale::EnUs, "Auto")] {
             let devices = compute_device_items(locale);
             assert_eq!(

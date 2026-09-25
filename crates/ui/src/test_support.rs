@@ -3,11 +3,20 @@
 //! `run` never calls them; the module is hidden from the docs and is not a
 //! stable API.
 
-use crate::controller::{self, RootView};
+use crate::controller::{self, RootView, SpeakerLibraryPrompt};
 use application::BackendInventory;
 use gpui::{AnyWindowHandle, App, Entity, WindowOptions};
 
 pub use crate::route::Route;
+
+/// An overlay the tests open over a route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overlay {
+    /// The Settings theme select with its menu open.
+    ThemeSelect,
+    /// The Speaker Library migration question.
+    SpeakerLibraryDialog,
+}
 
 /// The app-wide setup `run` performs before it opens the window, with every
 /// accessibility display flag off, so no test depends on the machine's.
@@ -42,6 +51,28 @@ impl MainWindow {
 
     pub fn navigate(&self, route: Route, cx: &mut App) {
         self.view.update(cx, |root, cx| root.navigate(route, cx));
+    }
+
+    /// Opens `overlay`. The theme select opens below where its trigger
+    /// painted last, so the Settings route must have drawn once.
+    pub fn open_overlay(&self, overlay: Overlay, cx: &mut App) {
+        self.view.update(cx, |root, cx| match overlay {
+            Overlay::ThemeSelect => {
+                let select = root
+                    .settings_selectors
+                    .as_ref()
+                    .map(|selectors| selectors.theme.clone())
+                    .expect("the settings selects are built on render");
+                select.update(cx, |select, cx| select.open_menu(cx));
+            }
+            Overlay::SpeakerLibraryDialog => {
+                root.speaker_library_prompt = Some(SpeakerLibraryPrompt {
+                    source: "data/speakers/library.json".into(),
+                    destination: "data/speakers/moved/library.json".into(),
+                });
+                cx.notify();
+            }
+        });
     }
 
     /// Whether the startup installation probe and project list, which load
