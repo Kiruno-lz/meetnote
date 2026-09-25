@@ -391,8 +391,13 @@ pub mod download {
 }
 
 pub mod manager;
+pub mod probe;
 
-pub use manager::{BackendProbe, ModelManager};
+pub use manager::{BackendProbe, ModelManager, ReprobeFinished, ReprobeTask};
+pub use probe::{
+    ArtifactChecksum, BackendCheck, BackendProbeResult, ChecksumResult, ModelFailure,
+    ModelFailureRecord, ModelOperation, ProbeOutcome, ProbeRecord, ProbeRecordError,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -443,11 +448,22 @@ pub enum ModelInstallState {
     Installed,
 }
 
+/// A catalog entry with what is known about its local install. `model`
+/// carries the catalog `license`, `source` and `sha256`.
 #[derive(Debug, Clone)]
 pub struct ModelAvailability {
     pub model: ModelCatalogEntry,
     pub install_state: ModelInstallState,
     pub artifact_paths: Vec<std::path::PathBuf>,
+    /// The last artifact probe, read from `ModelCatalogEntry::probe_record_path`.
+    /// It describes the files as they were at `probed_at_ms`.
+    pub probe: Option<ProbeRecord>,
+    /// Why the last download or re-probe failed; a later successful one
+    /// clears it.
+    pub failure: Option<ModelFailureRecord>,
+    /// Set when the record file exists but cannot be read; `probe` and
+    /// `failure` are then empty.
+    pub record_error: Option<ProbeRecordError>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -579,21 +595,49 @@ impl ModelCatalogEntry {
             .collect()
     }
 
+    /// The probe record file, beside the install directory so the directory
+    /// holds only artifacts.
+    pub fn probe_record_path(&self, model_root: impl AsRef<Path>) -> std::path::PathBuf {
+        model_root
+            .as_ref()
+            .join(&self.task)
+            .join(format!("{}.probe.json", self.id))
+    }
+
+    /// Whether the declared artifacts are present; loads nothing.
+    pub(crate) fn install_state(&self, model_root: impl AsRef<Path>) -> ModelInstallState {
+        install_state_of(&self.artifact_paths(model_root))
+    }
+
+    /// Reads the artifact files' presence and the probe record.
     pub fn availability(&self, model_root: impl AsRef<Path>) -> ModelAvailability {
+        let model_root = model_root.as_ref();
         let artifact_paths = self.artifact_paths(model_root);
-        let present = artifact_paths.iter().filter(|path| path.is_file()).count();
-        let install_state = if present == 0 {
-            ModelInstallState::Missing
-        } else if present == artifact_paths.len() {
-            ModelInstallState::Installed
-        } else {
-            ModelInstallState::Partial
-        };
+        let install_state = install_state_of(&artifact_paths);
+        let (record, record_error) =
+            match probe::read_record(&self.probe_record_path(model_root), &self.id) {
+                Ok(record) => (record, None),
+                Err(error) => (probe::ModelRecord::default(), Some(error)),
+            };
         ModelAvailability {
             model: self.clone(),
             install_state,
             artifact_paths,
+            probe: record.probe,
+            failure: record.failure,
+            record_error,
         }
+    }
+}
+
+fn install_state_of(artifact_paths: &[std::path::PathBuf]) -> ModelInstallState {
+    let present = artifact_paths.iter().filter(|path| path.is_file()).count();
+    if present == 0 {
+        ModelInstallState::Missing
+    } else if present == artifact_paths.len() {
+        ModelInstallState::Installed
+    } else {
+        ModelInstallState::Partial
     }
 }
 

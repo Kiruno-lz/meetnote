@@ -2,10 +2,15 @@ use crate::download::{
     download_bundle_with_progress, download_file_controlled_with_size, BundleArtifact,
     DownloadControl, DownloadError,
 };
+use crate::probe::{
+    self, ArtifactChecksum, BackendCheck, BackendProbeResult, ChecksumResult, ModelFailure,
+    ModelFailureRecord, ModelOperation, ModelRecord, ProbeOutcome, ProbeRecord,
+};
 use crate::{ModelCatalog, ModelCatalogEntry};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -63,6 +68,22 @@ pub struct DownloadTask {
     pub updates: UnboundedReceiver<DownloadEvent>,
 }
 
+/// A running `ModelManager::reprobe`.
+pub struct ReprobeTask {
+    pub model_id: String,
+    /// Resolves once the probe ran and its record was written; `Err` only
+    /// when the record could not be written.
+    pub finished: oneshot::Receiver<Result<ProbeRecord, ModelManagerError>>,
+}
+
+/// Published by `ModelManager::subscribe_reprobes_async` when a re-probe
+/// ends, after its record was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReprobeFinished {
+    pub model_id: String,
+    pub record: ProbeRecord,
+}
+
 pub trait BackendProbe: Send + Sync {
     fn probe(&self, task: &str, model: &contracts::ModelRef) -> Result<(), String>;
 }
@@ -94,6 +115,11 @@ pub enum ModelManagerError {
     Download(Box<DownloadError>),
     #[error("backend probe failed: {0}")]
     BackendProbeFailed(String),
+    #[error("failed to write model probe record {path}: {source}")]
+    Record {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("download task lock poisoned")]
     LockPoisoned,
 }
@@ -136,6 +162,9 @@ pub struct ModelManager {
     /// Receive every task's updates; see `subscribe_all_async`.
     all_subscribers: Arc<Mutex<Vec<UnboundedSender<DownloadEvent>>>>,
     backend_probe: Option<Arc<dyn BackendProbe>>,
+    /// Models with a re-probe running.
+    reprobes: Arc<Mutex<BTreeSet<String>>>,
+    reprobe_subscribers: Arc<Mutex<Vec<UnboundedSender<ReprobeFinished>>>>,
 }
 
 impl ModelManager {
@@ -176,6 +205,8 @@ impl ModelManager {
             tasks: Arc::new(Mutex::new(tasks)),
             all_subscribers: Arc::new(Mutex::new(Vec::new())),
             backend_probe,
+            reprobes: Arc::new(Mutex::new(BTreeSet::new())),
+            reprobe_subscribers: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -203,11 +234,12 @@ impl ModelManager {
         if model.status != "ready" {
             return Err(ModelManagerError::ModelNotReady(model.id));
         }
-        if model.availability(&self.model_root).install_state == crate::ModelInstallState::Installed
-        {
+        if model.install_state(&self.model_root) == crate::ModelInstallState::Installed {
             return Err(ModelManagerError::AlreadyInstalled(model.id));
         }
-        if self.has_active_download(&model.id)? {
+        if self.has_active_download(&model.id)?
+            || lock_unpoisoned(&self.reprobes).contains(&model.id)
+        {
             return Err(ModelManagerError::AlreadyActive(model.id));
         }
 
@@ -330,8 +362,7 @@ impl ModelManager {
                 backend_id: backend_id.into(),
             });
         }
-        if model.availability(&self.model_root).install_state != crate::ModelInstallState::Installed
-        {
+        if model.install_state(&self.model_root) != crate::ModelInstallState::Installed {
             return Err(ModelManagerError::ModelNotInstalled(model_id.into()));
         }
         let artifact_path = if model.artifacts.is_empty() {
@@ -364,25 +395,21 @@ impl ModelManager {
                 return self.model_ref_from_catalog(&preferred.model_id, backend_id);
             }
         }
-        let model = self
-            .catalog
-            .browse(&self.model_root, Some(task), Some(backend_id))
-            .into_iter()
-            .find(|availability| {
-                availability.install_state == crate::ModelInstallState::Installed
-                    && availability.model.status == "ready"
+        let ready = || {
+            self.catalog.models.iter().filter(|model| {
+                model.task == task && model.supports_backend(backend_id) && model.status == "ready"
             })
-            .or_else(|| {
-                self.catalog
-                    .browse(&self.model_root, Some(task), Some(backend_id))
-                    .into_iter()
-                    .find(|availability| availability.model.status == "ready")
+        };
+        let model = ready()
+            .find(|model| {
+                model.install_state(&self.model_root) == crate::ModelInstallState::Installed
             })
+            .or_else(|| ready().next())
             .ok_or_else(|| ModelManagerError::BackendNotSupported {
                 model_id: task.into(),
                 backend_id: backend_id.into(),
             })?;
-        self.model_ref_from_catalog(&model.model.id, backend_id)
+        self.model_ref_from_catalog(&model.id, backend_id)
     }
 
     fn model_ref_from_catalog(
@@ -443,17 +470,183 @@ impl ModelManager {
         Ok(())
     }
 
-    fn probe_installed_model(&self, model: &ModelCatalogEntry) -> Result<(), ModelManagerError> {
-        let Some(probe) = &self.backend_probe else {
-            return Ok(());
-        };
-        for backend_id in &model.candidate_backends {
-            let model_ref = self.model_ref_from_catalog(&model.id, backend_id)?;
-            probe
-                .probe(&model.task, &model_ref)
-                .map_err(ModelManagerError::BackendProbeFailed)?;
+    /// Probes an installed model again on its own thread: hashes its files
+    /// against the catalog, runs every candidate backend probe, and replaces
+    /// the probe record. A failed re-probe keeps the files and does not make
+    /// the model unusable here: `model_ref` still resolves, and processing
+    /// runs its own preflight. The failure stays in the record until a later
+    /// download or re-probe succeeds.
+    pub fn reprobe(&self, model_id: &str) -> Result<ReprobeTask, ModelManagerError> {
+        let model = self
+            .catalog
+            .find(model_id)
+            .cloned()
+            .ok_or_else(|| ModelManagerError::ModelNotFound(model_id.into()))?;
+        if model.install_state(&self.model_root) != crate::ModelInstallState::Installed {
+            return Err(ModelManagerError::ModelNotInstalled(model.id));
         }
-        Ok(())
+        if !lock_unpoisoned(&self.reprobes).insert(model.id.clone()) {
+            return Err(ModelManagerError::AlreadyActive(model.id));
+        }
+        let (sender, finished) = oneshot::channel();
+        let manager = self.clone();
+        let worker_model = model.clone();
+        let spawned = std::thread::Builder::new()
+            .name(format!("meetnote-reprobe-{}", model.id))
+            .spawn(move || {
+                let record = manager.probe_model(&worker_model, ModelOperation::Reprobe);
+                let failure = match &record.outcome {
+                    ProbeOutcome::Passed => None,
+                    ProbeOutcome::Failed { reason } => Some(ModelFailureRecord {
+                        operation: ModelOperation::Reprobe,
+                        failed_at_ms: record.probed_at_ms,
+                        revision: record.revision.clone(),
+                        reason: reason.clone(),
+                    }),
+                };
+                let written = manager.write_record(
+                    &worker_model,
+                    ModelRecord {
+                        probe: Some(record.clone()),
+                        failure,
+                    },
+                );
+                lock_unpoisoned(&manager.reprobes).remove(&worker_model.id);
+                let finished = ReprobeFinished {
+                    model_id: worker_model.id.clone(),
+                    record: record.clone(),
+                };
+                lock_unpoisoned(&manager.reprobe_subscribers)
+                    .retain(|subscriber| subscriber.unbounded_send(finished.clone()).is_ok());
+                let _ = sender.send(written.map(|()| record));
+            });
+        if let Err(error) = spawned {
+            lock_unpoisoned(&self.reprobes).remove(&model.id);
+            return Err(ModelManagerError::Download(Box::new(DownloadError::Io(
+                error,
+            ))));
+        }
+        Ok(ReprobeTask {
+            model_id: model.id,
+            finished,
+        })
+    }
+
+    fn write_record(
+        &self,
+        model: &ModelCatalogEntry,
+        record: ModelRecord,
+    ) -> Result<(), ModelManagerError> {
+        let path = model.probe_record_path(&self.model_root);
+        probe::write_record(&path, &model.id, &record).map_err(|source| ModelManagerError::Record {
+            path: path.display().to_string(),
+            source,
+        })
+    }
+
+    /// Records `reason` as the model's last failure and ends the task with
+    /// it. The files are left as they are.
+    fn fail_download(&self, id: DownloadId, model: &ModelCatalogEntry, reason: ModelFailure) {
+        let message = reason.to_string();
+        let _ = self.write_record(
+            model,
+            ModelRecord {
+                probe: None,
+                failure: Some(ModelFailureRecord {
+                    operation: ModelOperation::Download,
+                    failed_at_ms: probe::now_ms(),
+                    revision: model.revision.clone(),
+                    reason,
+                }),
+            },
+        );
+        let _ = self.update(id, |progress| {
+            progress.state = DownloadState::Failed(message)
+        });
+    }
+
+    /// Every re-probe ending from now on.
+    pub fn subscribe_reprobes_async(&self) -> UnboundedReceiver<ReprobeFinished> {
+        let (sender, receiver) = unbounded();
+        lock_unpoisoned(&self.reprobe_subscribers).push(sender);
+        receiver
+    }
+
+    /// The artifact probe: checksums, then every candidate backend. After a
+    /// download the checksums were verified while downloading; a re-probe
+    /// hashes the installed files again.
+    fn probe_model(&self, model: &ModelCatalogEntry, kind: ModelOperation) -> ProbeRecord {
+        let probed_at_ms = probe::now_ms();
+        let directory = model.install_directory(&self.model_root);
+        let mut failure = None;
+        let checksums = model_artifact_refs(model)
+            .into_iter()
+            .map(|artifact| {
+                let path = directory.join(&artifact.filename);
+                let result = checksum_result(&artifact, &path, kind);
+                if failure.is_none() {
+                    failure = match &result {
+                        ChecksumResult::Mismatched { actual_sha256 } => {
+                            Some(ModelFailure::ChecksumMismatch {
+                                path: path.display().to_string(),
+                                expected: artifact.expected_sha256.clone().unwrap_or_default(),
+                                actual: actual_sha256.clone(),
+                            })
+                        }
+                        ChecksumResult::Unreadable { message } => Some(ModelFailure::Io {
+                            message: message.clone(),
+                        }),
+                        _ => None,
+                    };
+                }
+                ArtifactChecksum {
+                    filename: artifact.filename,
+                    expected_sha256: artifact.expected_sha256,
+                    result,
+                }
+            })
+            .collect();
+        let backends = model
+            .candidate_backends
+            .iter()
+            .map(|backend_id| {
+                let result = self.probe_backend(model, backend_id);
+                if let (None, BackendCheck::Failed { message }) = (&failure, &result) {
+                    failure = Some(ModelFailure::BackendProbe {
+                        backend_id: backend_id.clone(),
+                        message: message.clone(),
+                    });
+                }
+                BackendProbeResult {
+                    backend_id: backend_id.clone(),
+                    result,
+                }
+            })
+            .collect();
+        ProbeRecord {
+            kind,
+            probed_at_ms,
+            revision: model.revision.clone(),
+            checksums,
+            backends,
+            outcome: failure.map_or(ProbeOutcome::Passed, |reason| ProbeOutcome::Failed {
+                reason,
+            }),
+        }
+    }
+
+    fn probe_backend(&self, model: &ModelCatalogEntry, backend_id: &str) -> BackendCheck {
+        let Some(probe) = &self.backend_probe else {
+            return BackendCheck::NotRegistered;
+        };
+        match self
+            .model_ref_from_catalog(&model.id, backend_id)
+            .map_err(|error| error.to_string())
+            .and_then(|model_ref| probe.probe(&model.task, &model_ref))
+        {
+            Ok(()) => BackendCheck::Passed,
+            Err(message) => BackendCheck::Failed { message },
+        }
     }
 
     pub fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError> {
@@ -488,7 +681,29 @@ impl ModelManager {
             }
             Ok(()) => {
                 let _ = self.update(id, |progress| progress.state = DownloadState::Verifying);
-                match self.probe_installed_model(&model) {
+                let probed = self.probe_model(&model, ModelOperation::Download);
+                if let ProbeOutcome::Failed { reason } = probed.outcome {
+                    let _ = fs::remove_dir_all(model.install_directory(&self.model_root));
+                    self.fail_download(id, &model, reason);
+                    return;
+                }
+                // Written even when cancelled now: the probed files stay
+                // installed.
+                let written = self.write_record(
+                    &model,
+                    ModelRecord {
+                        probe: Some(probed),
+                        failure: None,
+                    },
+                );
+                match written {
+                    Err(error) => self.fail_download(
+                        id,
+                        &model,
+                        ModelFailure::Io {
+                            message: error.to_string(),
+                        },
+                    ),
                     Ok(()) if record.control.is_cancelled() => {
                         let _ =
                             self.update(id, |progress| progress.state = DownloadState::Cancelled);
@@ -500,25 +715,17 @@ impl ModelManager {
                             progress.eta_seconds = Some(0);
                         });
                     }
-                    Err(error) => {
-                        let _ = fs::remove_dir_all(model.install_directory(&self.model_root));
-                        let _ = self.update(id, |progress| {
-                            progress.state = DownloadState::Failed(error.to_string())
-                        });
-                    }
                 }
-            }
-            Err(DownloadError::Cancelled) => {
-                let _ = self.update(id, |progress| progress.state = DownloadState::Cancelled);
             }
             Err(_error) if record.control.is_cancelled() => {
                 let _ = self.update(id, |progress| progress.state = DownloadState::Cancelled);
             }
-            Err(error) => {
-                let _ = self.update(id, |progress| {
-                    progress.state = DownloadState::Failed(error.to_string())
-                });
-            }
+            Err(error) => match ModelFailure::from_download(&error) {
+                Some(reason) => self.fail_download(id, &model, reason),
+                None => {
+                    let _ = self.update(id, |progress| progress.state = DownloadState::Cancelled);
+                }
+            },
         }
     }
 
@@ -733,6 +940,30 @@ fn load_task_progress(path: &Path) -> Vec<DownloadProgress> {
         .unwrap_or_default()
 }
 
+fn checksum_result(
+    artifact: &contracts::ModelArtifactRef,
+    path: &Path,
+    kind: ModelOperation,
+) -> ChecksumResult {
+    let Some(expected) = &artifact.expected_sha256 else {
+        return ChecksumResult::NotDeclared;
+    };
+    match (kind, artifact.archive_member.is_some()) {
+        (ModelOperation::Download, true) => ChecksumResult::ArchiveMatched,
+        (ModelOperation::Download, false) => ChecksumResult::Matched,
+        (ModelOperation::Reprobe, true) => ChecksumResult::ArchiveNotRechecked,
+        (ModelOperation::Reprobe, false) => match probe::file_sha256(path) {
+            Ok(actual) if actual.eq_ignore_ascii_case(expected) => ChecksumResult::Matched,
+            Ok(actual) => ChecksumResult::Mismatched {
+                actual_sha256: actual,
+            },
+            Err(error) => ChecksumResult::Unreadable {
+                message: format!("{}: {error}", path.display()),
+            },
+        },
+    }
+}
+
 fn model_artifact_refs(model: &ModelCatalogEntry) -> Vec<contracts::ModelArtifactRef> {
     if !model.artifacts.is_empty() {
         return model
@@ -890,7 +1121,12 @@ mod tests {
 
     #[test]
     fn transfer_rate_reports_a_byte_rate_for_download_progress() {
-        let rate = TransferRate::default();
+        // Started in the past: an immediate sample can see no elapsed time.
+        let rate = TransferRate {
+            started_at: Instant::now()
+                .checked_sub(std::time::Duration::from_millis(500))
+                .unwrap(),
+        };
 
         assert!(rate.sample(1_000_000).is_some());
         assert_eq!(eta_seconds(50, Some(100), Some(25)), Some(2));
@@ -926,7 +1162,16 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"fixture").unwrap();
 
-        manager.probe_installed_model(model).unwrap();
+        let record = manager.probe_model(model, ModelOperation::Download);
+
+        assert!(record.passed(), "{record:?}");
+        assert_eq!(
+            record.backends,
+            vec![BackendProbeResult {
+                backend_id: "fake".into(),
+                result: BackendCheck::Passed,
+            }]
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1128,6 +1373,473 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::Digest;
+        format!("{:x}", sha2::Sha256::digest(bytes))
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("meetnote-model-{name}-{}", unique_suffix()))
+    }
+
+    /// Serves each body to one request, in order, and returns the URL.
+    fn serve_sequence(bodies: Vec<&'static [u8]>) -> String {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for body in bodies {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 512];
+                let _ = stream.read(&mut request);
+                let header = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                std::io::Write::write_all(&mut stream, header.as_bytes()).unwrap();
+                std::io::Write::write_all(&mut stream, body).unwrap();
+            }
+        });
+        format!("http://{address}/fixture.bin")
+    }
+
+    /// A catalog whose single artifact is `body`, served once per entry of
+    /// `served`.
+    fn served_catalog(body: &[u8], served: Vec<&'static [u8]>) -> ModelCatalog {
+        let mut catalog = fixture_catalog();
+        catalog.models[0].source = serve_sequence(served);
+        catalog.models[0].size_bytes = Some(body.len() as u64);
+        catalog.models[0].sha256 = Some(sha256_hex(body));
+        catalog
+    }
+
+    /// A backend probe that passes unless told to fail, and can hold the
+    /// next probe until released.
+    #[derive(Default)]
+    struct SwitchProbe {
+        failure: Mutex<Option<String>>,
+        hold: Mutex<Option<Receiver<()>>>,
+        threads: Mutex<Vec<std::thread::ThreadId>>,
+    }
+
+    impl SwitchProbe {
+        fn failing(message: &str) -> Self {
+            let probe = Self::default();
+            probe.fail_with(Some(message));
+            probe
+        }
+
+        fn fail_with(&self, message: Option<&str>) {
+            *self.failure.lock().unwrap() = message.map(Into::into);
+        }
+
+        /// Holds the next probe until the returned sender sends or drops.
+        fn hold_next(&self) -> Sender<()> {
+            let (release, held) = mpsc::channel();
+            *self.hold.lock().unwrap() = Some(held);
+            release
+        }
+    }
+
+    impl BackendProbe for SwitchProbe {
+        fn probe(&self, _task: &str, _model: &contracts::ModelRef) -> Result<(), String> {
+            self.threads
+                .lock()
+                .unwrap()
+                .push(std::thread::current().id());
+            let held = self.hold.lock().unwrap().take();
+            if let Some(held) = held {
+                let _ = held.recv_timeout(std::time::Duration::from_secs(5));
+            }
+            self.failure.lock().unwrap().clone().map_or(Ok(()), Err)
+        }
+    }
+
+    fn terminal_state(task: &DownloadTask) -> DownloadState {
+        loop {
+            let DownloadEvent::Updated(progress) = task
+                .events
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the download did not end");
+            if progress.state.is_terminal() {
+                return progress.state;
+            }
+        }
+    }
+
+    fn finished_within(task: ReprobeTask) -> Result<ProbeRecord, ModelManagerError> {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(futures::executor::block_on(task.finished));
+        });
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the re-probe did not finish")
+            .expect("the re-probe worker dropped its result")
+    }
+
+    /// Writes the fixture model's single artifact as if it were installed.
+    fn install(manager: &ModelManager, bytes: &[u8]) -> PathBuf {
+        let model = manager.catalog.find("fixture").unwrap();
+        let path = model.artifact_paths(&manager.model_root)[0].clone();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    fn availability(manager: &ModelManager) -> crate::ModelAvailability {
+        manager.browse(None, None).remove(0)
+    }
+
+    fn directory_entries(path: &Path) -> Vec<String> {
+        let mut names: Vec<_> = std::fs::read_dir(path)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn a_passing_download_probe_is_recorded_beside_the_install_and_survives_a_restart() {
+        let catalog = served_catalog(b"fixture", vec![b"fixture"]);
+        let root = temp_root("record-pass");
+        let manager = ModelManager::with_backend_probe(
+            catalog.clone(),
+            &root,
+            Some(Arc::new(SwitchProbe::default())),
+        );
+        let before = probe::now_ms();
+
+        let task = manager.start("fixture").unwrap();
+        assert_eq!(terminal_state(&task), DownloadState::Completed);
+        let after = probe::now_ms();
+
+        let restarted = availability(&ModelManager::new(catalog, &root));
+        let record = restarted.probe.expect("no probe record after a restart");
+        assert_eq!(record.kind, ModelOperation::Download);
+        assert!(record.passed(), "{record:?}");
+        assert!((before..=after).contains(&record.probed_at_ms));
+        assert_eq!(record.revision.as_deref(), Some("fixture-v1"));
+        assert_eq!(
+            record.checksums,
+            vec![ArtifactChecksum {
+                filename: "fixture.bin".into(),
+                expected_sha256: Some(sha256_hex(b"fixture")),
+                result: ChecksumResult::Matched,
+            }]
+        );
+        assert_eq!(
+            record.backends,
+            vec![BackendProbeResult {
+                backend_id: "fake".into(),
+                result: BackendCheck::Passed,
+            }]
+        );
+        assert_eq!(restarted.failure, None);
+        assert_eq!(restarted.record_error, None);
+        // Provenance hashes the whole install directory, so the record stays
+        // beside it.
+        assert!(root.join("asr/fixture.probe.json").is_file());
+        assert_eq!(
+            directory_entries(&root.join("asr/fixture")),
+            ["fixture.bin"]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failing_download_probe_records_its_reason_and_removes_the_install() {
+        let catalog = served_catalog(b"fixture", vec![b"fixture"]);
+        let root = temp_root("record-probe-fail");
+        let manager = ModelManager::with_backend_probe(
+            catalog.clone(),
+            &root,
+            Some(Arc::new(SwitchProbe::failing("unsupported layout"))),
+        );
+        let before = probe::now_ms();
+
+        let task = manager.start("fixture").unwrap();
+        let state = terminal_state(&task);
+
+        assert_eq!(
+            state,
+            DownloadState::Failed("backend probe failed for fake: unsupported layout".into())
+        );
+        assert!(!root.join("asr/fixture").exists());
+        let restarted = availability(&ModelManager::new(catalog, &root));
+        assert_eq!(restarted.install_state, crate::ModelInstallState::Missing);
+        assert_eq!(restarted.probe, None);
+        let failure = restarted.failure.expect("no failure after the task ended");
+        assert_eq!(failure.operation, ModelOperation::Download);
+        assert_eq!(failure.revision.as_deref(), Some("fixture-v1"));
+        assert!(failure.failed_at_ms >= before);
+        assert_eq!(
+            failure.reason,
+            ModelFailure::BackendProbe {
+                backend_id: "fake".into(),
+                message: "unsupported layout".into(),
+            }
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_later_successful_download_clears_the_recorded_failure() {
+        let catalog = served_catalog(b"fixture", vec![b"broken!", b"fixture"]);
+        let root = temp_root("record-retry");
+        let manager = ModelManager::with_backend_probe(
+            catalog,
+            &root,
+            Some(Arc::new(SwitchProbe::default())),
+        );
+
+        let first = manager.start("fixture").unwrap();
+        assert!(matches!(terminal_state(&first), DownloadState::Failed(_)));
+        let failure = availability(&manager).failure.expect("no recorded failure");
+        assert!(matches!(
+            &failure.reason,
+            ModelFailure::ChecksumMismatch { path, expected, actual }
+                if path.ends_with("asr/fixture/fixture.part")
+                    && *expected == sha256_hex(b"fixture")
+                    && *actual == sha256_hex(b"broken!")
+        ));
+
+        let second = manager.start("fixture").unwrap();
+        assert_eq!(terminal_state(&second), DownloadState::Completed);
+        let recovered = availability(&manager);
+        assert_eq!(recovered.failure, None);
+        assert!(recovered.probe.is_some_and(|record| record.passed()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reprobe_rehashes_and_probes_an_installed_model_off_the_calling_thread() {
+        let mut catalog = fixture_catalog();
+        catalog.models[0].sha256 = Some(sha256_hex(b"fixture"));
+        let root = temp_root("reprobe-pass");
+        let probe = Arc::new(SwitchProbe::default());
+        let manager = ModelManager::with_backend_probe(catalog, &root, Some(probe.clone()));
+        install(&manager, b"fixture");
+        assert_eq!(
+            availability(&manager).probe,
+            None,
+            "installed without a record"
+        );
+        let mut finished = manager.subscribe_reprobes_async();
+
+        let task = manager.reprobe("fixture").unwrap();
+        let record = finished_within(task).unwrap();
+
+        assert_eq!(record.kind, ModelOperation::Reprobe);
+        assert!(record.passed(), "{record:?}");
+        assert_eq!(record.checksums[0].result, ChecksumResult::Matched);
+        assert_eq!(record.backends[0].result, BackendCheck::Passed);
+        assert_ne!(
+            probe.threads.lock().unwrap().as_slice(),
+            [std::thread::current().id()]
+        );
+        assert_eq!(availability(&manager).probe, Some(record.clone()));
+        assert_eq!(
+            finished.try_recv().unwrap(),
+            ReprobeFinished {
+                model_id: "fixture".into(),
+                record,
+            }
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failing_reprobe_reports_its_reason_and_keeps_the_install_usable() {
+        let mut catalog = fixture_catalog();
+        catalog.models[0].sha256 = Some(sha256_hex(b"fixture"));
+        let root = temp_root("reprobe-fail");
+        let probe = Arc::new(SwitchProbe::default());
+        let manager = ModelManager::with_backend_probe(catalog, &root, Some(probe.clone()));
+        let artifact = install(&manager, b"fixture");
+        probe.fail_with(Some("session rejected"));
+
+        let failed = finished_within(manager.reprobe("fixture").unwrap()).unwrap();
+
+        let reason = ModelFailure::BackendProbe {
+            backend_id: "fake".into(),
+            message: "session rejected".into(),
+        };
+        assert_eq!(
+            failed.outcome,
+            ProbeOutcome::Failed {
+                reason: reason.clone()
+            }
+        );
+        assert!(artifact.is_file());
+        let entry = availability(&manager);
+        assert_eq!(entry.install_state, crate::ModelInstallState::Installed);
+        assert_eq!(entry.probe, Some(failed));
+        let failure = entry.failure.expect("no recorded failure");
+        assert_eq!(failure.operation, ModelOperation::Reprobe);
+        assert_eq!(failure.reason, reason);
+        // The processing preflight decides whether processing can run.
+        assert!(manager.model_ref("fixture", "fake").is_ok());
+
+        probe.fail_with(None);
+        let passed = finished_within(manager.reprobe("fixture").unwrap()).unwrap();
+        assert!(passed.passed());
+        assert_eq!(availability(&manager).failure, None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_reprobe_reports_an_artifact_that_no_longer_matches_its_checksum() {
+        let mut catalog = fixture_catalog();
+        catalog.models[0].sha256 = Some(sha256_hex(b"fixture"));
+        let root = temp_root("reprobe-checksum");
+        let manager = ModelManager::with_backend_probe(
+            catalog,
+            &root,
+            Some(Arc::new(SwitchProbe::default())),
+        );
+        let artifact = install(&manager, b"tampered");
+
+        let record = finished_within(manager.reprobe("fixture").unwrap()).unwrap();
+
+        assert_eq!(
+            record.checksums[0].result,
+            ChecksumResult::Mismatched {
+                actual_sha256: sha256_hex(b"tampered"),
+            }
+        );
+        assert_eq!(
+            record.outcome,
+            ProbeOutcome::Failed {
+                reason: ModelFailure::ChecksumMismatch {
+                    path: artifact.display().to_string(),
+                    expected: sha256_hex(b"fixture"),
+                    actual: sha256_hex(b"tampered"),
+                },
+            }
+        );
+        assert!(artifact.is_file(), "a re-probe never deletes files");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_members_are_checked_through_their_archive_only_while_downloading() {
+        let mut catalog = fixture_catalog();
+        catalog.models[0].artifacts = vec![
+            crate::CatalogArtifact {
+                filename: "model.onnx".into(),
+                source: "local/archive.tar.bz2".into(),
+                sha256: Some(sha256_hex(b"archive")),
+                archive_member: Some("root/model.onnx".into()),
+            },
+            crate::CatalogArtifact {
+                filename: "tokens.txt".into(),
+                source: "local/tokens.txt".into(),
+                sha256: None,
+                archive_member: None,
+            },
+        ];
+        let root = temp_root("reprobe-archive");
+        let manager = ModelManager::new(catalog, &root);
+        let directory = root.join("asr/fixture");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("model.onnx"), b"member").unwrap();
+        std::fs::write(directory.join("tokens.txt"), b"tokens").unwrap();
+        let results = |record: &ProbeRecord| {
+            record
+                .checksums
+                .iter()
+                .map(|checksum| checksum.result.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let model = manager.catalog.find("fixture").unwrap();
+        let downloaded = manager.probe_model(model, ModelOperation::Download);
+        let reprobed = finished_within(manager.reprobe("fixture").unwrap()).unwrap();
+
+        assert_eq!(
+            results(&downloaded),
+            [ChecksumResult::ArchiveMatched, ChecksumResult::NotDeclared]
+        );
+        assert_eq!(
+            results(&reprobed),
+            [
+                ChecksumResult::ArchiveNotRechecked,
+                ChecksumResult::NotDeclared
+            ]
+        );
+        assert_eq!(
+            reprobed.backends,
+            vec![BackendProbeResult {
+                backend_id: "fake".into(),
+                result: BackendCheck::NotRegistered,
+            }]
+        );
+        assert!(reprobed.passed());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reprobe_rejects_unknown_missing_and_already_probing_models() {
+        let root = temp_root("reprobe-reject");
+        let probe = Arc::new(SwitchProbe::default());
+        let manager =
+            ModelManager::with_backend_probe(fixture_catalog(), &root, Some(probe.clone()));
+
+        assert!(matches!(
+            manager.reprobe("unknown"),
+            Err(ModelManagerError::ModelNotFound(id)) if id == "unknown"
+        ));
+        assert!(matches!(
+            manager.reprobe("fixture"),
+            Err(ModelManagerError::ModelNotInstalled(id)) if id == "fixture"
+        ));
+
+        install(&manager, b"fixture");
+        let release = probe.hold_next();
+        let running = manager.reprobe("fixture").unwrap();
+        assert!(matches!(
+            manager.reprobe("fixture"),
+            Err(ModelManagerError::AlreadyActive(id)) if id == "fixture"
+        ));
+        release.send(()).unwrap();
+        finished_within(running).unwrap();
+        finished_within(manager.reprobe("fixture").unwrap()).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn browse_exposes_catalog_provenance_and_reports_an_unreadable_record() {
+        let root = temp_root("record-unreadable");
+        let manager = ModelManager::new(fixture_catalog(), &root);
+        let record_path = manager
+            .catalog
+            .find("fixture")
+            .unwrap()
+            .probe_record_path(&root);
+        std::fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+        std::fs::write(&record_path, b"{not json").unwrap();
+
+        let entry = availability(&manager);
+
+        assert_eq!(entry.model.license, "test");
+        assert_eq!(entry.model.source, "local/fixture.bin");
+        assert_eq!(entry.model.sha256.as_deref(), Some("fixture-sha256"));
+        assert_eq!(entry.probe, None);
+        assert_eq!(
+            entry
+                .record_error
+                .expect("the invalid record was not reported")
+                .path,
+            record_path
+        );
+
+        install(&manager, b"fixture");
+        let record = finished_within(manager.reprobe("fixture").unwrap()).unwrap();
+        let replaced = availability(&manager);
+        assert_eq!(replaced.record_error, None);
+        assert_eq!(replaced.probe, Some(record));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn unique_suffix() -> u128 {

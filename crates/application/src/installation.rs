@@ -7,7 +7,7 @@ use contracts::{DiarizationStageOption, ModelRef};
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::future::ready;
 use futures::{FutureExt, StreamExt};
-use models::manager::{DownloadEvent, ModelManager};
+use models::manager::{DownloadEvent, ModelManager, ReprobeFinished};
 use models::ModelAvailability;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -73,7 +73,11 @@ impl PartialEq for InstallationState {
                 .iter()
                 .zip(&other.catalog)
                 .all(|(left, right)| {
-                    left.model.id == right.model.id && left.install_state == right.install_state
+                    left.model.id == right.model.id
+                        && left.install_state == right.install_state
+                        && left.probe == right.probe
+                        && left.failure == right.failure
+                        && left.record_error == right.record_error
                 })
     }
 }
@@ -84,7 +88,8 @@ pub type InstallationProbe = Arc<dyn Fn(&InstallationQuery) -> InstallationState
 type Subscribers = Arc<Mutex<Vec<UnboundedSender<InstallationState>>>>;
 
 /// Publishes the installation state of the last requested query after every
-/// `refresh` and whenever a `ModelManager` download ends. One worker thread
+/// `refresh` and whenever a `ModelManager` download or re-probe ends, so the
+/// catalog entries carry the latest probe records and failures. One worker thread
 /// probes; it stops when the last clone of the service is dropped.
 #[derive(Clone)]
 pub struct InstallationService {
@@ -108,6 +113,7 @@ impl InstallationService {
         let (queries, requested) = mpsc::unbounded();
         let subscribers = Subscribers::default();
         let downloads = model_manager.subscribe_all_async();
+        let reprobes = model_manager.subscribe_reprobes_async();
         let worker_probe = probe.clone();
         let worker_subscribers = subscribers.clone();
         std::thread::Builder::new()
@@ -118,6 +124,7 @@ impl InstallationService {
                     worker_subscribers,
                     requested,
                     downloads,
+                    reprobes,
                 ))
             })
             .expect("failed to spawn the installation worker");
@@ -152,32 +159,38 @@ impl InstallationService {
 
 enum Wake {
     Refresh(InstallationQuery),
-    DownloadEnded,
+    ModelChanged,
     Stopped,
 }
 
-/// The worker loop: every refresh or download ending probes the current query
-/// once; wakes that are already queued are coalesced into that probe.
+/// The worker loop: every refresh, download ending or re-probe ending probes
+/// the current query once; wakes that are already queued are coalesced into
+/// that probe.
 async fn publish_installation(
     probe: InstallationProbe,
     subscribers: Subscribers,
     requested: UnboundedReceiver<InstallationQuery>,
     downloads: UnboundedReceiver<DownloadEvent>,
+    reprobes: UnboundedReceiver<ReprobeFinished>,
 ) {
     let refreshes = requested
         .map(Wake::Refresh)
         .chain(futures::stream::once(ready(Wake::Stopped)));
     let download_endings = downloads.filter_map(|DownloadEvent::Updated(progress)| {
-        ready(progress.state.is_terminal().then_some(Wake::DownloadEnded))
+        ready(progress.state.is_terminal().then_some(Wake::ModelChanged))
     });
-    let mut wakes = futures::stream::select(refreshes, download_endings);
+    let reprobe_endings = reprobes.map(|_| Wake::ModelChanged);
+    let mut wakes = futures::stream::select(
+        refreshes,
+        futures::stream::select(download_endings, reprobe_endings),
+    );
     let mut current = None;
     while let Some(wake) = wakes.next().await {
         let mut queued = Some(wake);
         while let Some(wake) = queued {
             match wake {
                 Wake::Refresh(query) => current = Some(query),
-                Wake::DownloadEnded => {}
+                Wake::ModelChanged => {}
                 Wake::Stopped => return,
             }
             queued = wakes.next().now_or_never().flatten();
@@ -225,7 +238,10 @@ fn probe_installation(
 mod tests {
     use super::*;
     use futures::channel::mpsc::TryRecvError;
-    use models::{ModelCatalog, ModelCatalogEntry, ModelInstallState};
+    use models::{
+        ModelCatalog, ModelCatalogEntry, ModelFailure, ModelFailureRecord, ModelInstallState,
+        ModelOperation, ProbeOutcome, ProbeRecord,
+    };
     use std::path::PathBuf;
     use std::sync::mpsc as std_mpsc;
     use std::thread;
@@ -399,6 +415,26 @@ mod tests {
         assert_eq!(moved, state, "artifact paths are not shown");
         moved.catalog[0].install_state = ModelInstallState::Installed;
         assert_ne!(moved, state);
+        let mut failed = state.clone();
+        failed.catalog[0].failure = Some(ModelFailureRecord {
+            operation: ModelOperation::Download,
+            failed_at_ms: 1,
+            revision: None,
+            reason: ModelFailure::Network {
+                message: "offline".into(),
+            },
+        });
+        assert_ne!(failed, state, "failures are shown");
+        let mut probed = state.clone();
+        probed.catalog[0].probe = Some(ProbeRecord {
+            kind: ModelOperation::Reprobe,
+            probed_at_ms: 1,
+            revision: None,
+            checksums: vec![],
+            backends: vec![],
+            outcome: ProbeOutcome::Passed,
+        });
+        assert_ne!(probed, state, "probe records are shown");
         assert_ne!(
             InstallationState {
                 default_asr_ready: true,
@@ -438,6 +474,39 @@ mod tests {
         assert_eq!(before.catalog[0].install_state, ModelInstallState::Missing);
         assert!(after.default_asr_ready);
         assert_eq!(after.catalog[0].install_state, ModelInstallState::Installed);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn publishes_after_a_reprobe_finishes() {
+        let root = temp_root("reprobe");
+        let manager = ModelManager::new(
+            catalog(vec![catalog_entry(
+                "fixture",
+                "asr",
+                "fake",
+                "local/fixture.bin".into(),
+            )]),
+            &root,
+        );
+        let service = InstallationService::new(manager.clone());
+        let mut states = service.subscribe();
+        let asr_model = manager.configured_model_ref("asr", "fake", None).unwrap();
+        fs_write(Path::new(&asr_model.artifact_path));
+        service.refresh(InstallationQuery {
+            asr_model,
+            diarization_model: model_ref("fake-diarization", &root.join("missing")),
+            stage_root: None,
+            stage_files: BTreeSet::new(),
+        });
+        let before = next_within(&mut states);
+
+        manager.reprobe("fixture").unwrap();
+        let after = next_within(&mut states);
+
+        assert_eq!(before.catalog[0].probe, None);
+        let record = after.catalog[0].probe.as_ref().expect("no probe record");
+        assert_eq!(record.kind, ModelOperation::Reprobe);
         std::fs::remove_dir_all(root).unwrap();
     }
 
