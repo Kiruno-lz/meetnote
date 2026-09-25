@@ -818,6 +818,21 @@ impl SettingsService {
             .map(|settings| settings.clone())
     }
 
+    /// Re-read the repository and adopt it as the snapshot, so a caller whose
+    /// write conflicted with another writer sees that value and can retry
+    /// against its revision. A file that does not load or validate leaves the
+    /// snapshot unchanged and returns the error.
+    pub fn reload(&self) -> Result<AppSettings, SettingsError> {
+        let mut current = self
+            .current
+            .write()
+            .map_err(|_| SettingsError::LockPoisoned)?;
+        let settings = self.repository.load()?;
+        settings.validate()?;
+        *current = settings.clone();
+        Ok(settings)
+    }
+
     pub fn revision(&self) -> Result<String, SettingsError> {
         Ok(Self::revision_of(&self.snapshot()?))
     }
@@ -1791,5 +1806,92 @@ mod tests {
             serde_json::from_value::<AppSettings>(value).unwrap(),
             settings
         );
+    }
+
+    /// `settings.json` in a directory of its own, which the test removes.
+    fn settings_file(label: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-settings-{label}-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        (root, path)
+    }
+
+    #[test]
+    fn reload_adopts_an_external_change_so_the_retry_succeeds() {
+        let (root, path) = settings_file("reload");
+        let service = SettingsService::open(Arc::new(JsonSettingsRepository::open(&path))).unwrap();
+        let other = SettingsService::open(Arc::new(JsonSettingsRepository::open(&path))).unwrap();
+        let mut external = other.snapshot().unwrap();
+        external.ui_locale = "en-US".into();
+        other.update(external.clone()).unwrap();
+        let retry = |expected: &AppSettings| {
+            let mut next = expected.clone();
+            next.language = Some("en".into());
+            service.update_if_equal(expected, next)
+        };
+
+        // The snapshot cannot see the other writer, so retrying against it
+        // conflicts every time.
+        let stale = service.snapshot().unwrap();
+        assert!(matches!(
+            retry(&stale),
+            Err(SettingsError::RevisionConflict)
+        ));
+        assert_eq!(service.snapshot().unwrap(), stale);
+
+        let reloaded = service.reload().unwrap();
+        assert_eq!(reloaded, external);
+        assert_eq!(service.snapshot().unwrap(), external);
+        assert_eq!(
+            service.revision().unwrap(),
+            SettingsService::revision_of(&external)
+        );
+        let saved = retry(&reloaded).unwrap();
+        assert_eq!(saved.ui_locale, "en-US");
+        assert_eq!(saved.language.as_deref(), Some("en"));
+        assert_eq!(JsonSettingsRepository::open(&path).load().unwrap(), saved);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reload_of_an_invalid_file_keeps_the_snapshot_and_returns_the_error() {
+        let (root, path) = settings_file("reload-invalid");
+        let service = SettingsService::open(Arc::new(JsonSettingsRepository::open(&path))).unwrap();
+        let mut loaded = service.snapshot().unwrap();
+        loaded.ui_locale = "en-US".into();
+        service.update(loaded.clone()).unwrap();
+
+        fs::write(&path, "{ not json").unwrap();
+        let unparsable = service.reload();
+        assert!(
+            matches!(unparsable, Err(SettingsError::Parse(_))),
+            "{unparsable:?}"
+        );
+        assert_eq!(service.snapshot().unwrap(), loaded);
+
+        let mut invalid = serde_json::to_value(&loaded).unwrap();
+        invalid["expectedSpeakers"] = serde_json::json!(0);
+        fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        let rejected = service.reload();
+        assert!(
+            matches!(&rejected, Err(SettingsError::Invalid(message)) if message.contains("expected speakers")),
+            "{rejected:?}"
+        );
+        assert_eq!(service.snapshot().unwrap(), loaded);
+        fs::remove_dir_all(root).unwrap();
+
+        // Settings validates what any repository returns before adopting it.
+        let repository = Arc::new(TestRepository::new(AppSettings::default()));
+        let service = SettingsService::open(repository.clone()).unwrap();
+        *repository.0.lock().unwrap() = AppSettings {
+            expected_speakers: Some(0),
+            ..AppSettings::default()
+        };
+        assert!(matches!(service.reload(), Err(SettingsError::Invalid(_))));
+        assert_eq!(service.snapshot().unwrap(), AppSettings::default());
     }
 }
