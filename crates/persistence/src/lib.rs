@@ -522,6 +522,26 @@ impl DocumentWatcher {
     }
 }
 
+/// Watches `root` and pushes each change into the returned stream from the
+/// notify callback itself. A watcher error ends the stream.
+fn subscribe_document_changes(root: &Path) -> Result<application::DocumentChanges, String> {
+    let (sender, changes) = futures::channel::mpsc::unbounded();
+    let mut watcher = RecommendedWatcher::new(
+        move |result: Result<Event, notify::Error>| match result {
+            Ok(_) => {
+                let _ = sender.unbounded_send(DocumentChange::Changed);
+            }
+            Err(_) => sender.close_channel(),
+        },
+        Config::default(),
+    )
+    .map_err(|error| error.to_string())?;
+    watcher
+        .watch(root, RecursiveMode::Recursive)
+        .map_err(|error| error.to_string())?;
+    Ok(application::DocumentChanges::new(changes, watcher))
+}
+
 impl DocumentRepository for FileDocumentRepository {
     fn snapshot(&self) -> Result<DocumentSnapshot, String> {
         let scan = self.scanner.scan().map_err(|error| error.to_string())?;
@@ -575,6 +595,10 @@ impl DocumentRepository for FileDocumentRepository {
             }
         });
         Ok(receiver)
+    }
+
+    fn subscribe_changes(&self) -> Result<application::DocumentChanges, String> {
+        subscribe_document_changes(self.root())
     }
 
     fn save(&self, mut document: DocumentState, markdown: Option<String>) -> Result<(), String> {

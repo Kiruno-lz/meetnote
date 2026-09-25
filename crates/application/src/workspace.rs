@@ -78,6 +78,13 @@ impl ProcessingService {
         self
     }
 
+    /// Runs this service's jobs on `runtime`, so they share its worker limit
+    /// with every other user of that runtime.
+    pub fn with_job_runtime(mut self, runtime: Arc<JobRuntime>) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     pub fn probe(&self, request: &ProcessingRequest) -> Result<(), contracts::BackendError> {
         self.asr_provider
             .backend(&request.asr_model.backend_id)?
@@ -339,6 +346,12 @@ impl WorkspaceService {
         &self,
     ) -> Result<std::sync::mpsc::Receiver<crate::DocumentChange>, String> {
         self.documents.watch()
+    }
+
+    /// Document-directory changes as an async stream the watcher feeds
+    /// directly; dropping it stops watching.
+    pub fn subscribe_document_changes(&self) -> Result<crate::DocumentChanges, String> {
+        self.documents.subscribe_changes()
     }
 
     pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<DocumentState, String> {
@@ -1106,5 +1119,117 @@ mod tests {
         assert_eq!(processing.runtime.language.as_deref(), Some("zh"));
         assert_eq!(processing.runtime.expected_speakers, Some(2));
         std::fs::remove_file(audio_path).unwrap();
+    }
+
+    #[test]
+    fn processing_jobs_run_on_the_given_job_runtime() {
+        let runtime = Arc::new(JobRuntime::with_max_concurrency(1));
+        let processing = ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization))
+            .with_job_runtime(runtime.clone());
+
+        let contexts = processing.contexts();
+
+        let jobs: Vec<_> = runtime
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|job| job.job_id)
+            .collect();
+        assert_eq!(
+            jobs,
+            vec![
+                contexts.asr_context.job_id(),
+                contexts.diarization_context.job_id()
+            ]
+        );
+    }
+
+    /// Hands out one prepared change stream.
+    #[derive(Default)]
+    struct ChangingRepository {
+        changes: std::sync::Mutex<Option<crate::DocumentChanges>>,
+    }
+
+    impl DocumentRepository for ChangingRepository {
+        fn snapshot(&self) -> Result<DocumentSnapshot, String> {
+            Ok(DocumentSnapshot {
+                documents: Vec::new(),
+                issues: Vec::new(),
+            })
+        }
+
+        fn save(&self, _: DocumentState, _: Option<String>) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn get(&self, _: &ProjectId) -> Result<Option<DocumentState>, String> {
+            Ok(None)
+        }
+
+        fn read(&self, _: &ProjectId) -> Result<Option<DocumentRecord>, String> {
+            Ok(None)
+        }
+
+        fn watch(&self) -> Result<std::sync::mpsc::Receiver<crate::DocumentChange>, String> {
+            Err("not used".into())
+        }
+
+        fn subscribe_changes(&self) -> Result<crate::DocumentChanges, String> {
+            self.changes
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| "already subscribed".to_string())
+        }
+    }
+
+    struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn document_changes_stream_from_the_repository_and_stop_its_watcher_on_drop() {
+        use futures::StreamExt;
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        let watcher_dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let repository = ChangingRepository {
+            changes: std::sync::Mutex::new(Some(crate::DocumentChanges::new(
+                receiver,
+                DropFlag(watcher_dropped.clone()),
+            ))),
+        };
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(Arc::new(repository)),
+        );
+
+        let mut changes = workspace.subscribe_document_changes().unwrap();
+        sender
+            .unbounded_send(crate::DocumentChange::Changed)
+            .unwrap();
+        drop(sender);
+
+        assert_eq!(
+            futures::executor::block_on(changes.next()),
+            Some(crate::DocumentChange::Changed)
+        );
+        assert_eq!(futures::executor::block_on(changes.next()), None);
+        assert!(!watcher_dropped.load(std::sync::atomic::Ordering::SeqCst));
+        drop(changes);
+        assert!(watcher_dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_repository_without_change_subscriptions_reports_an_error() {
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(Arc::new(MemoryRepository::default())),
+        );
+
+        assert!(workspace.subscribe_document_changes().is_err());
     }
 }

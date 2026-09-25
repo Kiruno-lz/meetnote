@@ -3,6 +3,7 @@ use crate::download::{
     DownloadControl, DownloadError,
 };
 use crate::{ModelCatalog, ModelCatalogEntry};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -42,6 +43,13 @@ pub struct DownloadProgress {
     pub retry_count: u32,
 }
 
+impl DownloadState {
+    /// Completed, cancelled and failed tasks never change state again.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Cancelled | Self::Failed(_))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadEvent {
     Updated(DownloadProgress),
@@ -50,6 +58,9 @@ pub enum DownloadEvent {
 pub struct DownloadTask {
     pub id: DownloadId,
     pub events: Receiver<DownloadEvent>,
+    /// The same events as `events`, pushed by the download thread; the stream
+    /// ends after the terminal state.
+    pub updates: UnboundedReceiver<DownloadEvent>,
 }
 
 pub trait BackendProbe: Send + Sync {
@@ -97,7 +108,22 @@ struct TaskRecord {
     control: DownloadControl,
     progress: Mutex<DownloadProgress>,
     subscribers: Mutex<Vec<Sender<DownloadEvent>>>,
+    /// Pushed under the `progress` lock, so they see every change in order;
+    /// dropped once the task reaches a terminal state.
+    async_subscribers: Mutex<Vec<UnboundedSender<DownloadEvent>>>,
     worker_started: AtomicBool,
+}
+
+impl TaskRecord {
+    fn new(progress: DownloadProgress) -> Self {
+        Self {
+            control: DownloadControl::default(),
+            progress: Mutex::new(progress),
+            subscribers: Mutex::new(Vec::new()),
+            async_subscribers: Mutex::new(Vec::new()),
+            worker_started: AtomicBool::new(false),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -107,6 +133,8 @@ pub struct ModelManager {
     task_state_path: PathBuf,
     next_id: Arc<AtomicU64>,
     tasks: Arc<Mutex<BTreeMap<DownloadId, Arc<TaskRecord>>>>,
+    /// Receive every task's updates; see `subscribe_all_async`.
+    all_subscribers: Arc<Mutex<Vec<UnboundedSender<DownloadEvent>>>>,
     backend_probe: Option<Arc<dyn BackendProbe>>,
 }
 
@@ -137,15 +165,7 @@ impl ModelManager {
                 ) {
                     progress.state = DownloadState::Paused;
                 }
-                (
-                    progress.id,
-                    Arc::new(TaskRecord {
-                        control: DownloadControl::default(),
-                        progress: Mutex::new(progress),
-                        subscribers: Mutex::new(Vec::new()),
-                        worker_started: AtomicBool::new(false),
-                    }),
-                )
+                (progress.id, Arc::new(TaskRecord::new(progress)))
             })
             .collect();
         Self {
@@ -154,6 +174,7 @@ impl ModelManager {
             task_state_path,
             next_id: Arc::new(AtomicU64::new(next_id)),
             tasks: Arc::new(Mutex::new(tasks)),
+            all_subscribers: Arc::new(Mutex::new(Vec::new())),
             backend_probe,
         }
     }
@@ -192,34 +213,62 @@ impl ModelManager {
 
         let id = DownloadId(self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
         let artifact_count = model.artifact_filenames().len();
-        let record = Arc::new(TaskRecord {
-            control: DownloadControl::default(),
-            progress: Mutex::new(DownloadProgress {
-                id,
-                model_id: model.id.clone(),
-                state: DownloadState::Queued,
-                completed_bytes: 0,
-                speed_bytes_per_second: None,
-                total_bytes: model.size_bytes,
-                artifact_index: 0,
-                artifact_count,
-                eta_seconds: None,
-                retry_count: 0,
-            }),
-            subscribers: Mutex::new(Vec::new()),
-            worker_started: AtomicBool::new(false),
-        });
+        let record = Arc::new(TaskRecord::new(DownloadProgress {
+            id,
+            model_id: model.id.clone(),
+            state: DownloadState::Queued,
+            completed_bytes: 0,
+            speed_bytes_per_second: None,
+            total_bytes: model.size_bytes,
+            artifact_index: 0,
+            artifact_count,
+            eta_seconds: None,
+            retry_count: 0,
+        }));
         self.tasks
             .lock()
             .map_err(|_| ModelManagerError::LockPoisoned)?
             .insert(id, record.clone());
         self.persist_tasks()?;
         let receiver = self.subscribe(id)?;
+        let updates = self.subscribe_async(id)?;
         self.spawn_worker(id, model, record)?;
         Ok(DownloadTask {
             id,
             events: receiver,
+            updates,
         })
+    }
+
+    /// The task's current progress followed by every later update, pushed by
+    /// the download thread. The stream ends after the terminal state.
+    pub fn subscribe_async(
+        &self,
+        id: DownloadId,
+    ) -> Result<UnboundedReceiver<DownloadEvent>, ModelManagerError> {
+        let record = self.record(id)?;
+        let (sender, receiver) = unbounded();
+        let progress = record
+            .progress
+            .lock()
+            .map_err(|_| ModelManagerError::LockPoisoned)?;
+        let terminal = progress.state.is_terminal();
+        let _ = sender.unbounded_send(DownloadEvent::Updated(progress.clone()));
+        if !terminal {
+            record
+                .async_subscribers
+                .lock()
+                .map_err(|_| ModelManagerError::LockPoisoned)?
+                .push(sender);
+        }
+        Ok(receiver)
+    }
+
+    /// Every task's updates from now on, including tasks started later.
+    pub fn subscribe_all_async(&self) -> UnboundedReceiver<DownloadEvent> {
+        let (sender, receiver) = unbounded();
+        lock_unpoisoned(&self.all_subscribers).push(sender);
+        receiver
     }
 
     pub fn subscribe(&self, id: DownloadId) -> Result<Receiver<DownloadEvent>, ModelManagerError> {
@@ -562,15 +611,26 @@ impl ModelManager {
         F: FnOnce(&mut DownloadProgress),
     {
         let record = self.record(id)?;
-        let progress = {
+        let event = {
             let mut progress = record
                 .progress
                 .lock()
                 .map_err(|_| ModelManagerError::LockPoisoned)?;
             change(&mut progress);
-            progress.clone()
+            let event = DownloadEvent::Updated(progress.clone());
+            let mut async_subscribers = record
+                .async_subscribers
+                .lock()
+                .map_err(|_| ModelManagerError::LockPoisoned)?;
+            async_subscribers.retain(|sender| sender.unbounded_send(event.clone()).is_ok());
+            if progress.state.is_terminal() {
+                async_subscribers.clear();
+            }
+            drop(async_subscribers);
+            lock_unpoisoned(&self.all_subscribers)
+                .retain(|sender| sender.unbounded_send(event.clone()).is_ok());
+            event
         };
-        let event = DownloadEvent::Updated(progress);
         let mut subscribers = record
             .subscribers
             .lock()
@@ -648,6 +708,12 @@ impl ModelManager {
         fs::rename(&temporary, &self.task_state_path)
             .map_err(|error| ModelManagerError::Download(Box::new(DownloadError::Io(error))))
     }
+}
+
+fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn eta_seconds(completed: u64, total: Option<u64>, speed: Option<u64>) -> Option<u64> {
@@ -927,6 +993,141 @@ mod tests {
             worker.join().unwrap(),
             Err(DownloadError::Cancelled)
         ));
+    }
+
+    /// Serves `body` to a single request and returns its URL.
+    fn serve_once(body: &'static [u8]) -> String {
+        use std::io::Read;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 512];
+            let _ = stream.read(&mut request);
+            let header = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+            std::io::Write::write_all(&mut stream, header.as_bytes()).unwrap();
+            std::io::Write::write_all(&mut stream, body).unwrap();
+        });
+        format!("http://{address}/fixture.bin")
+    }
+
+    /// Drains `stream` on its own thread; panics unless it ends within
+    /// `timeout`.
+    fn collect_within(
+        stream: UnboundedReceiver<DownloadEvent>,
+        timeout: std::time::Duration,
+    ) -> Vec<DownloadProgress> {
+        use futures::StreamExt;
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(futures::executor::block_on(stream.collect::<Vec<_>>()));
+        });
+        receiver
+            .recv_timeout(timeout)
+            .expect("download stream did not end")
+            .into_iter()
+            .map(|DownloadEvent::Updated(progress)| progress)
+            .collect()
+    }
+
+    #[test]
+    fn terminal_states_are_completed_cancelled_and_failed() {
+        assert!(DownloadState::Completed.is_terminal());
+        assert!(DownloadState::Cancelled.is_terminal());
+        assert!(DownloadState::Failed("error".into()).is_terminal());
+        for state in [
+            DownloadState::Queued,
+            DownloadState::Downloading,
+            DownloadState::Paused,
+            DownloadState::Verifying,
+        ] {
+            assert!(!state.is_terminal(), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn async_download_events_arrive_in_order_and_end_at_the_terminal_state() {
+        let mut catalog = fixture_catalog();
+        catalog.models[0].source = serve_once(b"fixture");
+        catalog.models[0].size_bytes = Some(7);
+        catalog.models[0].sha256 = None;
+        let root =
+            std::env::temp_dir().join(format!("meetnote-model-manager-async-{}", unique_suffix()));
+        let manager = ModelManager::new(catalog, &root);
+        let task = manager.start("fixture").unwrap();
+
+        let progress = collect_within(task.updates, std::time::Duration::from_secs(5));
+
+        let mut states: Vec<_> = progress
+            .iter()
+            .map(|progress| progress.state.clone())
+            .collect();
+        states.dedup();
+        assert_eq!(
+            states,
+            vec![
+                DownloadState::Queued,
+                DownloadState::Downloading,
+                DownloadState::Verifying,
+                DownloadState::Completed,
+            ]
+        );
+        assert!(progress
+            .windows(2)
+            .all(|pair| pair[0].completed_bytes <= pair[1].completed_bytes));
+        assert_eq!(progress.last().unwrap().completed_bytes, 7);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_async_subscription_to_an_ended_task_yields_its_terminal_state_and_ends() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-model-manager-async-cancel-{}",
+            unique_suffix()
+        ));
+        let manager = ModelManager::new(fixture_catalog(), &root);
+        let task = manager.start("fixture").unwrap();
+        manager.cancel(task.id).unwrap();
+
+        let live = collect_within(task.updates, std::time::Duration::from_secs(5));
+        let late = collect_within(
+            manager.subscribe_async(task.id).unwrap(),
+            std::time::Duration::from_secs(5),
+        );
+
+        assert_eq!(live.first().unwrap().state, DownloadState::Queued);
+        assert_eq!(live.last().unwrap().state, DownloadState::Cancelled);
+        assert_eq!(late.last().unwrap().state, DownloadState::Cancelled);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_manager_wide_async_subscription_sees_tasks_started_later() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-model-manager-async-all-{}",
+            unique_suffix()
+        ));
+        let manager = ModelManager::new(fixture_catalog(), &root);
+        let mut all = manager.subscribe_all_async();
+        let task = manager.start("fixture").unwrap();
+        manager.cancel(task.id).unwrap();
+
+        let deadline = Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match all.try_recv() {
+                Ok(DownloadEvent::Updated(progress))
+                    if progress.id == task.id && progress.state == DownloadState::Cancelled =>
+                {
+                    break
+                }
+                Ok(_) => {}
+                Err(futures::channel::mpsc::TryRecvError::Empty) if Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(1))
+                }
+                Err(error) => panic!("no cancelled update for the task: {error:?}"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn unique_suffix() -> u128 {

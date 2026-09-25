@@ -217,6 +217,7 @@ dependencies = [
  "futures",
  "hound",
  "llm",
+ "models",
  "runtime",
  "schemars",
  "serde",
@@ -4119,6 +4120,7 @@ version = "0.1.0"
 dependencies = [
  "bzip2 0.6.1",
  "contracts",
+ "futures",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5117,6 +5119,7 @@ dependencies = [
  "application",
  "contracts",
  "domain",
+ "futures",
  "notify 8.2.0",
  "serde_json",
  "thiserror 2.0.20",

@@ -16,6 +16,7 @@ use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
 use llm::{LlmOutputBlock, LlmProvider};
 use models::{manager::BackendProbe, ModelCatalog, ModelManager};
 use persistence::FileDocumentRepository;
+use runtime::JobRuntime;
 use settings::{JsonSettingsRepository, SettingsService};
 use std::env;
 use std::io::{BufRead, Read};
@@ -64,20 +65,27 @@ fn main() {
         FileDocumentRepository::open("data/documents").expect("failed to open document repository"),
     );
     let documents = DocumentService::new(repository);
-    let assistant = Arc::new(assistant_service::DesktopAssistantService::new(
-        settings.clone(),
-        documents.clone(),
-    ));
+    // One runtime bounds Assistant and audio workers together.
+    let jobs = Arc::new(JobRuntime::default());
+    let assistant = Arc::new(
+        assistant_service::DesktopAssistantService::with_job_runtime(
+            settings.clone(),
+            documents.clone(),
+            jobs.clone(),
+        ),
+    );
     #[cfg(feature = "host-test-fake-audio")]
-    let processing = if is_agent && env::var("MEETNOTE_AGENT_HOST_FAKE_AUDIO").as_deref() == Ok("1")
-    {
-        ProcessingService::new(Arc::new(HostFakeAsr), Arc::new(HostFakeDiarization))
-    } else {
-        ProcessingService::new_with_providers(asr_manager.clone(), diarization_manager.clone())
-    };
+    let processing =
+        if is_agent && env::var("MEETNOTE_AGENT_HOST_FAKE_AUDIO").as_deref() == Ok("1") {
+            ProcessingService::new(Arc::new(HostFakeAsr), Arc::new(HostFakeDiarization))
+        } else {
+            ProcessingService::new_with_providers(asr_manager.clone(), diarization_manager.clone())
+        }
+        .with_job_runtime(jobs);
     #[cfg(not(feature = "host-test-fake-audio"))]
     let processing =
-        ProcessingService::new_with_providers(asr_manager.clone(), diarization_manager.clone());
+        ProcessingService::new_with_providers(asr_manager.clone(), diarization_manager.clone())
+            .with_job_runtime(jobs);
     let workspace = WorkspaceService::with_options(
         processing,
         documents,

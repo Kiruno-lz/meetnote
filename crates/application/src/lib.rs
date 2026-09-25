@@ -18,6 +18,7 @@ mod assistant_runtime;
 mod assistant_skills;
 mod capabilities;
 mod document_commands;
+mod installation;
 mod long_audio;
 mod speaker_identity;
 mod workspace;
@@ -40,6 +41,9 @@ pub use capabilities::{
 };
 pub use contracts::BackendDescriptor;
 pub use document_commands::{DocumentCommandError, DocumentCommandService};
+pub use installation::{
+    InstallationProbe, InstallationQuery, InstallationService, InstallationState,
+};
 pub use long_audio::{
     run_windowed_pipeline, AsrWindowSession, DiarizationWindowSession, LongAudioConfig,
 };
@@ -217,6 +221,37 @@ pub enum DocumentChange {
     Changed,
 }
 
+/// Document changes the repository's watcher pushes into the stream as they
+/// happen. Dropping the stream stops the watcher.
+pub struct DocumentChanges {
+    changes: futures::channel::mpsc::UnboundedReceiver<DocumentChange>,
+    _watcher: Box<dyn std::any::Any + Send>,
+}
+
+impl DocumentChanges {
+    /// `watcher` keeps the change source alive and is dropped with the stream.
+    pub fn new(
+        changes: futures::channel::mpsc::UnboundedReceiver<DocumentChange>,
+        watcher: impl Send + 'static,
+    ) -> Self {
+        Self {
+            changes,
+            _watcher: Box::new(watcher),
+        }
+    }
+}
+
+impl futures::Stream for DocumentChanges {
+    type Item = DocumentChange;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<DocumentChange>> {
+        futures::StreamExt::poll_next_unpin(&mut self.get_mut().changes, cx)
+    }
+}
+
 pub trait DocumentRepository: Send + Sync {
     fn snapshot(&self) -> Result<DocumentSnapshot, String>;
 
@@ -241,6 +276,12 @@ pub trait DocumentRepository: Send + Sync {
     ) -> Result<Option<domain::DocumentState>, String>;
     fn read(&self, document_id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String>;
     fn watch(&self) -> Result<Receiver<DocumentChange>, String>;
+
+    /// Changes pushed by the watcher itself, without a forwarding thread.
+    fn subscribe_changes(&self) -> Result<DocumentChanges, String> {
+        Err("document repository does not publish change subscriptions".into())
+    }
+
     fn save(&self, document: domain::DocumentState, markdown: Option<String>)
         -> Result<(), String>;
 
@@ -418,6 +459,10 @@ impl DocumentService {
 
     pub fn watch(&self) -> Result<Receiver<DocumentChange>, String> {
         self.repository.watch()
+    }
+
+    pub fn subscribe_changes(&self) -> Result<DocumentChanges, String> {
+        self.repository.subscribe_changes()
     }
 
     pub fn save(&self, document: domain::DocumentState) -> Result<domain::DocumentState, String> {

@@ -8,11 +8,12 @@ use contracts::{
     AgentToolError, AgentToolResult,
 };
 use domain::DocumentId;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use llm::{
     AuthMode, ConnectionConfig, Credential, LiteLlmProvider, LlmProtocol as ProviderProtocol,
     LlmProvider,
 };
-use runtime::{JobRuntime, Progress};
+use runtime::{JobEvent, JobRuntime, Progress};
 use settings::{
     AppSettings, AssistantAuthMode, AssistantConnectionProfile, AssistantSettings, LlmProtocol,
     SettingsError, SettingsGrant, SettingsPatch, SettingsRepository, SettingsService,
@@ -32,14 +33,53 @@ pub struct DesktopAssistantService {
     settings: SettingsService,
     documents: DocumentService,
     jobs: Arc<JobRuntime>,
+    job_events: Arc<Mutex<Vec<UnboundedSender<JobEvent>>>>,
 }
 
 impl DesktopAssistantService {
+    #[cfg(test)]
     pub fn new(settings: SettingsService, documents: DocumentService) -> Self {
+        Self::with_job_runtime(settings, documents, Arc::new(JobRuntime::default()))
+    }
+
+    /// Runs Assistant jobs on the application's shared `jobs`, so they count
+    /// against the same worker limit as audio processing.
+    pub fn with_job_runtime(
+        settings: SettingsService,
+        documents: DocumentService,
+        jobs: Arc<JobRuntime>,
+    ) -> Self {
         Self {
             settings,
             documents,
-            jobs: Arc::new(JobRuntime::default()),
+            jobs,
+            job_events: Arc::default(),
+        }
+    }
+
+    /// The `JobEvent`s of every Assistant job from now on, each job's in the
+    /// order it emitted them.
+    // The UI subscribes once it projects Assistant task state.
+    #[allow(dead_code)]
+    pub fn job_events(&self) -> UnboundedReceiver<JobEvent> {
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        self.job_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(sender);
+        receiver
+    }
+
+    /// Republishes what the job has emitted so far. The service makes every
+    /// state change of its jobs on the calling thread, so publishing after
+    /// each change keeps a job's events in order without a forwarding thread.
+    fn publish_job_events(&self, events: &mut UnboundedReceiver<JobEvent>) {
+        let mut subscribers = self
+            .job_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while let Ok(event) = events.try_recv() {
+            subscribers.retain(|sender| sender.unbounded_send(event.clone()).is_ok());
         }
     }
 
@@ -332,8 +372,9 @@ impl AssistantUiService for DesktopAssistantService {
         cancellation: AgentCancellation,
     ) -> Result<ConnectionDiagnostic, AssistantUiError> {
         let (provider, secret) = self.provider(&profile)?;
-        let (job, _events) = self.jobs.create_job();
+        let (job, mut events) = self.jobs.create_job();
         job.started();
+        self.publish_job_events(&mut events);
         cancellation.link_job(&job.cancellation_token());
         let secret_for_job = secret.clone();
         let profile_for_job = profile.clone();
@@ -389,6 +430,7 @@ impl AssistantUiService for DesktopAssistantService {
             Err(error) if error.code == "TASK_CANCELLED" => job.cancel(),
             Err(error) => job.failed(error.to_string()),
         }
+        self.publish_job_events(&mut events);
         result
     }
 
@@ -406,13 +448,14 @@ impl AssistantUiService for DesktopAssistantService {
         cancellation: AgentCancellation,
         progress_handler: AssistantProgressHandler,
     ) -> Result<AssistantRunResult, AssistantUiError> {
-        let (job, _events) = self.jobs.create_job();
+        let (job, mut events) = self.jobs.create_job();
         job.started();
         cancellation.link_job(&job.cancellation_token());
         job.report(Progress {
             completed: 0,
             total: None,
         });
+        self.publish_job_events(&mut events);
         let service = self.clone();
         let job_for_worker = job.clone();
         let result = futures::executor::block_on(job.spawn_blocking(move || {
@@ -436,6 +479,7 @@ impl AssistantUiService for DesktopAssistantService {
             Err(error) if error.code == "TASK_CANCELLED" => job.cancel(),
             Err(error) => job.failed(error.to_string()),
         }
+        self.publish_job_events(&mut events);
         result
     }
 
@@ -1088,6 +1132,166 @@ mod tests {
         assert_eq!(result.mutations.len(), 1);
         assert_eq!(result.usage.unwrap().total_tokens, 5);
         assert_eq!(result.diagnostics.unwrap().tool_rounds, 2);
+    }
+
+    fn memory_settings() -> SettingsService {
+        SettingsService::open(Arc::new(MemorySettingsRepository(Mutex::new(
+            AppSettings::default(),
+        ))))
+        .unwrap()
+    }
+
+    /// An Ask run over one document at revision 1.
+    fn ask_request() -> AssistantRunRequest {
+        AssistantRunRequest {
+            request_id: "request".into(),
+            scene: contracts::AgentScene::Ask,
+            skill: contracts::AgentSkillSelector::for_scene(contracts::AgentScene::Ask),
+            prompt: "question".into(),
+            authorized_documents: vec![ui::assistant_ui::AssistantDocumentContext {
+                document_id: "doc".into(),
+                title: "Document".into(),
+                revision: 1,
+            }],
+            projection: contracts::DocumentProjection::Metadata,
+            write_mode: contracts::AgentWriteMode::Automatic,
+            connection_id: "local".into(),
+            max_tool_rounds: 8,
+            max_validation_retries: 3,
+        }
+    }
+
+    /// Holds the Assistant worker inside `get` until released; logs when.
+    struct GatedRepository {
+        log: Arc<Mutex<Vec<&'static str>>>,
+        entered: Mutex<std::sync::mpsc::Sender<()>>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl DocumentRepository for GatedRepository {
+        fn snapshot(&self) -> Result<application::DocumentSnapshot, String> {
+            Ok(application::DocumentSnapshot {
+                documents: Vec::new(),
+                issues: Vec::new(),
+            })
+        }
+
+        fn get(&self, _: &DocumentId) -> Result<Option<DocumentState>, String> {
+            self.log.lock().unwrap().push("assistant:start");
+            let _ = self.entered.lock().unwrap().send(());
+            // Bounded, so a broken gate cannot hang the test.
+            let _ = self
+                .release
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(5));
+            self.log.lock().unwrap().push("assistant:end");
+            Ok(None)
+        }
+
+        fn read(&self, _: &DocumentId) -> Result<Option<contracts::DocumentRecord>, String> {
+            Ok(None)
+        }
+
+        fn watch(&self) -> Result<std::sync::mpsc::Receiver<application::DocumentChange>, String> {
+            Err("not used".into())
+        }
+
+        fn save(&self, _: DocumentState, _: Option<String>) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn assistant_and_audio_jobs_share_one_worker_limit() {
+        let jobs = Arc::new(JobRuntime::with_max_concurrency(1));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (entered, assistant_entered) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let assistant = DesktopAssistantService::with_job_runtime(
+            memory_settings(),
+            DocumentService::new(Arc::new(GatedRepository {
+                log: log.clone(),
+                entered: Mutex::new(entered),
+                release: Mutex::new(released),
+            })),
+            jobs.clone(),
+        );
+        let processing = application::ProcessingService::new_with_providers(
+            Arc::new(asr::AsrBackendManager::new(
+                asr::AsrBackendRegistry::default(),
+            )),
+            Arc::new(diarization::DiarizationBackendManager::new(
+                diarization::DiarizationBackendRegistry::default(),
+            )),
+        )
+        .with_job_runtime(jobs);
+
+        let run =
+            std::thread::spawn(move || assistant.run(ask_request(), AgentCancellation::new()));
+        assistant_entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the Assistant job did not start");
+        let contexts = processing.contexts();
+        let audio_log = log.clone();
+        let (audio_entered, audio_started) = std::sync::mpsc::channel();
+        // An audio backend runs its model work on a job worker like this.
+        let audio = std::thread::spawn(move || {
+            futures::executor::block_on(contexts.asr_context.spawn_blocking(move || {
+                audio_log.lock().unwrap().push("audio:start");
+                let _ = audio_entered.send(());
+                audio_log.lock().unwrap().push("audio:end");
+            }))
+        });
+        // With separate limits the audio worker starts while the Assistant
+        // worker is still held.
+        let started_early = audio_started
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_ok();
+        release.send(()).unwrap();
+        let error = run.join().unwrap().unwrap_err();
+        audio.join().unwrap();
+
+        assert!(!started_early);
+        assert_eq!(error.code, "DOCUMENT_NOT_FOUND");
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "assistant:start",
+                "assistant:end",
+                "audio:start",
+                "audio:end"
+            ]
+        );
+    }
+
+    #[test]
+    fn publishes_the_job_events_of_each_assistant_run() {
+        let (service, _) = service();
+        let mut events = service.job_events();
+
+        let error = service
+            .run(ask_request(), AgentCancellation::new())
+            .unwrap_err();
+
+        let mut received = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            received.push(event);
+        }
+        assert_eq!(error.code, "DOCUMENT_NOT_FOUND");
+        match received.as_slice() {
+            [JobEvent::Started { job_id }, JobEvent::Progress {
+                job_id: progress_job,
+                progress:
+                    Progress {
+                        completed: 0,
+                        total: None,
+                    },
+            }, JobEvent::Failed {
+                job_id: failed_job, ..
+            }] if progress_job == job_id && failed_job == job_id => {}
+            other => panic!("unexpected job events: {other:?}"),
+        }
     }
 
     fn unique_suffix() -> u128 {
