@@ -55,6 +55,10 @@ impl DownloadState {
     }
 }
 
+/// A task's updates reach every subscriber in the order they happened, each
+/// after the task file records it. The terminal update is the task's last:
+/// its installed files, probe record and task file are final when it
+/// arrives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadEvent {
     Updated(DownloadProgress),
@@ -132,10 +136,12 @@ impl From<DownloadError> for ModelManagerError {
 
 struct TaskRecord {
     control: DownloadControl,
+    /// Held while an update is applied, written to the task file and
+    /// published, and while a subscriber joins.
+    updating: Mutex<()>,
     progress: Mutex<DownloadProgress>,
     subscribers: Mutex<Vec<Sender<DownloadEvent>>>,
-    /// Pushed under the `progress` lock, so they see every change in order;
-    /// dropped once the task reaches a terminal state.
+    /// Dropped once the task reaches a terminal state.
     async_subscribers: Mutex<Vec<UnboundedSender<DownloadEvent>>>,
     worker_started: AtomicBool,
 }
@@ -144,6 +150,7 @@ impl TaskRecord {
     fn new(progress: DownloadProgress) -> Self {
         Self {
             control: DownloadControl::default(),
+            updating: Mutex::new(()),
             progress: Mutex::new(progress),
             subscribers: Mutex::new(Vec::new()),
             async_subscribers: Mutex::new(Vec::new()),
@@ -280,12 +287,17 @@ impl ModelManager {
     ) -> Result<UnboundedReceiver<DownloadEvent>, ModelManagerError> {
         let record = self.record(id)?;
         let (sender, receiver) = unbounded();
+        let _updating = record
+            .updating
+            .lock()
+            .map_err(|_| ModelManagerError::LockPoisoned)?;
         let progress = record
             .progress
             .lock()
-            .map_err(|_| ModelManagerError::LockPoisoned)?;
+            .map_err(|_| ModelManagerError::LockPoisoned)?
+            .clone();
         let terminal = progress.state.is_terminal();
-        let _ = sender.unbounded_send(DownloadEvent::Updated(progress.clone()));
+        let _ = sender.unbounded_send(DownloadEvent::Updated(progress));
         if !terminal {
             record
                 .async_subscribers
@@ -306,6 +318,10 @@ impl ModelManager {
     pub fn subscribe(&self, id: DownloadId) -> Result<Receiver<DownloadEvent>, ModelManagerError> {
         let record = self.record(id)?;
         let (sender, receiver) = mpsc::channel();
+        let _updating = record
+            .updating
+            .lock()
+            .map_err(|_| ModelManagerError::LockPoisoned)?;
         let current = record
             .progress
             .lock()
@@ -459,12 +475,13 @@ impl ModelManager {
             .clone();
         record.control.resume();
         self.update(id, |progress| progress.state = DownloadState::Downloading)?;
-        if !record.worker_started.swap(true, Ordering::AcqRel) {
-            let model = self
-                .catalog
-                .find(&model_id)
-                .cloned()
-                .ok_or(ModelManagerError::ModelNotFound(model_id))?;
+        // Sequentially consistent with `cancel`, which ends the task itself
+        // when it sees no worker.
+        if !record.worker_started.swap(true, Ordering::SeqCst) {
+            let Some(model) = self.catalog.find(&model_id).cloned() else {
+                record.worker_started.store(false, Ordering::SeqCst);
+                return Err(ModelManagerError::ModelNotFound(model_id));
+            };
             self.spawn_worker(id, model, record)?;
         }
         Ok(())
@@ -649,10 +666,19 @@ impl ModelManager {
         }
     }
 
+    /// Stops the task. A running worker stops at its next checkpoint and
+    /// publishes `Cancelled` after its last write, so the update arrives
+    /// after this returns; a task without a worker ends here.
     pub fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError> {
         let record = self.record(id)?;
         self.ensure_active(&record, id)?;
         record.control.cancel();
+        // Both sequentially consistent: when this sees no worker, a worker
+        // `resume` starts later sees the cancellation at its first
+        // checkpoint, before it writes anything.
+        if record.worker_started.load(Ordering::SeqCst) {
+            return Ok(());
+        }
         self.update(id, |progress| progress.state = DownloadState::Cancelled)
     }
 
@@ -735,12 +761,17 @@ impl ModelManager {
         model: ModelCatalogEntry,
         record: Arc<TaskRecord>,
     ) -> Result<(), ModelManagerError> {
-        record.worker_started.store(true, Ordering::Release);
+        record.worker_started.store(true, Ordering::SeqCst);
         let manager = self.clone();
+        let worker_record = record.clone();
         std::thread::Builder::new()
             .name(format!("meetnote-download-{}", id.0))
-            .spawn(move || manager.run(id, model, record))
-            .map_err(|error| ModelManagerError::Download(Box::new(DownloadError::Io(error))))?;
+            .spawn(move || manager.run(id, model, worker_record))
+            .map_err(|error| {
+                // No worker runs, so `cancel` ends the task itself.
+                record.worker_started.store(false, Ordering::SeqCst);
+                ModelManagerError::Download(Box::new(DownloadError::Io(error)))
+            })?;
         Ok(())
     }
 
@@ -813,38 +844,50 @@ impl ModelManager {
         Ok(())
     }
 
+    /// Applies `change` unless the task already ended, writes the task file,
+    /// then publishes the update to every subscriber, all under `updating`.
     fn update<F>(&self, id: DownloadId, change: F) -> Result<(), ModelManagerError>
     where
         F: FnOnce(&mut DownloadProgress),
     {
         let record = self.record(id)?;
-        let event = {
+        let _updating = record
+            .updating
+            .lock()
+            .map_err(|_| ModelManagerError::LockPoisoned)?;
+        let progress = {
             let mut progress = record
                 .progress
                 .lock()
                 .map_err(|_| ModelManagerError::LockPoisoned)?;
+            if progress.state.is_terminal() {
+                return Ok(());
+            }
             change(&mut progress);
-            let event = DownloadEvent::Updated(progress.clone());
+            progress.clone()
+        };
+        // Published even when the write fails: the task changed in memory.
+        let persisted = self.persist_tasks();
+        let terminal = progress.state.is_terminal();
+        let event = DownloadEvent::Updated(progress);
+        {
             let mut async_subscribers = record
                 .async_subscribers
                 .lock()
                 .map_err(|_| ModelManagerError::LockPoisoned)?;
             async_subscribers.retain(|sender| sender.unbounded_send(event.clone()).is_ok());
-            if progress.state.is_terminal() {
+            if terminal {
                 async_subscribers.clear();
             }
-            drop(async_subscribers);
-            lock_unpoisoned(&self.all_subscribers)
-                .retain(|sender| sender.unbounded_send(event.clone()).is_ok());
-            event
-        };
-        let mut subscribers = record
+        }
+        lock_unpoisoned(&self.all_subscribers)
+            .retain(|sender| sender.unbounded_send(event.clone()).is_ok());
+        record
             .subscribers
             .lock()
-            .map_err(|_| ModelManagerError::LockPoisoned)?;
-        subscribers.retain(|sender| sender.send(event.clone()).is_ok());
-        drop(subscribers);
-        self.persist_tasks()
+            .map_err(|_| ModelManagerError::LockPoisoned)?
+            .retain(|sender| sender.send(event.clone()).is_ok());
+        persisted
     }
 
     fn has_active_download(&self, model_id: &str) -> Result<bool, ModelManagerError> {
@@ -1046,26 +1089,10 @@ mod tests {
         assert!(manager.browse(Some("diarization"), None).is_empty());
     }
 
-    #[test]
-    fn cancellation_is_exposed_as_a_terminal_download_state() {
-        let root = std::env::temp_dir().join(format!("meetnote-model-manager-{}", unique_suffix()));
-        let manager = ModelManager::new(fixture_catalog(), &root);
-        let task = manager.start("fixture").unwrap();
-        manager.cancel(task.id).unwrap();
-
-        assert_eq!(
-            manager.status(task.id).unwrap().state,
-            DownloadState::Cancelled
-        );
-    }
-
-    #[test]
-    fn restores_interrupted_downloads_as_resumable_paused_tasks() {
-        let root = std::env::temp_dir().join(format!(
-            "meetnote-model-manager-restore-{}",
-            unique_suffix()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
+    /// Writes the task file of a process that stopped while downloading the
+    /// fixture model; the restored task has no worker until resumed.
+    fn write_interrupted_task(root: &Path) -> DownloadId {
+        std::fs::create_dir_all(root).unwrap();
         let progress = vec![DownloadProgress {
             id: DownloadId(9),
             model_id: "fixture".into(),
@@ -1083,6 +1110,35 @@ mod tests {
             serde_json::to_vec(&progress).unwrap(),
         )
         .unwrap();
+        DownloadId(9)
+    }
+
+    /// The task's state in the task file, as a restarted manager reads it.
+    fn persisted_state(root: &Path, id: DownloadId) -> Option<DownloadState> {
+        load_task_progress(&root.join(".download-tasks.json"))
+            .into_iter()
+            .find(|progress| progress.id == id)
+            .map(|progress| progress.state)
+    }
+
+    #[test]
+    fn cancellation_is_exposed_as_a_terminal_download_state() {
+        let root = temp_root("cancel-restored");
+        let id = write_interrupted_task(&root);
+        let manager = ModelManager::new(fixture_catalog(), &root);
+
+        manager.cancel(id).unwrap();
+
+        // No worker ever ran, so cancelling ends the task at once.
+        assert_eq!(manager.status(id).unwrap().state, DownloadState::Cancelled);
+        assert_eq!(persisted_state(&root, id), Some(DownloadState::Cancelled));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restores_interrupted_downloads_as_resumable_paused_tasks() {
+        let root = temp_root("restore");
+        write_interrupted_task(&root);
 
         let manager = ModelManager::new(fixture_catalog(), &root);
 
@@ -1324,55 +1380,181 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn an_async_subscription_to_an_ended_task_yields_its_terminal_state_and_ends() {
-        let root = std::env::temp_dir().join(format!(
-            "meetnote-model-manager-async-cancel-{}",
-            unique_suffix()
-        ));
-        let manager = ModelManager::new(fixture_catalog(), &root);
-        let task = manager.start("fixture").unwrap();
-        manager.cancel(task.id).unwrap();
-
-        let live = collect_within(task.updates, std::time::Duration::from_secs(5));
-        let late = collect_within(
-            manager.subscribe_async(task.id).unwrap(),
-            std::time::Duration::from_secs(5),
-        );
-
-        assert_eq!(live.first().unwrap().state, DownloadState::Queued);
-        assert_eq!(live.last().unwrap().state, DownloadState::Cancelled);
-        assert_eq!(late.last().unwrap().state, DownloadState::Cancelled);
-        let _ = std::fs::remove_dir_all(root);
+    fn states(progress: &[DownloadProgress]) -> Vec<DownloadState> {
+        progress
+            .iter()
+            .map(|progress| progress.state.clone())
+            .collect()
     }
 
     #[test]
-    fn the_manager_wide_async_subscription_sees_tasks_started_later() {
-        let root = std::env::temp_dir().join(format!(
-            "meetnote-model-manager-async-all-{}",
-            unique_suffix()
-        ));
+    fn an_async_subscription_to_an_ended_task_yields_its_terminal_state_and_ends() {
+        let root = temp_root("async-ended");
+        let id = write_interrupted_task(&root);
         let manager = ModelManager::new(fixture_catalog(), &root);
-        let mut all = manager.subscribe_all_async();
-        let task = manager.start("fixture").unwrap();
-        manager.cancel(task.id).unwrap();
+        let live = manager.subscribe_async(id).unwrap();
+        manager.cancel(id).unwrap();
 
+        let live = collect_within(live, std::time::Duration::from_secs(5));
+        let late = collect_within(
+            manager.subscribe_async(id).unwrap(),
+            std::time::Duration::from_secs(5),
+        );
+
+        assert_eq!(
+            states(&live),
+            [DownloadState::Paused, DownloadState::Cancelled]
+        );
+        assert_eq!(states(&late), [DownloadState::Cancelled]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Receives `id`'s updates from a manager-wide stream until its terminal
+    /// one.
+    fn terminal_from_all(
+        all: &mut UnboundedReceiver<DownloadEvent>,
+        id: DownloadId,
+    ) -> DownloadState {
         let deadline = Instant::now() + std::time::Duration::from_secs(5);
         loop {
             match all.try_recv() {
                 Ok(DownloadEvent::Updated(progress))
-                    if progress.id == task.id && progress.state == DownloadState::Cancelled =>
+                    if progress.id == id && progress.state.is_terminal() =>
                 {
-                    break
+                    return progress.state
                 }
                 Ok(_) => {}
                 Err(futures::channel::mpsc::TryRecvError::Empty) if Instant::now() < deadline => {
                     std::thread::sleep(std::time::Duration::from_millis(1))
                 }
-                Err(error) => panic!("no cancelled update for the task: {error:?}"),
+                Err(error) => panic!("no terminal update for the task: {error:?}"),
             }
         }
-        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn the_manager_wide_async_subscription_sees_tasks_started_later() {
+        let root = temp_root("async-all");
+        let manager = ModelManager::new(fixture_catalog(), &root);
+        let mut all = manager.subscribe_all_async();
+        let task = manager.start("fixture").unwrap();
+
+        assert_eq!(
+            terminal_from_all(&mut all, task.id),
+            DownloadState::Failed("model source is not an HTTP URL: local/fixture.bin".into())
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn every_subscription_gets_the_terminal_update_after_the_task_file_records_it() {
+        let catalog = served_catalog(b"fixture", vec![b"fixture"]);
+        let root = temp_root("terminal-order");
+        let probe = Arc::new(SwitchProbe::default());
+        let manager = ModelManager::with_backend_probe(catalog, &root, Some(probe.clone()));
+        let (probing, release) = probe.hold_next();
+        let mut all = manager.subscribe_all_async();
+        let DownloadTask {
+            id,
+            events,
+            updates,
+        } = manager.start("fixture").unwrap();
+        probing
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the download probe did not start");
+        // Stalls the worker when it reaches the std receivers, which every
+        // update reaches last.
+        let record = manager.record(id).unwrap();
+        let std_receivers = record.subscribers.lock().unwrap();
+        drop(release);
+
+        let updates = collect_within(updates, std::time::Duration::from_secs(5));
+
+        assert_eq!(updates.last().unwrap().state, DownloadState::Completed);
+        assert_eq!(persisted_state(&root, id), Some(DownloadState::Completed));
+        assert!(!root.join(".download-tasks.json.tmp").exists());
+        assert!(availability(&manager)
+            .probe
+            .is_some_and(|record| record.passed()));
+        assert_eq!(
+            std::fs::read(root.join("asr/fixture/fixture.bin")).unwrap(),
+            b"fixture"
+        );
+        drop(std_receivers);
+        assert_eq!(terminal_from_all(&mut all, id), DownloadState::Completed);
+        assert_eq!(terminal_of(&events), DownloadState::Completed);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancelling_while_verifying_ends_the_task_only_after_its_last_write() {
+        let catalog = served_catalog(b"fixture", vec![b"fixture"]);
+        let root = temp_root("cancel-verifying");
+        let probe = Arc::new(SwitchProbe::default());
+        let manager = ModelManager::with_backend_probe(catalog, &root, Some(probe.clone()));
+        let (probing, release) = probe.hold_next();
+        let DownloadTask {
+            id,
+            events,
+            mut updates,
+        } = manager.start("fixture").unwrap();
+        probing
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the download probe did not start");
+
+        manager.cancel(id).unwrap();
+
+        // The worker is still probing and writes the probe record next.
+        let mut published = Vec::new();
+        while let Ok(DownloadEvent::Updated(progress)) = updates.try_recv() {
+            published.push(progress);
+        }
+        assert!(
+            published
+                .iter()
+                .all(|progress| !progress.state.is_terminal()),
+            "{published:?}"
+        );
+        assert_eq!(manager.status(id).unwrap().state, DownloadState::Verifying);
+        drop(release);
+        published.extend(collect_within(updates, std::time::Duration::from_secs(5)));
+
+        assert_eq!(published.last().unwrap().state, DownloadState::Cancelled);
+        assert_eq!(
+            published
+                .iter()
+                .filter(|progress| progress.state.is_terminal())
+                .count(),
+            1
+        );
+        // The probed files stay installed with their record.
+        assert!(availability(&manager)
+            .probe
+            .is_some_and(|record| record.passed()));
+        assert_eq!(persisted_state(&root, id), Some(DownloadState::Cancelled));
+        assert_eq!(terminal_of(&events), DownloadState::Cancelled);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_ended_task_never_changes_state_again() {
+        let root = temp_root("ended-frozen");
+        let id = write_interrupted_task(&root);
+        let manager = ModelManager::new(fixture_catalog(), &root);
+        manager.cancel(id).unwrap();
+        let mut all = manager.subscribe_all_async();
+
+        manager
+            .update(id, |progress| progress.state = DownloadState::Downloading)
+            .unwrap();
+
+        assert_eq!(manager.status(id).unwrap().state, DownloadState::Cancelled);
+        assert_eq!(persisted_state(&root, id), Some(DownloadState::Cancelled));
+        assert!(matches!(
+            all.try_recv(),
+            Err(futures::channel::mpsc::TryRecvError::Empty)
+        ));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {
@@ -1417,7 +1599,7 @@ mod tests {
     #[derive(Default)]
     struct SwitchProbe {
         failure: Mutex<Option<String>>,
-        hold: Mutex<Option<Receiver<()>>>,
+        hold: Mutex<Option<(Sender<()>, Receiver<()>)>>,
         threads: Mutex<Vec<std::thread::ThreadId>>,
     }
 
@@ -1432,11 +1614,13 @@ mod tests {
             *self.failure.lock().unwrap() = message.map(Into::into);
         }
 
-        /// Holds the next probe until the returned sender sends or drops.
-        fn hold_next(&self) -> Sender<()> {
+        /// Holds the next probe until the returned sender sends or drops;
+        /// the returned receiver gets a message once that probe runs.
+        fn hold_next(&self) -> (Receiver<()>, Sender<()>) {
+            let (entered, probing) = mpsc::channel();
             let (release, held) = mpsc::channel();
-            *self.hold.lock().unwrap() = Some(held);
-            release
+            *self.hold.lock().unwrap() = Some((entered, held));
+            (probing, release)
         }
     }
 
@@ -1447,7 +1631,8 @@ mod tests {
                 .unwrap()
                 .push(std::thread::current().id());
             let held = self.hold.lock().unwrap().take();
-            if let Some(held) = held {
+            if let Some((entered, held)) = held {
+                let _ = entered.send(());
                 let _ = held.recv_timeout(std::time::Duration::from_secs(5));
             }
             self.failure.lock().unwrap().clone().map_or(Ok(()), Err)
@@ -1455,9 +1640,12 @@ mod tests {
     }
 
     fn terminal_state(task: &DownloadTask) -> DownloadState {
+        terminal_of(&task.events)
+    }
+
+    fn terminal_of(events: &Receiver<DownloadEvent>) -> DownloadState {
         loop {
-            let DownloadEvent::Updated(progress) = task
-                .events
+            let DownloadEvent::Updated(progress) = events
                 .recv_timeout(std::time::Duration::from_secs(5))
                 .expect("the download did not end");
             if progress.state.is_terminal() {
@@ -1796,7 +1984,7 @@ mod tests {
         ));
 
         install(&manager, b"fixture");
-        let release = probe.hold_next();
+        let (_probing, release) = probe.hold_next();
         let running = manager.reprobe("fixture").unwrap();
         assert!(matches!(
             manager.reprobe("fixture"),
@@ -1842,10 +2030,18 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    fn unique_suffix() -> u128 {
-        std::time::SystemTime::now()
+    /// Unique across the tests of one process and across processes running
+    /// the same tests at once.
+    fn unique_suffix() -> String {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos();
+        format!(
+            "{}-{nanos}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        )
     }
 }

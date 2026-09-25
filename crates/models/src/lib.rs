@@ -58,17 +58,28 @@ pub mod download {
         }
 
         pub fn resume(&self) {
-            self.paused.store(false, Ordering::Release);
-            self.wait_condvar.notify_all();
+            self.set_and_wake(&self.paused, false);
         }
 
         pub fn cancel(&self) {
-            self.cancelled.store(true, Ordering::Release);
-            self.wait_condvar.notify_all();
+            self.set_and_wake(&self.cancelled, true);
         }
 
+        /// Sequentially consistent, so `ModelManager::cancel` can rely on a
+        /// worker started after it looked seeing the cancellation.
         pub fn is_cancelled(&self) -> bool {
-            self.cancelled.load(Ordering::Acquire)
+            self.cancelled.load(Ordering::SeqCst)
+        }
+
+        /// Changes `flag` under `wait_lock`: a paused worker holds that lock
+        /// from its flag check until it waits, so it cannot miss the wake-up.
+        fn set_and_wake(&self, flag: &AtomicBool, value: bool) {
+            let _guard = self
+                .wait_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            flag.store(value, Ordering::SeqCst);
+            self.wait_condvar.notify_all();
         }
 
         pub(crate) fn checkpoint(&self) -> Result<(), DownloadError> {
@@ -386,6 +397,40 @@ pub mod download {
             extract_archive_member(&archive_path, "model.onnx", &destination).unwrap();
             assert_eq!(fs::read(&destination).unwrap(), payload);
             fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn cancel_wakes_a_paused_worker_between_its_flag_check_and_its_wait() {
+            let control = DownloadControl::default();
+            control.pause();
+            // Stands in for a paused worker inside `checkpoint` that has seen
+            // the flags but not started waiting: it holds `wait_lock`.
+            let checked = control.wait_lock.lock().unwrap();
+            assert!(!control.is_cancelled());
+            let (returned, cancel_returned) = std::sync::mpsc::channel();
+            let canceller = control.clone();
+            std::thread::spawn(move || {
+                canceller.cancel();
+                let _ = returned.send(());
+            });
+
+            // A wake-up sent now reaches no waiter and is lost.
+            assert!(
+                cancel_returned
+                    .recv_timeout(std::time::Duration::from_millis(50))
+                    .is_err(),
+                "cancel signalled before the worker waited"
+            );
+            let (_guard, waited) = control
+                .wait_condvar
+                .wait_timeout_while(checked, std::time::Duration::from_secs(5), |_| {
+                    !control.is_cancelled()
+                })
+                .unwrap();
+            assert!(!waited.timed_out(), "the cancel wake-up was lost");
+            cancel_returned
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
         }
     }
 }
