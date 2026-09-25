@@ -46,7 +46,6 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
   - #2824：单行 Input 绘制滚动条；
   - #2819：进度条边框；
   - `Select`/`Progress::accessibility_label`。
-- //TODO - 密钥输入框拦截 Copy/Cut，不把明文写入剪贴板。验证：L2 测试设置 masked 值 → 全选 → Copy/Cut → `read_from_clipboard()` 不等于密钥。
 - 全局 git 配置把 `https://github.com/` 改写为 SSH 时，cargo 拉取 git 依赖需设置 `CARGO_NET_GIT_FETCH_WITH_CLI=true`。
 
 ### 维护与退出
@@ -93,9 +92,9 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 | 窗口外壳、标题栏拖拽区、侧栏、工具栏、列表行、状态 chip | MeetNote 自建，按 token 与 Zeron 布局配方实现 |
 | 下拉菜单、对话框、Assistant 输入条 | gpui-base 无样式原语（`Select`、`Dialog`、`popover`、`focus_trap`、`positioner`）+ MeetNote frosted 渲染，保留键盘、焦点与 `accessibility_label`；替换 gpui-component `Select` 弹层与 `open_alert_dialog` |
 | 按钮、分隔线、进度、折叠、滚动条 | gpui-component，经 `ThemeConfig` 映射 token |
-| 单行输入 | gpui-base `Input` 替换自研 `TextInput`，补齐粘贴、IME 与 secret 掩码；密钥框拦截 Copy/Cut |
+| 单行输入 | gpui-base input 上的带 label 包装（`controls/text_field.rs`），支持粘贴、IME、undo/redo 与 secret 掩码；密钥框拦截 Copy/Cut：Copy 不写剪贴板，Cut 不改变值与选区 |
 
-U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件保留到下一项完成。`Root` 属于 styled `ui` crate，其对话框与 tooltip 依赖它；只要仍使用该 crate 的组件，`Root` 就必须是窗口第一层。
+下拉、对话框、进度条与单行输入已经由 `crates/ui/src/controls/` 的带 label 包装提供；按钮、折叠、分隔线、滚动条、tooltip 与 `ThemeConfig` 仍来自 styled `ui` crate。`Root` 属于该 crate，负责窗口背景、tooltip，以及 gpui-base focus trap 内的 Tab 循环；只要仍使用该 crate 的组件，`Root` 就必须是窗口第一层。
 
 - //TODO - 把按钮、分隔线、进度、折叠与滚动条改为 gpui-base 原语加 MeetNote 渲染，移除 `gpui-component` 依赖与 `Root`，只保留 `gpui-base` 与 assets（与 Zeron 一致）。验证：`cargo tree -p ui -i gpui-component` 无结果，L2/L3 测试通过。
 
@@ -105,7 +104,8 @@ U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件�
   - 对比度与 `effective_material`；
   - i18n key 源码扫描；
   - 颜色字面量扫描：`crates/ui/src` 除 `theme/` 外不得出现 `rgb(`/`rgba(`/`hsla(`，测试用 `include_str!` 读取源码，初始红线为 61 处；
-  - 渲染函数中无 `std::fs`/`Path::is_file` 的源码扫描。
+  - 渲染函数中无 `std::fs`/`Path::is_file` 的源码扫描；
+  - 下拉、进度条、对话框与文本输入只经 `controls/` 包装构造的源码扫描。
 - **L2**：`TestAppContext` + fake service 的 GPUI 交互测试。覆盖点击、键盘、焦点、异步完成与 `debug_bounds` 结构断言；涉及 `runtime::spawn_blocking` 真实线程的测试调用 `cx.executor().allow_parking()`。
 - **L3**：`VisualTestAppContext::capture_screenshot`（`Window::render_to_image`，Metal 离屏）。
   - 以固定窗口尺寸 1180×760、固定 locale 与 fixture 工作区渲染每个 route，覆盖深/浅 × 玻璃/不透明。
@@ -115,7 +115,9 @@ U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件�
     - 未设置 `MEETNOTE_VISUAL` 时跳过，默认 `cargo test -p ui` 只编译 harness。
   - 基线 PNG 存 `crates/ui/tests/visual/`。`baseline.json` 记录 scale factor、窗口尺寸、locale 与 GPUI/gpui-component revision；scale factor 与基线不一致时比较直接失败。
   - 单通道差 > 2 的像素占比超过 0.5% 视为变化，需人工确认后更新基线。
+  - 除 route 外，基线还覆盖打开的 Settings 下拉与对话框（四种外观）。
   - in-window blur 可以确定性截图；窗口背后桌面 blur 由 `NSVisualEffectView` 在进程外合成，只做手工检查。
+  - 资源探测：`MEETNOTE_VISUAL=1 MEETNOTE_RESOURCE_PROBE=1 cargo test --release -p ui --test visual`（debug 构建拒绝运行）。深色玻璃下对 Settings 下拉与对话框各预热 10 次、开合 50 次，门限为 `MTLDevice.currentAllocatedSize` 增长 ≤ 8 MiB、draw p95 ≤ 16.7 ms；render 耗时含 GPU 回读，只打印不设门限。M2 Pro 上一次实测：两者增长均为 0 MiB，draw p95 为 1.72 ms 与 1.70 ms。
 - **无障碍**：
   - L2 测试窗口不启用 accessibility tree，因此交互控件一律经 MeetNote 包装创建，包装要求传入 label；由 L1 源码扫描保证页面不直接构造未包装控件。
   - 发布前在 macOS 27 用 Accessibility Inspector 手工检查各 route。
@@ -132,8 +134,8 @@ U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件�
 
 | 区域 | 已实现 | 当前缺口 |
 |---|---|---|
-| Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 gpui-component `Root`；Settings 下拉与 Models 下载进度条没有 `accessibility_label`（fork 的 styled 组件无此 API） | 玻璃原语（frosted、edge fade）、gpui-base 下拉/对话框/输入、键盘导航与无障碍 |
-| Assistant | 输入、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染；任务状态由共享 JobRuntime 的 `JobEvent` 按请求投影；pending 过期后队列推进到下一项 | 下文三项页面验收 |
+| Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 gpui-component `Root`；frosted 浮层与 edge fade 原语；下拉、进度条、对话框与文本输入为带 label 的 gpui-base 包装 | 按钮、折叠、分隔线、滚动条与 tooltip 仍用 styled gpui-component；键盘遍历、焦点环与无障碍 |
+| Assistant | 内容平面底部的 frosted 输入条（Enter 发送）、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染；任务状态由共享 JobRuntime 的 `JobEvent` 按请求投影；pending 过期后队列推进到下一项 | 下文三项页面验收 |
 | Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original、处理与取消；列表读取与处理启动在后台执行 | 文档编辑、scanner issue、revision 冲突与通用 speaker 校正的 UI；服务已由 `WorkspaceService::document_commands()` 提供 |
 | Detail | 内容平面内右侧不透明面板、基础 transcript | 状态、来源、处理记录与结果统计的展示；统计由 `domain::document_result_statistics` 提供 |
 | Models | catalog 分组、下载、暂停、继续、取消和进度，安装状态来自 `InstallationService` | license/source/checksum、probe 记录、失败原因与重新 probe 的展示；服务已由 `ModelAvailability` 与 `ModelManager::reprobe` 提供 |
@@ -143,7 +145,7 @@ U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件�
 
 - L1：i18n key、颜色字面量、渲染路径文件探测，以及 `controller.rs` 中文件探测与线程创建的源码扫描；对比度、`effective_material` 与 token 纯函数；
 - L2：路由结构与交互测试（`crates/ui/tests/routes.rs`、`crates/ui/src/lib.rs`），其中阻塞的 fake repository/model manager 断言文件 IO 不占用 UI 线程；
-- L3：四个 route × 四种外观的基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN）。
+- L3：四个 route 与打开的下拉、对话框在四种外观下的 24 张基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN），以及 release 构建的资源探测。
 
 UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。音频处理与 Assistant 共用 `main.rs` 创建的应用级 JobRuntime，受同一并发上限约束；Assistant 任务状态由按请求标记的 `JobEvent` 投影，阶段与工具进度经 `AgentProgress` 回调补充细节。通用 session 不属于当前范围。
 
@@ -236,18 +238,9 @@ UI locale 与 transcription language 独立。backend 不支持的设备或 stag
   - `host_probe`：`host_probe_reads_the_api_key_file_that_settings_validates`、`host_probe_rejects_an_unreadable_api_key_file_before_contacting_the_provider`；
   - `meetnote` 二进制单元测试：`assistant_service::tests::resolves_api_key_file_from_the_settings_directory`。
 
-U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移、U3 token 与外壳已完成，当前状态见上文。
+U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移、U3 token 与外壳、U4 玻璃原语与页面迁移已完成，当前状态见上文。
 
-1. **U4 玻璃原语与页面迁移**
-   - `frosted`、`edge_faded` 原语与不透明回退。
-   - 基于 gpui-base 的 frosted 下拉、对话框与 Assistant 输入条；gpui-base `Input` 替换 `TextInput`；各页面迁移到 token 与原语。
-   - 验证：
-     - L2 测试覆盖下拉的 Up/Down/Enter/Esc、点击外部关闭、焦点归还；
-     - L1 扫描确认下拉与进度条都经带 label 的包装创建，恢复 Settings 3 个下拉与 Models 下载进度条的 label；
-     - 对话框确认/取消；输入粘贴，以及经 `EntityInputHandler` 提交中文文本；密钥框 Copy/Cut 不泄露；
-     - 重新验证 U1 中设备下拉、secret 输入与对话框相关用例。
-   - //TODO - 在 L3 harness 中增加 macOS 资源探测。预热 10 次后，浮层开合 50 次，`MTLDevice.currentAllocatedSize` 增长 ≤ 8 MiB，帧时间 p95 ≤ 16.7 ms。验证：手动运行 `MEETNOTE_VISUAL=1 MEETNOTE_RESOURCE_PROBE=1 cargo test -p ui --test visual` 并记录结果。
-2. **U5 产品功能**
+1. **U5 产品功能**
    - scanner issue、revision 和完整文档状态接入 Documents/Detail。persistence 扫描器改用 `application::DocumentIssueKind` 生成可读 issue（当前为 Debug 文本），并报告文档根下非隐藏的普通文件（当前静默跳过）。验证：L2 测试以无效外部文件与 revision 变化驱动显示。
    - 全部树和文档写回切换到 revision-aware document service，并补齐冲突 UI。验证：L2 测试在外部修改后写回，得到冲突提示且磁盘内容不变。
    - 通用文档编辑、speaker 校正和 Speaker Library 管理，移除固定 speaker 合并。验证：L2 编辑与校正测试回读 revision 递增、processing 字段不变。
