@@ -132,36 +132,26 @@ U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件�
 
 | 区域 | 已实现 | 当前缺口 |
 |---|---|---|
-| Application shell | 顶部四个入口、暗色、基础路由；窗口第一层为 gpui-component `Root`，只设 bounds、未设标题；导航不高亮当前 route；颜色为 61 处字面量；Settings 的 3 个下拉与 Models 下载进度条没有 `accessibility_label`（fork 无此 API） | token、玻璃外壳、外观设置、键盘导航与无障碍 |
-| Assistant | 输入、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染 | 下文三项页面验收与已知缺陷 |
-| Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original、处理与取消 | 文档编辑、scanner issue、revision/provenance、通用 speaker 校正 |
-| Detail | overlay 打开/关闭、基础 transcript | 完整 JSON、来源、状态、处理记录和 Agent 变更来源 |
-| Models | catalog 分组、下载、暂停、继续、取消和进度 | license/source 展示、probe 结果和安装问题诊断 |
-| Settings | locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径；即时保存项经 `update_if_equal` 在后台逐项提交，Assistant 连接区为草稿并以 typed patch 保存，revision 冲突显示可重试错误 | 外观、文档工作区路径、能力联动说明和完整校验反馈 |
+| Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 gpui-component `Root`；Settings 下拉与 Models 下载进度条没有 `accessibility_label`（fork 的 styled 组件无此 API） | 玻璃原语（frosted、edge fade）、gpui-base 下拉/对话框/输入、键盘导航与无障碍 |
+| Assistant | 输入、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染；任务状态由共享 JobRuntime 的 `JobEvent` 按请求投影；pending 过期后队列推进到下一项 | 下文三项页面验收 |
+| Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original、处理与取消；列表读取与处理启动在后台执行 | 文档编辑、scanner issue、revision 冲突与通用 speaker 校正的 UI；服务已由 `WorkspaceService::document_commands()` 提供 |
+| Detail | 内容平面内右侧不透明面板、基础 transcript | 状态、来源、处理记录与结果统计的展示；统计由 `domain::document_result_statistics` 提供 |
+| Models | catalog 分组、下载、暂停、继续、取消和进度，安装状态来自 `InstallationService` | license/source/checksum、probe 记录、失败原因与重新 probe 的展示；服务已由 `ModelAvailability` 与 `ModelManager::reprobe` 提供 |
+| Settings | 外观（主题、材质）、locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径；即时保存项经 `update_if_equal` 在后台逐项提交，Assistant 连接区为草稿并以 typed patch 保存（新建连接为一次 `patch_if_equal`）；revision 冲突后从 repository 重新加载再重试 | 文档工作区路径、能力联动说明和完整校验反馈 |
 
 当前 GPUI 上的测试基线：
 
-- L1：i18n key 与渲染路径文件探测的源码扫描；
-- L2：路由结构与交互测试（`crates/ui/tests/routes.rs`、`crates/ui/src/lib.rs`）；
-- L3：四个 route 的深色不透明基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN）。
+- L1：i18n key、颜色字面量、渲染路径文件探测，以及 `controller.rs` 中文件探测与线程创建的源码扫描；对比度、`effective_material` 与 token 纯函数；
+- L2：路由结构与交互测试（`crates/ui/tests/routes.rs`、`crates/ui/src/lib.rs`），其中阻塞的 fake repository/model manager 断言文件 IO 不占用 UI 线程；
+- L3：四个 route × 四种外观的基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN）。
 
-UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。Assistant 任务在 `DesktopAssistantService` 自建的 JobRuntime 中执行并联动取消，阶段进度经 `AgentProgress` 回调投影；该 JobRuntime 的 `JobEvent` 未被消费，也未与音频任务共用。通用 session 不属于当前范围。
-
-- //TODO - `DesktopAssistantService` 改用应用级共享 JobRuntime，并由 `JobEvent` 投影任务状态。验证：L2 测试在 `JobRuntime::with_max_concurrency(1)` 下，Assistant 任务与音频任务受同一并发上限约束。
+UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。音频处理与 Assistant 共用 `main.rs` 创建的应用级 JobRuntime，受同一并发上限约束；Assistant 任务状态由按请求标记的 `JobEvent` 投影，阶段与工具进度经 `AgentProgress` 回调补充细节。通用 session 不属于当前范围。
 
 ### 已知缺陷
 
-以下缺陷与 GPUI 版本无关，按"复现 → 测试红线 → 修复 → 转绿"处理，测试写在 controller/state 层。
+以下缺陷按"复现 → 测试红线 → 修复 → 转绿"处理，测试写在 controller/state 层。
 
-- //TODO - 当前 pending 过期后，队列中的后续 review 无法推进，因为接受/拒绝只作用于 awaiting 项。验证：L2 测试让首项过期后，下一项进入 awaiting 并可接受。
-- //TODO - 事件回调中的主线程文件 IO 移到后台，包括：
-  - 目录变化、导入、合并与处理完成时的 `list_projects()`；
-  - `use_model` 的 `model_ref`；
-  - `download_model` 的 `start`。
-  验证：L2 测试使用阻塞的 fake repository/model manager，断言这些操作期间其他 UI 操作仍能完成。
-- //TODO - 安装状态探测、目录事件与下载事件由 models/application 服务提供异步订阅。当前 UI 在后台调用 `probe_installation`，并用转发线程桥接同步 receiver。验证：`crates/ui` 不再调用 `ModelManager::browse` 与文件探测，L1 扫描覆盖 `controller.rs`。
-- //TODO - Settings 重新加载只读取内存快照，看不到其他进程对 `settings.json` 的修改，冲突后重试会持续失败；需要 Settings 基础服务提供从 repository 重新加载。验证：另一进程修改后，UI 重新加载能看到外部值并保存成功。
-- //TODO - Settings 契约缺少创建连接的 patch，`DesktopAssistantService` 先在内存候选设置上应用 patch，再以一次 `update_if_equal` 提交。验证：契约补齐后，新建连接只经一次 `patch_if_equal` 提交，凭据规则测试不变。
+- //TODO - 处理任务在后台启动完成前点击取消不生效，任务启动后继续运行。验证：L2 测试在阻塞的启动调用期间点击取消，启动返回后任务进入 cancelled 且没有结果写回。
 
 Speaker 合并目前在 UI 固定为 `speaker-1 → speaker-0`，随 U5 的通用 speaker 校正移除。
 
@@ -246,23 +236,9 @@ UI locale 与 transcription language 独立。backend 不支持的设备或 stag
   - `host_probe`：`host_probe_reads_the_api_key_file_that_settings_validates`、`host_probe_rejects_an_unreadable_api_key_file_before_contacting_the_provider`；
   - `meetnote` 二进制单元测试：`assistant_service::tests::resolves_api_key_file_from_the_settings_directory`。
 
-U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移已完成，当前状态见上文。
+U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移、U3 token 与外壳已完成，当前状态见上文。
 
-1. **U3 token 与外壳**
-   - 建立 `crates/ui/src/theme/`、`THIRD_PARTY_NOTICES.md`，并由 `scripts/package-macos-app.sh` 打包进产物；61 处颜色字面量改为 token。
-   - 实现透明标题栏（拖拽区与交通灯位置）、玻璃侧栏与内容平面布局、Settings 外观项与系统外观跟随。
-   - 修正当前基线中可见的问题：
-     - 导航高亮当前 route；
-     - 设置项控件按列对齐；
-     - 设置窗口标题；
-     - gpui-component 占位文字（Please select）与 projection 值（complete）本地化；
-     - Models 状态列对齐。
-   - 验证：
-     - L1 颜色扫描与对比度测试转绿，`effective_material` 测试通过；
-     - L2 测试断言玻璃材质下 `tokens.background.a == 0`；
-     - 四种外观组合的 L3 基线通过视觉清单；
-     - 桌面背后 blur 手工检查。
-2. **U4 玻璃原语与页面迁移**
+1. **U4 玻璃原语与页面迁移**
    - `frosted`、`edge_faded` 原语与不透明回退。
    - 基于 gpui-base 的 frosted 下拉、对话框与 Assistant 输入条；gpui-base `Input` 替换 `TextInput`；各页面迁移到 token 与原语。
    - 验证：
@@ -271,8 +247,8 @@ U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移已完成，当前�
      - 对话框确认/取消；输入粘贴，以及经 `EntityInputHandler` 提交中文文本；密钥框 Copy/Cut 不泄露；
      - 重新验证 U1 中设备下拉、secret 输入与对话框相关用例。
    - //TODO - 在 L3 harness 中增加 macOS 资源探测。预热 10 次后，浮层开合 50 次，`MTLDevice.currentAllocatedSize` 增长 ≤ 8 MiB，帧时间 p95 ≤ 16.7 ms。验证：手动运行 `MEETNOTE_VISUAL=1 MEETNOTE_RESOURCE_PROBE=1 cargo test -p ui --test visual` 并记录结果。
-3. **U5 产品功能**
-   - scanner issue、revision 和完整文档状态接入 Documents/Detail。验证：L2 测试以无效外部文件与 revision 变化驱动显示。
+2. **U5 产品功能**
+   - scanner issue、revision 和完整文档状态接入 Documents/Detail。persistence 扫描器改用 `application::DocumentIssueKind` 生成可读 issue（当前为 Debug 文本），并报告文档根下非隐藏的普通文件（当前静默跳过）。验证：L2 测试以无效外部文件与 revision 变化驱动显示。
    - 全部树和文档写回切换到 revision-aware document service，并补齐冲突 UI。验证：L2 测试在外部修改后写回，得到冲突提示且磁盘内容不变。
    - 通用文档编辑、speaker 校正和 Speaker Library 管理，移除固定 speaker 合并。验证：L2 编辑与校正测试回读 revision 递增、processing 字段不变。
    - 可选择的文档工作区与音频缺失恢复。验证：L2 测试切换工作区，并对缺失音频给出恢复入口。
