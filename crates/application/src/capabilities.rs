@@ -2247,6 +2247,113 @@ mod tests {
     }
 
     #[test]
+    fn settings_capability_port_neither_projects_nor_patches_the_documents_root() {
+        const ROOT: &str = "/Volumes/SENTINEL_DOCUMENTS_ROOT";
+        let fields: Vec<String> = vec![
+            "assistant.connections".into(),
+            "assistant.connectionTargets".into(),
+            "assistant.credentials".into(),
+            "assistant.writePolicy".into(),
+        ];
+        let initial = AppSettings {
+            documents_root: ROOT.into(),
+            ..sentinel_settings()
+        };
+        let settings_service =
+            SettingsService::open(Arc::new(MemorySettings(Mutex::new(initial.clone())))).unwrap();
+        let documents =
+            crate::DocumentService::new(Arc::new(MemoryDocuments(Mutex::new(BTreeMap::new()))));
+        let workspace = crate::WorkspaceService::new(
+            crate::ProcessingService::new(Arc::new(NoopAsr), Arc::new(NoopDiarization)),
+            documents.clone(),
+        );
+        let host = crate::AgentHost::new(
+            crate::WorkspaceCapabilityPort::new(
+                documents,
+                crate::WorkspaceAccessPolicy::AllDocuments,
+            ),
+            AudioCapabilityPort::new(workspace, std::iter::empty()),
+            SettingsCapabilityPort::new(settings_service.clone(), fields.clone()),
+            fields.clone(),
+        );
+        let call = |operation: &str, arguments: serde_json::Value| {
+            host.dispatch(contracts::CapabilityCallRequest::new(
+                format!("root-{operation}"),
+                format!("root-{operation}"),
+                "settings.app",
+                1,
+                operation,
+                contracts::CapabilityAuthorization {
+                    settings_fields: fields.clone(),
+                    ..Default::default()
+                },
+                arguments,
+            ))
+        };
+        let descriptor = host
+            .discover()
+            .into_iter()
+            .find(|descriptor| descriptor.id == "settings.app")
+            .unwrap();
+        for operation in &descriptor.operations {
+            for schema in [&operation.input_schema, &operation.output_schema] {
+                assert!(
+                    !schema.to_string().contains("documentsRoot"),
+                    "{} schema exposes the documents root: {schema}",
+                    operation.name
+                );
+            }
+        }
+
+        let snapshot = call("snapshot", serde_json::json!({}));
+        assert!(snapshot.ok, "{snapshot:?}");
+        let revision = snapshot.result.as_ref().unwrap()["revision"].clone();
+        let mut results = vec![serde_json::to_string(&snapshot).unwrap()];
+        for section in [
+            "connections",
+            "connectionTargets",
+            "credentials",
+            "writePolicy",
+        ] {
+            let read = call("read", serde_json::json!({"section": section}));
+            assert!(read.ok, "{read:?}");
+            results.push(serde_json::to_string(&read).unwrap());
+        }
+        let rejected = call(
+            "patch",
+            serde_json::json!({
+                "expectedRevision": revision,
+                "patch": {"documentsRoot": "/tmp/elsewhere"}
+            }),
+        );
+        assert!(!rejected.ok);
+        assert_eq!(
+            rejected.error.as_ref().unwrap().code,
+            "SETTINGS_ARGUMENTS_INVALID"
+        );
+        let patched = call(
+            "patch",
+            serde_json::json!({
+                "expectedRevision": revision,
+                "patch": {"maxToolRounds": 5}
+            }),
+        );
+        assert!(patched.ok, "{patched:?}");
+        results.push(serde_json::to_string(&patched).unwrap());
+
+        for result in &results {
+            assert!(!result.contains(ROOT), "public result leaked: {result}");
+            assert!(
+                !result.contains("documentsRoot"),
+                "public result exposes the documents root: {result}"
+            );
+        }
+        let stored = settings_service.snapshot().unwrap();
+        assert_eq!(stored.documents_root, ROOT);
+        assert_eq!(stored.assistant.max_tool_rounds, 5);
+    }
+
+    #[test]
     fn builtin_capabilities_reject_non_object_arguments_with_service_codes() {
         let documents =
             crate::DocumentService::new(Arc::new(MemoryDocuments(Mutex::new(BTreeMap::new()))));

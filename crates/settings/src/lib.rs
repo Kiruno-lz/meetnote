@@ -19,6 +19,10 @@ fn default_speaker_library_path() -> String {
     "data/speakers/library.json".into()
 }
 
+fn default_documents_root() -> String {
+    "data/documents".into()
+}
+
 fn default_max_tool_rounds() -> u32 {
     8
 }
@@ -324,6 +328,11 @@ pub struct AppSettings {
     pub expected_speakers: Option<u32>,
     #[serde(default = "default_speaker_library_path")]
     pub speaker_library_path: String,
+    /// The directory holding the document packages. A desktop Workspace
+    /// setting: it is not part of the Settings capability projection, and the
+    /// desktop saves it only after the workspace switched to it.
+    #[serde(default = "default_documents_root")]
+    pub documents_root: String,
     #[serde(default)]
     pub diarization_stages: DiarizationStageConfiguration,
     #[serde(default)]
@@ -345,6 +354,7 @@ impl Default for AppSettings {
             language: None,
             expected_speakers: None,
             speaker_library_path: default_speaker_library_path(),
+            documents_root: default_documents_root(),
             diarization_stages: DiarizationStageConfiguration::default(),
             assistant: AssistantSettings::default(),
             appearance: AppearanceSettings::default(),
@@ -394,6 +404,11 @@ impl AppSettings {
         if self.speaker_library_path.trim().is_empty() {
             return Err(SettingsError::Invalid(
                 "speaker library path must not be empty".into(),
+            ));
+        }
+        if self.documents_root.trim().is_empty() {
+            return Err(SettingsError::Invalid(
+                "documents root must not be empty".into(),
             ));
         }
         if let Some(model) = &self.diarization_stages.segmentation_model {
@@ -1844,6 +1859,57 @@ mod tests {
             serde_json::from_value::<AppSettings>(value).unwrap(),
             settings
         );
+    }
+
+    #[test]
+    fn settings_without_a_documents_root_load_the_default_root() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{
+                "schemaVersion": "meetnote.settings.v1",
+                "asrBackendId": null,
+                "asrModel": null,
+                "diarizationBackendId": null,
+                "diarizationModel": null,
+                "computeDevice": "Auto",
+                "language": null,
+                "expectedSpeakers": null
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.documents_root, "data/documents");
+        assert_eq!(AppSettings::default().documents_root, "data/documents");
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn documents_root_round_trips_as_camel_case() {
+        let settings = AppSettings {
+            documents_root: "/Users/me/Notes/meetnote".into(),
+            ..AppSettings::default()
+        };
+
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["documentsRoot"], "/Users/me/Notes/meetnote");
+        assert!(value.get("documents_root").is_none());
+        assert_eq!(
+            serde_json::from_value::<AppSettings>(value).unwrap(),
+            settings
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_documents_root() {
+        for root in ["", "   "] {
+            let settings = AppSettings {
+                documents_root: root.into(),
+                ..AppSettings::default()
+            };
+            assert!(matches!(
+                settings.validate(),
+                Err(SettingsError::Invalid(message)) if message.contains("documents root")
+            ));
+        }
     }
 
     /// `settings.json` in a directory of its own, which the test removes.

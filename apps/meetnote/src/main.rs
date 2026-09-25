@@ -1,8 +1,9 @@
 mod assistant_service;
 
 use application::{
-    AgentHost, BackendInventory, DocumentService, ProcessingOptions, ProcessingService,
-    SettingsCapabilityPort, WorkspaceAccessPolicy, WorkspaceCapabilityPort, WorkspaceService,
+    validate_documents_root, AgentHost, BackendInventory, DocumentRepository, DocumentService,
+    DocumentsRoot, ProcessingOptions, ProcessingService, SettingsCapabilityPort,
+    WorkspaceAccessPolicy, WorkspaceCapabilityPort, WorkspaceService,
 };
 use asr::{AsrBackendManager, AsrBackendRegistry};
 use asr_sherpa_onnx::SherpaOnnxAsrBackend;
@@ -20,8 +21,17 @@ use runtime::JobRuntime;
 use settings::{JsonSettingsRepository, SettingsService};
 use std::env;
 use std::io::{BufRead, Read};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use ui::DesktopServices;
+
+/// Downloaded models; it can never hold the document packages.
+const MODEL_DIRECTORY: &str = "models";
+
+/// The document repository of a documents root, creating the directory.
+fn open_documents_repository(root: &Path) -> Result<Arc<dyn DocumentRepository>, String> {
+    Ok(Arc::new(FileDocumentRepository::open(root)?))
+}
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -61,9 +71,23 @@ fn main() {
     diarization_registry.register(native_diarization_backend);
     let diarization_manager = Arc::new(DiarizationBackendManager::new(diarization_registry));
 
-    let repository = Arc::new(
-        FileDocumentRepository::open("data/documents").expect("failed to open document repository"),
-    );
+    let documents_root = PathBuf::from(&settings_snapshot.documents_root);
+    if let Err(error) = validate_documents_root(
+        &documents_root,
+        Some(Path::new(&settings_snapshot.speaker_library_path)),
+        Path::new(MODEL_DIRECTORY),
+    ) {
+        if is_agent {
+            fail_agent_adapter(&format!("invalid documents root: {error}"));
+        }
+        panic!("invalid documents root: {error}");
+    }
+    let repository = open_documents_repository(&documents_root).unwrap_or_else(|error| {
+        if is_agent {
+            fail_agent_adapter(&format!("cannot open document repository: {error}"));
+        }
+        panic!("failed to open document repository: {error}");
+    });
     let documents = DocumentService::new(repository);
     // One runtime bounds Assistant and audio workers together.
     let jobs = Arc::new(JobRuntime::default());
@@ -96,7 +120,12 @@ fn main() {
             speaker_library_path: Some(settings_snapshot.speaker_library_path.clone()),
             diarization_stages: settings_snapshot.diarization_stages.clone(),
         },
-    );
+    )
+    .with_documents_root(DocumentsRoot::new(
+        &documents_root,
+        MODEL_DIRECTORY,
+        open_documents_repository,
+    ));
 
     if is_agent {
         run_agent_cli(
@@ -124,7 +153,7 @@ fn main() {
                     diarization: diarization_manager.clone(),
                 });
                 let model_manager =
-                    ModelManager::with_backend_probe(catalog, "models", Some(backend_probe));
+                    ModelManager::with_backend_probe(catalog, MODEL_DIRECTORY, Some(backend_probe));
                 let asr_model = model_manager
                     .configured_model_ref(
                         "asr",
@@ -159,7 +188,10 @@ fn main() {
         ))
         .unwrap_or_else(|error| fail_process(error.message));
         println!("processed document {}", result.id().as_str());
-        println!("document package: data/documents/{}", result.id().as_str());
+        println!(
+            "document package: {}",
+            documents_root.join(result.id().as_str()).display()
+        );
         return;
     }
 
@@ -885,5 +917,68 @@ impl BackendProbe for RegisteredBackendProbe {
                 .map_err(|error| error.message),
             task => Err(format!("backend probe is not registered for task: {task}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_documents_root_switch_moves_the_file_repository_to_the_new_directory() {
+        let base = std::env::temp_dir().join(format!(
+            "meetnote-documents-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let old_root = base.join("documents");
+        let new_root = base.join("elsewhere/documents");
+        let processing = ProcessingService::new_with_providers(
+            Arc::new(AsrBackendManager::new(AsrBackendRegistry::default())),
+            Arc::new(DiarizationBackendManager::new(
+                DiarizationBackendRegistry::default(),
+            )),
+        );
+        let workspace = WorkspaceService::new(
+            processing,
+            DocumentService::new(open_documents_repository(&old_root).unwrap()),
+        )
+        .with_documents_root(DocumentsRoot::new(
+            &old_root,
+            base.join(MODEL_DIRECTORY),
+            open_documents_repository,
+        ));
+        let first = workspace.import_audio("first.wav").unwrap();
+
+        workspace.switch_documents_root(&new_root).unwrap();
+        let second = workspace.import_audio("second.wav").unwrap();
+
+        let state = |root: &Path, document: &domain::DocumentState| {
+            root.join(document.id().as_str())
+                .join(persistence::DOCUMENT_STATE_FILENAME)
+                .is_file()
+        };
+        assert!(state(&old_root, &first));
+        assert!(!state(&old_root, &second));
+        assert!(state(&new_root, &second));
+        let listed: Vec<_> = workspace
+            .list_projects()
+            .unwrap()
+            .into_iter()
+            .map(|document| document.id().clone())
+            .collect();
+        assert_eq!(listed, vec![second.id().clone()]);
+        assert_eq!(
+            workspace.switch_documents_root(base.join(MODEL_DIRECTORY)),
+            Err(application::DocumentsRootError::Reserved {
+                path: base.join(MODEL_DIRECTORY),
+                location: application::ReservedLocation::ModelDirectory,
+                reserved: base.join(MODEL_DIRECTORY),
+            })
+        );
+        std::fs::remove_dir_all(base).unwrap();
     }
 }

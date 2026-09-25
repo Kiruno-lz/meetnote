@@ -430,20 +430,21 @@ impl DocumentService {
     /// document is still at `expected_revision`; `markdown: None` keeps the
     /// stored body. The re-read and the write are two repository calls, not
     /// one locked step: a writer that lands between them is overwritten.
-    fn save_expecting_revision(
+    pub(crate) fn save_expecting_revision(
         &self,
         mut document: DocumentState,
         expected_revision: u64,
         markdown: Option<String>,
     ) -> Result<DocumentState, DocumentCommandError> {
-        let current = self
+        let repository = self.current();
+        let current = repository
             .read(document.id())
             .map_err(ServiceError::from)?
             .ok_or_else(|| DocumentCommandError::NotFound(document.id().clone()))?;
         ensure_revision(&current.state, expected_revision)?;
         document.schema.revision = expected_revision.saturating_add(1);
         document.schema.updated_at_ms = crate::now_ms();
-        self.repository
+        repository
             .save(document.clone(), markdown)
             .map_err(ServiceError::from)?;
         Ok(document)
