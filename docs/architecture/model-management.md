@@ -98,6 +98,14 @@ queued -> downloading <-> paused -> verifying -> completed
 - 文件或目录存在，bundle 必需 artifact 齐全。
 - native diarization stage 组合、revision 和固定参数文件兼容。
 
+每次 probe 的结果写入 `<model_root>/<task>/<model-id>.probe.json`（schema `meetnote.model-probe.v1`，原子替换），位于安装目录旁而不在其中：处理 provenance 对安装目录逐文件计算 checksum，probe 失败又会删除安装目录。记录包含：
+
+- probe 类型（`download` 或 `reprobe`）、时间与 catalog revision；
+- 逐 artifact checksum 结果（`matched`、`archive-matched`、`archive-not-rechecked`、`not-declared`、`mismatched`、`unreadable`）与逐 backend 结果；
+- 最近一次失败的操作与类型化原因（`network`、`io`、`size-mismatch`、`checksum-mismatch`、`archive`、`unsupported-source`、`backend-probe`），之后一次成功即清除。
+
+`ModelAvailability` 携带该记录、失败原因与记录读取错误（无法解析、schema 未知或属于其他模型时报告路径和原因，下次写入覆盖）。`ModelManager::reprobe` 在独立线程上对已安装模型重新校验 checksum 并执行 backend probe；archive 成员因 archive 未保留而记为 `archive-not-rechecked`。重新 probe 失败只更新记录与失败原因，不删除已安装文件，模型仍可选择，处理前 preflight 照常把关。
+
 ### 3. 处理前 preflight 与真实加载
 
 `ProcessingService::probe` 在任务进入 runtime 前再次检查选中的 ASR、diarization 模型和 stage configuration。真正的 ONNX graph、GGML/GGUF context、provider/ABI 与推理 session 在 backend 执行时加载；快速 probe 不能替代这一层。
