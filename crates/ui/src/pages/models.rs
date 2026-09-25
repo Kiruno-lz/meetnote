@@ -266,8 +266,7 @@ fn download_progress_view(
                 .child(
                     Progress::new(format!("download-progress-{model_id}"))
                         .value(percent)
-                        .loading(loading)
-                        .accessibility_label("model download progress"),
+                        .loading(loading),
                 )
                 .child(
                     div()

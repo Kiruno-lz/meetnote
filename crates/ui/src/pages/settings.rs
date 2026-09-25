@@ -564,23 +564,17 @@ fn select_control(
     div()
         .size_full()
         .debug_selector(|| format!("select-{id}"))
-        .child(
-            Select::new(state)
-                .w(px(280.))
-                .menu_width(px(280.))
-                .accessibility_label(id),
-        )
+        .child(Select::new(state).w(px(280.)).menu_width(px(280.)))
         .into_any_element()
 }
 
 fn model_select_control(
     state: &gpui::Entity<gpui_component::select::SelectState<Vec<ModelOption>>>,
-    id: &'static str,
+    _id: &'static str,
 ) -> gpui::AnyElement {
     Select::new(state)
         .w(px(280.))
         .menu_width(px(280.))
-        .accessibility_label(id)
         .into_any_element()
 }
 
@@ -588,11 +582,10 @@ fn stage_model_select_control(
     state: &gpui::Entity<
         gpui_component::select::SelectState<Vec<crate::controller::StageModelOption>>,
     >,
-    id: &'static str,
+    _id: &'static str,
 ) -> gpui::AnyElement {
     Select::new(state)
         .w(px(280.))
         .menu_width(px(280.))
-        .accessibility_label(id)
         .into_any_element()
 }

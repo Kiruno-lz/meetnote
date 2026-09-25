@@ -128,7 +128,7 @@ mod screenshots {
             let mut stable = None;
             for _ in 0..MAX_FRAMES {
                 cx.run_until_parked();
-                cx.update_window(handle, |_, window, cx| window.draw(cx).clear(cx))
+                cx.update_window(handle, |_, window, cx| window.draw(cx).clear())
                     .expect("the route window draws");
                 let screenshot = cx
                     .capture_screenshot(handle)

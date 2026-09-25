@@ -40,12 +40,12 @@ uuid = { version = "1", features = ["v4", "serde"] }
 notify = "8"
 ndarray = "0.17"
 
-# GPUI is still pre-1.0. Keep the UI, platform, and gpui-component crates on one
-# exact revision; Cargo.lock records the resolved Zed commit.
-gpui = { git = "https://github.com/zed-industries/zed", package = "gpui", default-features = false }
-gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", default-features = false, features = ["font-kit", "runtime_shaders"] }
-gpui-component = { git = "https://github.com/longbridge/gpui-component.git", rev = "1081d2b272c653a90b92184521c224d1200b6f72" }
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component.git", rev = "1081d2b272c653a90b92184521c224d1200b6f72" }
+# GPUI is still pre-1.0. zui and its gpui-component fork are bumped together,
+# only to the pair of revisions pinned in Zeron's Cargo.toml.
+gpui = { git = "https://github.com/zeronsh/zui", rev = "1561532176f54262e360acbb8bc00c6fcf183975", package = "gpui", default-features = false }
+gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "1561532176f54262e360acbb8bc00c6fcf183975", package = "gpui_platform", default-features = false, features = ["font-kit", "runtime_shaders"] }
+gpui-component = { git = "https://github.com/zeronsh/gpui-component", rev = "5086ff4fb162ae97ca9d806876e7c6694ac3a81f" }
+gpui-component-assets = { git = "https://github.com/zeronsh/gpui-component", rev = "5086ff4fb162ae97ca9d806876e7c6694ac3a81f" }
 
 [patch.crates-io]
 # Patch the unmaintained block 0.1.6 ABI marker until its upstream API moves to block2.
@@ -54,3 +54,28 @@ block = { path = "third_party/block" }
 # vendor patch adds one validated constructor so MeetNote can reuse the library's
 # own recording-wide AHC/PLDA/VBx post-inference stage for bounded audio windows.
 speakrs = { path = "third_party/speakrs" }
+
+[patch."https://github.com/zeronsh/zui"]
+# Branch meetnote/1561532 of Kiruno-lz/zui is zui 1561532 plus merged upstream zed
+# fixes zui lacks: test windows report NotSupported for raw handles instead of
+# panicking (zed 7bddd16a09). Every zui crate in Cargo.lock is patched so
+# gpui-component and MeetNote resolve a single gpui.
+collections = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+derive_refineable = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui_linux = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui_macos = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui_macros = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui_platform = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui_shared_string = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui_util = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui_web = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui_wgpu = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+gpui_windows = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+http_client = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+media = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+perf = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+refineable = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+scheduler = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+sum_tree = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+util_macros = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
