@@ -76,6 +76,7 @@ queued -> downloading <-> paused -> verifying -> completed
 - 暂停、取消和进程中断保留 `.part`；重启后活动任务恢复为 `paused`。
 - 继续下载时发送 HTTP `Range`；服务器不返回 `206` 时从零覆盖临时文件。
 - 网络或 IO 错误最多自动重试三次。
+- 终态（`completed`、`failed`、`cancelled`）在任务最后一次写入（安装文件、probe 记录、任务文件）之后才发布，此后状态不再变化；取消运行中的下载时由 worker 在下一个检查点（下一数据块、backend probe 结束或重试等待）发布 `cancelled`。
 - 校验失败删除临时文件；backend probe 失败删除本次模型安装目录。
 - `requiresAuth` 且没有认证接入的模型拒绝下载，token 不进入 catalog、日志或命令行。
 - bundle 按 artifact 下载；`archiveMember` 先校验来源 archive，再提取目标成员。
