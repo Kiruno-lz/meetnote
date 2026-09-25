@@ -9,9 +9,10 @@ use gpui::{AnyWindowHandle, App, Entity, WindowOptions};
 
 pub use crate::route::Route;
 
-/// The app-wide setup `run` performs before it opens the window.
+/// The app-wide setup `run` performs before it opens the window, with every
+/// accessibility display flag off, so no test depends on the machine's.
 pub fn init(cx: &mut App) {
-    controller::init_app(cx);
+    controller::init_app(crate::theme::Accessibility::default(), cx);
 }
 
 /// The desktop window as `run` opens it.

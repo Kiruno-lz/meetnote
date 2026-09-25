@@ -2,8 +2,9 @@ use crate::{
     components::empty_card,
     controller::{DownloadAction, RootView},
     i18n::{self, text as tr},
+    theme,
 };
-use gpui::{div, prelude::*, rgb, Context, IntoElement};
+use gpui::{div, prelude::*, Context, IntoElement};
 use gpui_component::{
     button::{Button, ButtonVariants},
     collapsible::Collapsible,
@@ -14,6 +15,7 @@ use models::{manager::DownloadProgress, ModelAvailability, ModelInstallState};
 use std::collections::BTreeMap;
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
+    let tokens = *theme::tokens(cx);
     let entries = root.installation.catalog.clone();
     let downloads = root.services.model_manager.list().unwrap_or_default();
     let mut groups: BTreeMap<String, Vec<ModelAvailability>> = BTreeMap::new();
@@ -34,7 +36,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .flex_col()
         .gap_4();
     if groups.is_empty() {
-        content = content.child(empty_card(tr(root.ui.locale, "no_models")));
+        content = content.child(empty_card(tr(root.ui.locale, "no_models"), &tokens));
     } else {
         for (family, entries) in groups {
             let expanded = root.ui.expanded_model_families.contains(&family);
@@ -52,45 +54,47 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                     model_card(root, entry, progress, cx)
                 })
                 .collect::<Vec<_>>();
-            let group = div().flex_shrink_0().rounded_lg().bg(rgb(0x171b22)).child(
-                Collapsible::new()
-                    .open(expanded)
-                    .child(
-                        div()
-                            .id(format!("model-family-{family}"))
-                            .debug_selector(|| format!("model-family-{family}"))
-                            .cursor_pointer()
-                            .p_4()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.toggle_model_family(family_for_click.clone(), cx)
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(if expanded { "▾" } else { "▸" })
-                                    .child(div().text_lg().child(family.clone())),
-                            )
-                            .child(div().text_sm().text_color(rgb(0x8992a3)).child(format!(
-                                "{} {}",
-                                model_count,
-                                tr(locale, "models_count")
-                            ))),
-                    )
-                    .content(
-                        div()
-                            .px_4()
-                            .pb_4()
-                            .flex()
-                            .flex_col()
-                            .gap_3()
-                            .children(cards),
-                    ),
-            );
+            let group = div()
+                .flex_shrink_0()
+                .rounded(tokens.radius.md)
+                .bg(tokens.surface)
+                .child(
+                    Collapsible::new()
+                        .open(expanded)
+                        .child(
+                            div()
+                                .id(format!("model-family-{family}"))
+                                .debug_selector(|| format!("model-family-{family}"))
+                                .cursor_pointer()
+                                .p_4()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.toggle_model_family(family_for_click.clone(), cx)
+                                }))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(if expanded { "▾" } else { "▸" })
+                                        .child(div().text_lg().child(family.clone())),
+                                )
+                                .child(div().text_sm().text_color(tokens.text_muted).child(
+                                    format!("{} {}", model_count, tr(locale, "models_count")),
+                                )),
+                        )
+                        .content(
+                            div()
+                                .px_4()
+                                .pb_4()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .children(cards),
+                        ),
+                );
             content = content.child(group);
         }
     }
@@ -99,6 +103,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .debug_selector(|| "models-page".into())
         .flex_1()
         .h_full()
+        .bg(tokens.content)
         .min_h_0()
         .p_6()
         .flex()
@@ -114,7 +119,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             div()
                 .flex_shrink_0()
                 .text_sm()
-                .text_color(rgb(0x8992a3))
+                .text_color(tokens.text_muted)
                 .child(tr(root.ui.locale, "catalog_description")),
         )
         .child(content)
@@ -123,7 +128,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .flex_shrink_0()
                 .pt_2()
                 .text_xs()
-                .text_color(rgb(0x8992a3))
+                .text_color(tokens.text_muted)
                 .child(root.ui.notice.clone()),
         )
 }
@@ -134,6 +139,7 @@ fn model_card(
     progress: Option<DownloadProgress>,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
+    let tokens = *theme::tokens(cx);
     let model_id = entry.model.id.clone();
     let downloading = progress.as_ref().is_some_and(|progress| {
         matches!(
@@ -176,8 +182,8 @@ fn model_card(
 
     div()
         .p_4()
-        .rounded_md()
-        .bg(rgb(0x202733))
+        .rounded(tokens.radius.sm)
+        .bg(tokens.raised)
         .child(
             div()
                 .flex()
@@ -188,7 +194,7 @@ fn model_card(
                 .child(
                     div()
                         .text_sm()
-                        .text_color(rgb(0x60a5fa))
+                        .text_color(tokens.accent_text)
                         .child(if downloaded {
                             tr(root.ui.locale, "downloaded")
                         } else {
@@ -203,7 +209,7 @@ fn model_card(
                 .flex()
                 .gap_6()
                 .text_sm()
-                .text_color(rgb(0x8992a3))
+                .text_color(tokens.text_muted)
                 .child(format!(
                     "{}: {}",
                     tr(root.ui.locale, "model_size"),
@@ -234,6 +240,7 @@ fn download_progress_view(
     progress: DownloadProgress,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
+    let tokens = *theme::tokens(cx);
     let percent = progress
         .total_bytes
         .filter(|total| *total > 0)
@@ -268,19 +275,16 @@ fn download_progress_view(
                         .value(percent)
                         .loading(loading),
                 )
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(rgb(0x8992a3))
-                        .child(i18n::download_progress(
-                            root.ui.locale,
-                            model_id,
-                            progress.artifact_index,
-                            progress.artifact_count,
-                            progress.completed_bytes,
-                            progress.speed_bytes_per_second,
-                        )),
-                ),
+                .child(div().text_xs().text_color(tokens.text_muted).child(
+                    i18n::download_progress(
+                        root.ui.locale,
+                        model_id,
+                        progress.artifact_index,
+                        progress.artifact_count,
+                        progress.completed_bytes,
+                        progress.speed_bytes_per_second,
+                    ),
+                )),
         )
         .child(
             Button::new(format!("download-action-{}", progress.id.0))

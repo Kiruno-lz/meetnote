@@ -1,10 +1,10 @@
 //! The fixture the L2 route tests (`routes.rs`) and the L3 screenshots
 //! (`visual.rs`) both render: settings in a directory of their own, three
-//! in-memory documents (one a semantic child), the `zh-CN` locale, a model
-//! root that holds no model, and an Assistant service that is never reached.
-//! Every value is fixed, so a route renders the same frame on every run.
-//! `pixels.rs` beside this file is not part of the fixture; `visual.rs` and
-//! the `pixels` target include it directly.
+//! in-memory documents (one a semantic child), the `zh-CN` locale, the dark
+//! opaque appearance, a model root that holds no model, and an Assistant
+//! service that is never reached. Every value is fixed, so a route renders
+//! the same frame on every run. `pixels.rs` beside this file is not part of
+//! the fixture; `visual.rs` and the `pixels` target include it directly.
 
 use application::{
     AsrBackend as _, BackendInventory, DiarizationBackend as _, DocumentRepository as _,
@@ -121,6 +121,12 @@ fn settings(temp: &std::path::Path) -> SettingsService {
     .expect("fixture settings open");
     let mut value = settings.snapshot().expect("fixture settings read");
     value.ui_locale = LOCALE.into();
+    // Pinned, never `System`: the rendered frame must not depend on the
+    // machine's appearance.
+    value.appearance = settings::AppearanceSettings {
+        theme: settings::ThemePreference::Dark,
+        material: settings::MaterialPreference::Opaque,
+    };
     value.asr_backend_id = Some("whisper-rs".into());
     value.diarization_backend_id = Some("sherpa-onnx".into());
     value.speaker_library_path = "data/speakers/library.json".into();

@@ -16,6 +16,11 @@ models = { path = "../models" }
 runtime = { path = "../runtime" }
 settings = { path = "../settings" }
 
+# Accessibility display flags (reduce transparency / motion). gpui-base
+# already locks these crates; only the features read here are named.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace"] }
+
 [dev-dependencies]
 asr-whisper-rs = { path = "../asr-whisper-rs" }
 diarization-sherpa-onnx = { path = "../diarization-sherpa-onnx" }

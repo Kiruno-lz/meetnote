@@ -3,6 +3,7 @@ use crate::{
     components::{setting_control_row, settings_section},
     controller::{settings_error_text, ModelOption, RootView},
     i18n::text as tr,
+    theme::{self, Tokens},
 };
 use contracts::AgentWriteMode;
 use gpui::{div, prelude::*, px, Context, IntoElement};
@@ -15,9 +16,10 @@ use gpui_component::{
 use settings::{AssistantAuthMode, LlmProtocol};
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
-    let assistant = assistant_settings_section(root, cx);
+    let tokens = *theme::tokens(cx);
+    let assistant = assistant_settings_section(root, &tokens, cx);
     let Some(selectors) = root.settings_selectors.as_ref() else {
-        return div().flex_1().into_any_element();
+        return div().flex_1().bg(tokens.content).into_any_element();
     };
 
     let body = div()
@@ -30,10 +32,28 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .flex_col()
         .gap_5()
         .child(settings_section(
+            tr(root.ui.locale, "appearance"),
+            vec![
+                setting_control_row(
+                    tr(root.ui.locale, "theme"),
+                    select_control(&selectors.theme, "theme"),
+                    &tokens,
+                )
+                .into_any_element(),
+                setting_control_row(
+                    tr(root.ui.locale, "material"),
+                    select_control(&selectors.material, "material"),
+                    &tokens,
+                )
+                .into_any_element(),
+            ],
+        ))
+        .child(settings_section(
             tr(root.ui.locale, "interface"),
             vec![setting_control_row(
                 tr(root.ui.locale, "language"),
                 select_control(&selectors.language, "language"),
+                &tokens,
             )
             .into_any_element()],
         ))
@@ -43,16 +63,19 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 setting_control_row(
                     tr(root.ui.locale, "asr_backend"),
                     select_control(&selectors.asr_backend, "asr-backend"),
+                    &tokens,
                 )
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "asr_model"),
                     model_select_control(&selectors.asr_model, "asr-model"),
+                    &tokens,
                 )
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "transcription_language"),
                     select_control(&selectors.transcription_language, "transcription-language"),
+                    &tokens,
                 )
                 .into_any_element(),
             ],
@@ -63,11 +86,13 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 setting_control_row(
                     tr(root.ui.locale, "diarization_backend"),
                     select_control(&selectors.diarization_backend, "diarization-backend"),
+                    &tokens,
                 )
                 .into_any_element(),
                 setting_control_row(
                     tr(root.ui.locale, "diarization_model"),
                     model_select_control(&selectors.diarization_model, "diarization-model"),
+                    &tokens,
                 )
                 .into_any_element(),
                 if root.show_diarization_stage_options() {
@@ -77,6 +102,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                             &selectors.diarization_segmentation_model,
                             "diarization-segmentation-model",
                         ),
+                        &tokens,
                     )
                     .into_any_element()
                 } else {
@@ -89,6 +115,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                             &selectors.diarization_embedding_model,
                             "diarization-embedding-model",
                         ),
+                        &tokens,
                     )
                     .into_any_element()
                 } else {
@@ -98,6 +125,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                     setting_control_row(
                         tr(root.ui.locale, "diarization_clustering"),
                         select_control(&selectors.diarization_clustering, "diarization-clustering"),
+                        &tokens,
                     )
                     .into_any_element()
                 } else {
@@ -106,6 +134,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 setting_control_row(
                     tr(root.ui.locale, "expected_speakers"),
                     select_control(&selectors.expected_speakers, "expected-speakers"),
+                    &tokens,
                 )
                 .into_any_element(),
                 setting_control_row(
@@ -118,7 +147,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                             div()
                                 .w(px(280.))
                                 .text_xs()
-                                .text_color(gpui::rgb(0x8992a3))
+                                .text_color(tokens.text_muted)
                                 .child(root.settings_draft.speaker_library_path.clone()),
                         )
                         .child(
@@ -129,6 +158,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                                 .on_click(cx.listener(RootView::choose_speaker_library_directory)),
                         )
                         .into_any_element(),
+                    &tokens,
                 )
                 .into_any_element(),
             ],
@@ -138,6 +168,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             vec![setting_control_row(
                 tr(root.ui.locale, "compute_device"),
                 select_control(&selectors.compute_device, "compute-device"),
+                &tokens,
             )
             .into_any_element()],
         ))
@@ -147,6 +178,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .debug_selector(|| "settings-page".into())
         .flex_1()
         .h_full()
+        .bg(tokens.content)
         .min_h_0()
         .p_6()
         .flex()
@@ -170,7 +202,11 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .into_any_element()
 }
 
-fn assistant_settings_section(root: &RootView, cx: &mut Context<RootView>) -> gpui::AnyElement {
+fn assistant_settings_section(
+    root: &RootView,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
     let locale = root.ui.locale;
     let active = root
         .settings_draft
@@ -248,6 +284,7 @@ fn assistant_settings_section(root: &RootView, cx: &mut Context<RootView>) -> gp
                     cx,
                     |root, value, cx| root.set_assistant_enabled(value, cx),
                 ),
+                tokens,
             )
             .into_any_element(),
             setting_control_row(
@@ -265,45 +302,65 @@ fn assistant_settings_section(root: &RootView, cx: &mut Context<RootView>) -> gp
                             .on_click(cx.listener(RootView::new_assistant_profile)),
                     )
                     .into_any_element(),
+                tokens,
             )
             .into_any_element(),
-            assistant_text_row(tr(locale, "assistant_connection_id"), &inputs.connection_id),
+            assistant_text_row(
+                tr(locale, "assistant_connection_id"),
+                &inputs.connection_id,
+                tokens,
+            ),
             assistant_text_row(
                 tr(locale, "assistant_connection_name"),
                 &inputs.connection_name,
+                tokens,
             ),
             setting_control_row(
                 tr(locale, "assistant_protocol"),
                 protocol_buttons(root.assistant_protocol, locale, cx),
+                tokens,
             )
             .into_any_element(),
-            assistant_text_row(tr(locale, "assistant_base_url"), &inputs.base_url),
-            assistant_text_row(tr(locale, "assistant_model"), &inputs.model),
+            assistant_text_row(tr(locale, "assistant_base_url"), &inputs.base_url, tokens),
+            assistant_text_row(tr(locale, "assistant_model"), &inputs.model, tokens),
             setting_control_row(
                 tr(locale, "assistant_auth_mode"),
                 auth_buttons(root.assistant_auth_mode, locale, cx),
+                tokens,
             )
             .into_any_element(),
-            assistant_text_row(tr(locale, "assistant_api_key"), &inputs.api_key),
-            assistant_text_row(tr(locale, "assistant_api_key_file"), &inputs.api_key_file),
+            assistant_text_row(tr(locale, "assistant_api_key"), &inputs.api_key, tokens),
+            assistant_text_row(
+                tr(locale, "assistant_api_key_file"),
+                &inputs.api_key_file,
+                tokens,
+            ),
             assistant_text_row(
                 tr(locale, "assistant_context_window"),
                 &inputs.context_window_tokens,
+                tokens,
             ),
-            assistant_text_row(tr(locale, "assistant_timeout"), &inputs.timeout_ms),
+            assistant_text_row(tr(locale, "assistant_timeout"), &inputs.timeout_ms, tokens),
             assistant_text_row(
                 tr(locale, "assistant_max_output"),
                 &inputs.max_output_tokens,
+                tokens,
             ),
             setting_control_row(
                 tr(locale, "assistant_write_mode"),
                 write_mode_buttons(root.settings_draft.assistant.write_mode, locale, cx),
+                tokens,
             )
             .into_any_element(),
-            assistant_text_row(tr(locale, "assistant_max_rounds"), &inputs.max_tool_rounds),
+            assistant_text_row(
+                tr(locale, "assistant_max_rounds"),
+                &inputs.max_tool_rounds,
+                tokens,
+            ),
             assistant_text_row(
                 tr(locale, "assistant_max_retries"),
                 &inputs.max_validation_retries,
+                tokens,
             ),
             setting_control_row(
                 tr(locale, "assistant_connection_test"),
@@ -348,13 +405,14 @@ fn assistant_settings_section(root: &RootView, cx: &mut Context<RootView>) -> gp
                             .on_click(cx.listener(RootView::cancel_assistant_probe))
                     }))
                     .into_any_element(),
+                tokens,
             )
             .into_any_element(),
             diagnostic
                 .map(|message| {
                     div()
                         .text_xs()
-                        .text_color(gpui::rgb(0x8992a3))
+                        .text_color(tokens.text_muted)
                         .child(message)
                         .into_any_element()
                 })
@@ -367,6 +425,7 @@ fn assistant_settings_section(root: &RootView, cx: &mut Context<RootView>) -> gp
 fn assistant_text_row(
     label: &'static str,
     input: &gpui::Entity<crate::text_input::TextInput>,
+    tokens: &Tokens,
 ) -> gpui::AnyElement {
     setting_control_row(
         label,
@@ -375,12 +434,13 @@ fn assistant_text_row(
             .min_h(px(34.))
             .px_3()
             .py_2()
-            .rounded_md()
+            .rounded(tokens.radius.sm)
             .border_1()
-            .border_color(gpui::rgb(0x303744))
-            .bg(gpui::rgb(0x171b22))
+            .border_color(tokens.border)
+            .bg(tokens.surface)
             .child(input.clone())
             .into_any_element(),
+        tokens,
     )
     .into_any_element()
 }
@@ -417,7 +477,7 @@ fn protocol_buttons(
         .child(
             div()
                 .text_xs()
-                .text_color(gpui::rgb(0x8992a3))
+                .text_color(theme::tokens(cx).text_muted)
                 .child(tr(locale, "assistant_protocol_notice")),
         )
         .into_any_element()

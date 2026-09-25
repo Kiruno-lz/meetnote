@@ -2,9 +2,10 @@ use crate::{
     components::{empty_card, timestamp},
     controller::RootView,
     i18n::{text as tr, Locale},
+    theme,
 };
 use domain::DocumentState;
-use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
+use gpui::{div, prelude::*, px, Context, IntoElement};
 use gpui_component::{
     button::{Button, ButtonVariants},
     scroll::ScrollableElement as _,
@@ -15,6 +16,7 @@ pub(crate) fn render(
     locale: Locale,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
+    let tokens = *theme::tokens(cx);
     let content = project
         .map(|project| {
             let transcript = div()
@@ -37,20 +39,22 @@ pub(crate) fn render(
                     div()
                         .mt_2()
                         .text_sm()
-                        .text_color(rgb(0x8992a3))
+                        .text_color(tokens.text_muted)
                         .child(format!("UUID: {}", project.id().as_str())),
                 )
                 .child(
                     div()
                         .mt_2()
                         .text_sm()
-                        .text_color(rgb(0x8992a3))
+                        .text_color(tokens.text_muted)
                         .child(project.audio_path().to_string()),
                 )
                 .child(transcript)
                 .into_any_element()
         })
-        .unwrap_or_else(|| empty_card(tr(locale, "select_project_first")).into_any_element());
+        .unwrap_or_else(|| {
+            empty_card(tr(locale, "select_project_first"), &tokens).into_any_element()
+        });
     div()
         .absolute()
         .top(px(76.))
@@ -58,10 +62,10 @@ pub(crate) fn render(
         .bottom(px(24.))
         .w(px(440.))
         .p_5()
-        .rounded_lg()
+        .rounded(tokens.radius.md)
         .border_1()
-        .border_color(rgb(0x3b82f6))
-        .bg(rgb(0x202733))
+        .border_color(tokens.accent)
+        .bg(tokens.raised)
         .flex()
         .flex_col()
         .child(
@@ -71,7 +75,7 @@ pub(crate) fn render(
                 .child(
                     div()
                         .text_sm()
-                        .text_color(rgb(0x60a5fa))
+                        .text_color(tokens.accent_text)
                         .child(tr(locale, "project_detail")),
                 )
                 .child(

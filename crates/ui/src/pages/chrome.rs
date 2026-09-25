@@ -1,8 +1,9 @@
-use crate::{controller::RootView, i18n::text as tr, route::Route};
+use crate::{controller::RootView, i18n::text as tr, route::Route, theme};
 use gpui::{div, prelude::*, Context, IntoElement};
 use gpui_component::button::{Button, ButtonVariants};
 
 pub(crate) fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
+    let tokens = *theme::tokens(cx);
     div()
         .h(gpui::px(64.))
         .px_6()
@@ -11,7 +12,7 @@ pub(crate) fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .justify_between()
         .flex_shrink_0()
         .border_b_1()
-        .border_color(gpui::rgb(0x2b303b))
+        .border_color(tokens.hairline)
         .child(
             div()
                 .flex()
@@ -26,7 +27,7 @@ pub(crate) fn header(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .child(
                     div()
                         .text_sm()
-                        .text_color(gpui::rgb(0x8992a3))
+                        .text_color(tokens.text_muted)
                         .child(tr(root.ui.locale, "local_intelligence")),
                 ),
         )

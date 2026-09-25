@@ -1,14 +1,12 @@
 use crate::{
-    components::{
-        backend_ids, ordered_projects, status_color, status_label, timestamp, DragGhost,
-        ProjectDrag,
-    },
+    components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
     i18n::text as tr,
     state::ContentMode,
+    theme,
 };
 use domain::{DocumentState, ProjectStatus};
-use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
+use gpui::{div, prelude::*, px, Context, IntoElement};
 use gpui_component::{
     button::{Button, ButtonVariants},
     scroll::ScrollableElement as _,
@@ -22,12 +20,14 @@ pub(crate) fn render(
     div()
         .debug_selector(|| "meetings-page".into())
         .flex_1()
+        .bg(theme::tokens(cx).content)
         .flex()
         .child(sidebar(root, cx))
         .child(main_panel(root, selected, cx))
 }
 
 fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
+    let tokens = *theme::tokens(cx);
     let mut tree = div()
         .id("project-tree")
         .debug_selector(|| "project-tree".into())
@@ -40,10 +40,10 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
         tree = tree.child(
             div()
                 .p_3()
-                .rounded_md()
-                .bg(rgb(0x1b2029))
+                .rounded(tokens.radius.sm)
+                .bg(tokens.surface)
                 .text_sm()
-                .text_color(rgb(0x8992a3))
+                .text_color(tokens.text_muted)
                 .child(tr(root.ui.locale, "no_projects")),
         );
     } else {
@@ -66,7 +66,7 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                 .id(format!("drag-{}", project.id().as_str()))
                 .mr_2()
                 .cursor_pointer()
-                .text_color(rgb(0x667085))
+                .text_color(tokens.text_subtle)
                 .child("⋮⋮")
                 .on_drag(
                     ProjectDrag {
@@ -127,11 +127,11 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                 .cursor_pointer()
                 .p_3()
                 .ml(px((depth as f32) * 16.))
-                .rounded_md()
+                .rounded(tokens.radius.sm)
                 .bg(if selected {
-                    rgb(0x27344a)
+                    tokens.selection
                 } else {
-                    rgb(0x171b22)
+                    tokens.surface
                 })
                 .child(
                     div()
@@ -149,7 +149,7 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                     div()
                         .mt_1()
                         .text_xs()
-                        .text_color(rgb(0x8992a3))
+                        .text_color(tokens.text_muted)
                         .child(status_label(root.ui.locale, display_status)),
                 )
                 .on_click(
@@ -170,11 +170,11 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
         .flex_col()
         .flex_shrink_0()
         .border_r_1()
-        .border_color(rgb(0x2b303b))
+        .border_color(tokens.hairline)
         .child(
             div()
                 .text_sm()
-                .text_color(rgb(0x8992a3))
+                .text_color(tokens.text_muted)
                 .child(tr(root.ui.locale, "audio_projects")),
         )
         .child(tree)
@@ -186,6 +186,7 @@ fn main_panel(
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     let locale = root.ui.locale;
+    let tokens = *theme::tokens(cx);
     let display_status = project.map(|project| {
         if root.ui.processing {
             ProjectStatus::Processing
@@ -201,8 +202,8 @@ fn main_panel(
             .flex_1()
             .overflow_y_scrollbar()
             .p_5()
-            .rounded_lg()
-            .bg(rgb(0x171b22));
+            .rounded(tokens.radius.md)
+            .bg(tokens.surface);
         if project.processing_status() == ProjectStatus::Ready {
             if root.ui.content_mode == ContentMode::Summary {
                 content = content.child(
@@ -219,21 +220,26 @@ fn main_panel(
                     content.children(project.results.speaker_segments.iter().map(|segment| {
                         div()
                             .pb_3()
-                            .child(div().text_xs().text_color(rgb(0x60a5fa)).child(format!(
-                            "{}  {}",
-                            timestamp(segment.start_ms),
-                            segment
-                                .speaker_label
-                                .as_deref()
-                                .unwrap_or(&segment.speaker_id)
-                        )))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(tokens.accent_text)
+                                    .child(format!(
+                                        "{}  {}",
+                                        timestamp(segment.start_ms),
+                                        segment
+                                            .speaker_label
+                                            .as_deref()
+                                            .unwrap_or(&segment.speaker_id)
+                                    )),
+                            )
                             .child(div().text_sm().child(segment.text.clone()))
                     }));
             }
         } else {
             content = content.child(
                 div()
-                    .text_color(rgb(0x8992a3))
+                    .text_color(tokens.text_muted)
                     .child(tr(locale, "need_process")),
             );
         }
@@ -248,7 +254,7 @@ fn main_panel(
                 div()
                     .flex_shrink_0()
                     .text_sm()
-                    .text_color(rgb(0x8992a3))
+                    .text_color(tokens.text_muted)
                     .child(project.audio_path().to_string()),
             )
             .child(
@@ -261,10 +267,8 @@ fn main_panel(
                         div()
                             .px_3()
                             .py_1()
-                            .rounded_md()
-                            .bg(status_color(
-                                display_status.unwrap_or(ProjectStatus::Imported),
-                            ))
+                            .rounded(tokens.radius.sm)
+                            .bg(tokens.status(display_status.unwrap_or(ProjectStatus::Imported)))
                             .text_sm()
                             .child(status_label(
                                 locale,
@@ -331,16 +335,19 @@ fn main_panel(
                     .text_2xl()
                     .child(tr(locale, "meetings")),
             )
-            .child(crate::components::empty_card(tr(locale, "empty_meetings")));
+            .child(crate::components::empty_card(
+                tr(locale, "empty_meetings"),
+                &tokens,
+            ));
     }
     panel.child(
         div()
             .flex_shrink_0()
             .border_t_1()
-            .border_color(rgb(0x2b303b))
+            .border_color(tokens.hairline)
             .pt_3()
             .text_xs()
-            .text_color(rgb(0x8992a3))
+            .text_color(tokens.text_muted)
             .child(format!(
                 "{}   •   ASR: {}   •   DIA: {}",
                 root.ui.notice,

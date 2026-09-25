@@ -2004,6 +2004,11 @@ mod tests {
             connection("direct", Some("SENTINEL_DIRECT_KEY"), None),
             connection("file", None, Some("credentials/SENTINEL_KEY_FILE")),
         ];
+        // Desktop-only: never part of the Settings capability projection.
+        settings.appearance = settings::AppearanceSettings {
+            theme: settings::ThemePreference::Light,
+            material: settings::MaterialPreference::Opaque,
+        };
         settings
     }
 
@@ -2053,16 +2058,26 @@ mod tests {
                     arguments,
                 ))
             };
-            let operations = host
+            let descriptor = host
                 .discover()
                 .into_iter()
                 .find(|descriptor| descriptor.id == "settings.app")
-                .unwrap()
+                .unwrap();
+            let operations = descriptor
                 .operations
-                .into_iter()
-                .map(|operation| operation.name)
+                .iter()
+                .map(|operation| operation.name.as_str())
                 .collect::<Vec<_>>();
             assert_eq!(operations, ["snapshot", "read", "patch"]);
+            for operation in &descriptor.operations {
+                for schema in [&operation.input_schema, &operation.output_schema] {
+                    assert!(
+                        !schema.to_string().contains("appearance"),
+                        "{} schema exposes appearance: {schema}",
+                        operation.name
+                    );
+                }
+            }
 
             let mut public_results = Vec::new();
             let snapshot = call("snapshot", serde_json::json!({}));
@@ -2114,6 +2129,10 @@ mod tests {
 
             for result in &public_results {
                 assert!(!result.contains(SENTINEL), "public result leaked: {result}");
+                assert!(
+                    !result.contains("appearance"),
+                    "public result exposes appearance: {result}"
+                );
             }
             let mut expected = initial;
             expected.assistant.max_tool_rounds = 6;

@@ -1,6 +1,11 @@
-use crate::{controller::RootView, i18n, state::ContentMode};
+use crate::{
+    controller::RootView,
+    i18n,
+    state::ContentMode,
+    theme::{self, Tokens},
+};
 use domain::{DocumentState, ProjectId, ProjectStatus};
-use gpui::{div, prelude::*, rgb, Context, Render, SharedString, Window};
+use gpui::{div, prelude::*, Context, Render, SharedString, Window};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::separator::Separator;
 
@@ -14,26 +19,27 @@ pub(crate) struct DragGhost {
 }
 
 impl Render for DragGhost {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tokens = theme::tokens(cx);
         div()
             .p_3()
-            .rounded_md()
-            .bg(rgb(0x263142))
+            .rounded(tokens.radius.sm)
+            .bg(tokens.drag_ghost)
             .text_sm()
             .child(self.title.clone())
     }
 }
 
-pub(crate) fn empty_card(message: impl Into<SharedString>) -> impl IntoElement {
+pub(crate) fn empty_card(message: impl Into<SharedString>, tokens: &Tokens) -> impl IntoElement {
     div()
         .flex_1()
-        .rounded_lg()
-        .bg(rgb(0x171b22))
+        .rounded(tokens.radius.md)
+        .bg(tokens.surface)
         .flex()
         .items_center()
         .justify_center()
         .p_6()
-        .text_color(rgb(0x8992a3))
+        .text_color(tokens.text_muted)
         .child(message.into())
 }
 
@@ -52,6 +58,7 @@ pub(crate) fn settings_section(
 pub(crate) fn setting_control_row(
     label: impl Into<SharedString>,
     control: gpui::AnyElement,
+    tokens: &Tokens,
 ) -> impl IntoElement {
     div()
         .mt_3()
@@ -61,7 +68,7 @@ pub(crate) fn setting_control_row(
         .justify_between()
         .gap_4()
         .text_sm()
-        .child(div().text_color(rgb(0x8992a3)).child(label.into()))
+        .child(div().text_color(tokens.text_muted).child(label.into()))
         .child(control)
 }
 
@@ -121,15 +128,6 @@ pub(crate) fn ordered_projects(
 
 pub(crate) fn status_label(locale: i18n::Locale, status: ProjectStatus) -> &'static str {
     i18n::status(locale, status)
-}
-
-pub(crate) fn status_color(status: ProjectStatus) -> gpui::Rgba {
-    match status {
-        ProjectStatus::Imported => rgb(0x374151),
-        ProjectStatus::Processing => rgb(0x92400e),
-        ProjectStatus::Ready => rgb(0x166534),
-        ProjectStatus::Failed => rgb(0x991b1b),
-    }
 }
 
 pub(crate) fn timestamp(milliseconds: u64) -> String {

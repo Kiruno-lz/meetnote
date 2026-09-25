@@ -58,6 +58,14 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "vram_estimate") => "显存预估",
         (Locale::ZhCn, "applicable_backends") => "适用后端",
         (Locale::ZhCn, "no_models") => "模型目录中没有可用模型。",
+        (Locale::ZhCn, "appearance") => "外观",
+        (Locale::ZhCn, "theme") => "主题",
+        (Locale::ZhCn, "theme_system") => "跟随系统",
+        (Locale::ZhCn, "theme_light") => "浅色",
+        (Locale::ZhCn, "theme_dark") => "深色",
+        (Locale::ZhCn, "material") => "材质",
+        (Locale::ZhCn, "material_glass") => "毛玻璃",
+        (Locale::ZhCn, "material_opaque") => "不透明",
         (Locale::ZhCn, "interface") => "界面",
         (Locale::ZhCn, "language") => "界面语言",
         (Locale::ZhCn, "transcription") => "转录",
@@ -223,6 +231,14 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "vram_estimate") => "VRAM estimate",
         (Locale::EnUs, "applicable_backends") => "Applicable backends",
         (Locale::EnUs, "no_models") => "No models are available in the catalog.",
+        (Locale::EnUs, "appearance") => "Appearance",
+        (Locale::EnUs, "theme") => "Theme",
+        (Locale::EnUs, "theme_system") => "System",
+        (Locale::EnUs, "theme_light") => "Light",
+        (Locale::EnUs, "theme_dark") => "Dark",
+        (Locale::EnUs, "material") => "Material",
+        (Locale::EnUs, "material_glass") => "Glass",
+        (Locale::EnUs, "material_opaque") => "Opaque",
         (Locale::EnUs, "interface") => "Interface",
         (Locale::EnUs, "language") => "Language / Interface locale",
         (Locale::EnUs, "transcription") => "Transcription",
@@ -556,24 +572,7 @@ pub fn download_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const SOURCES: &[(&str, &str)] = &[
-        ("assistant_ui.rs", include_str!("assistant_ui.rs")),
-        ("components.rs", include_str!("components.rs")),
-        ("controller.rs", include_str!("controller.rs")),
-        ("i18n.rs", include_str!("i18n.rs")),
-        ("lib.rs", include_str!("lib.rs")),
-        ("route.rs", include_str!("route.rs")),
-        ("state.rs", include_str!("state.rs")),
-        ("text_input.rs", include_str!("text_input.rs")),
-        ("pages/assistant.rs", include_str!("pages/assistant.rs")),
-        ("pages/chrome.rs", include_str!("pages/chrome.rs")),
-        ("pages/detail.rs", include_str!("pages/detail.rs")),
-        ("pages/meetings.rs", include_str!("pages/meetings.rs")),
-        ("pages/mod.rs", include_str!("pages/mod.rs")),
-        ("pages/models.rs", include_str!("pages/models.rs")),
-        ("pages/settings.rs", include_str!("pages/settings.rs")),
-    ];
+    use crate::source_files::SOURCES;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum Token<'a> {

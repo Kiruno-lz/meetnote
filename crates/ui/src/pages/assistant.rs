@@ -5,9 +5,10 @@ use crate::{
     },
     controller::RootView,
     i18n::{text as tr, Locale},
+    theme::{self, Tokens},
 };
 use contracts::{AgentScene, DocumentProjection};
-use gpui::{div, prelude::*, px, rgb, Context, IntoElement};
+use gpui::{div, prelude::*, px, Context, IntoElement};
 use gpui_component::{
     button::{Button, ButtonVariants},
     scroll::ScrollableElement as _,
@@ -15,6 +16,7 @@ use gpui_component::{
 };
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
+    let tokens = *theme::tokens(cx);
     let selected = root
         .ui
         .selected_project
@@ -62,6 +64,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .debug_selector(|| "assistant-page".into())
         .flex_1()
         .min_h_0()
+        .bg(tokens.content)
         .p_6()
         .flex()
         .flex_col()
@@ -96,10 +99,10 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         ]))
         .child(
             div()
-                .rounded_lg()
+                .rounded(tokens.radius.md)
                 .border_1()
-                .border_color(rgb(0x303744))
-                .bg(rgb(0x171b22))
+                .border_color(tokens.border)
+                .bg(tokens.surface)
                 .p_4()
                 .flex()
                 .flex_col()
@@ -124,14 +127,17 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .child(info_line(
                     tr(root.ui.locale, "assistant_authorized_document"),
                     document_summary,
+                    &tokens,
                 ))
                 .child(info_line(
                     tr(root.ui.locale, "assistant_projection"),
                     projection_label(root.assistant.projection).to_string(),
+                    &tokens,
                 ))
                 .child(info_line(
                     tr(root.ui.locale, "assistant_connection"),
                     connection_summary,
+                    &tokens,
                 ))
                 .child(
                     info_line(
@@ -144,6 +150,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                             },
                         )
                         .into(),
+                        &tokens,
                     )
                     .debug_selector(move || {
                         match write_mode {
@@ -157,7 +164,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         .into()
                     }),
                 )
-                .child(div().text_xs().text_color(rgb(0x8992a3)).child(tr(
+                .child(div().text_xs().text_color(tokens.text_muted).child(tr(
                     root.ui.locale,
                     match root.assistant.scope_mode {
                         AssistantScopeMode::CurrentDocument => "assistant_scope_notice",
@@ -174,10 +181,10 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .w_full()
                 .min_h(px(92.))
                 .p_4()
-                .rounded_lg()
+                .rounded(tokens.radius.md)
                 .border_1()
-                .border_color(rgb(0x3b82f6))
-                .bg(rgb(0x171b22))
+                .border_color(tokens.accent)
+                .bg(tokens.surface)
                 .child(root.assistant_inputs.prompt.clone()),
         )
         .child(
@@ -208,7 +215,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         ))
                         .on_click(cx.listener(RootView::cancel_assistant)),
                 )
-                .child(div().text_sm().text_color(rgb(0x8992a3)).child(task)),
+                .child(div().text_sm().text_color(tokens.text_muted).child(task)),
         )
         .child(
             div()
@@ -231,12 +238,16 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                     )
                 }))
                 .children((root.assistant.pending_overflow_count() > 0).then(|| {
-                    render_pending_overflow(root.assistant.pending_overflow_count(), root.ui.locale)
+                    render_pending_overflow(
+                        root.assistant.pending_overflow_count(),
+                        root.ui.locale,
+                        &tokens,
+                    )
                 }))
                 .child(
                     div()
                         .text_xs()
-                        .text_color(rgb(0x667085))
+                        .text_color(tokens.text_subtle)
                         .child(root.ui.notice.clone()),
                 ),
         )
@@ -303,12 +314,12 @@ fn projection_label(projection: DocumentProjection) -> &'static str {
     }
 }
 
-fn info_line(label: &'static str, value: String) -> gpui::Div {
+fn info_line(label: &'static str, value: String, tokens: &Tokens) -> gpui::Div {
     div()
         .flex()
         .gap_2()
         .text_sm()
-        .child(div().text_color(rgb(0x8992a3)).child(label))
+        .child(div().text_color(tokens.text_muted).child(label))
         .child(value)
 }
 
@@ -384,25 +395,38 @@ fn render_result(
         })
         .unwrap_or_else(|| "—".into());
     let render_model = result_render_model(&result);
+    let tokens = *theme::tokens(cx);
 
     div()
-        .rounded_lg()
+        .rounded(tokens.radius.md)
         .border_1()
-        .border_color(rgb(0x303744))
+        .border_color(tokens.border)
         .p_4()
         .flex()
         .flex_col()
         .gap_2()
         .child(div().text_lg().child(answer))
-        .child(info_line(tr(locale, "assistant_evidence"), evidence))
-        .child(info_line(tr(locale, "assistant_model_route"), model_route))
-        .child(info_line(tr(locale, "assistant_usage"), usage))
-        .child(info_line(tr(locale, "assistant_diagnostics"), diagnostics))
+        .child(info_line(
+            tr(locale, "assistant_evidence"),
+            evidence,
+            &tokens,
+        ))
+        .child(info_line(
+            tr(locale, "assistant_model_route"),
+            model_route,
+            &tokens,
+        ))
+        .child(info_line(tr(locale, "assistant_usage"), usage, &tokens))
+        .child(info_line(
+            tr(locale, "assistant_diagnostics"),
+            diagnostics,
+            &tokens,
+        ))
         .children(
             render_model
                 .warnings
                 .into_iter()
-                .map(|warning| render_warning(warning, locale)),
+                .map(|warning| render_warning(warning, locale, &tokens)),
         )
         .children(render_model.mutations.into_iter().map(|mutation| {
             let mutation_id = mutation.mutation_id.clone();
@@ -430,16 +454,17 @@ fn result_render_model(result: &AssistantRunResult) -> AssistantResultRenderMode
     }
 }
 
-fn render_warning(warning: AssistantUiError, locale: Locale) -> gpui::AnyElement {
+fn render_warning(warning: AssistantUiError, locale: Locale, tokens: &Tokens) -> gpui::AnyElement {
     div()
         .mt_2()
         .p_3()
-        .rounded_md()
-        .bg(rgb(0x3a2d16))
-        .text_color(rgb(0xfbbf24))
+        .rounded(tokens.radius.sm)
+        .bg(tokens.warning_surface)
+        .text_color(tokens.warning_text)
         .child(info_line(
             tr(locale, "assistant_warning"),
             format!("{}: {}", warning.code, warning.message),
+            tokens,
         ))
         .into_any_element()
 }
@@ -471,6 +496,7 @@ fn render_mutation(
         mutation.uncovered_segment_ids.join(", ")
     };
     let mutation_id = mutation.mutation_id.clone();
+    let tokens = *theme::tokens(cx);
     let undo_label = if undone {
         tr(locale, "assistant_undone")
     } else if undo_in_flight {
@@ -482,17 +508,22 @@ fn render_mutation(
     div()
         .mt_2()
         .p_3()
-        .rounded_md()
-        .bg(rgb(0x202630))
+        .rounded(tokens.radius.sm)
+        .bg(tokens.raised)
         .flex()
         .flex_col()
         .gap_2()
         .child(info_line(
             tr(locale, "assistant_mutation"),
             mutation.mutation_id,
+            &tokens,
         ))
-        .child(info_line(tr(locale, "assistant_affected"), affected))
-        .child(info_line(tr(locale, "assistant_uncovered"), gaps))
+        .child(info_line(
+            tr(locale, "assistant_affected"),
+            affected,
+            &tokens,
+        ))
+        .child(info_line(tr(locale, "assistant_uncovered"), gaps, &tokens))
         .child(
             div()
                 .id(format!("assistant-undo-{mutation_id}"))
@@ -519,6 +550,7 @@ fn render_pending(
     locale: Locale,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
+    let tokens = *theme::tokens(cx);
     let busy = matches!(
         &state,
         PendingReviewState::Accepting(_) | PendingReviewState::Rejecting(_)
@@ -534,7 +566,7 @@ fn render_pending(
         };
         return div()
             .p_3()
-            .text_color(rgb(0x8992a3))
+            .text_color(tokens.text_muted)
             .child(label)
             .into_any_element();
     };
@@ -584,9 +616,9 @@ fn render_pending(
     let gaps = pending.uncovered_segment_ids.join(", ");
 
     div()
-        .rounded_lg()
+        .rounded(tokens.radius.md)
         .border_1()
-        .border_color(rgb(0xf59e0b))
+        .border_color(tokens.warning)
         .p_4()
         .flex()
         .flex_col()
@@ -595,26 +627,32 @@ fn render_pending(
         .child(info_line(
             tr(locale, "assistant_pending_queue"),
             queued_count.to_string(),
+            &tokens,
         ))
         .child(info_line(
             tr(locale, "assistant_affected"),
             pending.affected_document_ids.join(", "),
+            &tokens,
         ))
         .child(info_line(
             tr(locale, "assistant_field_diff"),
             empty_as_dash(fields),
+            &tokens,
         ))
         .child(info_line(
             tr(locale, "assistant_tree_change"),
             empty_as_dash(tree),
+            &tokens,
         ))
         .child(info_line(
             tr(locale, "assistant_range"),
             empty_as_dash(ranges),
+            &tokens,
         ))
         .child(info_line(
             tr(locale, "assistant_uncovered"),
             empty_as_dash(gaps),
+            &tokens,
         ))
         .child(
             div()
@@ -638,7 +676,7 @@ fn render_pending(
         .into_any_element()
 }
 
-fn render_pending_overflow(count: usize, locale: Locale) -> gpui::AnyElement {
+fn render_pending_overflow(count: usize, locale: Locale, tokens: &Tokens) -> gpui::AnyElement {
     div()
         .id("assistant-pending-overflow")
         .debug_selector(|| "assistant-pending-overflow".into())
@@ -646,6 +684,7 @@ fn render_pending_overflow(count: usize, locale: Locale) -> gpui::AnyElement {
         .child(info_line(
             tr(locale, "assistant_pending_overflow"),
             count.to_string(),
+            tokens,
         ))
         .into_any_element()
 }

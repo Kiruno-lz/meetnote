@@ -1,8 +1,9 @@
+use crate::theme;
 use gpui::{
-    div, fill, hsla, point, prelude::*, px, relative, rgb, rgba, App, Bounds, Context, Element,
-    ElementId, ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable,
-    GlobalElementId, IntoElement, LayoutId, Pixels, Point, ShapedLine, SharedString, Size, Style,
-    TextRun, UTF16Selection, Window,
+    div, fill, point, prelude::*, px, relative, App, Bounds, Context, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId,
+    IntoElement, LayoutId, Pixels, Point, ShapedLine, SharedString, Size, Style, TextRun,
+    UTF16Selection, Window,
 };
 use std::ops::Range;
 
@@ -287,11 +288,12 @@ impl Element for TextElement {
         window: &mut Window,
         cx: &mut App,
     ) -> TextPrepaint {
+        let tokens = *theme::tokens(cx);
         let input = self.input.read(cx);
         let (text, color, cursor_index) = if input.content.is_empty() {
             (
                 input.placeholder.clone(),
-                hsla(220., 0.12, 0.68, 1.),
+                tokens.text_muted,
                 input.selected_range.end,
             )
         } else if input.masked {
@@ -327,7 +329,7 @@ impl Element for TextElement {
                     point(bounds.left() + cursor_x, bounds.top()),
                     Size::new(px(2.), bounds.bottom() - bounds.top()),
                 ),
-                rgba(0x6699ccff),
+                tokens.caret,
             ),
         }
     }
@@ -375,7 +377,7 @@ impl Render for TextInput {
             .key_context("MeetnoteTextInput")
             .track_focus(&self.focus_handle(cx))
             .cursor(gpui::CursorStyle::IBeam)
-            .bg(rgb(0x171b22))
+            .bg(theme::tokens(cx).surface)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))

@@ -278,6 +278,37 @@ impl AssistantSettings {
     }
 }
 
+/// Light or dark: follow the system appearance or pin one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// The window chrome material. Glass is used only while the system does not
+/// ask to reduce transparency.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialPreference {
+    #[default]
+    Glass,
+    Opaque,
+}
+
+/// Desktop appearance. It belongs to the desktop UI alone and is not part of
+/// the Settings capability projection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceSettings {
+    #[serde(default)]
+    pub theme: ThemePreference,
+    #[serde(default)]
+    pub material: MaterialPreference,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -297,6 +328,8 @@ pub struct AppSettings {
     pub diarization_stages: DiarizationStageConfiguration,
     #[serde(default)]
     pub assistant: AssistantSettings,
+    #[serde(default)]
+    pub appearance: AppearanceSettings,
 }
 
 impl Default for AppSettings {
@@ -314,6 +347,7 @@ impl Default for AppSettings {
             speaker_library_path: default_speaker_library_path(),
             diarization_stages: DiarizationStageConfiguration::default(),
             assistant: AssistantSettings::default(),
+            appearance: AppearanceSettings::default(),
         }
     }
 }
@@ -1707,5 +1741,55 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
+    }
+
+    #[test]
+    fn settings_without_appearance_load_the_default_appearance() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{
+                "schemaVersion": "meetnote.settings.v1",
+                "asrBackendId": null,
+                "asrModel": null,
+                "diarizationBackendId": null,
+                "diarizationModel": null,
+                "computeDevice": "Auto",
+                "language": null,
+                "expectedSpeakers": null
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            settings.appearance,
+            AppearanceSettings {
+                theme: ThemePreference::System,
+                material: MaterialPreference::Glass,
+            }
+        );
+        assert_eq!(AppSettings::default().appearance, settings.appearance);
+    }
+
+    #[test]
+    fn appearance_round_trips_with_camel_case_values() {
+        let settings = AppSettings {
+            appearance: AppearanceSettings {
+                theme: ThemePreference::Light,
+                material: MaterialPreference::Opaque,
+            },
+            ..AppSettings::default()
+        };
+
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            value["appearance"],
+            serde_json::json!({"theme": "light", "material": "opaque"})
+        );
+        let partial: AppearanceSettings =
+            serde_json::from_value(serde_json::json!({"theme": "dark"})).unwrap();
+        assert_eq!(partial.material, MaterialPreference::Glass);
+        assert_eq!(
+            serde_json::from_value::<AppSettings>(value).unwrap(),
+            settings
+        );
     }
 }

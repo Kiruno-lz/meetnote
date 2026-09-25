@@ -7,6 +7,7 @@ use crate::{
     route::Route,
     state::{ContentMode, InstallationState, Overlay, UiState},
     text_input::TextInput,
+    theme,
 };
 use application::{BackendInventory, ProcessingOptions, WorkspaceService};
 use contracts::{AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, ModelRef};
@@ -22,7 +23,8 @@ use models::{ModelAvailability, ModelInstallState};
 use runtime::{JobContext, JobEvent};
 use settings::{
     AppSettings, AssistantAuthMode, AssistantConnectionPatch, AssistantConnectionProfile,
-    AssistantSettings, CredentialUpdate, LlmProtocol, SettingsService,
+    AssistantSettings, CredentialUpdate, LlmProtocol, MaterialPreference, SettingsService,
+    ThemePreference,
 };
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -148,6 +150,8 @@ impl SelectItem for StageModelOption {
 }
 
 pub(crate) struct SettingsSelectors {
+    pub(crate) theme: Entity<StringSelect>,
+    pub(crate) material: Entity<StringSelect>,
     pub(crate) language: Entity<StringSelect>,
     pub(crate) asr_backend: Entity<StringSelect>,
     pub(crate) asr_model: Entity<ModelSelect>,
@@ -545,7 +549,37 @@ impl RootView {
         let expected_speakers_items = expected_speaker_items(locale);
         let compute_device_items = compute_device_items(locale);
         let expected_speakers_value = settings.expected_speakers.map(|value| value.to_string());
+        let theme_items = theme_preference_items(locale);
+        let material_items = material_preference_items(locale);
 
+        let theme = cx.new(|cx| {
+            SelectState::new(
+                theme_items.clone(),
+                selected_index(
+                    &theme_items,
+                    Some(i18n::text(
+                        locale,
+                        theme_preference_key(settings.appearance.theme),
+                    )),
+                ),
+                window,
+                cx,
+            )
+        });
+        let material = cx.new(|cx| {
+            SelectState::new(
+                material_items.clone(),
+                selected_index(
+                    &material_items,
+                    Some(i18n::text(
+                        locale,
+                        material_preference_key(settings.appearance.material),
+                    )),
+                ),
+                window,
+                cx,
+            )
+        });
         let language = cx.new(|cx| {
             SelectState::new(
                 language_items.clone(),
@@ -695,6 +729,10 @@ impl RootView {
             )
         });
 
+        cx.subscribe_in(&theme, window, Self::on_theme_selected)
+            .detach();
+        cx.subscribe_in(&material, window, Self::on_material_selected)
+            .detach();
         cx.subscribe_in(&language, window, Self::on_language_selected)
             .detach();
         cx.subscribe_in(&asr_backend, window, Self::on_asr_backend_selected)
@@ -747,6 +785,8 @@ impl RootView {
             .detach();
 
         self.settings_selectors = Some(SettingsSelectors {
+            theme,
+            material,
             language,
             asr_backend,
             asr_model,
@@ -869,6 +909,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         change(&mut self.settings_draft);
+        self.sync_appearance(cx);
         self.queue_settings_write(
             SettingsWrite::Field {
                 change: Arc::new(change),
@@ -943,6 +984,7 @@ impl RootView {
                 // An earlier failed write resets the draft; keep this change.
                 change(&mut self.settings_draft);
                 self.sync_locale(cx);
+                self.sync_appearance(cx);
                 self.settings_error = None;
                 self.ui.notice = saved_notice;
             }
@@ -985,6 +1027,7 @@ impl RootView {
         };
         self.settings_selectors = None;
         self.sync_locale(cx);
+        self.sync_appearance(cx);
         self.refresh_installation(cx);
         self.ui.notice = settings_error_text(self.ui.locale, &error);
         self.settings_error = Some(error);
@@ -1002,6 +1045,11 @@ impl RootView {
         self.assistant_inputs.prompt.update(cx, |input, _| {
             input.set_placeholder(i18n::text(locale, "ask_placeholder"));
         });
+    }
+
+    /// Follows the draft's appearance; the theme re-applies it to the window.
+    fn sync_appearance(&self, cx: &mut Context<Self>) {
+        theme::set_preference(self.settings_draft.appearance, cx);
     }
 
     fn load_assistant_form(&mut self, cx: &mut Context<Self>) {
@@ -1117,6 +1165,34 @@ impl RootView {
             state.set_items(clustering_items, window, cx);
             state.set_selected_index(clustering_selected, window, cx);
         });
+    }
+
+    fn on_theme_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            if let Some(theme) = theme_preference_from_label(self.ui.locale, value) {
+                self.persist_field(move |settings| settings.appearance.theme = theme, cx);
+            }
+        }
+    }
+
+    fn on_material_selected(
+        &mut self,
+        _: &Entity<StringSelect>,
+        event: &SelectEvent<Vec<String>>,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let SelectEvent::Confirm(Some(value)) = event {
+            if let Some(material) = material_preference_from_label(self.ui.locale, value) {
+                self.persist_field(move |settings| settings.appearance.material = material, cx);
+            }
+        }
     }
 
     fn on_language_selected(
@@ -1406,13 +1482,16 @@ impl RootView {
         let destination_for_description = destination.display().to_string();
         let locale = self.ui.locale;
         let root = cx.entity().downgrade();
-        window.open_alert_dialog(cx, move |dialog, _, _| {
+        window.open_alert_dialog(cx, move |dialog, _, cx| {
             let root_for_migration = root.clone();
             let root_for_switch = root.clone();
             let source_for_migration = source_for_migration.clone();
             let destination_for_migration = destination_for_migration.clone();
             let destination_for_switch = destination.clone();
+            // gpui-component paints the dialog with `background`, which glass
+            // clears; the panel sits on the opaque content plane instead.
             dialog
+                .bg(theme::tokens(cx).content)
                 .confirm()
                 .title(i18n::text(locale, "speaker_library_migration_title"))
                 .description(format!(
@@ -2556,6 +2635,56 @@ fn compute_device_from_label(locale: i18n::Locale, label: &str) -> ComputeDevice
         .unwrap_or(ComputeDevice::Auto)
 }
 
+const THEME_PREFERENCES: [ThemePreference; 3] = [
+    ThemePreference::System,
+    ThemePreference::Light,
+    ThemePreference::Dark,
+];
+
+const MATERIAL_PREFERENCES: [MaterialPreference; 2] =
+    [MaterialPreference::Glass, MaterialPreference::Opaque];
+
+fn theme_preference_key(preference: ThemePreference) -> &'static str {
+    match preference {
+        ThemePreference::System => "theme_system",
+        ThemePreference::Light => "theme_light",
+        ThemePreference::Dark => "theme_dark",
+    }
+}
+
+fn material_preference_key(preference: MaterialPreference) -> &'static str {
+    match preference {
+        MaterialPreference::Glass => "material_glass",
+        MaterialPreference::Opaque => "material_opaque",
+    }
+}
+
+fn theme_preference_items(locale: i18n::Locale) -> Vec<String> {
+    THEME_PREFERENCES
+        .iter()
+        .map(|preference| i18n::text(locale, theme_preference_key(*preference)).to_string())
+        .collect()
+}
+
+fn material_preference_items(locale: i18n::Locale) -> Vec<String> {
+    MATERIAL_PREFERENCES
+        .iter()
+        .map(|preference| i18n::text(locale, material_preference_key(*preference)).to_string())
+        .collect()
+}
+
+fn theme_preference_from_label(locale: i18n::Locale, label: &str) -> Option<ThemePreference> {
+    THEME_PREFERENCES
+        .into_iter()
+        .find(|preference| i18n::text(locale, theme_preference_key(*preference)) == label)
+}
+
+fn material_preference_from_label(locale: i18n::Locale, label: &str) -> Option<MaterialPreference> {
+    MATERIAL_PREFERENCES
+        .into_iter()
+        .find(|preference| i18n::text(locale, material_preference_key(*preference)) == label)
+}
+
 fn changed<T: PartialEq + Clone>(before: &T, after: &T) -> Option<T> {
     (before != after).then(|| after.clone())
 }
@@ -2676,10 +2805,11 @@ impl Render for RootView {
             Route::Models => pages::models::render(self, cx).into_any_element(),
             Route::Settings => pages::settings::render(self, cx).into_any_element(),
         };
+        let tokens = *theme::tokens(cx);
         let mut shell = gpui::div()
             .size_full()
-            .bg(gpui::rgb(0x111318))
-            .text_color(gpui::rgb(0xe9edf5))
+            .bg(tokens.window)
+            .text_color(tokens.text)
             .flex()
             .flex_col()
             .child(pages::chrome::header(self, cx))
@@ -2695,7 +2825,7 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
     application()
         .with_assets(gpui_component_assets::Assets)
         .run(move |cx: &mut App| {
-            init_app(cx);
+            init_app(theme::system_accessibility(), cx);
             let bounds = Bounds::centered(None, gpui::size(gpui::px(1_180.), gpui::px(760.)), cx);
             open_main_window(
                 inventory.clone(),
@@ -2712,10 +2842,11 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
 }
 
 /// The app-wide setup `run` performs before it opens the window; the route
-/// tests under `crates/ui/tests` perform the same setup.
-pub(crate) fn init_app(cx: &mut App) {
+/// tests under `crates/ui/tests` perform the same setup with fixed
+/// accessibility flags, where `run` reads the system's.
+pub(crate) fn init_app(accessibility: theme::Accessibility, cx: &mut App) {
     gpui_component::init(cx);
-    gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+    theme::init(accessibility, cx);
     cx.bind_keys([
         KeyBinding::new("backspace", crate::text_input::Backspace, None),
         KeyBinding::new("delete", crate::text_input::Delete, None),
@@ -2725,22 +2856,21 @@ pub(crate) fn init_app(cx: &mut App) {
     ]);
 }
 
-/// Opens the desktop window and starts following document changes; `run`
-/// and the GPUI tests build the window the same way. The first layer is
-/// gpui-component's `Root`, which its dialogs and tooltips look up.
+/// Opens the desktop window in the saved appearance and starts following
+/// document changes; `run` and the GPUI tests build the window the same way.
+/// The first layer is gpui-component's `Root`, which its dialogs and tooltips
+/// look up.
 pub(crate) fn open_main_window(
     inventory: BackendInventory,
     services: DesktopServices,
     options: WindowOptions,
     cx: &mut App,
 ) -> gpui::Result<(gpui::AnyWindowHandle, Entity<RootView>)> {
-    let locale = services
-        .settings
-        .snapshot()
-        .map(|settings| i18n::Locale::from_code(&settings.ui_locale))
-        .unwrap_or(i18n::Locale::ZhCn);
+    let saved = services.settings.snapshot().unwrap_or_default();
+    let locale = i18n::Locale::from_code(&saved.ui_locale);
     let mut root_view = None;
     let window = cx.open_window(options, |window, cx| {
+        theme::attach(saved.appearance, window, cx);
         let assistant_input =
             cx.new(|cx| TextInput::new(cx, i18n::text(locale, "ask_placeholder")));
         let view = cx.new(|cx| RootView::new(inventory, services, assistant_input, cx));
@@ -2785,6 +2915,37 @@ mod tests {
             );
             assert_eq!(speakers[0], auto, "{locale:?} expected speakers label");
         }
+    }
+
+    #[test]
+    fn appearance_labels_map_back_to_their_preferences_in_both_locales() {
+        for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+            let themes = theme_preference_items(locale);
+            assert_eq!(themes.len(), THEME_PREFERENCES.len());
+            for (label, preference) in themes.iter().zip(THEME_PREFERENCES) {
+                assert_eq!(theme_preference_from_label(locale, label), Some(preference));
+            }
+            let materials = material_preference_items(locale);
+            assert_eq!(materials.len(), MATERIAL_PREFERENCES.len());
+            for (label, preference) in materials.iter().zip(MATERIAL_PREFERENCES) {
+                assert_eq!(
+                    material_preference_from_label(locale, label),
+                    Some(preference)
+                );
+            }
+        }
+        assert_eq!(
+            theme_preference_items(i18n::Locale::ZhCn),
+            ["跟随系统", "浅色", "深色"]
+        );
+        assert_eq!(
+            material_preference_items(i18n::Locale::EnUs),
+            ["Glass", "Opaque"]
+        );
+        assert_eq!(
+            theme_preference_from_label(i18n::Locale::ZhCn, "Dark"),
+            None
+        );
     }
 
     #[test]

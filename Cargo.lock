@@ -7784,6 +7784,7 @@ dependencies = [
  "gpui-component-assets",
  "gpui_platform",
  "models",
+ "objc2-app-kit 0.3.2",
  "persistence",
  "runtime",
  "settings",

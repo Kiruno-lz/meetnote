@@ -4,10 +4,13 @@ mod controller;
 mod i18n;
 mod pages;
 mod route;
+#[cfg(test)]
+mod source_files;
 mod state;
 #[doc(hidden)]
 pub mod test_support;
 mod text_input;
+mod theme;
 
 pub use controller::{run, DesktopServices};
 
@@ -185,10 +188,7 @@ mod tests {
         let services = desktop_services(assistant.clone(), test_settings());
         // Undo runs on a `runtime::spawn_blocking` worker thread.
         cx.executor().allow_parking();
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
-        });
+        cx.update(|cx| controller::init_app(theme::Accessibility::default(), cx));
         let assistant_input = cx.new(|cx| text_input::TextInput::new(cx, "Ask…"));
         let (view, cx) = cx.add_window_view(|_window, cx| {
             controller::RootView::new(
@@ -346,13 +346,11 @@ mod tests {
         }
     }
 
+    /// The app setup `run` performs, with every accessibility flag off.
     fn init_gpui(cx: &mut TestAppContext) {
         // Service calls complete on `runtime::spawn_blocking` worker threads.
         cx.executor().allow_parking();
-        cx.update(|cx| {
-            gpui_component::init(cx);
-            gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
-        });
+        cx.update(|cx| controller::init_app(theme::Accessibility::default(), cx));
     }
 
     fn open_desktop_with(
@@ -935,6 +933,201 @@ mod tests {
             );
             assert!(!root.settings_draft.assistant.enabled);
         });
+    }
+
+    /// gpui-component's resolved colors except the window background.
+    fn component_colors_without_background(cx: &mut gpui::VisualTestContext) -> String {
+        cx.update(|_, cx| {
+            let theme = gpui_component::Theme::global(cx);
+            let mut colors = theme.colors;
+            colors.background = gpui::Hsla::default();
+            let mut tokens = theme.tokens;
+            tokens.background = gpui::Hsla::default().into();
+            format!("{colors:?}\n{tokens:?}")
+        })
+    }
+
+    #[track_caller]
+    fn assert_material(cx: &mut gpui::VisualTestContext, material: theme::Material) {
+        cx.update(|_, cx| {
+            let component = gpui_component::Theme::global(cx);
+            let (alpha, background) = match material {
+                theme::Material::Glass => (0., gpui::WindowBackgroundAppearance::Blurred),
+                theme::Material::Opaque => (1., gpui::WindowBackgroundAppearance::Opaque),
+            };
+            assert_eq!(theme::tokens(cx).material, material);
+            assert_eq!(
+                component.background.a, alpha,
+                "{material:?} component background"
+            );
+            assert_eq!(component.tokens.background.color.a, alpha, "Root's fill");
+            assert_eq!(theme::window_background(cx), background);
+        });
+    }
+
+    #[gpui::test]
+    fn glass_clears_the_component_background_and_blurs_the_window(cx: &mut TestAppContext) {
+        // Saved settings default to the glass material.
+        let services =
+            desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+        let (_view, cx) = open_main_window(cx, services);
+        assert_material(cx, theme::Material::Glass);
+
+        for theme in [
+            settings::ThemePreference::Light,
+            settings::ThemePreference::Dark,
+        ] {
+            let mut colors = Vec::new();
+            for material in [
+                settings::MaterialPreference::Glass,
+                settings::MaterialPreference::Opaque,
+            ] {
+                cx.update(|_, cx| {
+                    theme::set_preference(settings::AppearanceSettings { theme, material }, cx)
+                });
+                cx.run_until_parked();
+                assert_material(
+                    cx,
+                    match material {
+                        settings::MaterialPreference::Glass => theme::Material::Glass,
+                        settings::MaterialPreference::Opaque => theme::Material::Opaque,
+                    },
+                );
+                colors.push(component_colors_without_background(cx));
+            }
+            assert_eq!(
+                colors[0], colors[1],
+                "{theme:?}: the material may change only the background gpui-component paints"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn appearance_selects_save_with_revision_checks_and_reapply_the_theme(cx: &mut TestAppContext) {
+        let settings = test_settings();
+        let services = desktop_services(
+            Arc::new(FakeAssistantUiService::default()),
+            settings.clone(),
+        );
+        let (view, cx) = open_main_window(cx, services);
+        view.update(cx, |root, cx| root.navigate(route::Route::Settings, cx));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("select-theme").is_some());
+        assert!(cx.debug_bounds("select-material").is_some());
+        let select = |cx: &mut gpui::VisualTestContext, material: bool| {
+            view.read_with(cx, |root, _| {
+                let selectors = root
+                    .settings_selectors
+                    .as_ref()
+                    .expect("selectors are built on render");
+                if material {
+                    selectors.material.clone()
+                } else {
+                    selectors.theme.clone()
+                }
+            })
+        };
+        let confirm = |cx: &mut gpui::VisualTestContext, material: bool, label: &str| {
+            select(cx, material).update(cx, |_, cx| {
+                cx.emit(gpui_component::select::SelectEvent::Confirm(Some(
+                    label.to_string(),
+                )))
+            })
+        };
+        let appearance = |settings: &SettingsService| settings.snapshot().unwrap().appearance;
+        assert_eq!(
+            select(cx, false).read_with(cx, |state, _| state.selected_value().cloned()),
+            Some("跟随系统".to_string())
+        );
+
+        confirm(cx, false, "深色");
+        wait_for(cx, &view, |_| {
+            appearance(&settings).theme == settings::ThemePreference::Dark
+        });
+        cx.update(|_, cx| {
+            assert_eq!(theme::tokens(cx).mode, theme::Mode::Dark);
+            assert!(gpui_component::Theme::global(cx).is_dark());
+        });
+        assert_material(cx, theme::Material::Glass);
+
+        // An external change makes the next save stale: it must conflict,
+        // keep the saved material and re-apply it.
+        external_patch(
+            &settings,
+            settings::SettingsPatch {
+                max_tool_rounds: Some(5),
+                ..Default::default()
+            },
+        );
+        confirm(cx, true, "不透明");
+        wait_for(cx, &view, |root| root.settings_error.is_some());
+        let error = view.read_with(cx, |root, _| root.settings_error.clone().unwrap());
+        assert_eq!(error.code, "SETTINGS_REVISION_CONFLICT");
+        assert_eq!(
+            appearance(&settings).material,
+            settings::MaterialPreference::Glass
+        );
+        assert_material(cx, theme::Material::Glass);
+
+        cx.run_until_parked();
+        confirm(cx, true, "不透明");
+        wait_for(cx, &view, |root| {
+            root.settings_error.is_none()
+                && appearance(&settings).material == settings::MaterialPreference::Opaque
+        });
+        assert_material(cx, theme::Material::Opaque);
+        assert_eq!(
+            appearance(&settings),
+            settings::AppearanceSettings {
+                theme: settings::ThemePreference::Dark,
+                material: settings::MaterialPreference::Opaque,
+            }
+        );
+        assert_eq!(settings.snapshot().unwrap().assistant.max_tool_rounds, 5);
+    }
+
+    #[gpui::test]
+    fn the_system_preference_follows_the_window_appearance(cx: &mut TestAppContext) {
+        let services =
+            desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+        let (_view, cx) = open_main_window(cx, services);
+        let mode = |cx: &mut gpui::VisualTestContext| {
+            cx.update(|_, cx| {
+                let mode = theme::tokens(cx).mode;
+                assert_eq!(
+                    gpui_component::Theme::global(cx).is_dark(),
+                    mode == theme::Mode::Dark
+                );
+                mode
+            })
+        };
+        // gpui's test window is always light.
+        assert_eq!(mode(cx), theme::Mode::Light);
+
+        cx.update(|window, cx| {
+            theme::system_appearance_changed(gpui::WindowAppearance::Dark, window, cx)
+        });
+        assert_eq!(mode(cx), theme::Mode::Dark);
+        assert_material(cx, theme::Material::Glass);
+
+        cx.update(|_, cx| {
+            theme::set_preference(
+                settings::AppearanceSettings {
+                    theme: settings::ThemePreference::Light,
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            theme::system_appearance_changed(gpui::WindowAppearance::VibrantDark, window, cx)
+        });
+        assert_eq!(
+            mode(cx),
+            theme::Mode::Light,
+            "a pinned theme ignores the system"
+        );
     }
 
     #[gpui::test]
