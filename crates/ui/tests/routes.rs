@@ -1,14 +1,13 @@
 //! L2: the structure of every route in the desktop window. Each test opens
 //! the window as `run` does on the shared fixture (`support`), reaches the
-//! route through its navigation button, and checks by `debug_selector` that
-//! the navigation, the route's page with its primary content, and one
-//! primary control are laid out inside the 1180×760 window, and that no
-//! other route's page is rendered. GPUI's test platform keeps the tests
-//! deterministic.
+//! route through its sidebar entry, and checks by `debug_selector` that the
+//! glass sidebar holds the entries, the opaque content plane beside it holds
+//! only the route's page with its primary content, and that no other route's
+//! page is rendered. GPUI's test platform keeps the tests deterministic.
 //!
 //! A `debug_selector` on a scrollable element marks its scroll content,
 //! which may extend below the window; such content is only required to start
-//! inside its page.
+//! inside its container.
 
 mod support;
 
@@ -33,13 +32,19 @@ fn nav_selector(route: Route) -> &'static str {
     }
 }
 
-/// Opens the fixture window and clicks through to `route`, by way of a
-/// different route so every test exercises a real switch. Returns the
-/// bounds of the route's page.
-fn open_route(
-    cx: &mut TestAppContext,
-    route: Route,
-) -> (MainWindow, &mut VisualTestContext, Bounds<Pixels>) {
+/// Rendered inside the sidebar entry of the current route only.
+fn active_selector(route: Route) -> &'static str {
+    match route {
+        Route::Assistant => "nav-Assistant-active",
+        Route::Meetings => "nav-Meetings-active",
+        Route::Models => "nav-Models-active",
+        Route::Settings => "nav-Settings-active",
+    }
+}
+
+/// Opens the fixture window on its start route, Assistant, once the startup
+/// installation probe has reached the view.
+fn open_window(cx: &mut TestAppContext) -> (MainWindow, &mut VisualTestContext) {
     // The startup installation probe completes on a worker thread.
     cx.executor().allow_parking();
     let window = cx.update(|cx| {
@@ -59,19 +64,34 @@ fn open_route(
         "the installation probe did not finish"
     );
     assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Assistant);
+    (window, cx)
+}
 
+/// Clicks the sidebar entry of `route`.
+fn click_entry(cx: &mut VisualTestContext, window: &MainWindow, route: Route) {
+    let entry = visible(cx, nav_selector(route));
+    cx.simulate_click(entry.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), route);
+}
+
+/// Opens the fixture window and clicks through to `route`, by way of a
+/// different route so every test exercises a real switch. Returns the
+/// bounds of the route's page.
+fn open_route(
+    cx: &mut TestAppContext,
+    route: Route,
+) -> (MainWindow, &mut VisualTestContext, Bounds<Pixels>) {
+    let (window, cx) = open_window(cx);
     let detour = if route == Route::Models {
         Route::Settings
     } else {
         Route::Models
     };
     for step in [detour, route] {
-        let button = visible(cx, nav_selector(step));
-        cx.simulate_click(button.center(), Modifiers::none());
-        cx.run_until_parked();
-        assert_eq!(cx.update(|_, cx| window.route(cx)), step);
+        click_entry(cx, &window, step);
     }
-    let page = page_below_navigation(cx, route);
+    let page = page_in_content_plane(cx, route);
     (window, cx, page)
 }
 
@@ -106,21 +126,21 @@ fn visible(cx: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels>
     bounds
 }
 
-/// Scroll content `selector`, which must start inside `page` and keep to
-/// its width.
+/// Scroll content `selector`, which must start inside `container` and keep
+/// to its width.
 #[track_caller]
 fn scroll_content(
     cx: &mut VisualTestContext,
     selector: &'static str,
-    page: Bounds<Pixels>,
+    container: Bounds<Pixels>,
 ) -> Bounds<Pixels> {
     let bounds = rendered(cx, selector);
     assert!(
-        bounds.left() >= page.left()
-            && bounds.right() <= page.right()
-            && bounds.top() >= page.top()
-            && bounds.top() < page.bottom(),
-        "`{selector}` does not start inside its page: {bounds:?} in {page:?}"
+        bounds.left() >= container.left()
+            && bounds.right() <= container.right()
+            && bounds.top() >= container.top()
+            && bounds.top() < container.bottom(),
+        "`{selector}` does not start inside its container: {bounds:?} in {container:?}"
     );
     bounds
 }
@@ -133,31 +153,45 @@ fn within(inner: Bounds<Pixels>, outer: Bounds<Pixels>) -> bool {
         && inner.bottom() <= outer.bottom()
 }
 
-/// The navigation holds every route button, and `route`'s page, the only
-/// page rendered, fills the window below it.
+fn leak(selector: String) -> &'static str {
+    Box::leak(selector.into_boxed_str())
+}
+
+/// The sidebar holds every route entry, the content plane lies to its
+/// right, and `route`'s page, the only page rendered, lies in the plane.
 #[track_caller]
-fn page_below_navigation(cx: &mut VisualTestContext, route: Route) -> Bounds<Pixels> {
+fn page_in_content_plane(cx: &mut VisualTestContext, route: Route) -> Bounds<Pixels> {
+    let sidebar = visible(cx, "sidebar");
     let navigation = visible(cx, "nav");
+    assert!(
+        within(navigation, sidebar),
+        "the entries are in the sidebar"
+    );
     for (other, _) in ROUTE_PAGES {
-        let button = visible(cx, nav_selector(other));
+        let entry = visible(cx, nav_selector(other));
         assert!(
-            within(button, navigation),
+            within(entry, navigation),
             "`{}` is outside the navigation",
             nav_selector(other)
         );
     }
+    let import = visible(cx, "import-audio");
+    assert!(
+        within(import, sidebar) && navigation.bottom() <= import.top(),
+        "import audio sits in the sidebar below the entries"
+    );
+    let plane = visible(cx, "content-plane");
+    assert!(
+        sidebar.right() <= plane.left(),
+        "the content plane lies right of the sidebar"
+    );
     let mut page = None;
     for (other, selector) in ROUTE_PAGES {
         if other == route {
             let bounds = visible(cx, selector);
             assert!(
-                navigation.bottom() <= bounds.top(),
-                "the navigation overlaps the {route:?} page"
-            );
-            assert_eq!(
-                bounds.bottom(),
-                gpui::px(WINDOW_HEIGHT),
-                "the {route:?} page ends at the window bottom"
+                within(bounds, plane),
+                "the {route:?} page lies in the content plane: {bounds:?} in {plane:?}"
             );
             page = Some(bounds);
         } else {
@@ -182,7 +216,8 @@ fn the_assistant_route_shows_the_prompt_and_send_button(cx: &mut TestAppContext)
 #[gpui::test]
 fn the_meetings_route_shows_the_tree_content_and_process_button(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Meetings);
-    let tree = scroll_content(cx, "project-tree", page);
+    let sidebar = visible(cx, "sidebar");
+    let tree = scroll_content(cx, "project-tree", sidebar);
     let content = scroll_content(cx, "meeting-content", page);
     let process = visible(cx, "process-project");
     assert!(within(process, page));
@@ -192,7 +227,7 @@ fn the_meetings_route_shows_the_tree_content_and_process_button(cx: &mut TestApp
     );
 
     let [root, child, second_root] =
-        DOCUMENT_IDS.map(|id| visible(cx, Box::leak(format!("project-row-{id}").into_boxed_str())));
+        DOCUMENT_IDS.map(|id| visible(cx, leak(format!("project-row-{id}"))));
     assert!(
         root.bottom() <= child.top() && child.bottom() <= second_root.top(),
         "the child row sits between its parent and the next root"
@@ -204,23 +239,35 @@ fn the_meetings_route_shows_the_tree_content_and_process_button(cx: &mut TestApp
 }
 
 #[gpui::test]
-fn the_models_route_shows_the_catalog_and_a_family_toggle(cx: &mut TestAppContext) {
+fn the_models_route_shows_the_catalog_and_aligned_status_chips(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Models);
-    let first_family = support::catalog()
-        .models
-        .into_iter()
-        .map(|model| model.model_family)
+    let catalog = support::catalog().models;
+    let first_family = catalog
+        .iter()
+        .map(|model| model.model_family.clone())
         .min()
         .expect("the catalog lists models");
     let list = scroll_content(cx, "models-scroll", page);
-    let toggle = visible(
-        cx,
-        Box::leak(format!("model-family-{first_family}").into_boxed_str()),
-    );
+    let toggle = visible(cx, leak(format!("model-family-{first_family}")));
     assert!(
         within(toggle, list) && within(toggle, page),
         "the first family toggle is inside the model list"
     );
+
+    // Every family starts expanded, so every model row has a status chip;
+    // the chips form one column whatever the model id's length.
+    let chips = catalog
+        .iter()
+        .map(|model| rendered(cx, leak(format!("model-status-{}", model.id))))
+        .collect::<Vec<_>>();
+    assert!(chips.len() >= 3, "the fixture catalog lists several models");
+    for chip in &chips {
+        assert_eq!(
+            (chip.left(), chip.size.width),
+            (chips[0].left(), chips[0].size.width),
+            "status chips share one column: {chips:?}"
+        );
+    }
 }
 
 #[gpui::test]
@@ -231,5 +278,113 @@ fn the_settings_route_shows_the_form_and_language_select(cx: &mut TestAppContext
     assert!(
         within(language, form) && within(language, page),
         "the language select is inside the settings form"
+    );
+}
+
+#[gpui::test]
+fn settings_controls_start_at_one_left_edge(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Settings);
+    // Labels of different widths in three sections; the controls after them
+    // must still start at the same x.
+    let controls = [
+        "select-theme",
+        "select-material",
+        "select-language",
+        "select-asr-backend",
+        "select-asr-model",
+        "select-transcription-language",
+    ]
+    .map(|selector| (selector, rendered(cx, selector)));
+    let (first, left) = (controls[0].0, controls[0].1.left());
+    for (selector, bounds) in controls {
+        assert_eq!(
+            bounds.left(),
+            left,
+            "`{selector}` starts at {:?}, `{first}` at {left:?}",
+            bounds.left()
+        );
+    }
+}
+
+#[gpui::test]
+fn every_sidebar_entry_opens_its_route_and_only_it_is_active(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    for route in [
+        Route::Assistant,
+        Route::Models,
+        Route::Settings,
+        Route::Meetings,
+        Route::Assistant,
+    ] {
+        click_entry(cx, &window, route);
+        for (other, _) in ROUTE_PAGES {
+            let active = cx.debug_bounds(active_selector(other));
+            if other == route {
+                let entry = visible(cx, nav_selector(other));
+                let marker = active.unwrap_or_else(|| panic!("{route:?} is not marked active"));
+                assert!(within(marker, entry), "the active marker is in its entry");
+            } else {
+                assert!(
+                    active.is_none(),
+                    "{other:?} is marked active on the {route:?} route"
+                );
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn the_project_tree_is_in_the_sidebar_on_meetings_only(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    for route in [
+        Route::Meetings,
+        Route::Models,
+        Route::Settings,
+        Route::Assistant,
+    ] {
+        click_entry(cx, &window, route);
+        let tree = cx.debug_bounds("project-tree");
+        if route == Route::Meetings {
+            let sidebar = visible(cx, "sidebar");
+            let tree = scroll_content(cx, "project-tree", sidebar);
+            assert!(
+                visible(cx, "import-audio").bottom() <= tree.top(),
+                "the tree sits below the entries and import button"
+            );
+            for id in DOCUMENT_IDS {
+                let row = visible(cx, leak(format!("project-row-{id}")));
+                assert!(within(row, sidebar), "`{id}` is in the sidebar");
+            }
+        } else {
+            assert!(tree.is_none(), "the {route:?} route renders the tree");
+        }
+    }
+}
+
+#[gpui::test]
+fn the_window_is_titled_and_both_columns_start_with_a_drag_strip(cx: &mut TestAppContext) {
+    let (_window, cx) = open_window(cx);
+    assert_eq!(cx.window_title().as_deref(), Some("MeetNote"));
+
+    let sidebar = visible(cx, "sidebar");
+    let plane = visible(cx, "content-plane");
+    let sidebar_strip = visible(cx, "titlebar-drag-sidebar");
+    let content_strip = visible(cx, "titlebar-drag-content");
+    for strip in [sidebar_strip, content_strip] {
+        assert_eq!(strip.top(), gpui::px(0.), "the strip starts at the top");
+        assert_eq!(strip.size.height, sidebar_strip.size.height);
+    }
+    assert!(
+        within(sidebar_strip, sidebar) && sidebar_strip.size.width == sidebar.size.width,
+        "the sidebar strip spans the sidebar"
+    );
+    assert!(
+        content_strip.left() >= sidebar.right() && content_strip.bottom() <= plane.top(),
+        "the content strip lies above the content plane"
+    );
+    assert!(
+        sidebar_strip.bottom() <= visible(cx, "nav").top(),
+        "the entries start below the strip and the traffic lights"
     );
 }

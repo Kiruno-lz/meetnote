@@ -12,36 +12,33 @@ use gpui_component::{
     scroll::ScrollableElement as _,
 };
 
+/// The current document in the content plane; its project tree lives in
+/// the sidebar (`project_tree`).
 pub(crate) fn render(
     root: &mut RootView,
     selected: Option<&DocumentState>,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
-    div()
-        .debug_selector(|| "meetings-page".into())
-        .flex_1()
-        .bg(theme::tokens(cx).content)
-        .flex()
-        .child(sidebar(root, cx))
-        .child(main_panel(root, selected, cx))
+    main_panel(root, selected, cx).debug_selector(|| "meetings-page".into())
 }
 
-fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
+/// The three-level project tree the sidebar shows on the Meetings route:
+/// click selects, the handle drags, dropping onto a row reparents and
+/// between rows reorders.
+pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
     let mut tree = div()
         .id("project-tree")
         .debug_selector(|| "project-tree".into())
         .flex_1()
+        .min_h_0()
         .overflow_y_scrollbar()
         .flex()
-        .flex_col()
-        .gap_1();
+        .flex_col();
     if root.projects.is_empty() {
         tree = tree.child(
             div()
                 .p_3()
-                .rounded(tokens.radius.sm)
-                .bg(tokens.surface)
                 .text_sm()
                 .text_color(tokens.text_muted)
                 .child(tr(root.ui.locale, "no_projects")),
@@ -66,7 +63,7 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                 .id(format!("drag-{}", project.id().as_str()))
                 .mr_2()
                 .cursor_pointer()
-                .text_color(tokens.text_subtle)
+                .text_color(tokens.text_muted)
                 .child("⋮⋮")
                 .on_drag(
                     ProjectDrag {
@@ -125,13 +122,16 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                 .id(project.id().as_str().to_string())
                 .debug_selector(|| format!("project-row-{}", project.id().as_str()))
                 .cursor_pointer()
-                .p_3()
+                .px(tokens.spacing.sm)
+                .py(tokens.spacing.xs)
                 .ml(px((depth as f32) * 16.))
                 .rounded(tokens.radius.sm)
-                .bg(if selected {
-                    tokens.selection
-                } else {
-                    tokens.surface
+                .map(|row| {
+                    if selected {
+                        row.bg(tokens.selection)
+                    } else {
+                        row.hover(|style| style.bg(tokens.wash))
+                    }
                 })
                 .child(
                     div()
@@ -161,19 +161,23 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
             tree = tree.child(div().child(before_drop).child(row).child(after_drop));
         }
     }
+    // Inset like the entries above, so the hairline stops short of the
+    // window edge.
     div()
-        .w(px(280.))
-        .h_full()
-        .p_4()
-        .gap_3()
+        .flex_1()
+        .min_h_0()
+        .mx(tokens.spacing.md)
+        .mb(tokens.spacing.md)
+        .pt(tokens.spacing.md)
+        .gap(tokens.spacing.sm)
         .flex()
         .flex_col()
-        .flex_shrink_0()
-        .border_r_1()
+        .border_t_1()
         .border_color(tokens.hairline)
         .child(
             div()
-                .text_sm()
+                .px(tokens.spacing.sm)
+                .text_xs()
                 .text_color(tokens.text_muted)
                 .child(tr(root.ui.locale, "audio_projects")),
         )
@@ -184,7 +188,7 @@ fn main_panel(
     root: &mut RootView,
     project: Option<&DocumentState>,
     cx: &mut Context<RootView>,
-) -> impl IntoElement {
+) -> gpui::Div {
     let locale = root.ui.locale;
     let tokens = *theme::tokens(cx);
     let display_status = project.map(|project| {
@@ -194,7 +198,14 @@ fn main_panel(
             project.processing_status()
         }
     });
-    let mut panel = div().flex_1().h_full().p_6().flex().flex_col().gap_4();
+    let mut panel = div()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .p_6()
+        .flex()
+        .flex_col()
+        .gap_4();
     if let Some(project) = project {
         let mut content = div()
             .id("meeting-content")
@@ -289,6 +300,7 @@ fn main_panel(
                     )
                     .child(
                         Button::new("open-project-detail")
+                            .debug_selector(|| "open-project-detail".into())
                             .secondary()
                             .compact()
                             .label(tr(locale, "open_detail"))

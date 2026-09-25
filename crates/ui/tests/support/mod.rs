@@ -1,9 +1,9 @@
 //! The fixture the L2 route tests (`routes.rs`) and the L3 screenshots
 //! (`visual.rs`) both render: settings in a directory of their own, three
-//! in-memory documents (one a semantic child), the `zh-CN` locale, the dark
-//! opaque appearance, a model root that holds no model, and an Assistant
-//! service that is never reached. Every value is fixed, so a route renders
-//! the same frame on every run. `pixels.rs` beside this file is not part of
+//! in-memory documents (one a semantic child), the `zh-CN` locale, a pinned
+//! appearance (dark opaque unless a test picks another), a model root that
+//! holds no model, and an Assistant service that is never reached. Every
+//! value is fixed, so a route renders the same frame on every run. `pixels.rs` beside this file is not part of
 //! the fixture; `visual.rs` and the `pixels` target include it directly.
 
 use application::{
@@ -46,9 +46,29 @@ pub fn init(cx: &mut App) {
     ui::test_support::init(cx);
 }
 
-/// Opens the desktop window on the fixture, at the size `run` uses.
+/// Opens the desktop window on the fixture in the dark opaque appearance,
+/// at the size `run` uses.
+#[allow(dead_code, reason = "`visual.rs` opens every appearance itself")]
 pub fn open_main_window(cx: &mut App) -> MainWindow {
-    MainWindow::open(inventory(), services(), window_options(), cx)
+    open_main_window_in(
+        settings::AppearanceSettings {
+            theme: settings::ThemePreference::Dark,
+            material: settings::MaterialPreference::Opaque,
+        },
+        cx,
+    )
+}
+
+/// Opens the desktop window on the fixture in `appearance`, which must be
+/// pinned: with `ThemePreference::System` the frame would follow the
+/// machine's appearance.
+pub fn open_main_window_in(appearance: settings::AppearanceSettings, cx: &mut App) -> MainWindow {
+    assert_ne!(
+        appearance.theme,
+        settings::ThemePreference::System,
+        "the fixture pins its appearance"
+    );
+    MainWindow::open(inventory(), services(appearance), window_options(), cx)
         .expect("the fixture window opens")
 }
 
@@ -79,7 +99,7 @@ fn inventory() -> BackendInventory {
     )
 }
 
-fn services() -> ui::DesktopServices {
+fn services(appearance: settings::AppearanceSettings) -> ui::DesktopServices {
     let repository = Arc::new(InMemoryDocumentRepository::default());
     for document in documents() {
         // The repository keeps the fixed revision and timestamps;
@@ -95,7 +115,7 @@ fn services() -> ui::DesktopServices {
             ),
             DocumentService::new(repository),
         ),
-        settings: settings(&temp),
+        settings: settings(&temp, appearance),
         // A model root that does not exist: every catalog model is missing.
         model_manager: ModelManager::new(catalog(), temp.join("models")),
         asr_model: missing_model("whisper-rs"),
@@ -114,19 +134,14 @@ fn temp_directory() -> std::path::PathBuf {
     ))
 }
 
-fn settings(temp: &std::path::Path) -> SettingsService {
+fn settings(temp: &std::path::Path, appearance: settings::AppearanceSettings) -> SettingsService {
     let settings = SettingsService::open(Arc::new(JsonSettingsRepository::open(
         temp.join("settings.json"),
     )))
     .expect("fixture settings open");
     let mut value = settings.snapshot().expect("fixture settings read");
     value.ui_locale = LOCALE.into();
-    // Pinned, never `System`: the rendered frame must not depend on the
-    // machine's appearance.
-    value.appearance = settings::AppearanceSettings {
-        theme: settings::ThemePreference::Dark,
-        material: settings::MaterialPreference::Opaque,
-    };
+    value.appearance = appearance;
     value.asr_backend_id = Some("whisper-rs".into());
     value.diarization_backend_id = Some("sherpa-onnx".into());
     value.speaker_library_path = "data/speakers/library.json".into();

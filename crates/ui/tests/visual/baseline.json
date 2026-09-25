@@ -4,5 +4,6 @@
   "scale_factor": 2.0,
   "window": { "width": 1180, "height": 760 },
   "locale": "zh-CN",
-  "routes": ["assistant", "meetings", "models", "settings"]
+  "routes": ["assistant", "meetings", "models", "settings"],
+  "appearances": ["dark-glass", "dark-opaque", "light-glass", "light-opaque"]
 }

@@ -22,7 +22,13 @@
 //! libtest runs every test on a spawned thread, even with
 //! `--test-threads=1`; `main` asserts it is on the main thread.
 //!
-//! Each route renders in its own 1180×760 window on the shared fixture
+//! Each route renders in each of the four pinned appearances, dark/light ×
+//! glass/opaque, into `<route>-<dark|light>-<glass|opaque>.png`. Under glass
+//! the window background is clear, so the chrome's pixels carry the glass
+//! alpha: the capture has no desktop behind it, and the desktop blur is
+//! checked by hand.
+//!
+//! Each screenshot renders in its own 1180×760 window on the shared fixture
 //! (`support`) through `VisualTestAppContext`, which pairs the real macOS
 //! platform and Metal renderer with GPUI's deterministic scheduler, and is
 //! captured with `Window::render_to_image` once two consecutive frames are
@@ -59,12 +65,37 @@ fn main() -> ExitCode {
 mod screenshots {
     use crate::{pixels, support};
     use gpui::VisualTestAppContext;
+    use settings::{AppearanceSettings, MaterialPreference, ThemePreference};
     use std::path::Path;
     use std::process::ExitCode;
     use std::sync::Arc;
     use ui::test_support::{MainWindow, Route};
 
-    /// Every route with the file name of its baseline.
+    /// Every appearance with its baseline file name suffix; pinned, never
+    /// `ThemePreference::System`.
+    const APPEARANCES: [(&str, ThemePreference, MaterialPreference); 4] = [
+        (
+            "dark-glass",
+            ThemePreference::Dark,
+            MaterialPreference::Glass,
+        ),
+        (
+            "dark-opaque",
+            ThemePreference::Dark,
+            MaterialPreference::Opaque,
+        ),
+        (
+            "light-glass",
+            ThemePreference::Light,
+            MaterialPreference::Glass,
+        ),
+        (
+            "light-opaque",
+            ThemePreference::Light,
+            MaterialPreference::Opaque,
+        ),
+    ];
+    /// Every route with its baseline file name prefix.
     const ROUTES: [(Route, &str); 4] = [
         (Route::Assistant, "assistant"),
         (Route::Meetings, "meetings"),
@@ -119,8 +150,15 @@ mod screenshots {
             std::env::temp_dir().join(format!("meetnote-visual-{}", std::process::id()));
         let mut scale_factor = None;
         let mut failures = 0;
-        for (route, name) in ROUTES {
-            let window = cx.update(support::open_main_window);
+        let screenshots = APPEARANCES.iter().flat_map(|appearance| {
+            ROUTES
+                .iter()
+                .map(move |(route, route_name)| (*appearance, *route, *route_name))
+        });
+        for ((appearance_name, theme, material), route, route_name) in screenshots {
+            let name = format!("{route_name}-{appearance_name}");
+            let appearance = AppearanceSettings { theme, material };
+            let window = cx.update(|cx| support::open_main_window_in(appearance, cx));
             wait_for_installation(&mut cx, &window);
             cx.update(|cx| window.navigate(route, cx));
             let handle = window.window();
@@ -225,15 +263,15 @@ mod screenshots {
             );
             return ExitCode::SUCCESS;
         }
+        let total = APPEARANCES.len() * ROUTES.len();
         if failures > 0 {
             println!(
-                "visual: {failures} of {} routes changed by more than {}‰ of their pixels",
-                ROUTES.len(),
+                "visual: {failures} of {total} screenshots changed by more than {}‰ of their pixels",
                 pixels::MAX_DIFFERING_PER_MILLE
             );
             return ExitCode::FAILURE;
         }
-        println!("visual: {} routes match their baselines", ROUTES.len());
+        println!("visual: {total} screenshots match their baselines");
         ExitCode::SUCCESS
     }
 
@@ -291,13 +329,17 @@ mod screenshots {
             .iter()
             .map(|(key, revision)| format!("  \"{key}\": \"{revision}\",\n"))
             .collect::<String>();
-        let routes = ROUTES
-            .iter()
-            .map(|(_, name)| format!("\"{name}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let list = |names: Vec<&str>| {
+            names
+                .iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let routes = list(ROUTES.iter().map(|(_, name)| *name).collect());
+        let appearances = list(APPEARANCES.iter().map(|(name, ..)| *name).collect());
         format!(
-            "{{\n{revisions}  \"scale_factor\": {scale_factor:?},\n  \"window\": {{ \"width\": {}, \"height\": {} }},\n  \"locale\": \"{}\",\n  \"routes\": [{routes}]\n}}\n",
+            "{{\n{revisions}  \"scale_factor\": {scale_factor:?},\n  \"window\": {{ \"width\": {}, \"height\": {} }},\n  \"locale\": \"{}\",\n  \"routes\": [{routes}],\n  \"appearances\": [{appearances}]\n}}\n",
             support::WINDOW_WIDTH,
             support::WINDOW_HEIGHT,
             support::LOCALE,

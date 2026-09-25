@@ -543,6 +543,88 @@ mod tests {
         std::fs::remove_dir_all(directory).ok();
     }
 
+    #[gpui::test]
+    fn detail_opens_beside_the_document_and_closing_it_keeps_jobs_running(cx: &mut TestAppContext) {
+        let services =
+            desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+        let (view, cx) = open_main_window(cx, services);
+        // A processing job in flight, as `process_selected` leaves it, and a
+        // download the view follows.
+        let jobs = runtime::JobRuntime::with_max_concurrency(2);
+        let (asr, _asr_events) = jobs.create_job();
+        let (diarization, _diarization_events) = jobs.create_job();
+        let (download, events) = std::sync::mpsc::channel();
+        view.update(cx, |root, cx| {
+            let document = DocumentState::new(ProjectId::new("first"), "First", "first.wav");
+            root.ui.selected_project = Some(document.id().clone());
+            root.projects = vec![document];
+            root.ui.processing = true;
+            root.cancel_contexts = Some((asr.clone(), diarization.clone()));
+            root.follow_download(events, cx);
+            root.navigate(route::Route::Meetings, cx);
+        });
+        cx.run_until_parked();
+
+        let open = cx
+            .debug_bounds("open-project-detail")
+            .expect("the document offers Detail");
+        cx.simulate_click(open.center(), Modifiers::none());
+        cx.run_until_parked();
+        let panel = cx
+            .debug_bounds("detail-panel")
+            .expect("Detail opens as a panel");
+        let body = cx
+            .debug_bounds("meeting-content")
+            .expect("the document body stays visible beside Detail");
+        assert!(
+            !panel.intersects(&body) && body.right() <= panel.left(),
+            "Detail lies right of the document body, not over it: {panel:?} / {body:?}"
+        );
+        let plane = cx
+            .debug_bounds("content-plane")
+            .expect("the content plane holds the page");
+        let inside = |inner: gpui::Bounds<gpui::Pixels>| {
+            inner.left() >= plane.left()
+                && inner.right() <= plane.right()
+                && inner.top() >= plane.top()
+                && inner.bottom() <= plane.bottom()
+        };
+        assert!(inside(panel), "Detail is inside the content plane");
+
+        let close = cx
+            .debug_bounds("close-detail")
+            .expect("Detail can be closed");
+        cx.simulate_click(close.center(), Modifiers::none());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("detail-panel").is_none(), "Detail closed");
+        view.read_with(cx, |root, _| {
+            assert!(root.ui.processing, "closing Detail keeps processing");
+            assert!(root.cancel_contexts.is_some());
+        });
+        assert!(
+            !asr.is_cancelled() && !diarization.is_cancelled(),
+            "closing Detail cancels no job"
+        );
+        let progress = models::manager::DownloadProgress {
+            id: models::manager::DownloadId(7),
+            model_id: "detail-model".into(),
+            state: models::manager::DownloadState::Downloading,
+            completed_bytes: 2_000_000,
+            speed_bytes_per_second: None,
+            total_bytes: Some(4_000_000),
+            artifact_index: 1,
+            artifact_count: 1,
+            eta_seconds: None,
+            retry_count: 0,
+        };
+        download
+            .send(models::manager::DownloadEvent::Updated(progress))
+            .unwrap();
+        let reported =
+            i18n::download_progress(i18n::Locale::ZhCn, "detail-model", 1, 1, 2_000_000, None);
+        wait_for(cx, &view, |root| root.ui.notice == reported);
+    }
+
     /// Drives the GPUI executor until `done` holds; service calls run on real
     /// worker threads, so parked GPUI tasks may still be waiting on them.
     #[track_caller]

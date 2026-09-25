@@ -5,7 +5,7 @@ use crate::{
     theme::{self, Tokens},
 };
 use domain::{DocumentState, ProjectId, ProjectStatus};
-use gpui::{div, prelude::*, Context, Render, SharedString, Window};
+use gpui::{div, prelude::*, px, Context, Pixels, Render, SharedString, Window};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::separator::Separator;
 
@@ -50,26 +50,47 @@ pub(crate) fn settings_section(
     div()
         .pb_4()
         .flex_shrink_0()
-        .child(div().text_lg().child(title.into()))
+        .child(div().mb_1().text_lg().child(title.into()))
         .children(rows)
-        .child(Separator::horizontal())
+        .child(div().mt_4().child(Separator::horizontal()))
 }
 
+/// The settings label column; wide enough for the longest label in either
+/// locale, so every control starts at the same x.
+pub(crate) const SETTING_LABEL_WIDTH: Pixels = px(200.);
+/// The width of selects and text fields in a settings row.
+pub(crate) const SETTING_CONTROL_WIDTH: Pixels = px(360.);
+
+/// A settings row: the label in the fixed label column, the control after
+/// it. Rows are at least one large control tall, so rows of selects, fields
+/// and buttons share one height.
 pub(crate) fn setting_control_row(
     label: impl Into<SharedString>,
     control: gpui::AnyElement,
     tokens: &Tokens,
 ) -> impl IntoElement {
     div()
-        .mt_3()
-        .py_2()
+        .mt(tokens.spacing.sm)
+        .min_h(tokens.control_height.lg)
         .flex()
         .items_center()
-        .justify_between()
-        .gap_4()
+        .gap(tokens.spacing.lg)
         .text_sm()
-        .child(div().text_color(tokens.text_muted).child(label.into()))
-        .child(control)
+        .child(
+            div()
+                .w(SETTING_LABEL_WIDTH)
+                .flex_shrink_0()
+                .text_color(tokens.text_muted)
+                .child(label.into()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .child(control),
+        )
 }
 
 pub(crate) fn mode_button(

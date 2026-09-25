@@ -63,8 +63,8 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
     div()
         .debug_selector(|| "assistant-page".into())
         .flex_1()
+        .min_w_0()
         .min_h_0()
-        .bg(tokens.content)
         .p_6()
         .flex()
         .flex_col()
@@ -131,7 +131,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 ))
                 .child(info_line(
                     tr(root.ui.locale, "assistant_projection"),
-                    projection_label(root.assistant.projection).to_string(),
+                    tr(root.ui.locale, projection_key(root.assistant.projection)).into(),
                     &tokens,
                 ))
                 .child(info_line(
@@ -304,14 +304,19 @@ fn scene_key(scene: AgentScene) -> &'static str {
     }
 }
 
-fn projection_label(projection: DocumentProjection) -> &'static str {
+fn projection_key(projection: DocumentProjection) -> &'static str {
     match projection {
-        DocumentProjection::Metadata => "metadata",
-        DocumentProjection::Markdown => "markdown",
-        DocumentProjection::Transcript => "transcript",
-        DocumentProjection::SpeakerSegments => "speaker_segments",
-        DocumentProjection::Complete => "complete",
+        DocumentProjection::Metadata => "projection_metadata",
+        DocumentProjection::Markdown => "projection_markdown",
+        DocumentProjection::Transcript => "projection_transcript",
+        DocumentProjection::SpeakerSegments => "projection_speaker_segments",
+        DocumentProjection::Complete => "projection_complete",
     }
+}
+
+/// A revision for display: `r3`, or a dash when there is none.
+fn revision_text(revision: Option<u64>) -> String {
+    revision.map_or_else(|| "—".into(), |revision| format!("r{revision}"))
 }
 
 fn info_line(label: &'static str, value: String, tokens: &Tokens) -> gpui::Div {
@@ -481,11 +486,15 @@ fn render_mutation(
         .iter()
         .map(|change| {
             format!(
-                "{}: {:?} → {:?}{}",
+                "{}: {} → {}{}",
                 change.document_id,
-                change.previous_revision,
-                change.revision,
-                if change.deleted { " (deleted)" } else { "" }
+                revision_text(change.previous_revision),
+                revision_text(change.revision),
+                if change.deleted {
+                    format!(" ({})", tr(locale, "assistant_deleted"))
+                } else {
+                    String::new()
+                }
             )
         })
         .collect::<Vec<_>>()
@@ -588,13 +597,20 @@ fn render_pending(
         .tree_changes
         .iter()
         .map(|change| {
+            let parent = |parent: &Option<String>| {
+                parent
+                    .clone()
+                    .unwrap_or_else(|| tr(locale, "assistant_tree_root").into())
+            };
+            let order =
+                |order: Option<u32>| order.map_or_else(|| "—".into(), |order| format!("#{order}"));
             format!(
-                "{}: {:?}/#{:?} → {:?}/#{:?}",
+                "{}: {}/{} → {}/{}",
                 change.document_id,
-                change.previous_parent_id,
-                change.previous_sibling_order,
-                change.new_parent_id,
-                change.new_sibling_order
+                parent(&change.previous_parent_id),
+                order(change.previous_sibling_order),
+                parent(&change.new_parent_id),
+                order(change.new_sibling_order)
             )
         })
         .collect::<Vec<_>>()
@@ -605,7 +621,10 @@ fn render_pending(
         .map(|range| {
             format!(
                 "{}: {}..{} [{}]",
-                range.document_id.as_deref().unwrap_or("new"),
+                range
+                    .document_id
+                    .as_deref()
+                    .unwrap_or(tr(locale, "assistant_new_document")),
                 range.start_segment_id,
                 range.end_segment_id,
                 range.evidence_segment_ids.join(", ")

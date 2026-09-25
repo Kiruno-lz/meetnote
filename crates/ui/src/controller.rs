@@ -5,7 +5,7 @@ use crate::{
     },
     i18n, pages,
     route::Route,
-    state::{ContentMode, InstallationState, Overlay, UiState},
+    state::{ContentMode, InstallationState, UiState},
     text_input::TextInput,
     theme,
 };
@@ -1570,7 +1570,7 @@ impl RootView {
 
     pub(crate) fn navigate(&mut self, route: Route, cx: &mut Context<Self>) {
         self.ui.route = route;
-        self.ui.detail_overlay = None;
+        self.ui.detail_open = false;
         cx.notify();
     }
 
@@ -1585,13 +1585,14 @@ impl RootView {
 
     pub(crate) fn open_detail(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.ui.selected_project.is_some() {
-            self.ui.detail_overlay = Some(Overlay::ProjectDetail);
+            self.ui.detail_open = true;
             cx.notify();
         }
     }
 
+    /// Hides Detail; processing and downloads carry on.
     pub(crate) fn close_detail(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        self.ui.detail_overlay = None;
+        self.ui.detail_open = false;
         cx.notify();
     }
 
@@ -2805,19 +2806,11 @@ impl Render for RootView {
             Route::Models => pages::models::render(self, cx).into_any_element(),
             Route::Settings => pages::settings::render(self, cx).into_any_element(),
         };
-        let tokens = *theme::tokens(cx);
-        let mut shell = gpui::div()
-            .size_full()
-            .bg(tokens.window)
-            .text_color(tokens.text)
-            .flex()
-            .flex_col()
-            .child(pages::chrome::header(self, cx))
-            .child(body);
-        if self.ui.detail_overlay.is_some() && self.ui.route == Route::Meetings {
-            shell = shell.child(pages::detail::render(selected.as_ref(), self.ui.locale, cx));
-        }
-        shell.children(gpui_component::Root::render_dialog_layer(window, cx))
+        let detail = (self.ui.detail_open && self.ui.route == Route::Meetings).then(|| {
+            pages::detail::render(selected.as_ref(), self.ui.locale, cx).into_any_element()
+        });
+        pages::chrome::shell(self, body, detail, cx)
+            .children(gpui_component::Root::render_dialog_layer(window, cx))
     }
 }
 
@@ -2858,8 +2851,11 @@ pub(crate) fn init_app(accessibility: theme::Accessibility, cx: &mut App) {
 
 /// Opens the desktop window in the saved appearance and starts following
 /// document changes; `run` and the GPUI tests build the window the same way.
-/// The first layer is gpui-component's `Root`, which its dialogs and tooltips
-/// look up.
+/// `options` supplies placement and visibility; this function owns the
+/// titlebar (the title, a transparent titlebar with content under it, and
+/// dragging through the shell's own strips) and the least size the shell
+/// fits. The first layer is gpui-component's `Root`, which its dialogs and
+/// tooltips look up.
 pub(crate) fn open_main_window(
     inventory: BackendInventory,
     services: DesktopServices,
@@ -2868,8 +2864,18 @@ pub(crate) fn open_main_window(
 ) -> gpui::Result<(gpui::AnyWindowHandle, Entity<RootView>)> {
     let saved = services.settings.snapshot().unwrap_or_default();
     let locale = i18n::Locale::from_code(&saved.ui_locale);
+    let options = WindowOptions {
+        titlebar: Some(pages::chrome::titlebar_options()),
+        app_owns_titlebar_drag: true,
+        window_min_size: Some(pages::chrome::MIN_WINDOW_SIZE),
+        ..options
+    };
     let mut root_view = None;
     let window = cx.open_window(options, |window, cx| {
+        // The titlebar title reaches AppKit at creation; setting it here
+        // also labels the accessibility root and is what gpui's test
+        // window records.
+        window.set_window_title(pages::chrome::WINDOW_TITLE);
         theme::attach(saved.appearance, window, cx);
         let assistant_input =
             cx.new(|cx| TextInput::new(cx, i18n::text(locale, "ask_placeholder")));

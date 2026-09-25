@@ -4,7 +4,7 @@ use crate::{
     i18n::{self, text as tr},
     theme,
 };
-use gpui::{div, prelude::*, Context, IntoElement};
+use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
 use gpui_component::{
     button::{Button, ButtonVariants},
     collapsible::Collapsible,
@@ -13,6 +13,12 @@ use gpui_component::{
 };
 use models::{manager::DownloadProgress, ModelAvailability, ModelInstallState};
 use std::collections::BTreeMap;
+
+/// The install status chip column; fixed, so the chips of every model row
+/// line up whatever the model id's length.
+const STATUS_COLUMN_WIDTH: Pixels = px(96.);
+/// The action column after it, empty when a model offers no download.
+const ACTION_COLUMN_WIDTH: Pixels = px(88.);
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
@@ -102,8 +108,8 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
     div()
         .debug_selector(|| "models-page".into())
         .flex_1()
+        .min_w_0()
         .h_full()
-        .bg(tokens.content)
         .min_h_0()
         .p_6()
         .flex()
@@ -188,20 +194,38 @@ fn model_card(
             div()
                 .flex()
                 .items_center()
-                .justify_between()
                 .gap_3()
-                .child(div().text_base().child(model_id.clone()))
-                .child(
+                .child(div().flex_1().min_w_0().text_base().child(model_id.clone()))
+                .child({
+                    let chip_id = model_id.clone();
                     div()
-                        .text_sm()
-                        .text_color(tokens.accent_text)
+                        .debug_selector(move || format!("model-status-{chip_id}"))
+                        .w(STATUS_COLUMN_WIDTH)
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_center()
+                        .py_0p5()
+                        .rounded(tokens.radius.sm)
+                        .bg(if downloaded {
+                            tokens.status.ready
+                        } else {
+                            tokens.status.imported
+                        })
+                        .text_xs()
                         .child(if downloaded {
                             tr(root.ui.locale, "downloaded")
                         } else {
                             tr(root.ui.locale, "not_downloaded")
-                        }),
-                )
-                .child(action),
+                        })
+                })
+                .child(
+                    div()
+                        .w(ACTION_COLUMN_WIDTH)
+                        .flex_shrink_0()
+                        .flex()
+                        .justify_end()
+                        .child(action),
+                ),
         )
         .child(
             div()

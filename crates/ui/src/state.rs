@@ -9,22 +9,21 @@ pub enum ContentMode {
     Original,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Overlay {
-    ProjectDetail,
-}
-
 #[derive(Debug, Clone)]
 pub struct UiState {
     pub route: super::route::Route,
     pub locale: super::i18n::Locale,
     pub selected_project: Option<ProjectId>,
-    pub detail_overlay: Option<Overlay>,
+    /// Whether the Detail panel beside the Meetings document is open.
+    pub detail_open: bool,
     pub content_mode: ContentMode,
     pub expanded_projects: BTreeSet<ProjectId>,
     pub expanded_model_families: BTreeSet<String>,
     pub notice: String,
     pub processing: bool,
+    /// A left press in a titlebar drag strip that has not yet moved the
+    /// window (`pages::chrome`).
+    pub titlebar_drag_armed: bool,
 }
 
 impl UiState {
@@ -33,7 +32,7 @@ impl UiState {
             route: super::route::Route::Assistant,
             locale,
             selected_project: projects.first().map(|project| project.id().clone()),
-            detail_overlay: None,
+            detail_open: false,
             content_mode: ContentMode::Summary,
             expanded_projects: projects
                 .iter()
@@ -43,6 +42,7 @@ impl UiState {
             expanded_model_families: BTreeSet::new(),
             notice: super::i18n::text(locale, "ask_notice").into(),
             processing: false,
+            titlebar_drag_armed: false,
         }
     }
 }
