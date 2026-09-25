@@ -33,7 +33,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 
 | crate | 来源与锁定 | 说明 |
 |---|---|---|
-| `gpui`、`gpui_platform` | `zeronsh/zui` rev `1561532176f54262e360acbb8bc00c6fcf183975`，`default-features = false`，features `font-kit`、`runtime_shaders` | Apache-2.0；macOS 由 Metal + MetalPerformanceShaders 渲染，wgpu 只用于 Linux/Web |
+| `gpui`、`gpui_platform` | 声明为 `zeronsh/zui` rev `1561532176f54262e360acbb8bc00c6fcf183975`，`default-features = false`，features `font-kit`、`runtime_shaders`；根 `Cargo.toml` 的 `[patch."https://github.com/zeronsh/zui"]` 把该来源的全部 crate 指向 `Kiruno-lz/zui` 分支 `meetnote/1561532` | Apache-2.0；macOS 由 Metal + MetalPerformanceShaders 渲染，wgpu 只用于 Linux/Web |
 | `gpui-component`、`gpui-component-assets` | `zeronsh/gpui-component` rev `5086ff4fb162ae97ca9d806876e7c6694ac3a81f` | Apache-2.0；Zeron 使用的同一 pin，已适配 zui API；其中 `gpui-base` 提供无样式交互原语 |
 | `gpui_tokio` | 不引入 | MeetNote 不使用 tokio；异步由 JobRuntime 与 gpui executor 承担 |
 
@@ -52,6 +52,9 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 ### 维护与退出
 
 - zui 与 fork 只按 Zeron `Cargo.toml` 中成对锁定的 rev 一起升级，每次升级都在 macOS 27 上运行完整门禁与离屏基线。
+- `Kiruno-lz/zui` 分支 `meetnote/<zui rev>` 以该 zui rev 为基，只 cherry-pick 上游 zed 已合并的修复，不承载 MeetNote 自有改动。当前一项：zed `7bddd16a09`（#62775），测试窗口的 raw window/display handle 返回 `HandleError::NotSupported`，否则 fork 的 `Root::new` 在 macOS 上调用 `install_window_hit_test_forwarder` 时使所有 `TestAppContext` 窗口 panic。
+  - 升级时在新 zui rev 上重建分支，丢弃新 rev 已包含的 cherry-pick；分支不再携带提交时删除 `[patch]`，直接使用 `zeronsh/zui`。
+  - `[patch]` 必须覆盖 `Cargo.lock` 中来自 `zeronsh/zui` 的每个 crate，否则 gpui-component 与 MeetNote 会解析出两份 gpui。验证：`grep 'zeronsh/zui' Cargo.lock` 无结果。
 - //TODO - `scripts/package-macos-app.sh` 声明的 `LSMinimumSystemVersion` 13.0 尚未验证。验证：在 macOS 13 设备或虚拟机上启动应用并运行 L3；不通过则把声明版本提高到已验证版本。
 - 退出条件，满足任一即评估回退上游 GPUI：
   - zui 或 fork 连续 90 天无提交，且存在影响 MeetNote 的未修复缺陷；
@@ -129,7 +132,7 @@ U4 先替换下拉、对话框与单行输入，其余 styled `ui` crate 组件�
 
 | 区域 | 已实现 | 当前缺口 |
 |---|---|---|
-| Application shell | 顶部四个入口、暗色、基础路由；窗口第一层为 gpui-component `Root`，只设 bounds、未设标题；导航不高亮当前 route；颜色为 61 处字面量 | zui 迁移、token、玻璃外壳、外观设置、键盘导航与无障碍 |
+| Application shell | 顶部四个入口、暗色、基础路由；窗口第一层为 gpui-component `Root`，只设 bounds、未设标题；导航不高亮当前 route；颜色为 61 处字面量；Settings 的 3 个下拉与 Models 下载进度条没有 `accessibility_label`（fork 无此 API） | token、玻璃外壳、外观设置、键盘导航与无障碍 |
 | Assistant | 输入、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染 | 下文三项页面验收与已知缺陷 |
 | Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original、处理与取消 | 文档编辑、scanner issue、revision/provenance、通用 speaker 校正 |
 | Detail | overlay 打开/关闭、基础 transcript | 完整 JSON、来源、状态、处理记录和 Agent 变更来源 |
@@ -243,18 +246,9 @@ UI locale 与 transcription language 独立。backend 不支持的设备或 stag
   - `host_probe`：`host_probe_reads_the_api_key_file_that_settings_validates`、`host_probe_rejects_an_unreadable_api_key_file_before_contacting_the_provider`；
   - `meetnote` 二进制单元测试：`assistant_service::tests::resolves_api_key_file_from_the_settings_directory`。
 
-U0 基线与 U1 缺陷修复、测试基线已完成，当前状态见上文。
+U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移已完成，当前状态见上文。
 
-1. **U2 依赖迁移**
-   - 按依赖表写明 zui 与 fork 的 `rev`（原 zed 依赖只由 `Cargo.lock` 锁定）。
-   - 执行 `cargo update -p cocoa-foundation --precise 0.2.0`（zui 精确要求）；删除 4 处 `accessibility_label`：3 处下拉的 label 由 U4 的 gpui-base `Select` 恢复；进度条 label 在 U4 改为 MeetNote 包装后恢复。
-   - zui 基于 zed `f14fea9`，比原 pin `669bede5` 早 642 个提交；共享依赖随之变化，包括 strum 0.28→0.27、which 8→6、taffy 0.13→0.12。
-   - 验证：
-     - L2 结构测试全部通过，ui crate 测试数量不少于当前基线的 52 个（lib 40、pixels 8、routes 4）；
-     - L3 截图差异逐项审阅并记录；
-     - `cargo tree -i path` 与 `cargo tree -i ztracing` 均无结果；
-     - 应用在 macOS 27 启动，各 route 可达。
-2. **U3 token 与外壳**
+1. **U3 token 与外壳**
    - 建立 `crates/ui/src/theme/`、`THIRD_PARTY_NOTICES.md`，并由 `scripts/package-macos-app.sh` 打包进产物；61 处颜色字面量改为 token。
    - 实现透明标题栏（拖拽区与交通灯位置）、玻璃侧栏与内容平面布局、Settings 外观项与系统外观跟随。
    - 修正当前基线中可见的问题：
@@ -268,16 +262,16 @@ U0 基线与 U1 缺陷修复、测试基线已完成，当前状态见上文。
      - L2 测试断言玻璃材质下 `tokens.background.a == 0`；
      - 四种外观组合的 L3 基线通过视觉清单；
      - 桌面背后 blur 手工检查。
-3. **U4 玻璃原语与页面迁移**
+2. **U4 玻璃原语与页面迁移**
    - `frosted`、`edge_faded` 原语与不透明回退。
    - 基于 gpui-base 的 frosted 下拉、对话框与 Assistant 输入条；gpui-base `Input` 替换 `TextInput`；各页面迁移到 token 与原语。
    - 验证：
      - L2 测试覆盖下拉的 Up/Down/Enter/Esc、点击外部关闭、焦点归还；
-     - L1 扫描确认下拉与进度条都经带 label 的包装创建；
+     - L1 扫描确认下拉与进度条都经带 label 的包装创建，恢复 Settings 3 个下拉与 Models 下载进度条的 label；
      - 对话框确认/取消；输入粘贴，以及经 `EntityInputHandler` 提交中文文本；密钥框 Copy/Cut 不泄露；
      - 重新验证 U1 中设备下拉、secret 输入与对话框相关用例。
    - //TODO - 在 L3 harness 中增加 macOS 资源探测。预热 10 次后，浮层开合 50 次，`MTLDevice.currentAllocatedSize` 增长 ≤ 8 MiB，帧时间 p95 ≤ 16.7 ms。验证：手动运行 `MEETNOTE_VISUAL=1 MEETNOTE_RESOURCE_PROBE=1 cargo test -p ui --test visual` 并记录结果。
-4. **U5 产品功能**
+3. **U5 产品功能**
    - scanner issue、revision 和完整文档状态接入 Documents/Detail。验证：L2 测试以无效外部文件与 revision 变化驱动显示。
    - 全部树和文档写回切换到 revision-aware document service，并补齐冲突 UI。验证：L2 测试在外部修改后写回，得到冲突提示且磁盘内容不变。
    - 通用文档编辑、speaker 校正和 Speaker Library 管理，移除固定 speaker 合并。验证：L2 编辑与校正测试回读 revision 递增、processing 字段不变。
