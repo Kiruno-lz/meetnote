@@ -459,6 +459,12 @@ pub struct SettingsPatch {
     pub max_tool_rounds: Option<u32>,
     pub max_validation_retries: Option<u32>,
     pub connection: Option<AssistantConnectionPatch>,
+    /// A profile added before `connection` is applied, which sets its
+    /// credential under the edit rules; the profile carries none itself.
+    /// Desktop Settings only: absent from the wire contract, so capability
+    /// callers cannot create connections.
+    #[serde(skip)]
+    pub new_connection: Option<AssistantConnectionProfile>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1042,6 +1048,38 @@ fn apply_patch(
     }
     if let Some(value) = patch.max_validation_retries {
         settings.assistant.max_validation_retries = value;
+    }
+    if let Some(profile) = patch.new_connection {
+        // A new profile is read back through both sections, so it needs both
+        // grants. Its credential arrives only as `connection.credential`.
+        if !grant.write_connections {
+            return Err(SettingsError::FieldNotGranted {
+                field: "assistant.connections".into(),
+            });
+        }
+        if !grant.write_connection_targets {
+            return Err(SettingsError::FieldNotGranted {
+                field: "assistant.connectionTargets".into(),
+            });
+        }
+        if profile.api_key.is_some() || profile.api_key_file.is_some() {
+            return Err(SettingsError::Invalid(
+                "a new assistant connection sets its credential through connection.credential"
+                    .into(),
+            ));
+        }
+        if settings
+            .assistant
+            .connections
+            .iter()
+            .any(|connection| connection.id == profile.id)
+        {
+            return Err(SettingsError::Invalid(format!(
+                "assistant connection id is duplicated: {}",
+                profile.id
+            )));
+        }
+        settings.assistant.connections.push(profile);
     }
 
     let Some(connection_patch) = patch.connection else {
@@ -1893,5 +1931,225 @@ mod tests {
         };
         assert!(matches!(service.reload(), Err(SettingsError::Invalid(_))));
         assert_eq!(service.snapshot().unwrap(), AppSettings::default());
+    }
+
+    /// Creates connection `created`, with `credential` when it is given.
+    fn creation(credential: Option<CredentialUpdate>) -> SettingsPatch {
+        SettingsPatch {
+            new_connection: Some(AssistantConnectionProfile {
+                id: "created".into(),
+                name: "Created".into(),
+                protocol: LlmProtocol::OpenAiResponses,
+                base_url: "https://example.com/gateway".into(),
+                model: "model".into(),
+                auth_mode: AssistantAuthMode::Bearer,
+                api_key: None,
+                api_key_file: None,
+                context_window_tokens: Some(8_192),
+                timeout_ms: 2_000,
+                max_output_tokens: 512,
+            }),
+            connection: credential.map(|credential| AssistantConnectionPatch {
+                id: "created".into(),
+                credential: Some(credential),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn creating_a_connection_with_a_stale_revision_writes_nothing() {
+        let repository = Arc::new(TestRepository::new(AppSettings::default()));
+        let service = SettingsService::open(repository.clone()).unwrap();
+        let loaded_revision = service.revision().unwrap();
+        service
+            .patch_if_equal(
+                &loaded_revision,
+                SettingsPatch {
+                    write_mode: Some(AgentWriteMode::ConfirmEach),
+                    ..Default::default()
+                },
+                SettingsGrant::full(),
+            )
+            .unwrap();
+        let before = repository.load().unwrap();
+
+        let result = service.patch_if_equal(
+            &loaded_revision,
+            creation(Some(CredentialUpdate::Direct("created-secret".into()))),
+            SettingsGrant::full(),
+        );
+        assert!(
+            matches!(result, Err(SettingsError::RevisionConflict)),
+            "{result:?}"
+        );
+        assert_eq!(repository.load().unwrap(), before);
+        assert_eq!(service.snapshot().unwrap(), before);
+    }
+
+    #[test]
+    fn creating_a_connection_persists_the_profile_and_its_credential() {
+        for (credential, api_key, api_key_file) in [
+            (
+                Some(CredentialUpdate::Direct("created-secret".into())),
+                Some("created-secret"),
+                None,
+            ),
+            (
+                Some(CredentialUpdate::File("credentials/created".into())),
+                None,
+                Some("credentials/created"),
+            ),
+            (None, None, None),
+        ] {
+            let repository = Arc::new(TestRepository::new(AppSettings::default()));
+            let service = SettingsService::open(repository.clone()).unwrap();
+            let saved = service
+                .patch_if_equal(
+                    &service.revision().unwrap(),
+                    SettingsPatch {
+                        active_connection_id: Some(Some("created".into())),
+                        ..creation(credential)
+                    },
+                    SettingsGrant::full(),
+                )
+                .unwrap();
+
+            let persisted = repository.load().unwrap();
+            assert_eq!(persisted, saved);
+            assert_eq!(service.snapshot().unwrap(), saved);
+            assert_eq!(persisted.assistant.connections.len(), 1);
+            let created = persisted.assistant.active_connection().unwrap();
+            assert_eq!(created.id, "created");
+            assert_eq!(created.name, "Created");
+            assert_eq!(created.base_url, "https://example.com/gateway");
+            assert_eq!(created.api_key.as_deref(), api_key);
+            assert_eq!(created.api_key_file.as_deref(), api_key_file);
+        }
+    }
+
+    #[test]
+    fn a_new_connection_credential_breaks_a_rule_with_the_edit_error() {
+        let service = SettingsService::open(Arc::new(TestRepository::new(AppSettings {
+            assistant: AssistantSettings {
+                connections: vec![AssistantConnectionProfile {
+                    id: "route".into(),
+                    name: "Route".into(),
+                    protocol: LlmProtocol::OpenAiResponses,
+                    base_url: "https://example.com/gateway".into(),
+                    model: "model".into(),
+                    auth_mode: AssistantAuthMode::Bearer,
+                    api_key: None,
+                    api_key_file: None,
+                    context_window_tokens: None,
+                    timeout_ms: 2_000,
+                    max_output_tokens: 512,
+                }],
+                ..AssistantSettings::default()
+            },
+            ..AppSettings::default()
+        })))
+        .unwrap();
+        let before = service.snapshot().unwrap();
+        let revision = service.revision().unwrap();
+
+        for credential in [
+            CredentialUpdate::Direct("[redacted]".into()),
+            CredentialUpdate::Direct("  ".into()),
+            CredentialUpdate::File("[redacted]".into()),
+            CredentialUpdate::File("/etc/meetnote-key".into()),
+            CredentialUpdate::File("credentials/../../etc/passwd".into()),
+            CredentialUpdate::File("secrets/key".into()),
+        ] {
+            let edited = service
+                .patch_if_equal(
+                    &revision,
+                    SettingsPatch {
+                        connection: Some(AssistantConnectionPatch {
+                            id: "route".into(),
+                            credential: Some(credential.clone()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    SettingsGrant::full(),
+                )
+                .unwrap_err();
+            let created = service
+                .patch_if_equal(
+                    &revision,
+                    creation(Some(credential.clone())),
+                    SettingsGrant::full(),
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                std::mem::discriminant(&created),
+                std::mem::discriminant(&edited),
+                "{credential:?}: {created:?} / {edited:?}"
+            );
+            assert_eq!(created.to_string(), edited.to_string());
+            assert_eq!(service.snapshot().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn creating_a_connection_needs_the_grant_of_every_section_it_writes() {
+        let service =
+            SettingsService::open(Arc::new(TestRepository::new(AppSettings::default()))).unwrap();
+        let create = |patch: SettingsPatch, grant: SettingsGrant| {
+            service.patch_if_equal(&service.revision().unwrap(), patch, grant)
+        };
+        let before = service.snapshot().unwrap();
+        for (grant, field) in [
+            (
+                SettingsGrant::assistant_connection_targets().with_credentials(),
+                "assistant.connections",
+            ),
+            (
+                SettingsGrant::assistant_connections().with_credentials(),
+                "assistant.connectionTargets",
+            ),
+            (
+                SettingsGrant::assistant_connections().with_connection_targets(),
+                "assistant.credentials",
+            ),
+        ] {
+            let result = create(
+                creation(Some(CredentialUpdate::Direct("created-secret".into()))),
+                grant,
+            );
+            assert!(
+                matches!(&result, Err(SettingsError::FieldNotGranted { field: denied }) if denied == field),
+                "{result:?}"
+            );
+            assert_eq!(service.snapshot().unwrap(), before);
+        }
+
+        // Without a credential, connections and targets are enough.
+        create(
+            creation(None),
+            SettingsGrant::assistant_connections().with_connection_targets(),
+        )
+        .unwrap();
+        let created = service.snapshot().unwrap();
+        let duplicate = create(creation(None), SettingsGrant::full());
+        assert!(
+            matches!(&duplicate, Err(SettingsError::Invalid(message)) if message.contains("duplicated")),
+            "{duplicate:?}"
+        );
+
+        // A profile cannot carry a credential past the credential rules.
+        let mut inline = creation(None);
+        let profile = inline.new_connection.as_mut().unwrap();
+        profile.id = "inline".into();
+        profile.api_key = Some("inline-secret".into());
+        let inline = create(inline, SettingsGrant::full());
+        assert!(
+            matches!(&inline, Err(SettingsError::Invalid(message)) if message.contains("connection.credential")),
+            "{inline:?}"
+        );
+        assert_eq!(service.snapshot().unwrap(), created);
     }
 }

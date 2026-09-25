@@ -16,7 +16,7 @@ use llm::{
 use runtime::{JobEvent, JobRuntime, Progress};
 use settings::{
     AppSettings, AssistantAuthMode, AssistantConnectionProfile, AssistantSettings, LlmProtocol,
-    SettingsError, SettingsGrant, SettingsPatch, SettingsRepository, SettingsService,
+    SettingsError, SettingsGrant, SettingsPatch, SettingsService,
 };
 use std::io::Read;
 use std::sync::{Arc, Mutex};
@@ -223,34 +223,6 @@ impl DesktopAssistantService {
         self.provider(&profile).map(Some)
     }
 
-    /// Adds `profile` without a credential, applies `patch` (write policy and
-    /// credential) to that candidate under the same typed rules as
-    /// `patch_if_equal`, and commits the result with one compare-and-swap.
-    fn create_connection(
-        &self,
-        expected_revision: &str,
-        profile: AssistantConnectionProfile,
-        patch: SettingsPatch,
-    ) -> Result<AppSettings, SettingsError> {
-        let current = self.settings.snapshot()?;
-        if SettingsService::revision_of(&current) != expected_revision {
-            return Err(SettingsError::RevisionConflict);
-        }
-        let mut candidate = current.clone();
-        candidate
-            .assistant
-            .connections
-            .push(AssistantConnectionProfile {
-                api_key: None,
-                api_key_file: None,
-                ..profile
-            });
-        let revision = SettingsService::revision_of(&candidate);
-        let next = SettingsService::open(Arc::new(CandidateSettings(Mutex::new(candidate))))?
-            .patch_if_equal(&revision, patch, SettingsGrant::full())?;
-        self.settings.update_if_equal(&current, next)
-    }
-
     fn verify_source_revisions(
         &self,
         request: &AssistantRunRequest,
@@ -331,38 +303,21 @@ impl DesktopAssistantService {
     }
 }
 
-/// Settings held only in memory: the candidate a new connection is patched in
-/// before it is committed.
-struct CandidateSettings(Mutex<AppSettings>);
-
-impl SettingsRepository for CandidateSettings {
-    fn load(&self) -> Result<AppSettings, SettingsError> {
-        self.0
-            .lock()
-            .map(|settings| settings.clone())
-            .map_err(|_| SettingsError::LockPoisoned)
-    }
-
-    fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
-        *self.0.lock().map_err(|_| SettingsError::LockPoisoned)? = settings.clone();
-        Ok(())
-    }
-}
-
 impl AssistantUiService for DesktopAssistantService {
+    /// A new profile and its credential commit in the same typed patch, with
+    /// one compare-and-swap.
     fn save_assistant_settings(
         &self,
         expected_revision: String,
         save: AssistantSettingsSave,
     ) -> Result<AppSettings, AssistantUiError> {
-        match save.new_connection {
-            None => {
-                self.settings
-                    .patch_if_equal(&expected_revision, save.patch, SettingsGrant::full())
-            }
-            Some(profile) => self.create_connection(&expected_revision, profile, save.patch),
-        }
-        .map_err(|error| AssistantUiError::from_settings(&error))
+        let patch = SettingsPatch {
+            new_connection: save.new_connection,
+            ..save.patch
+        };
+        self.settings
+            .patch_if_equal(&expected_revision, patch, SettingsGrant::full())
+            .map_err(|error| AssistantUiError::from_settings(&error))
     }
 
     fn probe_connection(
@@ -761,6 +716,7 @@ mod tests {
         SettingsRepository,
     };
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     struct MemorySettingsRepository(Mutex<AppSettings>);
@@ -879,6 +835,74 @@ mod tests {
             .assistant
             .connections
             .is_empty());
+    }
+
+    /// Counts the writes Settings sends to its repository.
+    #[derive(Default)]
+    struct CountingSettingsRepository {
+        settings: Mutex<AppSettings>,
+        saves: AtomicUsize,
+        conditional_saves: AtomicUsize,
+    }
+
+    impl SettingsRepository for CountingSettingsRepository {
+        fn load(&self) -> Result<AppSettings, SettingsError> {
+            Ok(self.settings.lock().unwrap().clone())
+        }
+
+        fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
+            self.saves.fetch_add(1, Ordering::SeqCst);
+            *self.settings.lock().unwrap() = settings.clone();
+            Ok(())
+        }
+
+        fn save_if_equal(
+            &self,
+            expected: &AppSettings,
+            settings: &AppSettings,
+        ) -> Result<(), SettingsError> {
+            self.conditional_saves.fetch_add(1, Ordering::SeqCst);
+            let mut current = self.settings.lock().unwrap();
+            if &*current != expected {
+                return Err(SettingsError::RevisionConflict);
+            }
+            *current = settings.clone();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_new_connection_is_created_by_one_revision_checked_patch() {
+        let repository = Arc::new(CountingSettingsRepository::default());
+        let service = DesktopAssistantService::new(
+            SettingsService::open(repository.clone()).unwrap(),
+            DocumentService::new(Arc::new(InMemoryDocumentRepository::default())),
+        );
+        let request = new_connection_save(CredentialUpdate::Direct("private-token".into()));
+        // The same save as one `patch_if_equal` on an identical service.
+        let reference = memory_settings();
+        let expected = reference
+            .patch_if_equal(
+                &reference.revision().unwrap(),
+                SettingsPatch {
+                    new_connection: request.new_connection.clone(),
+                    ..request.patch.clone()
+                },
+                SettingsGrant::full(),
+            )
+            .unwrap();
+
+        let stale = service
+            .save_assistant_settings("stale".into(), request.clone())
+            .unwrap_err();
+        assert_eq!(stale.code, "SETTINGS_REVISION_CONFLICT");
+        assert_eq!(repository.conditional_saves.load(Ordering::SeqCst), 0);
+
+        let saved = save(&service, request).unwrap();
+        assert_eq!(saved, expected);
+        assert_eq!(repository.load().unwrap(), expected);
+        assert_eq!(repository.conditional_saves.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.saves.load(Ordering::SeqCst), 0);
     }
 
     /// Desktop service whose active connection `local` stores `private-token`.

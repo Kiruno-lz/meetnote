@@ -920,6 +920,13 @@ impl SettingsCapabilityPort {
         patch: SettingsPatch,
         grant: SettingsGrant,
     ) -> Result<SettingsCapabilityMutation, SettingsError> {
+        // Creating a connection is a desktop Settings action; capability
+        // callers edit only existing profiles.
+        if patch.new_connection.is_some() {
+            return Err(SettingsError::FieldNotGranted {
+                field: "assistant.connections".into(),
+            });
+        }
         let grant = self.grant.intersect(grant);
         let settings = self
             .settings
@@ -1850,6 +1857,105 @@ mod tests {
             service.snapshot().unwrap().assistant.connections[0].name,
             "Primary"
         );
+    }
+
+    #[test]
+    fn settings_capability_cannot_create_a_connection_with_its_credential() {
+        let documents =
+            crate::DocumentService::new(Arc::new(MemoryDocuments(Mutex::new(BTreeMap::new()))));
+        let workspace = crate::WorkspaceService::new(
+            crate::ProcessingService::new(Arc::new(NoopAsr), Arc::new(NoopDiarization)),
+            documents.clone(),
+        );
+        let service =
+            SettingsService::open(Arc::new(MemorySettings(Mutex::new(AppSettings::default()))))
+                .unwrap();
+        let fields = vec!["assistant".to_string()];
+        let port = SettingsCapabilityPort::new(service.clone(), fields.clone());
+        let host = crate::AgentHost::new(
+            crate::WorkspaceCapabilityPort::new(
+                documents,
+                crate::WorkspaceAccessPolicy::AllDocuments,
+            ),
+            AudioCapabilityPort::new(workspace, std::iter::empty()),
+            port.clone(),
+            fields.clone(),
+        );
+        let profile = settings::AssistantConnectionProfile {
+            id: "created".into(),
+            name: "Created".into(),
+            protocol: settings::LlmProtocol::OpenAiChatCompletions,
+            base_url: "http://localhost:1234".into(),
+            model: "fixture".into(),
+            auth_mode: settings::AssistantAuthMode::Bearer,
+            api_key: None,
+            api_key_file: None,
+            context_window_tokens: Some(8_192),
+            timeout_ms: 1_000,
+            max_output_tokens: 128,
+        };
+        let credential = settings::AssistantConnectionPatch {
+            id: "created".into(),
+            credential: Some(settings::CredentialUpdate::Direct("created-secret".into())),
+            ..Default::default()
+        };
+
+        // Even a caller holding every Assistant field cannot pass a typed
+        // creation through the port.
+        let typed = port.patch(
+            &service.revision().unwrap(),
+            SettingsPatch {
+                active_connection_id: Some(Some("created".into())),
+                connection: Some(credential.clone()),
+                new_connection: Some(profile.clone()),
+                ..Default::default()
+            },
+            SettingsGrant::full(),
+        );
+        assert!(
+            matches!(
+                &typed,
+                Err(SettingsError::FieldNotGranted { field }) if field == "assistant.connections"
+            ),
+            "{typed:?}"
+        );
+        assert_eq!(service.snapshot().unwrap(), AppSettings::default());
+
+        // The wire contract has no creation field, and the Host rejects one.
+        let patch_schema = port
+            .descriptor()
+            .operations
+            .into_iter()
+            .find(|operation| operation.name == "patch")
+            .unwrap()
+            .input_schema
+            .to_string();
+        assert!(
+            !patch_schema.contains("newConnection") && !patch_schema.contains("new_connection"),
+            "{patch_schema}"
+        );
+        let response = host.dispatch(contracts::CapabilityCallRequest::new(
+            "settings-create-connection",
+            "settings-create-connection",
+            "settings.app",
+            1,
+            "patch",
+            contracts::CapabilityAuthorization {
+                settings_fields: fields,
+                ..Default::default()
+            },
+            serde_json::json!({
+                "expectedRevision": service.revision().unwrap(),
+                "patch": {
+                    "activeConnectionId": "created",
+                    "connection": credential,
+                    "newConnection": profile,
+                }
+            }),
+        ));
+        assert!(!response.ok);
+        assert_eq!(response.error.unwrap().code, "SETTINGS_ARGUMENTS_INVALID");
+        assert_eq!(service.snapshot().unwrap(), AppSettings::default());
     }
 
     #[test]
