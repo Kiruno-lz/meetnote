@@ -87,6 +87,23 @@ pub fn migrate_file(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Which Speaker Library files exist before the library path changes; the
+/// desktop offers migration only when the source exists and the destination
+/// does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeakerLibraryPresence {
+    pub source_exists: bool,
+    pub destination_exists: bool,
+}
+
+/// Probes the file system; call it off the UI thread.
+pub fn speaker_library_presence(source: &Path, destination: &Path) -> SpeakerLibraryPresence {
+    SpeakerLibraryPresence {
+        source_exists: source.is_file(),
+        destination_exists: destination.is_file(),
+    }
+}
+
 pub trait AsrBackend: Send + Sync {
     fn descriptor(&self) -> BackendDescriptor;
     fn probe(&self, model: &contracts::ModelRef) -> Result<(), BackendError>;
@@ -880,6 +897,44 @@ mod tests {
         assert_eq!(
             std::fs::read(&source).unwrap(),
             std::fs::read(&destination).unwrap()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn speaker_library_presence_reports_each_file() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-library-presence-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = root.join("old/library.json");
+        let destination = root.join("new/library.json");
+        let presence = |source_exists, destination_exists| SpeakerLibraryPresence {
+            source_exists,
+            destination_exists,
+        };
+
+        assert_eq!(
+            speaker_library_presence(&source, &destination),
+            presence(false, false)
+        );
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"{}").unwrap();
+        // A directory at the destination is not a library file.
+        std::fs::create_dir_all(&destination).unwrap();
+        assert_eq!(
+            speaker_library_presence(&source, &destination),
+            presence(true, false)
+        );
+        std::fs::remove_dir(&destination).unwrap();
+        std::fs::write(&destination, b"{}").unwrap();
+        assert_eq!(
+            speaker_library_presence(&source, &destination),
+            presence(true, true)
         );
         std::fs::remove_dir_all(root).unwrap();
     }

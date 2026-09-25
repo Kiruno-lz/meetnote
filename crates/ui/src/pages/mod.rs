@@ -40,4 +40,28 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(found.is_empty(), "render paths probe files: {found:#?}");
     }
+
+    /// Installation facts, downloads and document changes arrive from
+    /// service subscriptions; the controller neither probes files nor runs
+    /// threads of its own.
+    #[test]
+    fn the_controller_does_not_probe_files_or_spawn_threads() {
+        let source = include_str!("../controller.rs");
+        let found = [
+            "std::fs",
+            ".is_file(",
+            ".is_dir(",
+            ".exists(",
+            "metadata(",
+            ".browse(",
+            "thread::",
+        ]
+        .into_iter()
+        .filter(|probe| source.contains(probe))
+        .collect::<Vec<_>>();
+        assert!(
+            found.is_empty(),
+            "controller.rs probes or spawns: {found:?}"
+        );
+    }
 }

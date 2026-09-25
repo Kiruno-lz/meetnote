@@ -44,9 +44,10 @@ impl MainWindow {
         self.view.update(cx, |root, cx| root.navigate(route, cx));
     }
 
-    /// Whether the startup installation probe, which runs on a worker
-    /// thread, has reached the view.
-    pub fn installation_loaded(&self, cx: &App) -> bool {
-        !self.view.read(cx).installation.catalog.is_empty()
+    /// Whether the startup installation probe and project list, which load
+    /// on worker threads, have reached the view.
+    pub fn startup_loaded(&self, cx: &App) -> bool {
+        let root = self.view.read(cx);
+        root.projects_loaded && !root.installation.catalog.is_empty()
     }
 }

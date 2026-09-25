@@ -43,9 +43,9 @@ fn active_selector(route: Route) -> &'static str {
 }
 
 /// Opens the fixture window on its start route, Assistant, once the startup
-/// installation probe has reached the view.
+/// installation probe and project list have reached the view.
 fn open_window(cx: &mut TestAppContext) -> (MainWindow, &mut VisualTestContext) {
-    // The startup installation probe completes on a worker thread.
+    // The startup loads complete on worker threads.
     cx.executor().allow_parking();
     let window = cx.update(|cx| {
         support::init(cx);
@@ -54,14 +54,14 @@ fn open_window(cx: &mut TestAppContext) -> (MainWindow, &mut VisualTestContext) 
     let cx = VisualTestContext::from_window(window.window(), cx).into_mut();
     for _ in 0..500 {
         cx.run_until_parked();
-        if cx.update(|_, cx| window.installation_loaded(cx)) {
+        if cx.update(|_, cx| window.startup_loaded(cx)) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     assert!(
-        cx.update(|_, cx| window.installation_loaded(cx)),
-        "the installation probe did not finish"
+        cx.update(|_, cx| window.startup_loaded(cx)),
+        "the startup loads did not finish"
     );
     assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Assistant);
     (window, cx)

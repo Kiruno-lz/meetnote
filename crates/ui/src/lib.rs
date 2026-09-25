@@ -12,13 +12,13 @@ pub mod test_support;
 mod text_input;
 mod theme;
 
-pub use controller::{run, DesktopServices};
+pub use controller::{run, DesktopServices, ModelService};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::assistant_ui::{
-        AssistantCancellation, AssistantMutationSummary, AssistantPendingReview,
+        AssistantCancellation, AssistantJobEvent, AssistantMutationSummary, AssistantPendingReview,
         AssistantRunRequest, AssistantRunResult, AssistantScopeMode, AssistantSettingsSave,
         AssistantTaskState, AssistantUiError, AssistantUiService, ConnectionDiagnostic,
         ConnectionProbeKind, PendingReviewState,
@@ -45,9 +45,27 @@ mod tests {
         settings: Option<SettingsService>,
         /// The write mode of every run request.
         write_modes: Arc<Mutex<Vec<contracts::AgentWriteMode>>>,
+        /// The request id of every run.
+        run_request_ids: Arc<Mutex<Vec<String>>>,
+        /// Holds each run until released, when set.
+        run_gate: Option<Gate>,
+        /// Subscribers of `job_events`; tests publish through `publish_job`.
+        job_subscribers:
+            Arc<Mutex<Vec<futures::channel::mpsc::UnboundedSender<AssistantJobEvent>>>>,
     }
 
     impl FakeAssistantUiService {
+        fn publish_job(&self, request_id: Option<&str>, event: runtime::JobEvent) {
+            for subscriber in self.job_subscribers.lock().unwrap().iter() {
+                subscriber
+                    .unbounded_send(AssistantJobEvent {
+                        request_id: request_id.map(str::to_string),
+                        event: event.clone(),
+                    })
+                    .unwrap();
+            }
+        }
+
         fn record(&self, operation: &'static str, document_ids: Vec<String>) {
             self.grants.lock().unwrap().push((operation, document_ids));
         }
@@ -110,6 +128,13 @@ mod tests {
             _: AssistantCancellation,
         ) -> Result<AssistantRunResult, AssistantUiError> {
             self.write_modes.lock().unwrap().push(request.write_mode);
+            self.run_request_ids
+                .lock()
+                .unwrap()
+                .push(request.request_id.clone());
+            if let Some(gate) = &self.run_gate {
+                gate.pass();
+            }
             self.record(
                 "run",
                 request
@@ -160,6 +185,12 @@ mod tests {
                 undo_token,
                 uncovered_segment_ids: Vec::new(),
             })
+        }
+
+        fn job_events(&self) -> futures::channel::mpsc::UnboundedReceiver<AssistantJobEvent> {
+            let (sender, receiver) = futures::channel::mpsc::unbounded();
+            self.job_subscribers.lock().unwrap().push(sender);
+            receiver
         }
     }
 
@@ -306,6 +337,17 @@ mod tests {
         open_desktop_with(cx, assistant, test_settings())
     }
 
+    fn test_model_manager() -> ModelManager {
+        ModelManager::new(
+            ModelCatalog::from_path(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../resources/models/catalog.json"),
+            )
+            .unwrap(),
+            "models",
+        )
+    }
+
     fn desktop_services(
         assistant: Arc<FakeAssistantUiService>,
         settings: SettingsService,
@@ -317,17 +359,12 @@ mod tests {
             ),
             DocumentService::new(Arc::new(InMemoryDocumentRepository::default())),
         );
+        let model_manager = test_model_manager();
         DesktopServices {
             workspace,
             settings,
-            model_manager: ModelManager::new(
-                ModelCatalog::from_path(
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../resources/models/catalog.json"),
-                )
-                .unwrap(),
-                "models",
-            ),
+            installation: application::InstallationService::new(model_manager.clone()),
+            model_manager: Arc::new(model_manager),
             asr_model: ModelRef {
                 backend_id: "whisper-rs".into(),
                 model_id: "fixture".into(),
@@ -361,7 +398,31 @@ mod tests {
         gpui::Entity<controller::RootView>,
         &mut gpui::VisualTestContext,
     ) {
-        let services = desktop_services(assistant, settings);
+        open_desktop_on(cx, desktop_services(assistant, settings))
+    }
+
+    /// The desktop once its startup project list has loaded, so a test's
+    /// own project list is not replaced by it.
+    fn open_desktop_on(
+        cx: &mut TestAppContext,
+        services: DesktopServices,
+    ) -> (
+        gpui::Entity<controller::RootView>,
+        &mut gpui::VisualTestContext,
+    ) {
+        let (view, cx) = open_desktop_loading(cx, services);
+        wait_for(cx, &view, |root| root.projects_loaded);
+        (view, cx)
+    }
+
+    /// The desktop as soon as its window opens.
+    fn open_desktop_loading(
+        cx: &mut TestAppContext,
+        services: DesktopServices,
+    ) -> (
+        gpui::Entity<controller::RootView>,
+        &mut gpui::VisualTestContext,
+    ) {
         init_gpui(cx);
         let assistant_input = cx.new(|cx| text_input::TextInput::new(cx, "Ask…"));
         cx.add_window_view(|_window, cx| {
@@ -374,7 +435,8 @@ mod tests {
         })
     }
 
-    /// The desktop window exactly as `run` opens it.
+    /// The desktop window exactly as `run` opens it, once its startup project
+    /// list has loaded, so a test's own project list is not replaced by it.
     fn open_main_window(
         cx: &mut TestAppContext,
         services: DesktopServices,
@@ -394,7 +456,7 @@ mod tests {
             })
             .unwrap();
         let cx = gpui::VisualTestContext::from_window(window, cx).into_mut();
-        cx.run_until_parked();
+        wait_for(cx, &view, |root| root.projects_loaded);
         (view, cx)
     }
 
@@ -414,28 +476,26 @@ mod tests {
         panic!("window state did not settle");
     }
 
-    /// Replaces the installation probe with a counting wrapper around the
-    /// real one; the count starts after the startup probe.
-    fn count_installation_probes(
-        cx: &mut gpui::VisualTestContext,
-        view: &gpui::Entity<controller::RootView>,
-    ) -> Arc<std::sync::atomic::AtomicUsize> {
-        let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = probes.clone();
-        view.update(cx, |root, _| {
-            root.installation_probe = Arc::new(move |query| {
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                controller::probe_installation(query)
-            });
-        });
-        probes
-    }
-
     #[gpui::test]
     fn rendering_meetings_and_models_does_not_probe_installation(cx: &mut TestAppContext) {
-        let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
+        // The real probe, counted.
+        let mut services =
+            desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+        let manager = test_model_manager();
+        let real = application::InstallationService::new(manager.clone());
+        let probes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = probes.clone();
+        services.installation = application::InstallationService::with_probe(
+            manager,
+            Arc::new(move |query| {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                real.probe(query)
+            }),
+        );
+        let (view, cx) = open_desktop_on(cx, services);
         wait_for(cx, &view, |root| !root.installation.catalog.is_empty());
-        let probes = count_installation_probes(cx, &view);
+        // Count from after the startup probe.
+        probes.store(0, std::sync::atomic::Ordering::SeqCst);
 
         for route in [route::Route::Meetings, route::Route::Models] {
             view.update(cx, |root, cx| root.navigate(route, cx));
@@ -450,7 +510,7 @@ mod tests {
             "rendering must read the cached installation state"
         );
 
-        view.update(cx, |root, cx| root.refresh_installation(cx));
+        view.read_with(cx, |root, _| root.refresh_installation());
         wait_for(cx, &view, |_| {
             probes.load(std::sync::atomic::Ordering::SeqCst) == 1
         });
@@ -469,9 +529,9 @@ mod tests {
         let mut senders = Vec::new();
         view.update(cx, |root, cx| {
             for _ in 0..4 {
-                let (changes, receiver) = std::sync::mpsc::channel();
+                let (changes, receiver) = futures::channel::mpsc::unbounded();
                 root.follow_document_changes(receiver, cx);
-                let (downloads, events) = std::sync::mpsc::channel();
+                let (downloads, events) = futures::channel::mpsc::unbounded();
                 root.follow_download(events, cx);
                 senders.push((changes, downloads));
             }
@@ -490,12 +550,12 @@ mod tests {
         workspace.import_audio("idle-wait.wav").unwrap();
         senders[0]
             .0
-            .send(application::DocumentChange::Changed)
+            .unbounded_send(application::DocumentChange::Changed)
             .unwrap();
         wait_for(cx, &view, |root| root.projects.len() == 1);
         senders[1]
             .1
-            .send(models::manager::DownloadEvent::Updated(
+            .unbounded_send(models::manager::DownloadEvent::Updated(
                 models::manager::DownloadProgress {
                     id: models::manager::DownloadId(1),
                     model_id: "idle-model".into(),
@@ -511,6 +571,414 @@ mod tests {
             ))
             .unwrap();
         let installed = i18n::message(i18n::Locale::ZhCn, "installed", "idle-model");
+        wait_for(cx, &view, |root| root.ui.notice == installed);
+    }
+
+    /// Serializes the tests that hold a `runtime::spawn_blocking` worker in a
+    /// gate: every test in the process shares that pool of at most four
+    /// workers, and a held test still needs a free one for its settings save.
+    fn hold_a_worker_alone() -> std::sync::MutexGuard<'static, ()> {
+        static HELD: Mutex<()> = Mutex::new(());
+        HELD.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Holds the calls that pass it while armed, until released.
+    #[derive(Clone, Default)]
+    struct Gate(Arc<(Mutex<GateState>, std::sync::Condvar)>);
+
+    #[derive(Default)]
+    struct GateState {
+        armed: bool,
+        /// Calls that entered since the gate was armed.
+        entered: usize,
+        /// Calls waiting in the gate now.
+        holding: usize,
+    }
+
+    impl Gate {
+        fn arm(&self) {
+            let mut state = self.0 .0.lock().unwrap();
+            state.armed = true;
+            state.entered = 0;
+        }
+
+        /// Lets the held calls go and waits until each has left, so arming
+        /// the gate again cannot catch a call that was already released.
+        #[track_caller]
+        fn release(&self) {
+            let (lock, changed) = &*self.0;
+            let mut state = lock.lock().unwrap();
+            state.armed = false;
+            changed.notify_all();
+            let (state, left) = changed
+                .wait_timeout_while(state, std::time::Duration::from_secs(5), |state| {
+                    state.holding > 0
+                })
+                .unwrap();
+            drop(state);
+            assert!(!left.timed_out(), "a released call did not leave the gate");
+        }
+
+        fn counts(&self) -> (usize, usize) {
+            let state = self.0 .0.lock().unwrap();
+            (state.entered, state.holding)
+        }
+
+        /// Waits while armed. The wait is bounded, so a call made on the UI
+        /// thread stalls the test briefly and then fails it instead of
+        /// hanging it.
+        fn pass(&self) {
+            let (lock, released) = &*self.0;
+            let mut state = lock.lock().unwrap();
+            if !state.armed {
+                return;
+            }
+            state.entered += 1;
+            state.holding += 1;
+            let (mut state, _) = released
+                .wait_timeout_while(state, std::time::Duration::from_secs(2), |state| {
+                    state.armed
+                })
+                .unwrap();
+            state.holding -= 1;
+            // `release` waits for the held calls to leave.
+            released.notify_all();
+        }
+    }
+
+    /// Documents in memory whose `snapshot`, which `list_projects` reads,
+    /// waits in `list_gate`, and whose `get` waits in `get_gate`.
+    struct GatedRepository {
+        inner: InMemoryDocumentRepository,
+        list_gate: Gate,
+        get_gate: Gate,
+    }
+
+    impl application::DocumentRepository for GatedRepository {
+        fn snapshot(&self) -> Result<application::DocumentSnapshot, String> {
+            self.list_gate.pass();
+            self.inner.snapshot()
+        }
+
+        fn get(&self, document_id: &domain::DocumentId) -> Result<Option<DocumentState>, String> {
+            self.get_gate.pass();
+            self.inner.get(document_id)
+        }
+
+        fn read(
+            &self,
+            document_id: &domain::DocumentId,
+        ) -> Result<Option<contracts::DocumentRecord>, String> {
+            self.inner.read(document_id)
+        }
+
+        fn watch(&self) -> Result<std::sync::mpsc::Receiver<application::DocumentChange>, String> {
+            self.inner.watch()
+        }
+
+        fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
+            self.inner.save(document, markdown)
+        }
+    }
+
+    /// A workspace on `inner` whose list and get calls wait in the gates.
+    fn gated_workspace(
+        inner: InMemoryDocumentRepository,
+        list_gate: &Gate,
+        get_gate: &Gate,
+    ) -> WorkspaceService {
+        WorkspaceService::new(
+            ProcessingService::new(
+                Arc::new(WhisperRsBackend::default()),
+                Arc::new(SherpaOnnxDiarizationBackend::default()),
+            ),
+            DocumentService::new(Arc::new(GatedRepository {
+                inner,
+                list_gate: list_gate.clone(),
+                get_gate: get_gate.clone(),
+            })),
+        )
+    }
+
+    /// The real catalog and download list; `model_ref` and `start` wait in
+    /// `gate` and then succeed, the download completing at once.
+    struct GatedModels {
+        inner: ModelManager,
+        gate: Gate,
+    }
+
+    impl ModelService for GatedModels {
+        fn catalog(&self) -> &ModelCatalog {
+            self.inner.catalog()
+        }
+
+        fn list(
+            &self,
+        ) -> Result<Vec<models::manager::DownloadProgress>, models::manager::ModelManagerError>
+        {
+            self.inner.list()
+        }
+
+        fn model_ref(
+            &self,
+            model_id: &str,
+            backend_id: &str,
+        ) -> Result<ModelRef, models::manager::ModelManagerError> {
+            self.gate.pass();
+            Ok(ModelRef {
+                backend_id: backend_id.into(),
+                model_id: model_id.into(),
+                revision: None,
+                artifact_path: "gated-model.bin".into(),
+                artifacts: Vec::new(),
+            })
+        }
+
+        fn start(
+            &self,
+            model_id: &str,
+        ) -> Result<models::manager::DownloadTask, models::manager::ModelManagerError> {
+            self.gate.pass();
+            let (sender, updates) = futures::channel::mpsc::unbounded();
+            sender
+                .unbounded_send(models::manager::DownloadEvent::Updated(
+                    models::manager::DownloadProgress {
+                        id: models::manager::DownloadId(9),
+                        model_id: model_id.into(),
+                        state: models::manager::DownloadState::Completed,
+                        completed_bytes: 1,
+                        speed_bytes_per_second: None,
+                        total_bytes: Some(1),
+                        artifact_index: 1,
+                        artifact_count: 1,
+                        eta_seconds: Some(0),
+                        retry_count: 0,
+                    },
+                ))
+                .unwrap();
+            Ok(models::manager::DownloadTask {
+                id: models::manager::DownloadId(9),
+                events: std::sync::mpsc::channel().1,
+                updates,
+            })
+        }
+
+        fn pause(
+            &self,
+            id: models::manager::DownloadId,
+        ) -> Result<(), models::manager::ModelManagerError> {
+            self.inner.pause(id)
+        }
+
+        fn resume(
+            &self,
+            id: models::manager::DownloadId,
+        ) -> Result<(), models::manager::ModelManagerError> {
+            self.inner.resume(id)
+        }
+
+        fn cancel(
+            &self,
+            id: models::manager::DownloadId,
+        ) -> Result<(), models::manager::ModelManagerError> {
+            self.inner.cancel(id)
+        }
+    }
+
+    /// While `gate` holds the one call the UI just started, navigating and
+    /// an instant settings save still complete; then the call is released.
+    #[track_caller]
+    fn assert_ui_responsive_while_held(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<controller::RootView>,
+        gate: &Gate,
+        settings: &SettingsService,
+        backend: &str,
+    ) {
+        wait_for(cx, view, |_| gate.counts().0 >= 1);
+        assert_eq!(
+            gate.counts(),
+            (1, 1),
+            "the gated call already returned: it held the UI thread"
+        );
+        view.update(cx, |root, cx| {
+            root.navigate(route::Route::Settings, cx);
+            root.select_diarization_backend(backend.into(), cx);
+        });
+        wait_for(cx, view, |root| {
+            root.ui.route == route::Route::Settings
+                && settings
+                    .snapshot()
+                    .unwrap()
+                    .diarization_backend_id
+                    .as_deref()
+                    == Some(backend)
+        });
+        assert_eq!(gate.counts().1, 1, "the gated call is still pending");
+        view.update(cx, |root, cx| root.navigate(route::Route::Meetings, cx));
+        gate.release();
+    }
+
+    #[gpui::test]
+    fn project_list_reloads_leave_the_ui_thread_free(cx: &mut TestAppContext) {
+        let _alone = hold_a_worker_alone();
+        let gate = Gate::default();
+        let inner = InMemoryDocumentRepository::default();
+        let mut merged = DocumentState::new(ProjectId::new("merge"), "Merge", "merge.wav");
+        merged.results.speaker_segments = vec![domain::SpeakerTaggedSegment {
+            transcript_segment_id: "t-1".into(),
+            speaker_id: "speaker-1".into(),
+            speaker_profile_id: None,
+            speaker_label: None,
+            start_ms: 0,
+            end_ms: 1_000,
+            text: "merge me".into(),
+        }];
+        application::DocumentRepository::save(&inner, merged, None).unwrap();
+        let settings = test_settings();
+        let mut services = desktop_services(
+            Arc::new(FakeAssistantUiService::default()),
+            settings.clone(),
+        );
+        services.workspace = gated_workspace(inner.clone(), &gate, &Gate::default());
+        let (view, cx) = open_desktop_on(cx, services);
+        assert_eq!(view.read_with(cx, |root, _| root.projects.len()), 1);
+        let (changes, receiver) = futures::channel::mpsc::unbounded();
+        view.update(cx, |root, cx| root.follow_document_changes(receiver, cx));
+
+        // Another writer adds a document to the directory.
+        let external = DocumentState::new(ProjectId::new("external"), "External", "external.wav");
+        application::DocumentRepository::save(&inner, external, None).unwrap();
+        gate.arm();
+        changes
+            .unbounded_send(application::DocumentChange::Changed)
+            .unwrap();
+        assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-change");
+        wait_for(cx, &view, |root| root.projects.len() == 2);
+
+        // An import.
+        gate.arm();
+        view.update(cx, |root, cx| {
+            root.import_audio_path("imported.wav".into(), cx)
+        });
+        assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-import");
+        wait_for(cx, &view, |root| root.projects.len() == 3);
+
+        // A speaker merge.
+        gate.arm();
+        view.update_in(cx, |root, window, cx| {
+            root.ui.selected_project = Some(ProjectId::new("merge"));
+            root.merge_speaker(&gpui::ClickEvent::default(), window, cx)
+        });
+        assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-merge");
+        let merged = i18n::text(i18n::Locale::ZhCn, "speaker_merged");
+        wait_for(cx, &view, |root| root.ui.notice == merged);
+    }
+
+    /// A repository holding the `first` document.
+    fn repository_with_first_document() -> InMemoryDocumentRepository {
+        let inner = InMemoryDocumentRepository::default();
+        let first = DocumentState::new(ProjectId::new("first"), "First", "first.wav");
+        application::DocumentRepository::save(&inner, first, None).unwrap();
+        inner
+    }
+
+    #[gpui::test]
+    fn the_startup_project_list_loads_off_the_ui_thread(cx: &mut TestAppContext) {
+        let _alone = hold_a_worker_alone();
+        let gate = Gate::default();
+        let settings = test_settings();
+        let mut services = desktop_services(
+            Arc::new(FakeAssistantUiService::default()),
+            settings.clone(),
+        );
+        services.workspace =
+            gated_workspace(repository_with_first_document(), &gate, &Gate::default());
+        gate.arm();
+
+        let (view, cx) = open_desktop_loading(cx, services);
+        assert!(!view.read_with(cx, |root, _| root.projects_loaded));
+        assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-startup");
+        wait_for(cx, &view, |root| root.projects_loaded);
+
+        view.read_with(cx, |root, _| {
+            let first = ProjectId::new("first");
+            assert_eq!(root.projects.len(), 1);
+            assert_eq!(root.ui.selected_project.as_ref(), Some(&first));
+            assert!(root.ui.expanded_projects.contains(&first));
+        });
+    }
+
+    #[gpui::test]
+    fn starting_processing_leaves_the_ui_thread_free(cx: &mut TestAppContext) {
+        let _alone = hold_a_worker_alone();
+        let gate = Gate::default();
+        // Selected models that are not installed.
+        let settings = test_settings();
+        let mut value = settings.snapshot().unwrap();
+        let missing = |backend_id: &str| ModelRef {
+            backend_id: backend_id.into(),
+            model_id: "fixture".into(),
+            revision: None,
+            artifact_path: "missing-model".into(),
+            artifacts: Vec::new(),
+        };
+        value.asr_model = Some(missing("whisper-rs"));
+        value.diarization_backend_id = Some("sherpa-onnx".into());
+        value.diarization_model = Some(missing("sherpa-onnx"));
+        settings.update(value).unwrap();
+        let mut services = desktop_services(
+            Arc::new(FakeAssistantUiService::default()),
+            settings.clone(),
+        );
+        services.workspace =
+            gated_workspace(repository_with_first_document(), &Gate::default(), &gate);
+        let (view, cx) = open_desktop_on(cx, services);
+
+        // Starting reads the document the job processes.
+        gate.arm();
+        view.update_in(cx, |root, window, cx| {
+            root.process_selected(&gpui::ClickEvent::default(), window, cx)
+        });
+        assert!(view.read_with(cx, |root, _| root.ui.processing));
+        assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-start");
+        // The fixture has no model, so the job fails and processing ends.
+        wait_for(cx, &view, |root| !root.ui.processing);
+    }
+
+    #[gpui::test]
+    fn model_selection_and_download_start_leave_the_ui_thread_free(cx: &mut TestAppContext) {
+        let _alone = hold_a_worker_alone();
+        let gate = Gate::default();
+        let settings = test_settings();
+        let mut services = desktop_services(
+            Arc::new(FakeAssistantUiService::default()),
+            settings.clone(),
+        );
+        services.model_manager = Arc::new(GatedModels {
+            inner: test_model_manager(),
+            gate: gate.clone(),
+        });
+        let (view, cx) = open_desktop_on(cx, services);
+
+        gate.arm();
+        view.update(cx, |root, cx| {
+            root.use_model("gated-model".into(), "asr".into(), "gated-asr".into(), cx)
+        });
+        assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-model-ref");
+        wait_for(cx, &view, |_| {
+            settings
+                .snapshot()
+                .unwrap()
+                .asr_model
+                .is_some_and(|model| model.model_id == "gated-model")
+        });
+
+        gate.arm();
+        view.update(cx, |root, cx| root.download_model("gated-model".into(), cx));
+        assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-start");
+        let installed = i18n::message(i18n::Locale::ZhCn, "installed", "gated-model");
         wait_for(cx, &view, |root| root.ui.notice == installed);
     }
 
@@ -553,7 +1021,7 @@ mod tests {
         let jobs = runtime::JobRuntime::with_max_concurrency(2);
         let (asr, _asr_events) = jobs.create_job();
         let (diarization, _diarization_events) = jobs.create_job();
-        let (download, events) = std::sync::mpsc::channel();
+        let (download, events) = futures::channel::mpsc::unbounded();
         view.update(cx, |root, cx| {
             let document = DocumentState::new(ProjectId::new("first"), "First", "first.wav");
             root.ui.selected_project = Some(document.id().clone());
@@ -618,7 +1086,7 @@ mod tests {
             retry_count: 0,
         };
         download
-            .send(models::manager::DownloadEvent::Updated(progress))
+            .unbounded_send(models::manager::DownloadEvent::Updated(progress))
             .unwrap();
         let reported =
             i18n::download_progress(i18n::Locale::ZhCn, "detail-model", 1, 1, 2_000_000, None);
@@ -804,6 +1272,85 @@ mod tests {
     }
 
     #[gpui::test]
+    fn job_events_of_the_run_drive_the_assistant_page(cx: &mut TestAppContext) {
+        let _alone = hold_a_worker_alone();
+        let gate = Gate::default();
+        let assistant = Arc::new(FakeAssistantUiService {
+            run_gate: Some(gate.clone()),
+            ..Default::default()
+        });
+        let (view, cx) = open_desktop_with(cx, assistant.clone(), stored_key_settings());
+        gate.arm();
+        start_run(cx, &view);
+        wait_for(cx, &view, |_| gate.counts().0 == 1);
+        let request_id = assistant.run_request_ids.lock().unwrap()[0].clone();
+        let run = Some(request_id.as_str());
+        let job_id = runtime::JobId(7);
+        let task_shown = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+            cx.run_until_parked();
+            cx.debug_bounds(selector).is_some()
+        };
+
+        assistant.publish_job(run, runtime::JobEvent::Started { job_id });
+        // A probe's job and another run's job are not this run's.
+        assistant.publish_job(
+            None,
+            runtime::JobEvent::Failed {
+                job_id: runtime::JobId(8),
+                message: "probe failed".into(),
+            },
+        );
+        assistant.publish_job(
+            Some("another-run"),
+            runtime::JobEvent::Cancelled {
+                job_id: runtime::JobId(9),
+            },
+        );
+        wait_for(cx, &view, |root| root.assistant.job == Some(job_id));
+        assert!(task_shown(cx, "assistant-task-running"));
+        assert!(view.read_with(cx, |root, _| matches!(
+            root.assistant.task,
+            AssistantTaskState::Running { .. }
+        )));
+
+        let progress = runtime::Progress {
+            completed: 1,
+            total: Some(3),
+        };
+        assistant.publish_job(run, runtime::JobEvent::Progress { job_id, progress });
+        wait_for(cx, &view, |root| {
+            root.assistant.job_progress == Some(progress)
+        });
+        assert!(cx.debug_bounds("assistant-job-progress").is_some());
+
+        assistant.publish_job(
+            run,
+            runtime::JobEvent::Failed {
+                job_id,
+                message: "worker failed".into(),
+            },
+        );
+        wait_for(cx, &view, |root| {
+            matches!(root.assistant.task, AssistantTaskState::Failed(_))
+        });
+        assert!(task_shown(cx, "assistant-task-failed"));
+        assert_eq!(
+            gate.counts().1,
+            1,
+            "the job event, not the run's result, ended the task"
+        );
+
+        // The run's typed error replaces the job's message.
+        gate.release();
+        wait_for(cx, &view, |root| {
+            matches!(
+                &root.assistant.task,
+                AssistantTaskState::Failed(error) if error.code == "ASSISTANT_RUNTIME_NOT_CONNECTED"
+            )
+        });
+    }
+
+    #[gpui::test]
     fn pending_overflow_is_shown_on_the_page(cx: &mut TestAppContext) {
         let (_view, cx) = start_pending_run(cx, 10, u64::MAX);
         assert!(
@@ -829,6 +1376,41 @@ mod tests {
             view.read_with(cx, |root, _| root.assistant.pending.clone()),
             Some(PendingReviewState::Expired)
         );
+    }
+
+    #[gpui::test]
+    fn the_next_queued_review_awaits_after_the_first_expires(cx: &mut TestAppContext) {
+        let assistant = Arc::new(FakeAssistantUiService::default());
+        *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+            pending_reviews: vec![
+                pending_review("expires", crate::assistant_ui::now_ms() + 60_000),
+                pending_review("next", u64::MAX),
+            ],
+            ..empty_result()
+        });
+        *assistant.confirm_result.lock().unwrap() = Some(empty_result());
+        let (view, cx) = open_desktop_with(cx, assistant.clone(), stored_key_settings());
+        start_run(cx, &view);
+        wait_for(cx, &view, |root| root.assistant.pending.is_some());
+
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(61));
+        assert_eq!(
+            view.read_with(cx, |root, _| root.assistant.pending.clone()),
+            Some(PendingReviewState::Awaiting(pending_review(
+                "next",
+                u64::MAX
+            ))),
+            "the queued review must await once the first expires"
+        );
+
+        view.update_in(cx, |root, window, cx| {
+            root.accept_assistant_pending(&gpui::ClickEvent::default(), window, cx)
+        });
+        wait_for(cx, &view, |root| {
+            root.assistant.pending.is_none() && root.assistant.task == AssistantTaskState::Completed
+        });
+        assert_eq!(assistant.grants_for("confirm"), [vec!["first".to_string()]]);
     }
 
     fn click_save_assistant_settings(
@@ -986,6 +1568,61 @@ mod tests {
             root.settings_error.is_none() && asr_backend(&settings).as_deref() == Some("test-asr")
         });
         assert_eq!(settings.snapshot().unwrap().assistant.max_tool_rounds, 5);
+    }
+
+    #[gpui::test]
+    fn a_conflict_reloads_another_writers_settings_so_the_retry_succeeds(cx: &mut TestAppContext) {
+        let path = temp_directory().join("settings.json");
+        let open = || SettingsService::open(Arc::new(JsonSettingsRepository::open(&path))).unwrap();
+        let (view, cx) = open_desktop_with(cx, Arc::new(FakeAssistantUiService::default()), open());
+        view.update(cx, |root, cx| root.navigate(route::Route::Settings, cx));
+        cx.run_until_parked();
+        // Another process changes settings.json; the desktop's snapshot
+        // cannot see it.
+        let other = open();
+        let mut external = other.snapshot().unwrap();
+        external.expected_speakers = Some(3);
+        other.update(external).unwrap();
+
+        view.update(cx, |root, cx| {
+            root.select_asr_backend("test-asr".into(), cx)
+        });
+        wait_for(cx, &view, |root| root.settings_error.is_some());
+        let error = view.read_with(cx, |root, _| root.settings_error.clone().unwrap());
+        assert_eq!(error.code, "SETTINGS_REVISION_CONFLICT");
+        cx.run_until_parked();
+        let shown = view.read_with(cx, |root, cx| {
+            root.settings_selectors
+                .as_ref()
+                .expect("selectors are rebuilt on render")
+                .expected_speakers
+                .read(cx)
+                .selected_value()
+                .cloned()
+        });
+        assert_eq!(
+            shown.as_deref(),
+            Some("3"),
+            "the page shows the external value"
+        );
+
+        view.update(cx, |root, cx| {
+            // A new failure would set the error again.
+            root.settings_error = None;
+            root.select_asr_backend("test-asr".into(), cx)
+        });
+        wait_for(cx, &view, |root| {
+            root.settings_error.is_some()
+                || open().snapshot().unwrap().asr_backend_id.as_deref() == Some("test-asr")
+        });
+        assert_eq!(
+            view.read_with(cx, |root, _| root.settings_error.clone()),
+            None,
+            "the retry must succeed after the reload"
+        );
+        let stored = open().snapshot().unwrap();
+        assert_eq!(stored.asr_backend_id.as_deref(), Some("test-asr"));
+        assert_eq!(stored.expected_speakers, Some(3));
     }
 
     #[gpui::test]

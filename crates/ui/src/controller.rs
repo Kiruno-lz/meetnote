@@ -5,11 +5,14 @@ use crate::{
     },
     i18n, pages,
     route::Route,
-    state::{ContentMode, InstallationState, UiState},
+    state::{ContentMode, UiState},
     text_input::TextInput,
     theme,
 };
-use application::{BackendInventory, ProcessingOptions, WorkspaceService};
+use application::{
+    BackendInventory, InstallationQuery, InstallationService, InstallationState, ProcessingOptions,
+    WorkspaceService,
+};
 use contracts::{AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, ModelRef};
 use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
@@ -18,15 +21,16 @@ use gpui::{
     SharedString, Task, Window, WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
-use models::manager::{DownloadEvent, DownloadState};
-use models::{ModelAvailability, ModelInstallState};
+use models::manager::{
+    DownloadEvent, DownloadId, DownloadState, DownloadTask, ModelManager, ModelManagerError,
+};
+use models::{ModelAvailability, ModelCatalog, ModelInstallState};
 use runtime::{JobContext, JobEvent};
 use settings::{
     AppSettings, AssistantAuthMode, AssistantConnectionPatch, AssistantConnectionProfile,
     AssistantSettings, CredentialUpdate, LlmProtocol, MaterialPreference, SettingsService,
     ThemePreference,
 };
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -50,6 +54,40 @@ enum SettingsWrite {
     },
     /// The Assistant form, relative to the settings it was loaded from.
     Assistant(AssistantSettingsSave),
+}
+
+/// A failed settings write and, after a revision conflict, the settings the
+/// repository holds, which the next write compares against.
+struct SettingsWriteFailure {
+    error: AssistantUiError,
+    reloaded: Option<AppSettings>,
+}
+
+/// Re-reads the repository after a revision conflict, on the write's worker,
+/// so a retry sees what another writer saved. A reload that fails reports
+/// its own error instead.
+fn reload_after_conflict(
+    settings: &SettingsService,
+    result: Result<AppSettings, AssistantUiError>,
+) -> Result<AppSettings, SettingsWriteFailure> {
+    result.map_err(|error| {
+        if !error.is_settings_conflict() {
+            return SettingsWriteFailure {
+                error,
+                reloaded: None,
+            };
+        }
+        match settings.reload() {
+            Ok(latest) => SettingsWriteFailure {
+                error,
+                reloaded: Some(latest),
+            },
+            Err(reload) => SettingsWriteFailure {
+                error: AssistantUiError::from_settings(&reload),
+                reloaded: None,
+            },
+        }
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -218,49 +256,55 @@ impl AssistantInputs {
 pub struct DesktopServices {
     pub workspace: WorkspaceService,
     pub settings: SettingsService,
-    pub model_manager: models::manager::ModelManager,
+    pub model_manager: Arc<dyn ModelService>,
+    /// Publishes the installation facts the pages show.
+    pub installation: InstallationService,
     pub asr_model: ModelRef,
     pub diarization_model: ModelRef,
     pub assistant: Arc<dyn AssistantUiService>,
 }
 
-/// What `probe_installation` looks at.
-#[derive(Clone)]
-pub(crate) struct InstallationQuery {
-    model_manager: models::manager::ModelManager,
-    asr_model: ModelRef,
-    diarization_model: ModelRef,
-    /// The selected diarization model's directory.
-    stage_root: Option<String>,
-    /// Every artifact file a diarization stage option may need.
-    stage_files: BTreeSet<String>,
+/// The catalog and download operations the desktop calls. `ModelManager`
+/// implements it; tests substitute fakes that block or fail. Everything but
+/// `catalog` and `list` may touch the file system, so the controller calls
+/// those off the main thread.
+pub trait ModelService: Send + Sync {
+    fn catalog(&self) -> &ModelCatalog;
+    fn list(&self) -> Result<Vec<models::manager::DownloadProgress>, ModelManagerError>;
+    fn model_ref(&self, model_id: &str, backend_id: &str) -> Result<ModelRef, ModelManagerError>;
+    fn start(&self, model_id: &str) -> Result<DownloadTask, ModelManagerError>;
+    fn pause(&self, id: DownloadId) -> Result<(), ModelManagerError>;
+    fn resume(&self, id: DownloadId) -> Result<(), ModelManagerError>;
+    fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError>;
 }
 
-/// Produces `InstallationState`; tests wrap it to count probes.
-pub(crate) type InstallationProbe =
-    Arc<dyn Fn(&InstallationQuery) -> InstallationState + Send + Sync>;
+impl ModelService for ModelManager {
+    fn catalog(&self) -> &ModelCatalog {
+        ModelManager::catalog(self)
+    }
 
-/// The file-system probe behind `InstallationState`. It runs on a
-/// `runtime::spawn_blocking` worker, never during render.
-pub(crate) fn probe_installation(query: &InstallationQuery) -> InstallationState {
-    let stage_files = query
-        .stage_root
-        .as_deref()
-        .map(|root| {
-            query
-                .stage_files
-                .iter()
-                .filter(|file| Path::new(root).join(file).is_file())
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-    InstallationState {
-        catalog: query.model_manager.browse(None, None),
-        default_asr_ready: Path::new(&query.asr_model.artifact_path).is_file(),
-        default_diarization_ready: Path::new(&query.diarization_model.artifact_path).is_dir(),
-        stage_root: query.stage_root.clone(),
-        stage_files,
+    fn list(&self) -> Result<Vec<models::manager::DownloadProgress>, ModelManagerError> {
+        ModelManager::list(self)
+    }
+
+    fn model_ref(&self, model_id: &str, backend_id: &str) -> Result<ModelRef, ModelManagerError> {
+        ModelManager::model_ref(self, model_id, backend_id)
+    }
+
+    fn start(&self, model_id: &str) -> Result<DownloadTask, ModelManagerError> {
+        ModelManager::start(self, model_id)
+    }
+
+    fn pause(&self, id: DownloadId) -> Result<(), ModelManagerError> {
+        ModelManager::pause(self, id)
+    }
+
+    fn resume(&self, id: DownloadId) -> Result<(), ModelManagerError> {
+        ModelManager::resume(self, id)
+    }
+
+    fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError> {
+        ModelManager::cancel(self, id)
     }
 }
 
@@ -315,10 +359,14 @@ pub(crate) struct RootView {
     /// The last failed settings write, shown on the settings page.
     pub(crate) settings_error: Option<AssistantUiError>,
     pending_expiry: Option<Task<()>>,
-    /// Installation facts for rendering; see `refresh_installation`.
+    /// Installation facts for rendering, as `services.installation` last
+    /// published them; see `refresh_installation`.
     pub(crate) installation: InstallationState,
-    pub(crate) installation_probe: InstallationProbe,
-    installation_refresh: Option<Task<()>>,
+    /// The latest project-list reload; an older one that finishes later is
+    /// dropped.
+    projects_generation: u64,
+    /// Whether the project list has loaded since the window opened.
+    pub(crate) projects_loaded: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -335,7 +383,6 @@ impl RootView {
         assistant_input: gpui::Entity<TextInput>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let projects = services.workspace.list_projects().unwrap_or_default();
         let locale = services
             .settings
             .snapshot()
@@ -422,7 +469,7 @@ impl RootView {
                 &settings_draft.assistant.max_validation_retries.to_string(),
             ),
         };
-        let mut ui = UiState::from_projects(&projects, locale);
+        let mut ui = UiState::new(locale);
         ui.expanded_model_families.extend(
             services
                 .model_manager
@@ -438,7 +485,7 @@ impl RootView {
             assistant_origin: settings_draft.assistant.clone(),
             settings_write: None,
             settings_draft,
-            projects,
+            projects: Vec::new(),
             ui,
             assistant: AssistantController::default(),
             assistant_inputs,
@@ -455,30 +502,99 @@ impl RootView {
             settings_error: None,
             pending_expiry: None,
             installation: InstallationState::default(),
-            installation_probe: Arc::new(probe_installation),
-            installation_refresh: None,
+            projects_generation: 0,
+            projects_loaded: false,
         };
-        this.refresh_installation(cx);
+        // The tree stays empty until the list loads on a worker.
+        this.reload_projects(cx);
+        this.follow_installation(cx);
+        this.follow_assistant_jobs(cx);
+        this.refresh_installation();
         this
     }
 
-    /// Probes installation facts off the main thread. Call it whenever they
-    /// may have changed; a newer refresh replaces (cancels) an older one.
-    pub(crate) fn refresh_installation(&mut self, cx: &mut Context<Self>) {
-        let query = self.installation_query();
-        let probe = self.installation_probe.clone();
-        self.installation_refresh = Some(cx.spawn(async move |this, cx| {
-            let installation = runtime::spawn_blocking(move || probe(&query)).await;
-            this.update(cx, |this, cx| {
-                if installation != this.installation {
-                    this.installation = installation;
-                    // Model selects show install state; rebuild them.
-                    this.settings_selectors = None;
-                    cx.notify();
+    /// Projects the Assistant's jobs on the shared runtime into the page.
+    fn follow_assistant_jobs(&mut self, cx: &mut Context<Self>) {
+        let mut events = self.services.assistant.job_events();
+        cx.spawn(async move |this, cx| {
+            while let Some(event) = events.next().await {
+                let applied = this.update(cx, |this, cx| {
+                    if this.assistant.apply_job_event(event) {
+                        cx.notify();
+                    }
+                });
+                if applied.is_err() {
+                    break;
                 }
-            })
-            .ok();
-        }));
+            }
+        })
+        .detach();
+    }
+
+    /// Applies every installation state the service publishes, including
+    /// the ones it probes after downloads end.
+    fn follow_installation(&mut self, cx: &mut Context<Self>) {
+        let mut states = self.services.installation.subscribe();
+        cx.spawn(async move |this, cx| {
+            while let Some(installation) = states.next().await {
+                let applied = this.update(cx, |this, cx| {
+                    if installation != this.installation {
+                        this.installation = installation;
+                        // Model selects show install state; rebuild them.
+                        this.settings_selectors = None;
+                        cx.notify();
+                    }
+                });
+                if applied.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Asks the installation service to probe the current query on its
+    /// worker. Call it whenever the facts may have changed; the published
+    /// state arrives through `follow_installation`.
+    pub(crate) fn refresh_installation(&self) {
+        self.services
+            .installation
+            .refresh(self.installation_query());
+    }
+
+    /// Re-reads the project list off the main thread.
+    fn reload_projects(&mut self, cx: &mut Context<Self>) {
+        let generation = self.begin_projects_reload();
+        let workspace = self.services.workspace.clone();
+        cx.spawn(async move |this, cx| {
+            let projects = runtime::spawn_blocking(move || workspace.list_projects()).await;
+            this.update(cx, |this, cx| this.apply_projects(generation, projects, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    fn begin_projects_reload(&mut self) -> u64 {
+        self.projects_generation += 1;
+        self.projects_generation
+    }
+
+    /// Shows a reloaded project list unless a newer reload has started; the
+    /// first list to land also opens the tree.
+    fn apply_projects(
+        &mut self,
+        generation: u64,
+        projects: Result<Vec<DocumentState>, String>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation == self.projects_generation {
+            self.projects = projects.unwrap_or_default();
+            if !self.projects_loaded {
+                self.ui.open_loaded_projects(&self.projects);
+                self.projects_loaded = true;
+            }
+            cx.notify();
+        }
     }
 
     /// The persisted Assistant settings; the settings form's unsaved draft
@@ -489,7 +605,6 @@ impl RootView {
 
     fn installation_query(&self) -> InstallationQuery {
         InstallationQuery {
-            model_manager: self.services.model_manager.clone(),
             asr_model: self.services.asr_model.clone(),
             diarization_model: self.services.diarization_model.clone(),
             stage_root: self
@@ -917,7 +1032,7 @@ impl RootView {
             },
             cx,
         );
-        self.refresh_installation(cx);
+        self.refresh_installation();
         cx.notify();
     }
 
@@ -948,9 +1063,10 @@ impl RootView {
                     let result = runtime::spawn_blocking(move || {
                         let mut next = expected.clone();
                         apply(&mut next);
-                        settings
+                        let result = settings
                             .update_if_equal(&expected, next)
-                            .map_err(|error| AssistantUiError::from_settings(&error))
+                            .map_err(|error| AssistantUiError::from_settings(&error));
+                        reload_after_conflict(&settings, result)
                     })
                     .await;
                     this.update(cx, |this, cx| {
@@ -960,8 +1076,9 @@ impl RootView {
                 }
                 SettingsWrite::Assistant(save) => {
                     let result = runtime::spawn_blocking(move || {
-                        assistant
-                            .save_assistant_settings(SettingsService::revision_of(&expected), save)
+                        let result = assistant
+                            .save_assistant_settings(SettingsService::revision_of(&expected), save);
+                        reload_after_conflict(&settings, result)
                     })
                     .await;
                     this.update(cx, |this, cx| this.finish_assistant_save(result, cx))
@@ -975,7 +1092,7 @@ impl RootView {
         &mut self,
         change: &(dyn Fn(&mut AppSettings) + Send + Sync),
         saved_notice: String,
-        result: Result<AppSettings, AssistantUiError>,
+        result: Result<AppSettings, SettingsWriteFailure>,
         cx: &mut Context<Self>,
     ) {
         match result {
@@ -995,7 +1112,7 @@ impl RootView {
 
     fn finish_assistant_save(
         &mut self,
-        result: Result<AppSettings, AssistantUiError>,
+        result: Result<AppSettings, SettingsWriteFailure>,
         cx: &mut Context<Self>,
     ) {
         match result {
@@ -1013,13 +1130,13 @@ impl RootView {
     }
 
     /// The persisted settings stay authoritative after a failed write: a
-    /// conflict reloads them and the instant-save fields show them again. The
-    /// unsaved Assistant form is kept, so saving it again is the retry.
-    fn settings_write_failed(&mut self, error: AssistantUiError, cx: &mut Context<Self>) {
-        if error.is_settings_conflict() {
-            if let Ok(latest) = self.services.settings.snapshot() {
-                self.settings_base = latest;
-            }
+    /// conflict adopts the settings reloaded from the repository, and the
+    /// instant-save fields show them again. The unsaved Assistant form is
+    /// kept, so saving it again is the retry.
+    fn settings_write_failed(&mut self, failure: SettingsWriteFailure, cx: &mut Context<Self>) {
+        let SettingsWriteFailure { error, reloaded } = failure;
+        if let Some(latest) = reloaded {
+            self.settings_base = latest;
         }
         self.settings_draft = AppSettings {
             assistant: self.settings_draft.assistant.clone(),
@@ -1028,7 +1145,7 @@ impl RootView {
         self.settings_selectors = None;
         self.sync_locale(cx);
         self.sync_appearance(cx);
-        self.refresh_installation(cx);
+        self.refresh_installation();
         self.ui.notice = settings_error_text(self.ui.locale, &error);
         self.settings_error = Some(error);
     }
@@ -1391,15 +1508,27 @@ impl RootView {
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
+            this.update(cx, |this, cx| this.import_audio_path(path, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Imports `path` and reloads the project list off the main thread.
+    pub(crate) fn import_audio_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        let generation = self.begin_projects_reload();
+        let workspace = self.services.workspace.clone();
+        cx.spawn(async move |this, cx| {
+            let imported = runtime::spawn_blocking(move || {
+                let project = workspace.import_audio(path.display().to_string())?;
+                Ok::<_, String>((project, workspace.list_projects()))
+            })
+            .await;
             this.update(cx, |this, cx| {
-                match this
-                    .services
-                    .workspace
-                    .import_audio(path.display().to_string())
-                {
-                    Ok(project) => {
+                match imported {
+                    Ok((project, projects)) => {
                         this.ui.selected_project = Some(project.id().clone());
-                        this.projects = this.services.workspace.list_projects().unwrap_or_default();
+                        this.apply_projects(generation, projects, cx);
                         this.ui.notice = i18n::message(this.ui.locale, "imported", project.title());
                     }
                     Err(error) => {
@@ -1455,10 +1584,12 @@ impl RootView {
         }
         cx.spawn(async move |this, cx| {
             let paths = (source.clone(), destination.clone());
-            let (source_present, destination_present) =
-                runtime::spawn_blocking(move || (paths.0.is_file(), paths.1.is_file())).await;
+            let presence = runtime::spawn_blocking(move || {
+                application::speaker_library_presence(&paths.0, &paths.1)
+            })
+            .await;
             this.update_in(cx, move |this, window, cx| {
-                if destination_present || !source_present {
+                if presence.destination_exists || !presence.source_exists {
                     this.commit_speaker_library_path(destination, cx);
                 } else {
                     this.ask_speaker_library_migration(source, destination, window, cx);
@@ -2054,6 +2185,10 @@ impl RootView {
                         cx.background_executor().timer(delay).await;
                         this.update(cx, |this, cx| {
                             if this.assistant.expire_pending(&confirmation_id) {
+                                this.ui.notice =
+                                    i18n::text(this.ui.locale, "assistant_expired").into();
+                                // The next queued review, if any, awaits now.
+                                this.schedule_pending_expiry(cx);
                                 cx.notify();
                             }
                         })
@@ -2219,65 +2354,81 @@ impl RootView {
         backend_id: String,
         cx: &mut Context<Self>,
     ) {
-        let model = self
-            .services
-            .model_manager
-            .model_ref(&model_id, &backend_id);
-        match model {
-            Ok(model) => {
-                self.ui.notice = i18n::message(self.ui.locale, "model_selected", &model_id);
-                self.persist_field(
-                    move |settings| {
-                        if task == "asr" {
-                            settings.asr_backend_id = Some(backend_id.clone());
-                            settings.asr_model = Some(model.clone());
-                        } else {
-                            settings.diarization_backend_id = Some(backend_id.clone());
-                            settings.diarization_model = Some(model.clone());
-                            settings.diarization_stages = Default::default();
-                        }
-                    },
-                    cx,
-                );
-            }
-            Err(error) => {
-                self.ui.notice =
-                    i18n::message(self.ui.locale, "model_not_ready", &error.to_string())
-            }
-        }
-        cx.notify();
+        let models = self.services.model_manager.clone();
+        cx.spawn(async move |this, cx| {
+            let (model_id_for_ref, backend_id_for_ref) = (model_id.clone(), backend_id.clone());
+            let model = runtime::spawn_blocking(move || {
+                models.model_ref(&model_id_for_ref, &backend_id_for_ref)
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                match model {
+                    Ok(model) => {
+                        this.ui.notice = i18n::message(this.ui.locale, "model_selected", &model_id);
+                        this.persist_field(
+                            move |settings| {
+                                if task == "asr" {
+                                    settings.asr_backend_id = Some(backend_id.clone());
+                                    settings.asr_model = Some(model.clone());
+                                } else {
+                                    settings.diarization_backend_id = Some(backend_id.clone());
+                                    settings.diarization_model = Some(model.clone());
+                                    settings.diarization_stages = Default::default();
+                                }
+                            },
+                            cx,
+                        );
+                    }
+                    Err(error) => {
+                        this.ui.notice =
+                            i18n::message(this.ui.locale, "model_not_ready", &error.to_string())
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
+    /// Starts the download off the main thread and follows its progress.
     pub(crate) fn download_model(&mut self, model_id: String, cx: &mut Context<Self>) {
-        match self.services.model_manager.start(&model_id) {
-            Ok(task) => {
-                self.ui.notice = i18n::message(self.ui.locale, "download_started", &model_id);
-                self.follow_download(task.events, cx);
+        let models = self.services.model_manager.clone();
+        cx.spawn(async move |this, cx| {
+            let id = model_id.clone();
+            let started = runtime::spawn_blocking(move || models.start(&id)).await;
+            this.update(cx, |this, cx| {
+                match started {
+                    Ok(task) => {
+                        this.ui.notice =
+                            i18n::message(this.ui.locale, "download_started", &model_id);
+                        this.follow_download(task.updates, cx);
+                    }
+                    Err(error) => {
+                        this.ui.notice = i18n::message(
+                            this.ui.locale,
+                            "download_failed",
+                            &format!("{model_id}: {error}"),
+                        );
+                    }
+                }
                 cx.notify();
-            }
-            Err(error) => {
-                self.ui.notice = i18n::message(
-                    self.ui.locale,
-                    "download_failed",
-                    &format!("{model_id}: {error}"),
-                );
-                cx.notify();
-            }
-        }
+            })
+            .ok();
+        })
+        .detach();
     }
 
-    /// Shows a download's progress until it ends.
+    /// Shows a download's progress, pushed by the download thread, until it
+    /// ends.
     pub(crate) fn follow_download(
         &mut self,
-        events: std::sync::mpsc::Receiver<DownloadEvent>,
+        mut updates: futures::channel::mpsc::UnboundedReceiver<DownloadEvent>,
         cx: &mut Context<Self>,
     ) {
-        let mut events = forward_channel(events, |DownloadEvent::Updated(progress)| {
-            is_terminal_download(&progress.state)
-        });
         cx.spawn(async move |this, cx| {
-            while let Some(DownloadEvent::Updated(progress)) = events.next().await {
-                let terminal = is_terminal_download(&progress.state);
+            while let Some(DownloadEvent::Updated(progress)) = updates.next().await {
+                let terminal = progress.state.is_terminal();
                 let applied =
                     this.update(cx, |this, cx| this.apply_download_progress(progress, cx));
                 if applied.is_err() || terminal {
@@ -2310,9 +2461,7 @@ impl RootView {
                 progress.speed_bytes_per_second,
             ),
         };
-        if is_terminal_download(&progress.state) {
-            self.refresh_installation(cx);
-        }
+        // The installation service re-probes when a download ends.
         cx.notify();
     }
 
@@ -2322,32 +2471,45 @@ impl RootView {
         action: DownloadAction,
         cx: &mut Context<Self>,
     ) {
-        let result = match action {
-            DownloadAction::Pause => self.services.model_manager.pause(id),
-            DownloadAction::Resume => self.services.model_manager.resume(id),
-            DownloadAction::Cancel => self.services.model_manager.cancel(id),
-        };
-        self.ui.notice = match result {
-            Ok(()) => i18n::text(self.ui.locale, "download_updated").into(),
-            Err(error) => i18n::message(self.ui.locale, "download_failed", &error.to_string()),
-        };
-        cx.notify();
+        let models = self.services.model_manager.clone();
+        cx.spawn(async move |this, cx| {
+            // Each control persists the download tasks.
+            let result = runtime::spawn_blocking(move || match action {
+                DownloadAction::Pause => models.pause(id),
+                DownloadAction::Resume => models.resume(id),
+                DownloadAction::Cancel => models.cancel(id),
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.ui.notice = match result {
+                    Ok(()) => i18n::text(this.ui.locale, "download_updated").into(),
+                    Err(error) => {
+                        i18n::message(this.ui.locale, "download_failed", &error.to_string())
+                    }
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn merge_speaker(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(project_id) = self.ui.selected_project.clone() else {
             return;
         };
+        let generation = self.begin_projects_reload();
         let workspace = self.services.workspace.clone();
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || {
-                workspace.merge_speaker(&project_id, "speaker-1", "speaker-0")
+                let project = workspace.merge_speaker(&project_id, "speaker-1", "speaker-0")?;
+                Ok::<_, String>((project, workspace.list_projects()))
             })
             .await;
             this.update(cx, |this, cx| {
                 match result {
-                    Ok(project) => {
-                        this.projects = this.services.workspace.list_projects().unwrap_or_default();
+                    Ok((project, projects)) => {
+                        this.apply_projects(generation, projects, cx);
                         this.ui.selected_project = Some(project.id().clone());
                         this.ui.notice = i18n::text(this.ui.locale, "speaker_merged").into();
                     }
@@ -2442,38 +2604,65 @@ impl RootView {
             (None, None) => self.services.diarization_model.clone(),
             (None, Some(model)) => model,
         };
-        if let Err(error) = workspace.set_processing_options(ProcessingOptions {
+        let options = ProcessingOptions {
             language: settings.language.clone(),
             expected_speakers: settings.expected_speakers,
             device: settings.compute_device,
             speaker_library_path: Some(settings.speaker_library_path.clone()),
             diarization_stages: settings.diarization_stages.clone(),
-        }) {
-            self.ui.processing = false;
-            self.ui.notice = i18n::message(self.ui.locale, "processing_failed", &error);
-            cx.notify();
-            return;
-        }
-        let job = match workspace.start_project_processing_with_speaker_library(
-            project_id,
-            asr_model,
-            diarization_model,
-            Some(settings.speaker_library_path),
-        ) {
-            Ok(job) => job,
-            Err(error) => {
-                self.ui.processing = false;
-                self.ui.notice = i18n::message(self.ui.locale, "processing_failed", &error.message);
+        };
+        let speaker_library_path = settings.speaker_library_path;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            // Starting reads the document and probes the models.
+            let started = runtime::spawn_blocking(move || {
+                workspace.set_processing_options(options)?;
+                workspace
+                    .start_project_processing_with_speaker_library(
+                        project_id,
+                        asr_model,
+                        diarization_model,
+                        Some(speaker_library_path),
+                    )
+                    .map_err(|error| error.message)
+            })
+            .await;
+            let job = match started {
+                Ok(job) => job,
+                Err(error) => {
+                    this.update(cx, |this, cx| {
+                        this.ui.processing = false;
+                        this.ui.notice = i18n::message(this.ui.locale, "processing_failed", &error);
+                        cx.notify();
+                    })
+                    .ok();
+                    return;
+                }
+            };
+            let contexts = (job.asr_context.clone(), job.diarization_context.clone());
+            let shown = this.update(cx, |this, cx| {
+                this.cancel_contexts = Some(contexts);
                 cx.notify();
+            });
+            if shown.is_err() {
                 return;
             }
-        };
-        self.cancel_contexts = Some((job.asr_context.clone(), job.diarization_context.clone()));
+            Self::follow_processing(this, job, cx).await;
+        })
+        .detach();
+    }
+
+    /// Shows a started job's events until it finishes, then reloads the
+    /// project list.
+    async fn follow_processing(
+        this: gpui::WeakEntity<Self>,
+        job: application::ProjectProcessingJob,
+        cx: &mut gpui::AsyncApp,
+    ) {
         let mut asr_events = job.asr_events.fuse();
         let mut diarization_events = job.diarization_events.fuse();
         let mut processing_future = job.future.fuse();
-        cx.notify();
-        cx.spawn(async move |this, cx| loop {
+        loop {
             let mut asr_next = asr_events.next().fuse();
             let mut diarization_next = diarization_events.next().fuse();
             futures::select! {
@@ -2491,7 +2680,7 @@ impl RootView {
                     this.update(cx, |this, cx| {
                         this.ui.processing = false;
                         this.cancel_contexts = None;
-                        this.projects = this.services.workspace.list_projects().unwrap_or_default();
+                        this.reload_projects(cx);
                         match result {
                             Ok(project) => {
                                 this.ui.selected_project = Some(project.id().clone());
@@ -2506,29 +2695,29 @@ impl RootView {
                     break;
                 }
             }
-        })
-        .detach();
+        }
     }
 
     /// Reloads the project list whenever the document directory changes.
     pub(crate) fn watch_documents(&mut self, cx: &mut Context<Self>) {
-        if let Ok(changes) = self.services.workspace.watch_documents() {
+        if let Ok(changes) = self.services.workspace.subscribe_document_changes() {
             self.follow_document_changes(changes, cx);
         }
     }
 
+    /// Follows the watcher's change stream; a burst of changes that is
+    /// already queued triggers one reload.
     pub(crate) fn follow_document_changes(
         &mut self,
-        changes: std::sync::mpsc::Receiver<application::DocumentChange>,
+        mut changes: impl futures::Stream<Item = application::DocumentChange> + Unpin + 'static,
         cx: &mut Context<Self>,
     ) {
-        let mut changes = forward_channel(changes, |_| false);
         cx.spawn(async move |this, cx| {
             while changes.next().await.is_some() {
+                while let Some(Some(_)) = changes.next().now_or_never() {}
                 let refreshed = this.update(cx, |view, cx| {
-                    view.projects = view.services.workspace.list_projects().unwrap_or_default();
-                    view.refresh_installation(cx);
-                    cx.notify();
+                    view.reload_projects(cx);
+                    view.refresh_installation();
                 });
                 if refreshed.is_err() {
                     break;
@@ -2561,35 +2750,6 @@ impl RootView {
         };
         cx.notify();
     }
-}
-
-/// Forwards a blocking channel to an async stream on a plain thread, so an
-/// idle wait holds no `runtime::spawn_blocking` worker. The thread ends when
-/// the sender hangs up, the stream is dropped, or after the item `last` marks.
-fn forward_channel<T: Send + 'static>(
-    receiver: std::sync::mpsc::Receiver<T>,
-    last: impl Fn(&T) -> bool + Send + 'static,
-) -> futures::channel::mpsc::UnboundedReceiver<T> {
-    let (sender, stream) = futures::channel::mpsc::unbounded();
-    std::thread::Builder::new()
-        .name("meetnote-ui-channel".into())
-        .spawn(move || {
-            for item in receiver {
-                let done = last(&item);
-                if sender.unbounded_send(item).is_err() || done {
-                    break;
-                }
-            }
-        })
-        .expect("failed to spawn channel forwarder");
-    stream
-}
-
-fn is_terminal_download(state: &DownloadState) -> bool {
-    matches!(
-        state,
-        DownloadState::Completed | DownloadState::Cancelled | DownloadState::Failed(_)
-    )
 }
 
 fn auto_label(locale: i18n::Locale) -> &'static str {

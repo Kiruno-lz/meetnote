@@ -2,7 +2,7 @@ use crate::{
     components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
     i18n::text as tr,
-    state::ContentMode,
+    state::{self, ContentMode},
     theme,
 };
 use domain::{DocumentState, ProjectStatus};
@@ -369,7 +369,7 @@ fn main_panel(
             .child(format!(
                 "{}: {}",
                 tr(locale, "models"),
-                root.installation.model_status(locale)
+                state::model_status(&root.installation, locale)
             )),
     )
 }

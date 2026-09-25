@@ -21,11 +21,11 @@ use settings::{
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 use ui::assistant_ui::{
-    AssistantDocumentChange, AssistantFieldDiff, AssistantMutationSummary, AssistantPendingReview,
-    AssistantProgress, AssistantProgressHandler, AssistantRangePreview, AssistantRunDiagnostics,
-    AssistantRunRequest, AssistantRunResult, AssistantSettingsSave, AssistantTreeChange,
-    AssistantUiError, AssistantUiService, AssistantUsage, ConnectionDiagnostic,
-    ConnectionProbeKind,
+    AssistantDocumentChange, AssistantFieldDiff, AssistantJobEvent, AssistantMutationSummary,
+    AssistantPendingReview, AssistantProgress, AssistantProgressHandler, AssistantRangePreview,
+    AssistantRunDiagnostics, AssistantRunRequest, AssistantRunResult, AssistantSettingsSave,
+    AssistantTreeChange, AssistantUiError, AssistantUiService, AssistantUsage,
+    ConnectionDiagnostic, ConnectionProbeKind,
 };
 
 #[derive(Clone)]
@@ -33,7 +33,7 @@ pub struct DesktopAssistantService {
     settings: SettingsService,
     documents: DocumentService,
     jobs: Arc<JobRuntime>,
-    job_events: Arc<Mutex<Vec<UnboundedSender<JobEvent>>>>,
+    job_events: Arc<Mutex<Vec<UnboundedSender<AssistantJobEvent>>>>,
 }
 
 impl DesktopAssistantService {
@@ -57,28 +57,24 @@ impl DesktopAssistantService {
         }
     }
 
-    /// The `JobEvent`s of every Assistant job from now on, each job's in the
-    /// order it emitted them.
-    // The UI subscribes once it projects Assistant task state.
-    #[allow(dead_code)]
-    pub fn job_events(&self) -> UnboundedReceiver<JobEvent> {
-        let (sender, receiver) = futures::channel::mpsc::unbounded();
-        self.job_events
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(sender);
-        receiver
-    }
-
-    /// Republishes what the job has emitted so far. The service makes every
-    /// state change of its jobs on the calling thread, so publishing after
-    /// each change keeps a job's events in order without a forwarding thread.
-    fn publish_job_events(&self, events: &mut UnboundedReceiver<JobEvent>) {
+    /// Republishes what the job has emitted so far, tagged with the run it
+    /// belongs to (`None` for probes). The service makes every state change
+    /// of its jobs on the calling thread, so publishing after each change
+    /// keeps a job's events in order without a forwarding thread.
+    fn publish_job_events(
+        &self,
+        events: &mut UnboundedReceiver<JobEvent>,
+        request_id: Option<&str>,
+    ) {
         let mut subscribers = self
             .job_events
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         while let Ok(event) = events.try_recv() {
+            let event = AssistantJobEvent {
+                request_id: request_id.map(str::to_string),
+                event,
+            };
             subscribers.retain(|sender| sender.unbounded_send(event.clone()).is_ok());
         }
     }
@@ -329,7 +325,7 @@ impl AssistantUiService for DesktopAssistantService {
         let (provider, secret) = self.provider(&profile)?;
         let (job, mut events) = self.jobs.create_job();
         job.started();
-        self.publish_job_events(&mut events);
+        self.publish_job_events(&mut events, None);
         cancellation.link_job(&job.cancellation_token());
         let secret_for_job = secret.clone();
         let profile_for_job = profile.clone();
@@ -385,7 +381,7 @@ impl AssistantUiService for DesktopAssistantService {
             Err(error) if error.code == "TASK_CANCELLED" => job.cancel(),
             Err(error) => job.failed(error.to_string()),
         }
-        self.publish_job_events(&mut events);
+        self.publish_job_events(&mut events, None);
         result
     }
 
@@ -403,6 +399,7 @@ impl AssistantUiService for DesktopAssistantService {
         cancellation: AgentCancellation,
         progress_handler: AssistantProgressHandler,
     ) -> Result<AssistantRunResult, AssistantUiError> {
+        let request_id = request.request_id.clone();
         let (job, mut events) = self.jobs.create_job();
         job.started();
         cancellation.link_job(&job.cancellation_token());
@@ -410,7 +407,7 @@ impl AssistantUiService for DesktopAssistantService {
             completed: 0,
             total: None,
         });
-        self.publish_job_events(&mut events);
+        self.publish_job_events(&mut events, Some(&request_id));
         let service = self.clone();
         let job_for_worker = job.clone();
         let result = futures::executor::block_on(job.spawn_blocking(move || {
@@ -434,7 +431,7 @@ impl AssistantUiService for DesktopAssistantService {
             Err(error) if error.code == "TASK_CANCELLED" => job.cancel(),
             Err(error) => job.failed(error.to_string()),
         }
-        self.publish_job_events(&mut events);
+        self.publish_job_events(&mut events, Some(&request_id));
         result
     }
 
@@ -490,6 +487,17 @@ impl AssistantUiService for DesktopAssistantService {
                 false,
             )
         })))
+    }
+
+    /// The `JobEvent`s of every Assistant job from now on, each job's in the
+    /// order it emitted them, tagged with the run it belongs to.
+    fn job_events(&self) -> UnboundedReceiver<AssistantJobEvent> {
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        self.job_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(sender);
+        receiver
     }
 }
 
@@ -1300,7 +1308,12 @@ mod tests {
 
         let mut received = Vec::new();
         while let Ok(event) = events.try_recv() {
-            received.push(event);
+            assert_eq!(
+                event.request_id.as_deref(),
+                Some(ask_request().request_id.as_str()),
+                "each event names its run"
+            );
+            received.push(event.event);
         }
         assert_eq!(error.code, "DOCUMENT_NOT_FOUND");
         match received.as_slice() {

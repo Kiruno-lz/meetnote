@@ -1,5 +1,7 @@
 use contracts::{AgentScene, AgentSkillSelector, AgentWriteMode, DocumentProjection};
 use domain::DocumentState;
+use futures::channel::mpsc::UnboundedReceiver;
+use runtime::{JobEvent, JobId, Progress};
 use settings::{
     AppSettings, AssistantConnectionProfile, AssistantSettings, SettingsError, SettingsPatch,
 };
@@ -251,6 +253,16 @@ pub struct AssistantProgress {
 
 pub type AssistantProgressHandler = Arc<dyn Fn(AssistantProgress) + Send + Sync>;
 
+/// A `JobEvent` of an Assistant job on the application's shared
+/// `JobRuntime`, tagged with the run it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssistantJobEvent {
+    /// The run's `AssistantRunRequest::request_id`; `None` for jobs that are
+    /// not runs, such as connection probes.
+    pub request_id: Option<String>,
+    pub event: JobEvent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssistantRunDiagnostics {
     pub path: String,
@@ -309,6 +321,12 @@ pub trait AssistantUiService: Send + Sync {
         undo_token: String,
         authorized_document_ids: Vec<String>,
     ) -> Result<AssistantMutationSummary, AssistantUiError>;
+
+    /// The events of every Assistant job from now on, each job's in the order
+    /// it emitted them. A service that runs no jobs publishes none.
+    fn job_events(&self) -> UnboundedReceiver<AssistantJobEvent> {
+        futures::channel::mpsc::unbounded().1
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -343,7 +361,14 @@ pub struct AssistantController {
     pub pending: Option<PendingReviewState>,
     pub diagnostic: Option<Result<ConnectionDiagnostic, AssistantUiError>>,
     pub progress: Option<AssistantProgress>,
+    /// The current run's job on the shared runtime and its last reported
+    /// progress, projected from its `JobEvent`s.
+    pub job: Option<JobId>,
+    pub job_progress: Option<Progress>,
     pub probe_running: Option<ConnectionProbeKind>,
+    /// The run whose result, error and job events the controller still
+    /// accepts; a job event may end the task before the result arrives.
+    active_request: Option<String>,
     pending_queue: VecDeque<AssistantPendingReview>,
     pending_overflow_ids: HashSet<String>,
     /// Document ids authorized when the current result's run started.
@@ -368,7 +393,10 @@ impl Default for AssistantController {
             pending: None,
             diagnostic: None,
             progress: None,
+            job: None,
+            job_progress: None,
             probe_running: None,
+            active_request: None,
             pending_queue: VecDeque::new(),
             pending_overflow_ids: HashSet::new(),
             result_grant: Vec::new(),
@@ -458,7 +486,12 @@ impl AssistantController {
             max_tool_rounds: settings.max_tool_rounds,
             max_validation_retries: settings.max_validation_retries,
         };
-        self.task = AssistantTaskState::Running { request_id };
+        self.task = AssistantTaskState::Running {
+            request_id: request_id.clone(),
+        };
+        self.active_request = Some(request_id);
+        self.job = None;
+        self.job_progress = None;
         self.result = None;
         self.result_grant = self
             .authorized_documents
@@ -489,6 +522,34 @@ impl AssistantController {
             (None, false) => AssistantTaskState::Completed,
         };
         self.cancellation = None;
+        self.active_request = None;
+    }
+
+    /// Projects a job event of the current run; returns whether the state
+    /// changed. A failed or cancelled job ends the task at once; the run's
+    /// typed result or error still replaces it when it arrives.
+    pub fn apply_job_event(&mut self, event: AssistantJobEvent) -> bool {
+        let Some(request_id) = event.request_id else {
+            return false;
+        };
+        if !self.matches_active_request(&request_id) {
+            return false;
+        }
+        match event.event {
+            JobEvent::Started { job_id } => self.job = Some(job_id),
+            JobEvent::Progress { progress, .. } => self.job_progress = Some(progress),
+            // The run's result completes the task.
+            JobEvent::Completed { .. } => return false,
+            JobEvent::Failed { message, .. } => {
+                self.task = AssistantTaskState::Failed(AssistantUiError {
+                    code: "TASK_FAILED".into(),
+                    message,
+                    retryable: false,
+                });
+            }
+            JobEvent::Cancelled { .. } => self.task = AssistantTaskState::Cancelled,
+        }
+        true
     }
 
     pub fn record_progress(&mut self, progress: AssistantProgress) {
@@ -512,6 +573,7 @@ impl AssistantController {
             AssistantTaskState::Failed(error)
         };
         self.cancellation = None;
+        self.active_request = None;
     }
 
     pub fn request_cancel(&mut self) -> bool {
@@ -527,8 +589,12 @@ impl AssistantController {
         true
     }
 
+    /// The awaiting review, now accepting; `None` when there is none or it
+    /// has expired, in which case the next queued review awaits instead.
     pub fn pending_for_accept(&mut self, now_ms: u64) -> Option<AssistantPendingReview> {
-        self.refresh_pending_expiration(now_ms);
+        if self.refresh_pending_expiration(now_ms) {
+            return None;
+        }
         let pending = match self.pending.as_ref()? {
             PendingReviewState::Awaiting(pending) => pending.clone(),
             _ => return None,
@@ -538,7 +604,9 @@ impl AssistantController {
     }
 
     pub fn pending_for_reject(&mut self, now_ms: u64) -> Option<AssistantPendingReview> {
-        self.refresh_pending_expiration(now_ms);
+        if self.refresh_pending_expiration(now_ms) {
+            return None;
+        }
         let pending = match self.pending.as_ref()? {
             PendingReviewState::Awaiting(pending) => pending.clone(),
             _ => return None,
@@ -598,16 +666,16 @@ impl AssistantController {
     }
 
     pub fn confirmation_failed(&mut self, error: AssistantUiError) {
-        self.pending = if error.code == "WRITE_CONFIRMATION_EXPIRED" {
-            Some(PendingReviewState::Expired)
+        if error.code == "WRITE_CONFIRMATION_EXPIRED" {
+            self.advance_past_expired();
         } else {
-            self.pending.take().map(|state| match state {
+            self.pending = self.pending.take().map(|state| match state {
                 PendingReviewState::Accepting(pending) | PendingReviewState::Rejecting(pending) => {
                     PendingReviewState::Awaiting(pending)
                 }
                 other => other,
-            })
-        };
+            });
+        }
         self.task = AssistantTaskState::Failed(error);
     }
 
@@ -698,8 +766,8 @@ impl AssistantController {
         }
     }
 
-    /// Marks the awaiting review expired when its timer fires; returns whether
-    /// the state changed.
+    /// Expires the awaiting review when its timer fires, so the next queued
+    /// review awaits; returns whether the state changed.
     pub fn expire_pending(&mut self, confirmation_id: &str) -> bool {
         if !matches!(
             self.pending.as_ref(),
@@ -707,7 +775,7 @@ impl AssistantController {
         ) {
             return false;
         }
-        self.pending = Some(PendingReviewState::Expired);
+        self.advance_past_expired();
         true
     }
 
@@ -752,13 +820,27 @@ impl AssistantController {
         true
     }
 
-    fn refresh_pending_expiration(&mut self, now_ms: u64) {
-        if matches!(
+    /// Expires every due review from the awaiting one on; returns whether
+    /// any expired.
+    fn refresh_pending_expiration(&mut self, now_ms: u64) -> bool {
+        let mut expired = false;
+        while matches!(
             self.pending.as_ref(),
             Some(PendingReviewState::Awaiting(pending)) if pending.expires_at_ms <= now_ms
         ) {
-            self.pending = Some(PendingReviewState::Expired);
+            self.advance_past_expired();
+            expired = true;
         }
+        expired
+    }
+
+    /// The current review expired: the next queued review awaits, or the
+    /// expiry is shown when the queue is empty.
+    fn advance_past_expired(&mut self) {
+        self.pending = Some(match self.pending_queue.pop_front() {
+            Some(next) => PendingReviewState::Awaiting(next),
+            None => PendingReviewState::Expired,
+        });
     }
 
     fn set_pending_reviews(&mut self, mut pending_reviews: Vec<AssistantPendingReview>) {
@@ -777,12 +859,7 @@ impl AssistantController {
     }
 
     fn matches_active_request(&self, request_id: &str) -> bool {
-        matches!(
-            &self.task,
-            AssistantTaskState::Running { request_id: active }
-                | AssistantTaskState::Cancelling { request_id: active }
-                if active == request_id
-        )
+        self.active_request.as_deref() == Some(request_id)
     }
 }
 
@@ -1405,6 +1482,115 @@ mod tests {
         assert_eq!(controller.pending, None);
         assert_eq!(controller.pending_queue_len(), 0);
         assert_eq!(controller.task, AssistantTaskState::Completed);
+    }
+
+    #[test]
+    fn job_events_project_only_the_current_run_until_its_result_arrives() {
+        let document = DocumentState::new(ProjectId::new("jobs"), "Jobs", "jobs.wav");
+        let mut controller = AssistantController::default();
+        controller.authorize_document(Some(&document));
+        let job_id = JobId(3);
+        let event = |request_id: &str, event| AssistantJobEvent {
+            request_id: Some(request_id.into()),
+            event,
+        };
+        let (request, _) = controller.begin("cancel".into(), &settings()).unwrap();
+        let run = request.request_id.as_str();
+
+        assert!(!controller.apply_job_event(AssistantJobEvent {
+            request_id: None,
+            event: JobEvent::Started { job_id },
+        }));
+        assert!(!controller.apply_job_event(event("other", JobEvent::Started { job_id })));
+        assert!(controller.apply_job_event(event(run, JobEvent::Started { job_id })));
+        assert_eq!(controller.job, Some(job_id));
+        assert!(!controller.apply_job_event(event(run, JobEvent::Completed { job_id })));
+        assert!(controller.apply_job_event(event(run, JobEvent::Cancelled { job_id })));
+        assert_eq!(controller.task, AssistantTaskState::Cancelled);
+        // A result that still arrives is shown.
+        controller.complete(run, empty_result());
+        assert_eq!(controller.task, AssistantTaskState::Completed);
+        assert!(!controller.apply_job_event(event(
+            run,
+            JobEvent::Failed {
+                job_id,
+                message: "late".into(),
+            }
+        )));
+        assert_eq!(controller.task, AssistantTaskState::Completed);
+
+        let (request, _) = controller.begin("fail".into(), &settings()).unwrap();
+        assert_eq!((controller.job, controller.job_progress), (None, None));
+        let run = request.request_id.as_str();
+        assert!(controller.apply_job_event(event(
+            run,
+            JobEvent::Failed {
+                job_id,
+                message: "worker failed".into(),
+            }
+        )));
+        assert!(
+            matches!(&controller.task, AssistantTaskState::Failed(error) if error.code == "TASK_FAILED")
+        );
+        controller.fail(
+            run,
+            AssistantUiError {
+                code: "PROVIDER_TIMEOUT".into(),
+                message: "provider timed out".into(),
+                retryable: true,
+            },
+        );
+        assert!(
+            matches!(&controller.task, AssistantTaskState::Failed(error) if error.code == "PROVIDER_TIMEOUT" && error.retryable)
+        );
+    }
+
+    #[test]
+    fn expired_reviews_hand_over_to_the_next_queued_review() {
+        let document = DocumentState::new(ProjectId::new("queue"), "Queue", "queue.wav");
+        let mut controller = AssistantController::default();
+        controller.authorize_document(Some(&document));
+        let (request, _) = controller.begin("queue".into(), &settings()).unwrap();
+        let due = |id: &str| AssistantPendingReview {
+            expires_at_ms: 10,
+            ..pending_with_id(id)
+        };
+        controller.complete(
+            &request.request_id,
+            AssistantRunResult {
+                pending_reviews: vec![
+                    due("due-0"),
+                    due("due-1"),
+                    pending_with_id("runtime-expired"),
+                    pending_with_id("last"),
+                ],
+                ..empty_result()
+            },
+        );
+
+        // Accepting a due review accepts nothing; every due review is skipped.
+        assert!(controller.pending_for_accept(10).is_none());
+        assert_eq!(
+            controller.pending,
+            Some(PendingReviewState::Awaiting(pending_with_id(
+                "runtime-expired"
+            )))
+        );
+
+        controller.pending_for_accept(10).unwrap();
+        controller.confirmation_failed(AssistantUiError {
+            code: "WRITE_CONFIRMATION_EXPIRED".into(),
+            message: "expired by runtime".into(),
+            retryable: true,
+        });
+        assert_eq!(
+            controller.pending,
+            Some(PendingReviewState::Awaiting(pending_with_id("last")))
+        );
+
+        assert!(controller.expire_pending("last"));
+        assert_eq!(controller.pending, Some(PendingReviewState::Expired));
+        assert_eq!(controller.pending_queue_len(), 0);
     }
 
     #[test]

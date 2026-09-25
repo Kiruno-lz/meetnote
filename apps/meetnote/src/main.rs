@@ -166,7 +166,8 @@ fn main() {
     let desktop_services = DesktopServices {
         workspace,
         settings,
-        model_manager,
+        installation: application::InstallationService::new(model_manager.clone()),
+        model_manager: Arc::new(model_manager),
         asr_model,
         diarization_model,
         assistant,

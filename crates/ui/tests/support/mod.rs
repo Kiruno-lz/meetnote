@@ -107,6 +107,7 @@ fn services(appearance: settings::AppearanceSettings) -> ui::DesktopServices {
         repository.save(document, None).expect("fixture document");
     }
     let temp = temp_directory();
+    let model_manager = ModelManager::new(catalog(), temp.join("models"));
     ui::DesktopServices {
         workspace: WorkspaceService::new(
             ProcessingService::new(
@@ -117,7 +118,8 @@ fn services(appearance: settings::AppearanceSettings) -> ui::DesktopServices {
         ),
         settings: settings(&temp, appearance),
         // A model root that does not exist: every catalog model is missing.
-        model_manager: ModelManager::new(catalog(), temp.join("models")),
+        installation: application::InstallationService::new(model_manager.clone()),
+        model_manager: Arc::new(model_manager),
         asr_model: missing_model("whisper-rs"),
         diarization_model: missing_model("sherpa-onnx"),
         assistant: Arc::new(UnreachableAssistant),

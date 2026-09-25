@@ -57,6 +57,11 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .unwrap_or_else(|| tr(root.ui.locale, "assistant_connection_required").into());
     let write_mode = root.saved_assistant().write_mode;
     let task = task_label(root.ui.locale, &root.assistant.task);
+    let task_selector = task_selector(&root.assistant.task);
+    let job_progress = root
+        .assistant
+        .job_progress
+        .map(|progress| job_progress_label(root.ui.locale, progress));
     let result = root.assistant.result.clone();
     let pending = root.assistant.pending.clone();
 
@@ -215,7 +220,20 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         ))
                         .on_click(cx.listener(RootView::cancel_assistant)),
                 )
-                .child(div().text_sm().text_color(tokens.text_muted).child(task)),
+                .child(
+                    div()
+                        .debug_selector(move || task_selector.into())
+                        .text_sm()
+                        .text_color(tokens.text_muted)
+                        .child(task),
+                )
+                .children(job_progress.map(|progress| {
+                    div()
+                        .debug_selector(|| "assistant-job-progress".into())
+                        .text_sm()
+                        .text_color(tokens.text_muted)
+                        .child(progress)
+                })),
         )
         .child(
             div()
@@ -326,6 +344,37 @@ fn info_line(label: &'static str, value: String, tokens: &Tokens) -> gpui::Div {
         .text_sm()
         .child(div().text_color(tokens.text_muted).child(label))
         .child(value)
+}
+
+/// The task label's selector, for tests to find the state the page shows.
+fn task_selector(task: &AssistantTaskState) -> &'static str {
+    match task {
+        AssistantTaskState::Idle => "assistant-task-idle",
+        AssistantTaskState::Running { .. } => "assistant-task-running",
+        AssistantTaskState::Cancelling { .. } => "assistant-task-cancelling",
+        AssistantTaskState::AwaitingConfirmation => "assistant-task-awaiting",
+        AssistantTaskState::Completed => "assistant-task-completed",
+        AssistantTaskState::Partial(_) => "assistant-task-partial",
+        AssistantTaskState::Failed(_) => "assistant-task-failed",
+        AssistantTaskState::Cancelled => "assistant-task-cancelled",
+    }
+}
+
+/// The run's job progress on the shared runtime.
+fn job_progress_label(locale: Locale, progress: runtime::Progress) -> String {
+    let assistant = tr(locale, "assistant");
+    match progress.total {
+        Some(total) => crate::i18n::message(
+            locale,
+            "job_progress_total",
+            &format!("{assistant}|{}|{total}", progress.completed),
+        ),
+        None => crate::i18n::message(
+            locale,
+            "job_progress",
+            &format!("{assistant}|{}", progress.completed),
+        ),
+    }
 }
 
 fn task_label(locale: Locale, task: &AssistantTaskState) -> String {

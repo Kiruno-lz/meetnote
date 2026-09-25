@@ -159,7 +159,7 @@ mod screenshots {
             let name = format!("{route_name}-{appearance_name}");
             let appearance = AppearanceSettings { theme, material };
             let window = cx.update(|cx| support::open_main_window_in(appearance, cx));
-            wait_for_installation(&mut cx, &window);
+            wait_for_startup(&mut cx, &window);
             cx.update(|cx| window.navigate(route, cx));
             let handle = window.window();
             let mut previous: Option<Vec<u8>> = None;
@@ -275,17 +275,17 @@ mod screenshots {
         ExitCode::SUCCESS
     }
 
-    /// Drives the scheduler until the startup installation probe, which
-    /// runs on a worker thread, has reached the view.
-    fn wait_for_installation(cx: &mut VisualTestAppContext, window: &MainWindow) {
+    /// Drives the scheduler until the startup installation probe and project
+    /// list, which load on worker threads, have reached the view.
+    fn wait_for_startup(cx: &mut VisualTestAppContext, window: &MainWindow) {
         for _ in 0..1_000 {
             cx.run_until_parked();
-            if cx.read(|cx| window.installation_loaded(cx)) {
+            if cx.read(|cx| window.startup_loaded(cx)) {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        panic!("the installation probe did not finish");
+        panic!("the startup loads did not finish");
     }
 
     /// Decodes a baseline through GPUI's image loader, which yields BGRA.
