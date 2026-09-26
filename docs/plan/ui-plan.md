@@ -34,7 +34,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 | crate | 来源与锁定 | 说明 |
 |---|---|---|
 | `gpui`、`gpui_platform` | 声明为 `zeronsh/zui` rev `1561532176f54262e360acbb8bc00c6fcf183975`，`default-features = false`，features `font-kit`、`runtime_shaders`；根 `Cargo.toml` 的 `[patch."https://github.com/zeronsh/zui"]` 把该来源的全部 crate 指向 `Kiruno-lz/zui` 分支 `meetnote/1561532` | Apache-2.0；macOS 由 Metal + MetalPerformanceShaders 渲染，wgpu 只用于 Linux/Web |
-| `gpui-component`、`gpui-component-assets` | `zeronsh/gpui-component` rev `5086ff4fb162ae97ca9d806876e7c6694ac3a81f` | Apache-2.0；Zeron 使用的同一 pin，已适配 zui API；其中 `gpui-base` 提供无样式交互原语 |
+| `gpui-base`、`gpui-component-assets` | `zeronsh/gpui-component` rev `5086ff4fb162ae97ca9d806876e7c6694ac3a81f` | Apache-2.0；Zeron 使用的同一 pin，已适配 zui API；`gpui-base` 提供无样式交互原语，assets 提供 Lucide 图标；不依赖 styled `gpui-component` crate |
 | `gpui_tokio` | 不引入 | MeetNote 不使用 tokio；异步由 JobRuntime 与 gpui executor 承担 |
 
 - zui 独有 API（`Window::paint_backdrop_blur`、`Window::with_edge_fade`、`paint_image_fitted_masked`）只允许在 `crates/ui/src/theme/` 的玻璃原语中调用；原语在不透明材质下绘制 token 填充。
@@ -51,16 +51,16 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 ### 维护与退出
 
 - zui 与 fork 只按 Zeron `Cargo.toml` 中成对锁定的 rev 一起升级，每次升级都在 macOS 27 上运行完整门禁与离屏基线。
-- `Kiruno-lz/zui` 分支 `meetnote/<zui rev>` 以该 zui rev 为基，只 cherry-pick 上游 zed 已合并的修复，不承载 MeetNote 自有改动。当前一项：zed `7bddd16a09`（#62775），测试窗口的 raw window/display handle 返回 `HandleError::NotSupported`，否则 fork 的 `Root::new` 在 macOS 上调用 `install_window_hit_test_forwarder` 时使所有 `TestAppContext` 窗口 panic。
+- `Kiruno-lz/zui` 分支 `meetnote/<zui rev>` 以该 zui rev 为基，只 cherry-pick 上游 zed 已合并的修复，不承载 MeetNote 自有改动。当前一项：zed `7bddd16a09`（#62775），测试窗口的 raw window/display handle 返回 `HandleError::NotSupported`，否则 MeetNote 窗口根（`crates/ui/src/controls/window.rs`）在 macOS 上调用 gpui-base 的 `install_window_hit_test_forwarder` 时使所有 `TestAppContext` 窗口 panic。
   - 升级时在新 zui rev 上重建分支，丢弃新 rev 已包含的 cherry-pick；分支不再携带提交时删除 `[patch]`，直接使用 `zeronsh/zui`。
-  - `[patch]` 必须覆盖 `Cargo.lock` 中来自 `zeronsh/zui` 的每个 crate，否则 gpui-component 与 MeetNote 会解析出两份 gpui。验证：`grep 'zeronsh/zui' Cargo.lock` 无结果。
+  - `[patch]` 必须覆盖 `Cargo.lock` 中来自 `zeronsh/zui` 的每个 crate，否则 gpui-base 与 MeetNote 会解析出两份 gpui。验证：`grep 'zeronsh/zui' Cargo.lock` 无结果。
 - //TODO - `scripts/package-macos-app.sh` 声明的 `LSMinimumSystemVersion` 13.0 尚未验证。验证：在 macOS 13 设备或虚拟机上启动应用并运行 L3；不通过则把声明版本提高到已验证版本。
 - 退出条件，满足任一即评估回退上游 GPUI：
   - zui 或 fork 连续 90 天无提交，且存在影响 MeetNote 的未修复缺陷；
   - 上游 gpui 的安全修复 30 天内无法移植；
   - 新 macOS 版本破坏渲染且 zui 无修复。
 - 回退成本：
-  - 恢复上游 gpui 与 longbridge gpui-component 版本对，以及 `accessibility_label` 调用；
+  - 恢复上游 gpui 与 longbridge gpui-component 版本对，`controls/` 包装改用 longbridge 的 styled 组件；
   - 玻璃原语退化为 token 填充，失去 in-window blur 与 edge fade；
   - 窗口 blur 在 macOS 26+ 需要自行维护 `NSVisualEffectView` 材质补丁。
 
@@ -73,7 +73,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 - 滚动列表、transcript 与标题栏下方使用 EdgeFade；超长标签用尾部渐隐代替截断省略号。浮层不加阴影，只有不透明回退时使用阴影。
 - blur 强度为 `BlurLevel` 枚举，最多两个常量值，同屏 blur kernel 数量由类型保证。开合动画只改变透明度与位置，不改变 blur 半径与浮层尺寸，避免每帧新建 MPS kernel 与纹理。
 - 设计 token 集中在 `crates/ui/src/theme/`：含 alpha 的颜色、hairline、wash、scrim、radius、spacing、控件高度、字号与 motion，深浅两套。
-  - token 经 gpui-component `ThemeConfig`/`apply_config` 写入，因为 `Root` 按 `tokens.background` 绘制整窗，直接改 `ThemeColor` 会遮住窗口玻璃。
+  - 窗口根按 token 绘制整窗底色，gpui-base 的全局滚动条样式随 token 更新。
   - 玻璃材质下 `tokens.background` 的 alpha 为 0。
   - 页面不写颜色字面量。
 - 玻璃底色透明度由纯函数按最坏桌面背景计算，保证正文对比度 ≥ 4.5:1、次要文字 ≥ 3:1。
@@ -90,13 +90,12 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 | 类别 | 实现 |
 |---|---|
 | 窗口外壳、标题栏拖拽区、侧栏、工具栏、列表行、状态 chip | MeetNote 自建，按 token 与 Zeron 布局配方实现 |
-| 下拉菜单、对话框、Assistant 输入条 | gpui-base 无样式原语（`Select`、`Dialog`、`popover`、`focus_trap`、`positioner`）+ MeetNote frosted 渲染，保留键盘、焦点与 `accessibility_label`；替换 gpui-component `Select` 弹层与 `open_alert_dialog` |
-| 按钮、分隔线、进度、折叠、滚动条 | gpui-component，经 `ThemeConfig` 映射 token |
+| 下拉菜单、对话框、Assistant 输入条 | gpui-base 无样式原语（`Select`、`Dialog`、`popover`、`focus_trap`、`positioner`）+ MeetNote frosted 渲染，保留键盘、焦点与 `accessibility_label` |
+| 按钮、分隔线、进度、折叠、滚动条 | gpui-base 原语上的 MeetNote 包装（`controls/button.rs`、`separator.rs`、`progress.rs`、`collapsible.rs`、`scrollbar.rs`），按 token 渲染 |
 | 单行输入 | gpui-base input 上的带 label 包装（`controls/text_field.rs`），支持粘贴、IME、undo/redo 与 secret 掩码；密钥框拦截 Copy/Cut：Copy 不写剪贴板，Cut 不改变值与选区 |
 
-下拉、对话框、进度条与单行输入已经由 `crates/ui/src/controls/` 的带 label 包装提供；按钮、折叠、分隔线、滚动条、tooltip 与 `ThemeConfig` 仍来自 styled `ui` crate。`Root` 属于该 crate，负责窗口背景、tooltip，以及 gpui-base focus trap 内的 Tab 循环；只要仍使用该 crate 的组件，`Root` 就必须是窗口第一层。
+所有控件经 `crates/ui/src/controls/` 的包装构造，交互控件的构造函数要求 label。窗口第一层是 MeetNote 窗口根（`controls/window.rs`），负责整窗底色、字体、rem 尺寸、macOS 无障碍 hit-test 转发与 gpui-base focus trap 内的 Tab 循环。tooltip 当前没有使用场景，未提供包装。
 
-- //TODO - 把按钮、分隔线、进度、折叠与滚动条改为 gpui-base 原语加 MeetNote 渲染，移除 `gpui-component` 依赖与 `Root`，只保留 `gpui-base` 与 assets（与 Zeron 一致）。验证：`cargo tree -p ui -i gpui-component` 无结果，L2/L3 测试通过。
 
 ### 验证分层
 
@@ -113,7 +112,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
     - 比较：`MEETNOTE_VISUAL=1 cargo test -p ui --test visual`；
     - 更新基线：另加 `MEETNOTE_VISUAL_UPDATE=1`；
     - 未设置 `MEETNOTE_VISUAL` 时跳过，默认 `cargo test -p ui` 只编译 harness。
-  - 基线 PNG 存 `crates/ui/tests/visual/`。`baseline.json` 记录 scale factor、窗口尺寸、locale 与 GPUI/gpui-component revision；scale factor 与基线不一致时比较直接失败。
+  - 基线 PNG 存 `crates/ui/tests/visual/`。`baseline.json` 记录 scale factor、窗口尺寸、locale 与 GPUI、gpui-base revision；scale factor 与基线不一致时比较直接失败。
   - 单通道差 > 2 的像素占比超过 0.5% 视为变化，需人工确认后更新基线。
   - 除 route 外，基线还覆盖打开的 Settings 下拉与对话框（四种外观）。
   - in-window blur 可以确定性截图；窗口背后桌面 blur 由 `NSVisualEffectView` 在进程外合成，只做手工检查。
@@ -134,7 +133,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 
 | 区域 | 已实现 | 当前缺口 |
 |---|---|---|
-| Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 gpui-component `Root`；frosted 浮层与 edge fade 原语；下拉、进度条、对话框与文本输入为带 label 的 gpui-base 包装 | 按钮、折叠、分隔线、滚动条与 tooltip 仍用 styled gpui-component；键盘遍历、焦点环与无障碍 |
+| Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 MeetNote 窗口根；frosted 浮层与 edge fade 原语；全部控件为带 label 的 gpui-base 包装，按钮与折叠头有仅键盘聚焦时显示的焦点环 | 各 route 的键盘遍历顺序、方向键导航与焦点归还；无障碍手工检查 |
 | Assistant | 内容平面底部的 frosted 输入条（Enter 发送）、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染；任务状态由共享 JobRuntime 的 `JobEvent` 按请求投影；pending 过期后队列推进到下一项 | — |
 | Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original/编辑、处理与取消；内容平面顶部列出 scanner issue（路径与原因）；标题、标签、状态、摘要与正文按文档保存草稿，经一次带 revision 的 `Update` 提交；树移动经 `Reparent`/`Reorder` 命令；revision 冲突显示通知并保留草稿，用户重新加载后才丢弃；Original 视图的 speaker 列表支持改名与确认后合并；scanner issue 按 `DocumentIssueKind` 本地化；选中文档的音频在后台检查，缺失或 checksum 不符时在树、标题栏与 Detail 标记并禁止处理，经文件选择按 revision 重新关联；列表读取与处理启动在后台执行，启动完成前的取消在启动返回后生效 | — |
 | Detail | 内容平面内右侧不透明面板：identity、audio source、层级、document status、revision、processing provenance、最近错误、结果统计与缺失的 provenance 项、transcript | 单文档的 Agent 变更来源（mutation journal 尚无按文档查询） |
