@@ -1,13 +1,13 @@
 use crate::{
     components::{empty_card, timestamp},
     controller::RootView,
-    controls::{Button, Scrollbar},
+    controls::{Button, Region, Scrollbar},
     i18n::{text as tr, Locale},
     theme::{self, Tokens},
 };
 use application::{AudioSourceError, AudioStatus};
 use domain::{document_result_statistics, DocumentState, ProvenanceGap};
-use gpui::{div, prelude::*, px, Context, IntoElement, Pixels, ScrollHandle};
+use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Pixels, ScrollHandle};
 
 const DETAIL_WIDTH: Pixels = px(400.);
 /// The label column of a Detail row.
@@ -19,12 +19,15 @@ const MISSING: &str = "—";
 /// the content plane, beside the document rather than over it. Opening or
 /// closing it changes nothing but its own visibility. The facts and the
 /// transcript scroll together; every value is read from the loaded state.
+/// The panel is a group that holds `focus`, so closing it from the keyboard
+/// can return focus to the button that opened it.
 pub(crate) fn render(
     project: Option<&DocumentState>,
     projects: &[DocumentState],
     audio: Option<&Result<AudioStatus, AudioSourceError>>,
     locale: Locale,
     scroll: &ScrollHandle,
+    focus: &FocusHandle,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
@@ -73,7 +76,7 @@ pub(crate) fn render(
             empty_card(tr(locale, "select_project_first"), &tokens).into_any_element()
         });
     // The panel's right corners follow the content plane's.
-    div()
+    Region::new("detail-panel", tr(locale, "project_detail"), focus)
         .debug_selector(|| "detail-panel".into())
         .w(DETAIL_WIDTH)
         .h_full()

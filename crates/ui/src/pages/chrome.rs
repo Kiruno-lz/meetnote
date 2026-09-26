@@ -10,10 +10,16 @@
 //! card inset from the window edges and shows only the current route's page,
 //! with Detail as a panel at its right edge.
 
-use crate::{controller::RootView, controls::Button, i18n::text as tr, route::Route, theme};
+use crate::{
+    controller::RootView,
+    controls::{window::DragStrip, Button, NavEntry, NavList},
+    i18n::text as tr,
+    route::Route,
+    theme,
+};
 use gpui::{
-    div, point, prelude::*, px, size, AnyElement, Context, FontWeight, IntoElement, MouseButton,
-    MouseMoveEvent, Pixels, Point, Size, TitlebarOptions, WindowControlArea,
+    div, point, prelude::*, px, size, AnyElement, Context, FocusHandle, IntoElement, Pixels, Point,
+    Size, TitlebarOptions,
 };
 
 /// The window title. The transparent titlebar hides it; the Window menu,
@@ -29,7 +35,7 @@ pub(crate) const SIDEBAR_WIDTH: Pixels = px(256.);
 pub(crate) const MIN_WINDOW_SIZE: Size<Pixels> = size(px(900.), px(600.));
 
 /// The route entries in sidebar order, with their label keys.
-const ENTRIES: [(Route, &str); 4] = [
+pub(crate) const ENTRIES: [(Route, &str); 4] = [
     (Route::Assistant, "assistant"),
     (Route::Meetings, "meetings"),
     (Route::Models, "models"),
@@ -82,7 +88,7 @@ pub(crate) fn shell(
                 .h_full()
                 .flex()
                 .flex_col()
-                .child(drag_strip("titlebar-drag-content", cx).w_full())
+                .child(drag_strip("titlebar-drag-content").w_full())
                 .child(plane),
         )
 }
@@ -91,14 +97,26 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
     let tokens = *theme::tokens(cx);
     let locale = root.ui.locale;
     let current = root.ui.route;
-    let entries = div()
+    let focus = root.nav_focus.clone();
+    let entries = NavList::new("nav", tr(locale, "navigation"))
         .debug_selector(|| "nav".into())
         .flex()
         .flex_col()
         .gap(px(2.))
-        .children(
-            ENTRIES.map(|(route, key)| nav_entry(tr(locale, key), route, route == current, cx)),
-        );
+        .children(ENTRIES.iter().enumerate().map(|(index, (route, key))| {
+            let beside = (
+                index.checked_sub(1).map(|previous| &focus[previous]),
+                focus.get(index + 1),
+            );
+            nav_entry(
+                tr(locale, key),
+                *route,
+                *route == current,
+                &focus[index],
+                beside,
+                cx,
+            )
+        }));
     let mut column = div()
         .debug_selector(|| "sidebar".into())
         .w(SIDEBAR_WIDTH)
@@ -106,7 +124,7 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
         .flex_shrink_0()
         .flex()
         .flex_col()
-        .child(drag_strip("titlebar-drag-sidebar", cx).w_full())
+        .child(drag_strip("titlebar-drag-sidebar").w_full())
         .child(
             div()
                 .flex_shrink_0()
@@ -132,75 +150,31 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
 
 /// A route entry; the current route's entry is filled with the selection
 /// wash, set in a heavier weight and marks its label `nav-<Route>-active`.
+/// Up and Down move focus to the entries `beside` it.
 fn nav_entry(
     label: &'static str,
     route: Route,
     active: bool,
+    focus: &FocusHandle,
+    beside: (Option<&FocusHandle>, Option<&FocusHandle>),
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
-    let tokens = *theme::tokens(cx);
     let mut text = div().child(label);
     if active {
         text = text.debug_selector(move || format!("nav-{route:?}-active"));
     }
-    div()
-        .id(format!("nav-{route:?}"))
+    NavEntry::new(format!("nav-{route:?}"), label, focus)
         .debug_selector(move || format!("nav-{route:?}"))
-        .h(tokens.control_height.md)
-        .px(tokens.spacing.md)
-        .flex()
-        .items_center()
-        .rounded(tokens.radius.sm)
-        .text_sm()
-        .cursor_pointer()
-        .map(|entry| {
-            if active {
-                entry.bg(tokens.selection).font_weight(FontWeight::SEMIBOLD)
-            } else {
-                entry.hover(|style| style.bg(tokens.wash))
-            }
-        })
+        .selected(active)
+        .beside(beside.0, beside.1)
         .on_click(cx.listener(move |this, _, _, cx| this.navigate(route, cx)))
         .child(text)
 }
 
-/// A titlebar strip that drags the window: a `WindowControlArea::Drag`
-/// region that hands the drag to the platform once the pointer moves with
-/// the button held, and zooms on a double click. The window owns titlebar
-/// dragging (`WindowOptions::app_owns_titlebar_drag`), so only these strips
-/// move it.
-fn drag_strip(id: &'static str, cx: &mut Context<RootView>) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
+/// A titlebar strip that drags the window (`DragStrip`).
+fn drag_strip(id: &'static str) -> DragStrip {
+    DragStrip::titlebar(id)
         .debug_selector(move || id.into())
         .h(TITLEBAR_HEIGHT)
         .flex_shrink_0()
-        .window_control_area(WindowControlArea::Drag)
-        .on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, _, _| this.ui.titlebar_drag_armed = true),
-        )
-        .on_mouse_up(
-            MouseButton::Left,
-            cx.listener(|this, _, _, _| this.ui.titlebar_drag_armed = false),
-        )
-        .on_mouse_down_out(cx.listener(|this, _, _, _| this.ui.titlebar_drag_armed = false))
-        // Only while the button is still held: AppKit resolves a second
-        // click inside its drag session as a titlebar double click, so a
-        // stale arm must not start one from a plain hover.
-        .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, _| {
-            if this.ui.titlebar_drag_armed && event.pressed_button == Some(MouseButton::Left) {
-                this.ui.titlebar_drag_armed = false;
-                window.start_window_move();
-            }
-        }))
-        .on_click(|event, window, _| {
-            if event.click_count() == 2 {
-                if cfg!(target_os = "macos") {
-                    window.titlebar_double_click();
-                } else {
-                    window.zoom_window();
-                }
-            }
-        })
 }

@@ -29,8 +29,9 @@
 //! revision conflict, the Original view with its speakers, Settings at the
 //! Speaker Library, Meetings with Detail on a document whose audio is
 //! missing, Settings at the Workspace under a refused documents-root
-//! switch, and the Assistant with the receipts of a stopped run above its
-//! first pending review), into `<overlay>-<appearance>.png`, once their
+//! switch, the Assistant with the receipts of a stopped run above its
+//! first pending review, and the focus ring of a button and of a select
+//! that Tab reached), into `<overlay>-<appearance>.png`, once their
 //! entrance animation has finished. Under glass the window background is
 //! clear, so the chrome's pixels carry the glass alpha: the capture has no
 //! desktop behind it, and the desktop blur is checked by hand.
@@ -139,7 +140,7 @@ mod screenshots {
         (Route::Settings, "settings"),
     ];
     /// Overlays captured over a route, with their baseline file name prefix.
-    const OVERLAYS: [(Route, Overlay, &str); 9] = [
+    const OVERLAYS: [(Route, Overlay, &str); 11] = [
         (Route::Settings, Overlay::ThemeSelect, "settings-select"),
         (
             Route::Settings,
@@ -173,6 +174,8 @@ mod screenshots {
             Overlay::AssistantReview,
             "assistant-review",
         ),
+        (Route::Meetings, Overlay::FocusedButton, "meetings-focus"),
+        (Route::Settings, Overlay::FocusedSelect, "settings-focus"),
     ];
     /// Frames drawn at most while waiting for two identical ones.
     const MAX_FRAMES: usize = 8;

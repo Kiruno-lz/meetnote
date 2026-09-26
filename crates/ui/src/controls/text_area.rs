@@ -4,10 +4,15 @@
 //! label and paints the frame (`InputBase` with the multi-line text-input
 //! role and the label for assistive technology).
 //!
+//! Like `TextField`, it shows the focus ring while focus that arrived from
+//! the keyboard is on it. Tab indents inside it; Ctrl-Tab and Ctrl-Shift-Tab
+//! move focus on, as in AppKit's text views.
+//!
 //! Like `TextField`, a value set without a window takes effect at the next
 //! render; `value` reads a pending value at once.
 
 use super::text_field::editor_style;
+use super::{with_focus_ring, KeyboardArrival};
 use crate::theme::{self, Tokens};
 use gpui::{
     prelude::*, px, App, Context, Entity, FocusHandle, Focusable, IntoElement, MouseButton, Role,
@@ -29,6 +34,7 @@ pub(crate) struct TextArea {
     pending_value: Option<String>,
     /// The tokens the input's colors were last taken from.
     styled_with: Tokens,
+    arrival: KeyboardArrival,
 }
 
 impl Focusable for TextArea {
@@ -63,6 +69,7 @@ impl TextArea {
             rows: rows.max(1),
             pending_value: None,
             styled_with: tokens,
+            arrival: KeyboardArrival::default(),
         }
     }
 
@@ -117,12 +124,14 @@ impl Render for TextArea {
         let tokens = *theme::tokens(cx);
         self.sync_input(tokens, window, cx);
         let focus = self.focus_handle(cx);
+        let ring = self.arrival.ring(&focus, window);
         let input = self.input.clone();
-        InputBase::new("text-area")
+        let frame = InputBase::new("text-area")
             .role(Role::MultilineTextInput)
             .accessibility_label(self.label.clone())
             .focused(focus.is_focused(window))
             .styles(|styles| styles.focused(|style| style.border_color(tokens.accent)))
+            .relative()
             .w_full()
             .h(px(self.rows as f32 * ROW_HEIGHT + 2. * PADDING))
             .px(tokens.spacing.sm)
@@ -138,7 +147,8 @@ impl Render for TextArea {
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 input.update(cx, |input, cx| input.focus(window, cx));
             })
-            .child(self.input.clone())
+            .child(self.input.clone());
+        with_focus_ring(frame, ring, &focus, &tokens)
     }
 }
 

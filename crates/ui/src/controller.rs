@@ -4,9 +4,10 @@ use crate::{
         AssistantUiError, AssistantUiService, ConnectionProbeKind,
     },
     audio::AudioCheck,
-    components::ProjectDrag,
+    components::{ProjectDrag, TreeMove},
     controls::{
         self, ConfirmDialog, Dropdown, DropdownEvent, SelectOption, TextField, TextFieldEvent,
+        TreeStep,
     },
     editor::DocumentEditor,
     i18n, pages,
@@ -519,6 +520,17 @@ pub(crate) struct RootView {
     pub(crate) scroll: ScrollAreas,
     /// Holds focus while a dialog is open, so Enter and Esc reach it.
     pub(crate) dialog_focus: FocusHandle,
+    /// What held focus before the open dialog took it; closing the dialog
+    /// returns focus there.
+    dialog_return: Option<FocusHandle>,
+    /// The sidebar entries, in `pages::chrome::ENTRIES` order.
+    pub(crate) nav_focus: [FocusHandle; 4],
+    /// The project tree, one tab stop whose arrow keys move the selection.
+    pub(crate) tree_focus: FocusHandle,
+    /// The Detail panel, and the button that opens it, which focus returns
+    /// to when Detail closes from inside.
+    pub(crate) detail_focus: FocusHandle,
+    pub(crate) detail_trigger: FocusHandle,
     /// The awaiting review's card on the Assistant page.
     pub(crate) review_focus: FocusHandle,
     /// Moves focus to the awaiting review on the next render.
@@ -680,6 +692,11 @@ impl RootView {
             speaker_library_prompt: None,
             scroll: ScrollAreas::default(),
             dialog_focus: cx.focus_handle(),
+            dialog_return: None,
+            nav_focus: std::array::from_fn(|_| cx.focus_handle()),
+            tree_focus: cx.focus_handle(),
+            detail_focus: cx.focus_handle(),
+            detail_trigger: cx.focus_handle(),
             review_focus: cx.focus_handle(),
             review_focus_request: None,
             document_issues: Vec::new(),
@@ -1855,8 +1872,30 @@ impl RootView {
             source,
             destination,
         });
-        self.dialog_focus.focus(window, cx);
+        self.focus_dialog(window, cx);
         cx.notify();
+    }
+
+    /// Moves focus to the dialog that just opened once the event that
+    /// opened it is done, and remembers what held focus, which closing the
+    /// dialog returns it to. A select that opened the dialog hands focus
+    /// back to its trigger as its own event ends; the dialog takes it after.
+    fn focus_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dialog = self.dialog_focus.clone();
+        let this = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            let previous = window.focused(cx).filter(|focused| *focused != dialog);
+            this.update(cx, |this, _| this.dialog_return = previous)
+                .ok();
+            dialog.focus(window, cx);
+        });
+    }
+
+    /// Returns focus to what held it before the dialog that just closed.
+    fn return_focus_from_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(previous) = self.dialog_return.take() {
+            previous.focus(window, cx);
+        }
     }
 
     /// Closes the migration question: `migrate` moves the library to the new
@@ -1893,14 +1932,20 @@ impl RootView {
                 prompt.source.display(),
                 prompt.destination.display()
             ))
-            .on_confirm(i18n::text(locale, "migrate"), move |_, cx| {
+            .on_confirm(i18n::text(locale, "migrate"), move |window, cx| {
                 migrate
-                    .update(cx, |this, cx| this.answer_speaker_library_prompt(true, cx))
+                    .update(cx, |this, cx| {
+                        this.answer_speaker_library_prompt(true, cx);
+                        this.return_focus_from_dialog(window, cx);
+                    })
                     .ok();
             })
-            .on_cancel(i18n::text(locale, "use_new_path"), move |_, cx| {
+            .on_cancel(i18n::text(locale, "use_new_path"), move |window, cx| {
                 switch
-                    .update(cx, |this, cx| this.answer_speaker_library_prompt(false, cx))
+                    .update(cx, |this, cx| {
+                        this.answer_speaker_library_prompt(false, cx);
+                        this.return_focus_from_dialog(window, cx);
+                    })
                     .ok();
             }),
         )
@@ -2122,7 +2167,7 @@ impl RootView {
             from,
             into,
         });
-        self.dialog_focus.focus(window, cx);
+        self.focus_dialog(window, cx);
         cx.notify();
     }
 
@@ -2206,7 +2251,7 @@ impl RootView {
             name: profile.display_name.clone(),
             profile_id,
         });
-        self.dialog_focus.focus(window, cx);
+        self.focus_dialog(window, cx);
         cx.notify();
     }
 
@@ -2232,7 +2277,7 @@ impl RootView {
             target_id,
             target_name,
         });
-        self.dialog_focus.focus(window, cx);
+        self.focus_dialog(window, cx);
         cx.notify();
     }
 
@@ -2318,14 +2363,20 @@ impl RootView {
         Some(
             ConfirmDialog::new(confirmation.title(locale), &self.dialog_focus)
                 .description(confirmation.description(locale))
-                .on_confirm(confirmation.confirm_label(locale), move |_, cx| {
+                .on_confirm(confirmation.confirm_label(locale), move |window, cx| {
                     confirm
-                        .update(cx, |this, cx| this.answer_speaker_confirmation(true, cx))
+                        .update(cx, |this, cx| {
+                            this.answer_speaker_confirmation(true, cx);
+                            this.return_focus_from_dialog(window, cx);
+                        })
                         .ok();
                 })
-                .on_cancel(i18n::text(locale, "cancel"), move |_, cx| {
+                .on_cancel(i18n::text(locale, "cancel"), move |window, cx| {
                     cancel
-                        .update(cx, |this, cx| this.answer_speaker_confirmation(false, cx))
+                        .update(cx, |this, cx| {
+                            this.answer_speaker_confirmation(false, cx);
+                            this.return_focus_from_dialog(window, cx);
+                        })
                         .ok();
                 }),
         )
@@ -2399,8 +2450,17 @@ impl RootView {
         }
     }
 
-    /// Hides Detail; processing and downloads carry on.
-    pub(crate) fn close_detail(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+    /// Hides Detail; processing and downloads carry on. Focus inside Detail
+    /// returns to the button that opens it.
+    pub(crate) fn close_detail(
+        &mut self,
+        _: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.detail_focus.contains_focused(window, cx) {
+            self.detail_trigger.focus(window, cx);
+        }
         self.ui.detail_open = false;
         cx.notify();
     }
@@ -3421,6 +3481,29 @@ impl RootView {
         .detach();
     }
 
+    /// A key step in the project tree: selects a row, or expands or
+    /// collapses the selected one.
+    pub(crate) fn step_project_tree(
+        &mut self,
+        step: TreeStep,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = self.ui.selected_project.as_ref();
+        match crate::components::tree_move(
+            &self.projects,
+            &self.ui.expanded_projects,
+            selected,
+            step,
+        ) {
+            Some(TreeMove::Select(id)) => self.select_project(id, cx),
+            Some(TreeMove::Expand(id)) | Some(TreeMove::Collapse(id)) => {
+                self.toggle_project(id, cx)
+            }
+            None => {}
+        }
+    }
+
     pub(crate) fn toggle_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
         if !self.ui.expanded_projects.insert(project_id.clone()) {
             self.ui.expanded_projects.remove(&project_id);
@@ -4164,6 +4247,7 @@ impl Render for RootView {
                     .and_then(|project| self.audio.result_for(project.id())),
                 self.ui.locale,
                 &self.scroll.detail,
+                &self.detail_focus,
                 cx,
             )
             .into_any_element()

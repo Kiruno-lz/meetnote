@@ -16,26 +16,39 @@
 //! - `TextField`: a single-line text field on gpui-base's `InputState`, with
 //!   a secret mode that masks the value and keeps it off the clipboard.
 //! - `TextArea`: a multi-line text field on gpui-base's `TextareaState`.
+//! - `NavList` and `NavEntry`: the sidebar's route list and its entries.
+//! - `Tree` and `TreeItem`: a tree that is one tab stop and moves among its
+//!   items with the arrow keys.
+//! - `Region`: a labelled group that holds focus.
 //! - `Separator` and `Scrollbar`: a hairline divider and a scroll area's
 //!   scrollbar; neither is focusable, so neither takes a label.
-//! - `window`: the window's first layer, which cycles Tab inside focus
-//!   traps.
+//! - `window`: the window's first layer, which moves focus on Tab, cycles
+//!   it inside focus traps and scrolls the control it moves to into view,
+//!   and `DragStrip`, the titlebar strip that drags the window.
+//!
+//! Every focusable control shows the focus ring (`tokens.focus_ring`) only
+//! while it holds keyboard focus: after a press it shows none.
 
 mod button;
 mod collapsible;
 mod dialog;
+mod nav;
 mod progress;
+mod region;
 mod scrollbar;
 mod select;
 mod separator;
 mod text_area;
 mod text_field;
+pub(crate) mod tree;
 pub(crate) mod window;
 
 pub(crate) use button::Button;
 pub(crate) use collapsible::Collapsible;
 pub(crate) use dialog::ConfirmDialog;
+pub(crate) use nav::{NavEntry, NavList};
 pub(crate) use progress::ProgressBar;
+pub(crate) use region::Region;
 pub(crate) use scrollbar::{follow_tokens, Scrollbar};
 pub(crate) use select::{Dropdown, DropdownEvent, SelectOption};
 pub(crate) use separator::Separator;
@@ -43,9 +56,13 @@ pub(crate) use text_area::TextArea;
 #[cfg(test)]
 pub(crate) use text_field::FieldInput;
 pub(crate) use text_field::{TextField, TextFieldEvent};
+pub(crate) use tree::{Tree, TreeItem, TreeStep};
 
 use crate::theme::Tokens;
-use gpui::{prelude::*, px, Animation, AnimationExt as _, AnyElement, BoxShadow, Div, Pixels};
+use gpui::{
+    canvas, div, prelude::*, px, Animation, AnimationExt as _, AnyElement, BoxShadow, Div,
+    FocusHandle, Pixels, Window,
+};
 use std::time::Duration;
 
 /// How far the focus ring reaches outside a control's edge.
@@ -55,6 +72,65 @@ const FOCUS_RING_WIDTH: Pixels = px(2.);
 /// edge, drawn as a shadow so it takes no layout space.
 fn focus_ring(tokens: &Tokens) -> BoxShadow {
     BoxShadow::new(px(0.), px(0.), tokens.focus_ring).spread_radius(FOCUS_RING_WIDTH)
+}
+
+/// Whether the control that holds focus through `focus` shows its ring:
+/// focus is on it and the last input was a key, so a press never shows one.
+fn keyboard_focused(focus: &FocusHandle, window: &Window) -> bool {
+    focus.is_focused(window) && window.last_input_was_keyboard()
+}
+
+/// `control`, which holds focus through `focus`, with its focus ring when
+/// `shown`: the ring's band, and inside the control a layer that marks it
+/// `focus-ring` for tests and, once keyboard focus has moved to it, scrolls
+/// it into view (`window::reveal_painted`). `control` must be `relative`.
+fn with_focus_ring<E: Styled + ParentElement>(
+    control: E,
+    shown: bool,
+    focus: &FocusHandle,
+    tokens: &Tokens,
+) -> E {
+    if !shown {
+        return control;
+    }
+    let focus = focus.clone();
+    control.shadow(vec![focus_ring(tokens)]).child(
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+            .debug_selector(|| "focus-ring".into())
+            .child(
+                canvas(
+                    move |bounds, window, cx| window::reveal_painted(&focus, bounds, window, cx),
+                    |_, _, _, _| {},
+                )
+                .size_full(),
+            ),
+    )
+}
+
+/// How focus arrived at a text field, which decides its ring: typing into
+/// a field focused by a press shows none, and one reached from the keyboard
+/// keeps its ring while it is typed in.
+#[derive(Debug, Default)]
+struct KeyboardArrival {
+    focused: bool,
+    from_keyboard: bool,
+}
+
+impl KeyboardArrival {
+    /// Whether the field that holds focus through `focus` shows its ring;
+    /// notes how focus arrived when it just did.
+    fn ring(&mut self, focus: &FocusHandle, window: &Window) -> bool {
+        let focused = focus.is_focused(window);
+        if focused && !self.focused {
+            self.from_keyboard = window.last_input_was_keyboard();
+        }
+        self.focused = focused;
+        focused && self.from_keyboard
+    }
 }
 
 /// Fades `element` in while it rises `rise` into place over `duration`. An
@@ -224,6 +300,230 @@ mod tests {
         );
     }
 
+    /// The methods that make an element respond to the pointer or the
+    /// keyboard, take focus, or name it for assistive technology. Outside
+    /// `controls/` only a chain that starts at a wrapper may call them, so
+    /// every interactive element carries the role and label its wrapper
+    /// gives it. Dragging and dropping stay pointer affordances of the page.
+    const INTERACTIVE: [&str; 16] = [
+        ".on_click(",
+        ".on_mouse_down(",
+        ".on_mouse_up(",
+        ".on_mouse_down_out(",
+        ".on_mouse_move(",
+        ".on_key_down(",
+        ".on_key_up(",
+        ".on_action(",
+        ".key_context(",
+        ".track_focus(",
+        ".tab_stop(",
+        ".tab_index(",
+        ".focus_visible(",
+        ".focus(|",
+        ".role(",
+        ".aria_",
+    ];
+
+    /// The constructors a chain may start from to call `INTERACTIVE`.
+    const WRAPPER_ROOTS: [&str; 8] = [
+        "Button::new(",
+        "Collapsible::new(",
+        "NavEntry::new(",
+        "NavList::new(",
+        "Tree::new(",
+        "TreeItem::new(",
+        "Region::new(",
+        "DragStrip::titlebar(",
+    ];
+
+    /// The files that render: tests and the scans themselves build no UI.
+    fn renders(path: &str) -> bool {
+        !(path.starts_with("controls/")
+            || path.ends_with("_tests.rs")
+            || matches!(path, "lib.rs" | "test_support.rs" | "source_files.rs"))
+    }
+
+    /// The index of the bracket that `close`, a `)` or `]` in `source`,
+    /// closes.
+    fn opening(source: &[u8], close: usize) -> usize {
+        let mut depth = 0usize;
+        let mut index = close + 1;
+        while index > 0 {
+            index -= 1;
+            match source[index] {
+                b')' | b']' => depth += 1,
+                b'(' | b'[' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return index;
+                    }
+                }
+                _ => {}
+            }
+        }
+        0
+    }
+
+    /// Where the method chain that calls at `dot`, a `.` in `source`,
+    /// starts: past every earlier link and its arguments, at a constructor
+    /// such as `Button::new(`, a function such as `div(`, or a variable.
+    fn chain_start(source: &str, dot: usize) -> usize {
+        let bytes = source.as_bytes();
+        // Skips whitespace and the line comments between two links.
+        let skip_space = |mut index: usize| loop {
+            while index > 0 && bytes[index - 1].is_ascii_whitespace() {
+                index -= 1;
+            }
+            let line_start = source[..index].rfind('\n').map_or(0, |at| at + 1);
+            match source[line_start..index].find("//") {
+                Some(comment) => index = line_start + comment,
+                None => return index,
+            }
+        };
+        let mut end = dot;
+        loop {
+            let mut index = skip_space(end);
+            while index > 0 && matches!(bytes[index - 1], b')' | b']') {
+                index = opening(bytes, index - 1);
+            }
+            let name_end = index;
+            while index > 0
+                && (bytes[index - 1].is_ascii_alphanumeric()
+                    || matches!(bytes[index - 1], b'_' | b':' | b'!'))
+            {
+                index -= 1;
+            }
+            if index == name_end {
+                return index;
+            }
+            let before = skip_space(index);
+            if before > 0 && bytes[before - 1] == b'.' {
+                end = before - 1;
+                continue;
+            }
+            return index;
+        }
+    }
+
+    /// Whether the chain that starts at `start` in `source` starts at a
+    /// wrapper, directly or through the `let` binding of a variable.
+    fn starts_at_wrapper(source: &str, start: usize) -> bool {
+        let root = &source[start..];
+        if WRAPPER_ROOTS
+            .iter()
+            .any(|wrapper| root.starts_with(wrapper))
+        {
+            return true;
+        }
+        let name = root
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .unwrap_or_default();
+        let is_variable = !name.is_empty()
+            && root[name.len()..].trim_start().starts_with('.')
+            && name.starts_with(|c: char| c.is_lowercase() || c == '_');
+        if !is_variable {
+            return false;
+        }
+        // The bindings of `name` before the chain, nearest first. A binding
+        // that branches (`let button = if … { button.primary() } …`)
+        // shadows one of the same type, so the one before it decides.
+        let mut bindings = ["let mut ", "let "]
+            .iter()
+            .flat_map(|binding| {
+                let pattern = format!("{binding}{name} =");
+                source[..start]
+                    .match_indices(&pattern)
+                    .map(|(at, _)| at + pattern.len())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        bindings.sort_unstable_by(|a, b| b.cmp(a));
+        for initializer in bindings {
+            let initializer = source[initializer..].trim_start();
+            if WRAPPER_ROOTS
+                .iter()
+                .any(|wrapper| initializer.starts_with(wrapper))
+            {
+                return true;
+            }
+            if !(initializer.starts_with("if ") || initializer.starts_with("match ")) {
+                return false;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn a_chain_starts_past_every_link_and_argument() {
+        let start = |source: &str| {
+            let dot = source.rfind(".on_click(").unwrap();
+            source[chain_start(source, dot)..dot].trim_end().to_string()
+        };
+        assert_eq!(
+            start("div()\n    .h(px(2.)) // a note.\n    // More (of it).\n    .on_click(f)"),
+            "div()\n    .h(px(2.)) // a note.\n    // More (of it).",
+            "comments between links are skipped"
+        );
+        assert_eq!(
+            start("x.child(Button::new(\"a\", tr(l, \"a\")).primary().on_click(f))"),
+            "Button::new(\"a\", tr(l, \"a\")).primary()"
+        );
+        assert_eq!(
+            start("div()\n    .id(\"x\")\n    .child(Button::new(\"b\", \"B\"))\n    .on_click(f)"),
+            "div()\n    .id(\"x\")\n    .child(Button::new(\"b\", \"B\"))"
+        );
+        assert_eq!(start("    button\n        .on_click(f)"), "button");
+        assert_eq!(
+            start("format!(\"{x}\").when(a, |this| this.b()).on_click(f)"),
+            "format!(\"{x}\").when(a, |this| this.b())"
+        );
+
+        let wrapped = |source: &str| {
+            let dot = source.rfind(".on_click(").unwrap();
+            starts_at_wrapper(source, chain_start(source, dot))
+        };
+        assert!(wrapped("Button::new(\"a\", \"A\").on_click(f)"));
+        assert!(wrapped(
+            "let mut button =\n    Button::new(\"a\", \"A\");\nbutton = button.primary();\nbutton.on_click(f)"
+        ));
+        assert!(wrapped(
+            "let button = Button::new(\"a\", \"A\");\nlet button = if a { button.primary() } else { button };\nbutton.on_click(f)"
+        ));
+        assert!(!wrapped("div().id(\"a\").on_click(f)"));
+        assert!(!wrapped("let row = div().id(\"a\");\nrow.on_click(f)"));
+        assert!(!wrapped(".when(a, |this| this.on_click(f))"));
+        assert!(!wrapped("ConfirmButton::new(\"a\").on_click(f)"));
+    }
+
+    #[test]
+    fn only_wrappers_are_interactive_outside_the_controls() {
+        let found = SOURCES
+            .iter()
+            .filter(|(path, _)| renders(path))
+            .flat_map(|(path, source)| {
+                INTERACTIVE.iter().flat_map(move |method| {
+                    source
+                        .match_indices(method)
+                        .filter(move |(dot, _)| {
+                            !starts_at_wrapper(source, chain_start(source, *dot))
+                        })
+                        .map(move |(dot, _)| {
+                            let line = source[..dot].lines().count();
+                            let start = chain_start(source, dot);
+                            let root = source[start..].lines().next().unwrap_or_default();
+                            format!("{path}:{line}: `{method}` on `{}`", root.trim())
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            found.is_empty(),
+            "{} interactive elements outside the labelled wrappers: {found:#?}",
+            found.len()
+        );
+    }
+
     /// The constructors of the wrappers. Separators and scrollbars are
     /// neither focusable nor named on their own, so they have none.
     const CONSTRUCTORS: [&str; 2] = ["pub(crate) fn new(", "pub(crate) fn secret("];
@@ -261,9 +561,10 @@ mod tests {
                 }
             }
         }
-        // Button, Collapsible, ConfirmDialog, Dropdown, ProgressBar,
-        // TextArea and TextField's plain and secret constructors.
-        assert_eq!(constructors, 8, "a wrapper constructor was added or lost");
+        // Button, Collapsible, ConfirmDialog, Dropdown, NavEntry, NavList,
+        // ProgressBar, Region, TextArea, TextField's plain and secret
+        // constructors, Tree and TreeItem.
+        assert_eq!(constructors, 13, "a wrapper constructor was added or lost");
         assert!(
             unnamed.is_empty(),
             "constructors without a name: {unnamed:#?}"

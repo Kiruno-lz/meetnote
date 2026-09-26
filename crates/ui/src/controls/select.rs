@@ -2,16 +2,17 @@
 
 //! `Dropdown`: a labelled select. gpui-base's controlled `Select` root owns
 //! the combobox semantics, keyboard opening and dismissal (Up/Down open it,
-//! Enter opens it or confirms, Esc dismisses it) and the focus transfer
+//! Enter or Space opens it or confirms, Esc dismisses it) and the focus transfer
 //! between the trigger and the menu. This entity owns the options, the
 //! selection, the open state and the keyboard highlight, and paints the
 //! trigger and a frosted menu (`BlurLevel::Menu`) below it.
 //!
 //! The menu closes on a confirmation, on Esc and on a press outside it, and
 //! focus returns to the trigger; a press on another focusable element then
-//! takes focus as usual.
+//! takes focus as usual. The trigger shows the focus ring while it holds
+//! keyboard focus.
 
-use super::entrance;
+use super::{entrance, keyboard_focused, with_focus_ring};
 use crate::theme::{self, BlurLevel, Tokens};
 use gpui::{
     canvas, deferred, div, prelude::*, px, Bounds, Context, EventEmitter, FocusHandle, Focusable,
@@ -466,9 +467,10 @@ impl Render for Dropdown {
         let entity = cx.entity();
         let trigger_focus = self.trigger_focus.clone();
         let focused = self.trigger_focus.is_focused(window);
+        let ring = keyboard_focused(&self.trigger_focus, window);
         let trigger = self.render_trigger(&tokens, cx);
         let menu = self.open.then(|| self.render_menu(&tokens, cx));
-        gpui_base::Select::new("select")
+        let select = gpui_base::Select::new("select")
             .open(self.open)
             .focus_handle(&self.trigger_focus)
             .content_focus_handle(&self.menu_focus)
@@ -505,7 +507,8 @@ impl Render for Dropdown {
             .bg(tokens.surface)
             .text_sm()
             .child(trigger)
-            .children(menu)
+            .children(menu);
+        with_focus_ring(select, ring, &self.trigger_focus, &tokens)
     }
 }
 

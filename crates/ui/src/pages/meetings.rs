@@ -1,7 +1,7 @@
 use crate::{
     components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
-    controls::{Button, Scrollbar},
+    controls::{tree, Button, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
     speakers::{document_speakers, DocumentSpeaker},
     state::{self, ContentMode},
@@ -31,18 +31,29 @@ pub(crate) fn render(
 
 /// The three-level project tree the sidebar shows on the Meetings route:
 /// click selects, the handle drags, dropping onto a row reparents and
-/// between rows reorders.
+/// between rows reorders. The tree is one tab stop; the arrow keys move the
+/// selection and expand or collapse the selected row.
 pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
     let scroll = root.scroll.project_tree.clone();
-    let mut tree = div()
-        .id("project-tree")
-        .debug_selector(|| "project-tree".into())
-        .size_full()
-        .overflow_y_scroll()
-        .track_scroll(&scroll)
-        .flex()
-        .flex_col();
+    let rows = ordered_projects(&root.projects, &root.ui.expanded_projects);
+    let has_selection = rows
+        .iter()
+        .any(|(project, _)| root.ui.selected_project.as_ref() == Some(project.id()));
+    let mut tree = Tree::new(
+        "project-tree",
+        tr(root.ui.locale, "audio_projects"),
+        &root.tree_focus,
+    )
+    .debug_selector(|| "project-tree".into())
+    .has_items(!rows.is_empty())
+    .has_selection(has_selection)
+    .on_step(cx.listener(|this, step, window, cx| this.step_project_tree(*step, window, cx)))
+    .size_full()
+    .overflow_y_scroll()
+    .track_scroll(&scroll)
+    .flex()
+    .flex_col();
     if root.projects.is_empty() {
         tree = tree.child(
             div()
@@ -52,7 +63,7 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .child(tr(root.ui.locale, "no_projects")),
         );
     } else {
-        for (project, depth) in ordered_projects(&root.projects, &root.ui.expanded_projects) {
+        for (project, depth) in rows {
             let selected = root.ui.selected_project.as_ref() == Some(project.id());
             let display_status = if selected && root.ui.processing {
                 ProjectStatus::Processing
@@ -67,6 +78,7 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .projects
                 .iter()
                 .any(|child| child.hierarchy.parent_id.as_ref() == Some(project.id()));
+            let expanded = root.ui.expanded_projects.contains(project.id());
             let drag_handle = div()
                 .id(format!("drag-{}", project.id().as_str()))
                 .debug_selector(|| format!("drag-{}", project.id().as_str()))
@@ -85,25 +97,17 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                         })
                     },
                 );
-            let expand_handle =
-                if has_children {
-                    let expand_id = project.id().clone();
-                    div()
-                        .id(format!("expand-{}", project.id().as_str()))
-                        .cursor_pointer()
-                        .mr_1()
-                        .child(if root.ui.expanded_projects.contains(project.id()) {
-                            "▾"
-                        } else {
-                            "▸"
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.toggle_project(expand_id.clone(), cx)
-                        }))
-                        .into_any_element()
-                } else {
-                    div().w(px(10.)).into_any_element()
-                };
+            let expand_handle = if has_children {
+                let expand_id = project.id().clone();
+                tree::disclosure(
+                    format!("expand-{}", project.id().as_str()),
+                    expanded,
+                    cx.listener(move |this, _, _, cx| this.toggle_project(expand_id.clone(), cx)),
+                )
+                .into_any_element()
+            } else {
+                tree::disclosure_space().into_any_element()
+            };
             let before_target = project.id().clone();
             let after_target = project.id().clone();
             let before_drop = div()
@@ -120,60 +124,69 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
                     this.reorder_document(dragged.clone(), after_target.clone(), false, cx)
                 }));
-            let row =
+            let row = TreeItem::new(
+                project.id().as_str().to_string(),
+                project.title().to_string(),
+                &root.tree_focus,
+            )
+            .debug_selector(|| format!("project-row-{}", project.id().as_str()))
+            .depth(depth.into())
+            .selected(selected)
+            .expanded(has_children.then_some(expanded))
+            .cursor_pointer()
+            .px(tokens.spacing.sm)
+            .py(tokens.spacing.xs)
+            .ml(px((depth as f32) * 16.))
+            .rounded(tokens.radius.sm)
+            .map(|row| {
+                if selected {
+                    row.bg(tokens.selection)
+                } else {
+                    row.hover(|style| style.bg(tokens.wash))
+                }
+            })
+            .child(
                 div()
-                    .id(project.id().as_str().to_string())
-                    .debug_selector(|| format!("project-row-{}", project.id().as_str()))
-                    .cursor_pointer()
-                    .px(tokens.spacing.sm)
-                    .py(tokens.spacing.xs)
-                    .ml(px((depth as f32) * 16.))
-                    .rounded(tokens.radius.sm)
-                    .map(|row| {
-                        if selected {
-                            row.bg(tokens.selection)
-                        } else {
-                            row.hover(|style| style.bg(tokens.wash))
-                        }
-                    })
+                    .flex()
+                    .items_center()
+                    .child(drag_handle)
+                    .child(expand_handle)
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .child(drag_handle)
-                            .child(expand_handle)
-                            .child(div().flex_1().min_w_0().text_sm().child(
-                                theme::tail_faded_label(
-                                    format!("project-title-{}", project.id().as_str()),
-                                    format!(
-                                        "{} {}",
-                                        if depth > 0 { "↳" } else { "◈" },
-                                        project.title()
-                                    ),
-                                    if selected {
-                                        tokens.selection
-                                    } else {
-                                        tokens.window
-                                    },
+                            .flex_1()
+                            .min_w_0()
+                            .text_sm()
+                            .child(theme::tail_faded_label(
+                                format!("project-title-{}", project.id().as_str()),
+                                format!(
+                                    "{} {}",
+                                    if depth > 0 { "↳" } else { "◈" },
+                                    project.title()
                                 ),
+                                if selected {
+                                    tokens.selection
+                                } else {
+                                    tokens.window
+                                },
                             )),
+                    ),
+            )
+            .child(status_line(
+                status_label(root.ui.locale, display_status),
+                root.audio.problem(project.id()).map(|problem| {
+                    (
+                        format!("audio-indicator-{}", project.id().as_str()),
+                        tr(root.ui.locale, problem.label_key()),
                     )
-                    .child(status_line(
-                        status_label(root.ui.locale, display_status),
-                        root.audio.problem(project.id()).map(|problem| {
-                            (
-                                format!("audio-indicator-{}", project.id().as_str()),
-                                tr(root.ui.locale, problem.label_key()),
-                            )
-                        }),
-                        &tokens,
-                    ))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_project(project_id.clone(), cx)
-                    }))
-                    .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
-                        this.reparent_document(dragged.clone(), target_id.clone(), cx)
-                    }));
+                }),
+                &tokens,
+            ))
+            .on_click(
+                cx.listener(move |this, _, _, cx| this.select_project(project_id.clone(), cx)),
+            )
+            .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
+                this.reparent_document(dragged.clone(), target_id.clone(), cx)
+            }));
             tree = tree.child(div().child(before_drop).child(row).child(after_drop));
         }
     }
@@ -381,6 +394,7 @@ fn main_panel(
                     .child(
                         Button::new("open-project-detail", tr(locale, "open_detail"))
                             .debug_selector(|| "open-project-detail".into())
+                            .focus_handle(&root.detail_trigger)
                             .secondary()
                             .compact()
                             .on_click(cx.listener(RootView::open_detail)),

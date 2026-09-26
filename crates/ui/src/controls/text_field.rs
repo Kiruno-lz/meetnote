@@ -5,6 +5,9 @@
 //! paints the frame (`InputBase`, which carries the text-input role and the
 //! label for assistive technology).
 //!
+//! The field shows the focus ring while it holds focus that arrived from
+//! the keyboard: Tab rings it, a press does not, even while typing follows.
+//!
 //! A secret field masks its value and keeps it off the clipboard: the frame
 //! intercepts Copy and Cut before the input sees them. Cut does nothing, so
 //! the value and the selection stay; removing the key without putting it on
@@ -15,6 +18,7 @@
 //! worker). `set_value` and `set_placeholder` therefore take effect at the
 //! next render; `value` reads a pending value at once.
 
+use super::{with_focus_ring, KeyboardArrival};
 use crate::theme::{self, Tokens};
 use gpui::{
     prelude::*, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
@@ -48,6 +52,7 @@ pub(crate) struct TextField {
     pending_placeholder: Option<SharedString>,
     /// The tokens the input's colors were last taken from.
     styled_with: Tokens,
+    arrival: KeyboardArrival,
     _subscription: Subscription,
 }
 
@@ -125,6 +130,7 @@ impl TextField {
             pending_value: None,
             pending_placeholder: None,
             styled_with: tokens,
+            arrival: KeyboardArrival::default(),
             _subscription: subscription,
         }
     }
@@ -206,6 +212,7 @@ impl Render for TextField {
         let tokens = *theme::tokens(cx);
         self.sync_input(tokens, window, cx);
         let focus = self.focus_handle(cx);
+        let ring = self.arrival.ring(&focus, window);
         let input = self.input.clone();
         let (height, font_size) = if self.large {
             (tokens.control_height.lg, tokens.font_size.md)
@@ -221,6 +228,7 @@ impl Render for TextField {
             .accessibility_label(self.label.clone())
             .focused(focus.is_focused(window))
             .styles(|styles| styles.focused(|style| style.border_color(tokens.accent)))
+            .relative()
             .w_full()
             .h(height)
             .px(tokens.spacing.sm)
@@ -243,7 +251,7 @@ impl Render for TextField {
                 .capture_action(|_: &CopyAction, _, cx| cx.stop_propagation())
                 .capture_action(|_: &CutAction, _, cx| cx.stop_propagation());
         }
-        frame.child(self.input.clone())
+        with_focus_ring(frame.child(self.input.clone()), ring, &focus, &tokens)
     }
 }
 

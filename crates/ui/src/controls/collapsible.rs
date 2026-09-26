@@ -4,7 +4,7 @@
 //! renders only while open. The header's styles and children are the
 //! caller's; a press toggles it without moving focus.
 
-use super::focus_ring;
+use super::{keyboard_focused, with_focus_ring};
 use crate::theme;
 use gpui::{
     prelude::*, AnyElement, App, ClickEvent, ElementId, Interactivity, IntoElement, MouseButton,
@@ -13,6 +13,7 @@ use gpui::{
 
 #[derive(IntoElement)]
 pub(crate) struct Collapsible {
+    id: ElementId,
     header: gpui_base::Button,
     label: SharedString,
     open: bool,
@@ -23,8 +24,10 @@ impl Collapsible {
     /// `label` names the header for assistive technology; the header's
     /// children are what it shows.
     pub(crate) fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
+        let id = id.into();
         Self {
-            header: gpui_base::Button::new(id),
+            header: gpui_base::Button::new(id.clone()),
+            id,
             label: label.into(),
             open: false,
             content: None,
@@ -79,15 +82,22 @@ impl InteractiveElement for Collapsible {
 }
 
 impl RenderOnce for Collapsible {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let ring = focus_ring(theme::tokens(cx));
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let tokens = *theme::tokens(cx);
+        let focus = window
+            .use_keyed_state(self.id, cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+        let ring = keyboard_focused(&focus, window);
         let header = self
             .header
+            .track_focus(&focus)
             .accessibility_label(self.label)
             .aria_expanded(self.open)
+            .relative()
             .cursor_pointer()
-            .focus_visible(move |style| style.shadow(vec![ring]))
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default());
+        let header = with_focus_ring(header, ring, &focus, &tokens);
         let collapsible = gpui_base::Collapsible::new()
             .open(self.open)
             .flex()

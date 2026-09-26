@@ -3,13 +3,14 @@
 //! paints the variant's token fills, the disabled look and, while keyboard
 //! focus is on it, the focus ring. A press activates the button without
 //! moving focus, so a field keeps focus when the button beside it is
-//! clicked.
+//! clicked. A choice among exclusive options (`selected`) is a radio button
+//! for assistive technology, checked while it is the selected one.
 
-use super::focus_ring;
+use super::{keyboard_focused, with_focus_ring};
 use crate::theme;
 use gpui::{
-    div, prelude::*, px, relative, App, ClickEvent, ElementId, Interactivity, IntoElement,
-    MouseButton, Pixels, SharedString, StyleRefinement, Window,
+    div, prelude::*, px, relative, App, ClickEvent, ElementId, FocusHandle, Interactivity,
+    IntoElement, MouseButton, Pixels, Role, SharedString, StyleRefinement, Toggled, Window,
 };
 
 /// Side padding of a regular button; a compact one uses `spacing.sm`.
@@ -25,35 +26,43 @@ enum Variant {
 
 #[derive(IntoElement)]
 pub(crate) struct Button {
+    id: ElementId,
     base: gpui_base::Button,
     label: SharedString,
     glyph: Option<SharedString>,
     variant: Variant,
     compact: bool,
     disabled: bool,
+    /// Whether this choice is the selected one of its group.
+    choice: Option<bool>,
+    focus: Option<FocusHandle>,
 }
 
 impl Button {
     /// `label` is the button's text and names it for assistive technology.
     /// The button is secondary until a variant is chosen.
     pub(crate) fn new(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Self {
+        let id = id.into();
         Self {
-            base: gpui_base::Button::new(id),
+            base: gpui_base::Button::new(id.clone()),
+            id,
             label: label.into(),
             glyph: None,
             variant: Variant::Secondary,
             compact: false,
             disabled: false,
+            choice: None,
+            focus: None,
         }
     }
 
-    /// The one primary action of a group, or the selected choice.
+    /// The one primary action of a group.
     pub(crate) fn primary(mut self) -> Self {
         self.variant = Variant::Primary;
         self
     }
 
-    /// A secondary action, or an unselected choice.
+    /// A secondary action.
     pub(crate) fn secondary(mut self) -> Self {
         self.variant = Variant::Secondary;
         self
@@ -68,6 +77,19 @@ impl Button {
     /// A destructive action.
     pub(crate) fn danger(mut self) -> Self {
         self.variant = Variant::Danger;
+        self
+    }
+
+    /// One of a group of exclusive choices: filled as primary while
+    /// `selected`, secondary otherwise, and a radio button checked while
+    /// selected for assistive technology.
+    pub(crate) fn selected(mut self, selected: bool) -> Self {
+        self.variant = if selected {
+            Variant::Primary
+        } else {
+            Variant::Secondary
+        };
+        self.choice = Some(selected);
         self
     }
 
@@ -89,6 +111,13 @@ impl Button {
         self
     }
 
+    /// Holds focus through `focus`, which the caller keeps, e.g. to return
+    /// focus to the button when what it opened closes.
+    pub(crate) fn focus_handle(mut self, focus: &FocusHandle) -> Self {
+        self.focus = Some(focus.clone());
+        self
+    }
+
     /// What a press, Enter or Space on the focused button runs.
     pub(crate) fn on_click(
         mut self,
@@ -101,6 +130,15 @@ impl Button {
     #[cfg(test)]
     pub(crate) fn accessibility_label(&self) -> &SharedString {
         &self.label
+    }
+
+    /// The role and, for a choice, whether it is checked.
+    #[cfg(test)]
+    fn accessibility_role(&self) -> (Role, Option<bool>) {
+        match self.choice {
+            Some(selected) => (Role::RadioButton, Some(selected)),
+            None => (Role::Button, None),
+        }
     }
 }
 
@@ -118,7 +156,7 @@ impl InteractiveElement for Button {
 }
 
 impl RenderOnce for Button {
-    fn render(mut self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = *theme::tokens(cx);
         let colors = match self.variant {
             Variant::Primary => tokens.button.primary,
@@ -131,13 +169,30 @@ impl RenderOnce for Button {
         } else {
             (colors.fill, colors.text)
         };
+        // The same keyed handle gpui-base would create, kept here so the
+        // ring knows when the button holds keyboard focus.
+        let focus = self.focus.clone().unwrap_or_else(|| {
+            window
+                .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+                .read(cx)
+                .clone()
+        });
+        let ring = !self.disabled && keyboard_focused(&focus, window);
         // The caller's styles apply over the button's own.
         let caller = std::mem::take(self.base.style());
-        let ring = focus_ring(&tokens);
         let mut button = self
             .base
+            .track_focus(&focus)
             .accessibility_label(self.label.clone())
             .disabled(self.disabled)
+            .when_some(self.choice, |button, selected| {
+                button.role(Role::RadioButton).aria_toggled(if selected {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
+            })
+            .relative()
             .flex()
             .flex_shrink_0()
             .items_center()
@@ -155,7 +210,6 @@ impl RenderOnce for Button {
             .cursor_default()
             .bg(fill)
             .text_color(text)
-            .focus_visible(move |style| style.shadow(vec![ring]))
             .when(!self.disabled, |button| {
                 button
                     .hover(move |style| style.bg(colors.hover))
@@ -163,7 +217,7 @@ impl RenderOnce for Button {
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             });
         button.style().refine(&caller);
-        button.child(
+        let button = button.child(
             div()
                 .size_full()
                 .flex()
@@ -176,7 +230,8 @@ impl RenderOnce for Button {
                         .line_height(relative(1.))
                         .child(self.glyph.unwrap_or(self.label)),
                 ),
-        )
+        );
+        with_focus_ring(button, ring, &focus, &tokens)
     }
 }
 
@@ -261,6 +316,51 @@ mod tests {
                 .accessibility_label(),
             "Close detail"
         );
+    }
+
+    #[test]
+    fn a_choice_is_a_radio_button_checked_while_selected() {
+        assert_eq!(
+            Button::new("save", "Save").accessibility_role(),
+            (Role::Button, None)
+        );
+        for selected in [true, false] {
+            let choice = Button::new("ask", "Ask").selected(selected);
+            assert_eq!(
+                choice.accessibility_role(),
+                (Role::RadioButton, Some(selected))
+            );
+            let variant = if selected {
+                Variant::Primary
+            } else {
+                Variant::Secondary
+            };
+            assert_eq!(choice.variant, variant);
+        }
+    }
+
+    #[gpui::test]
+    fn the_ring_shows_while_the_button_holds_keyboard_focus(cx: &mut TestAppContext) {
+        let (cx, _, _) = harness(cx);
+        let save = cx.debug_bounds("save").unwrap();
+        cx.update(|window, cx| window.focus_next(cx));
+        assert!(
+            cx.debug_bounds("focus-ring").is_none(),
+            "no ring before a key is pressed"
+        );
+        // A key the button ignores makes the keyboard the last input.
+        cx.simulate_keystrokes("escape");
+        assert_eq!(
+            cx.debug_bounds("focus-ring"),
+            Some(save),
+            "keyboard focus rings the button"
+        );
+        cx.simulate_mouse_move(save.center(), None, Modifiers::none());
+        assert!(
+            cx.debug_bounds("focus-ring").is_none(),
+            "the pointer hides the ring"
+        );
+        assert!(cx.update(|window, cx| window.focused(cx)).is_some());
     }
 
     #[gpui::test]

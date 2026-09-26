@@ -4,7 +4,7 @@ use crate::{
         AssistantTaskState, AssistantUiError, PendingReviewState,
     },
     controller::RootView,
-    controls::{Button, Scrollbar},
+    controls::{Button, Region, Scrollbar},
     i18n::{text as tr, Locale},
     theme::{self, BlurLevel, Tokens},
 };
@@ -325,13 +325,14 @@ fn scope_button(
         AssistantScopeMode::CurrentDocument => tr(locale, "assistant_current_document"),
         AssistantScopeMode::AllVisibleDocuments => tr(locale, "assistant_all_visible_documents"),
     };
-    let mut button = Button::new(format!("assistant-scope-{label}"), label).compact();
-    button = if scope == selected {
-        button.primary()
-    } else {
-        button.secondary()
+    let name = match scope {
+        AssistantScopeMode::CurrentDocument => "current",
+        AssistantScopeMode::AllVisibleDocuments => "all",
     };
-    button
+    Button::new(format!("assistant-scope-{label}"), label)
+        .debug_selector(move || format!("assistant-scope-{name}"))
+        .compact()
+        .selected(scope == selected)
         .on_click(cx.listener(move |root, _, _, cx| root.select_assistant_scope(scope, cx)))
         .into_any_element()
 }
@@ -342,18 +343,14 @@ fn scene_button(
     locale: Locale,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let mut button = Button::new(
+    Button::new(
         format!("assistant-scene-{}", scene.skill_id()),
         tr(locale, scene_key(scene)),
-    );
-    button = if scene == selected {
-        button.primary()
-    } else {
-        button.secondary()
-    };
-    button
-        .on_click(cx.listener(move |root, _, _, cx| root.select_assistant_scene(scene, cx)))
-        .into_any_element()
+    )
+    .debug_selector(move || format!("assistant-scene-{}", scene.skill_id()))
+    .selected(scene == selected)
+    .on_click(cx.listener(move |root, _, _, cx| root.select_assistant_scene(scene, cx)))
+    .into_any_element()
 }
 
 fn scene_key(scene: AgentScene) -> &'static str {
@@ -835,105 +832,106 @@ fn render_pending(
         &crate::components::utc_time(pending.expires_at_ms),
     );
 
-    div()
-        .id(SharedString::from(card_selector.clone()))
-        .debug_selector(move || card_selector.clone())
-        .track_focus(focus)
-        .rounded(tokens.radius.md)
-        .border_1()
-        .border_color(tokens.warning)
-        .focus(|style| style.border_color(tokens.accent))
-        .p_4()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(div().text_lg().child(tr(locale, "assistant_pending")))
-                .children(position.map(|(position, total)| {
-                    div()
-                        .debug_selector(move || {
-                            format!("assistant-pending-position-{position}-of-{total}")
-                        })
-                        .text_sm()
-                        .text_color(tokens.text_muted)
-                        .child(crate::i18n::message(
-                            locale,
-                            "assistant_pending_position",
-                            &format!("{position}|{total}"),
-                        ))
-                }))
-                .child(
-                    div()
-                        .debug_selector(|| "assistant-pending-expires".into())
-                        .text_sm()
-                        .text_color(tokens.text_muted)
-                        .child(expires),
-                ),
-        )
-        .child(
-            div()
-                .debug_selector(|| "assistant-pending-paused".into())
-                .text_sm()
-                .text_color(tokens.warning_text)
-                .child(tr(locale, "assistant_pending_paused")),
-        )
-        .child(info_line(
-            tr(locale, "assistant_pending_queue"),
-            queued.to_string(),
-            &tokens,
-        ))
-        .child(info_line(
-            tr(locale, "assistant_affected"),
-            pending.affected_document_ids.join(", "),
-            &tokens,
-        ))
-        .child(info_line(
-            tr(locale, "assistant_field_diff"),
-            empty_as_dash(fields),
-            &tokens,
-        ))
-        .child(info_line(
-            tr(locale, "assistant_tree_change"),
-            empty_as_dash(tree),
-            &tokens,
-        ))
-        .child(info_line(
-            tr(locale, "assistant_range"),
-            empty_as_dash(ranges),
-            &tokens,
-        ))
-        .child(info_line(
-            tr(locale, "assistant_uncovered"),
-            empty_as_dash(gaps),
-            &tokens,
-        ))
-        .child(
-            div()
-                .when_some(decision, |this, decision| {
-                    this.debug_selector(move || decision.into())
-                })
-                .flex()
-                .gap_2()
-                .child(
-                    Button::new("assistant-confirm", accept_label)
-                        .debug_selector(|| "assistant-confirm".into())
-                        .primary()
-                        .disabled(busy)
-                        .on_click(cx.listener(RootView::accept_assistant_pending)),
-                )
-                .child(
-                    Button::new("assistant-reject", reject_label)
-                        .debug_selector(|| "assistant-reject".into())
-                        .secondary()
-                        .disabled(busy)
-                        .on_click(cx.listener(RootView::reject_assistant_pending)),
-                ),
-        )
-        .into_any_element()
+    Region::new(
+        SharedString::from(card_selector.clone()),
+        tr(locale, "assistant_pending"),
+        focus,
+    )
+    .debug_selector(move || card_selector.clone())
+    .rounded(tokens.radius.md)
+    .border_1()
+    .border_color(tokens.warning)
+    .p_4()
+    .flex()
+    .flex_col()
+    .gap_2()
+    .child(
+        div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .child(div().text_lg().child(tr(locale, "assistant_pending")))
+            .children(position.map(|(position, total)| {
+                div()
+                    .debug_selector(move || {
+                        format!("assistant-pending-position-{position}-of-{total}")
+                    })
+                    .text_sm()
+                    .text_color(tokens.text_muted)
+                    .child(crate::i18n::message(
+                        locale,
+                        "assistant_pending_position",
+                        &format!("{position}|{total}"),
+                    ))
+            }))
+            .child(
+                div()
+                    .debug_selector(|| "assistant-pending-expires".into())
+                    .text_sm()
+                    .text_color(tokens.text_muted)
+                    .child(expires),
+            ),
+    )
+    .child(
+        div()
+            .debug_selector(|| "assistant-pending-paused".into())
+            .text_sm()
+            .text_color(tokens.warning_text)
+            .child(tr(locale, "assistant_pending_paused")),
+    )
+    .child(info_line(
+        tr(locale, "assistant_pending_queue"),
+        queued.to_string(),
+        &tokens,
+    ))
+    .child(info_line(
+        tr(locale, "assistant_affected"),
+        pending.affected_document_ids.join(", "),
+        &tokens,
+    ))
+    .child(info_line(
+        tr(locale, "assistant_field_diff"),
+        empty_as_dash(fields),
+        &tokens,
+    ))
+    .child(info_line(
+        tr(locale, "assistant_tree_change"),
+        empty_as_dash(tree),
+        &tokens,
+    ))
+    .child(info_line(
+        tr(locale, "assistant_range"),
+        empty_as_dash(ranges),
+        &tokens,
+    ))
+    .child(info_line(
+        tr(locale, "assistant_uncovered"),
+        empty_as_dash(gaps),
+        &tokens,
+    ))
+    .child(
+        div()
+            .when_some(decision, |this, decision| {
+                this.debug_selector(move || decision.into())
+            })
+            .flex()
+            .gap_2()
+            .child(
+                Button::new("assistant-confirm", accept_label)
+                    .debug_selector(|| "assistant-confirm".into())
+                    .primary()
+                    .disabled(busy)
+                    .on_click(cx.listener(RootView::accept_assistant_pending)),
+            )
+            .child(
+                Button::new("assistant-reject", reject_label)
+                    .debug_selector(|| "assistant-reject".into())
+                    .secondary()
+                    .disabled(busy)
+                    .on_click(cx.listener(RootView::reject_assistant_pending)),
+            ),
+    )
+    .into_any_element()
 }
 
 /// The reviews of the run beyond the queue limit: not listed, not written.

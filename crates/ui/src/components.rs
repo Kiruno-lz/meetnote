@@ -1,6 +1,6 @@
 use crate::{
     controller::RootView,
-    controls::{Button, Separator},
+    controls::{Button, Separator, TreeStep},
     i18n,
     state::ContentMode,
     theme::{self, Tokens},
@@ -107,15 +107,11 @@ pub(crate) fn mode_button(
         ContentMode::Original => "original",
         ContentMode::Edit => "edit",
     };
-    let button = Button::new(format!("content-mode-{name}"), label)
+    Button::new(format!("content-mode-{name}"), label)
         .debug_selector(move || format!("content-mode-{name}"))
-        .compact();
-    let button = if mode == active {
-        button.primary()
-    } else {
-        button.secondary()
-    };
-    button.on_click(cx.listener(move |this, _, _, cx| this.set_content_mode(mode, cx)))
+        .compact()
+        .selected(mode == active)
+        .on_click(cx.listener(move |this, _, _, cx| this.set_content_mode(mode, cx)))
 }
 
 pub(crate) fn ordered_projects(
@@ -152,6 +148,50 @@ pub(crate) fn ordered_projects(
     let mut output = Vec::new();
     append(projects, None, 0, expanded, &mut output);
     output
+}
+
+/// What a key step in the project tree does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TreeMove {
+    Select(ProjectId),
+    Expand(ProjectId),
+    Collapse(ProjectId),
+}
+
+/// What `step` does in the tree of `projects` with `expanded` open, from
+/// the `selected` row: Up and Down select the visible row before or after
+/// it (the first row without a visible selection); Right expands a
+/// collapsed row with children or selects its first child; Left collapses
+/// an expanded row or selects its parent. `None` at either end.
+pub(crate) fn tree_move(
+    projects: &[DocumentState],
+    expanded: &std::collections::BTreeSet<ProjectId>,
+    selected: Option<&ProjectId>,
+    step: TreeStep,
+) -> Option<TreeMove> {
+    let rows = ordered_projects(projects, expanded);
+    let id = |index: usize| rows.get(index).map(|(row, _)| row.id().clone());
+    let Some(index) = selected.and_then(|id| rows.iter().position(|(row, _)| row.id() == id))
+    else {
+        return matches!(step, TreeStep::Previous | TreeStep::Next)
+            .then(|| id(0))
+            .flatten()
+            .map(TreeMove::Select);
+    };
+    let (row, _) = &rows[index];
+    let has_children = projects
+        .iter()
+        .any(|child| child.hierarchy.parent_id.as_ref() == Some(row.id()));
+    let open = expanded.contains(row.id());
+    match step {
+        TreeStep::Previous => index.checked_sub(1).and_then(id).map(TreeMove::Select),
+        TreeStep::Next => id(index + 1).map(TreeMove::Select),
+        TreeStep::Expand if has_children && !open => Some(TreeMove::Expand(row.id().clone())),
+        TreeStep::Expand if has_children => id(index + 1).map(TreeMove::Select),
+        TreeStep::Expand => None,
+        TreeStep::Collapse if has_children && open => Some(TreeMove::Collapse(row.id().clone())),
+        TreeStep::Collapse => row.hierarchy.parent_id.clone().map(TreeMove::Select),
+    }
 }
 
 pub(crate) fn status_label(locale: i18n::Locale, status: ProjectStatus) -> &'static str {
@@ -212,7 +252,115 @@ pub(crate) fn backend_ids(descriptors: &[application::BackendDescriptor]) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::utc_time;
+    use super::{tree_move, utc_time, TreeMove};
+    use crate::controls::TreeStep;
+    use domain::{DocumentState, ProjectId};
+    use std::collections::BTreeSet;
+
+    /// Two roots, the first with two children; the second child has a
+    /// child of its own.
+    fn projects() -> Vec<DocumentState> {
+        let document = |id: &str, parent: Option<&str>, order: u32| {
+            let mut document = DocumentState::new(ProjectId::new(id), id, "a.wav");
+            document.hierarchy.parent_id = parent.map(ProjectId::new);
+            document.hierarchy.sibling_order = order;
+            document
+        };
+        vec![
+            document("a", None, 0),
+            document("a1", Some("a"), 0),
+            document("a2", Some("a"), 1),
+            document("a2x", Some("a2"), 0),
+            document("b", None, 1),
+        ]
+    }
+
+    fn open(ids: &[&str]) -> BTreeSet<ProjectId> {
+        ids.iter().copied().map(ProjectId::new).collect()
+    }
+
+    #[test]
+    fn up_and_down_step_through_the_visible_rows() {
+        let (projects, expanded) = (projects(), open(&["a"]));
+        let step =
+            |from: &str, step| tree_move(&projects, &expanded, Some(&ProjectId::new(from)), step);
+        let select = |id: &str| Some(TreeMove::Select(ProjectId::new(id)));
+        assert_eq!(step("a", TreeStep::Next), select("a1"));
+        // `a2x` is hidden under the collapsed `a2`.
+        assert_eq!(step("a2", TreeStep::Next), select("b"));
+        assert_eq!(
+            step("b", TreeStep::Next),
+            None,
+            "Down stops at the last row"
+        );
+        assert_eq!(step("a1", TreeStep::Previous), select("a"));
+        assert_eq!(
+            step("a", TreeStep::Previous),
+            None,
+            "Up stops at the first row"
+        );
+        // Without a visible selection, Up and Down start at the first row.
+        for from in [None, Some(ProjectId::new("a2x"))] {
+            for key in [TreeStep::Previous, TreeStep::Next] {
+                assert_eq!(
+                    tree_move(&projects, &expanded, from.as_ref(), key),
+                    select("a")
+                );
+            }
+            assert_eq!(
+                tree_move(&projects, &expanded, from.as_ref(), TreeStep::Expand),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn right_expands_then_enters_and_left_collapses_then_leaves() {
+        let projects = projects();
+        let step = |expanded: &[&str], from: &str, step| {
+            tree_move(
+                &projects,
+                &open(expanded),
+                Some(&ProjectId::new(from)),
+                step,
+            )
+        };
+        let id = ProjectId::new;
+        assert_eq!(
+            step(&[], "a", TreeStep::Expand),
+            Some(TreeMove::Expand(id("a")))
+        );
+        assert_eq!(
+            step(&["a"], "a", TreeStep::Expand),
+            Some(TreeMove::Select(id("a1")))
+        );
+        assert_eq!(
+            step(&["a"], "a1", TreeStep::Expand),
+            None,
+            "a leaf has nothing to open"
+        );
+        assert_eq!(
+            step(&["a"], "a", TreeStep::Collapse),
+            Some(TreeMove::Collapse(id("a")))
+        );
+        assert_eq!(
+            step(&["a"], "a1", TreeStep::Collapse),
+            Some(TreeMove::Select(id("a")))
+        );
+        assert_eq!(
+            step(&["a", "a2"], "a2", TreeStep::Collapse),
+            Some(TreeMove::Collapse(id("a2")))
+        );
+        assert_eq!(
+            step(&["a"], "a2", TreeStep::Collapse),
+            Some(TreeMove::Select(id("a")))
+        );
+        assert_eq!(
+            step(&[], "b", TreeStep::Collapse),
+            None,
+            "a root leaf has no parent"
+        );
+    }
 
     #[test]
     fn utc_time_reads_the_gregorian_minute_in_utc() {

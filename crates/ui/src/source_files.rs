@@ -18,7 +18,9 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ),
     ("controls/dialog.rs", include_str!("controls/dialog.rs")),
     ("controls/mod.rs", include_str!("controls/mod.rs")),
+    ("controls/nav.rs", include_str!("controls/nav.rs")),
     ("controls/progress.rs", include_str!("controls/progress.rs")),
+    ("controls/region.rs", include_str!("controls/region.rs")),
     (
         "controls/scrollbar.rs",
         include_str!("controls/scrollbar.rs"),
@@ -36,6 +38,7 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
         "controls/text_field.rs",
         include_str!("controls/text_field.rs"),
     ),
+    ("controls/tree.rs", include_str!("controls/tree.rs")),
     ("controls/window.rs", include_str!("controls/window.rs")),
     ("document_tests.rs", include_str!("document_tests.rs")),
     ("editor.rs", include_str!("editor.rs")),

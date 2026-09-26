@@ -44,6 +44,12 @@ pub enum Overlay {
     /// with its warnings and both receipts (the first undone), paused at the
     /// first of three reviews; the results scrolled to the receipts.
     AssistantReview,
+    /// On Meetings: keyboard focus on the Process button, reached with Tab
+    /// from the project tree.
+    FocusedButton,
+    /// On Settings: keyboard focus on the theme select, reached with Tab
+    /// from the Settings entry.
+    FocusedSelect,
 }
 
 /// A receipt of the fixture run: `document` moved from `revision` to the
@@ -207,10 +213,43 @@ impl MainWindow {
         self.view.update(cx, |root, cx| root.navigate(route, cx));
     }
 
+    /// The id of the document the Meetings route shows.
+    pub fn selected_document(&self, cx: &App) -> Option<String> {
+        let root = self.view.read(cx);
+        root.ui
+            .selected_project
+            .as_ref()
+            .map(|id| id.as_str().to_string())
+    }
+
     /// Opens `overlay`. The theme select opens below where its trigger
-    /// painted last, so the Settings route must have drawn once.
+    /// painted last, so the Settings route must have drawn once, as must a
+    /// route whose control a focus overlay tabs to.
     pub fn open_overlay(&self, overlay: Overlay, cx: &mut App) {
+        let tab_from = match overlay {
+            Overlay::FocusedButton => Some((self.view.read(cx).tree_focus.clone(), 1)),
+            Overlay::FocusedSelect => {
+                let settings = crate::pages::chrome::ENTRIES
+                    .iter()
+                    .position(|(route, _)| *route == Route::Settings)
+                    .expect("Settings has an entry");
+                Some((self.view.read(cx).nav_focus[settings].clone(), 2))
+            }
+            _ => None,
+        };
+        if let Some((start, tabs)) = tab_from {
+            self.window
+                .update(cx, |_, window, cx| {
+                    start.focus(window, cx);
+                    for _ in 0..tabs {
+                        window.dispatch_keystroke(gpui::Keystroke::parse("tab").unwrap(), cx);
+                    }
+                })
+                .expect("the window is open");
+            return;
+        }
         self.view.update(cx, |root, cx| match overlay {
+            Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
                 let select = root
                     .settings_selectors
@@ -313,7 +352,14 @@ impl MainWindow {
 
     /// Closes `overlay` again.
     pub fn close_overlay(&self, overlay: Overlay, cx: &mut App) {
+        if matches!(overlay, Overlay::FocusedButton | Overlay::FocusedSelect) {
+            self.window
+                .update(cx, |_, window, _| window.blur())
+                .expect("the window is open");
+            return;
+        }
         self.view.update(cx, |root, cx| match overlay {
+            Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
                 if let Some(selectors) = &root.settings_selectors {
                     selectors

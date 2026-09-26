@@ -292,6 +292,7 @@ fn speaker_library_section(
             )
             .child(
                 Button::new("choose-speaker-library", tr(locale, "choose_directory"))
+                    .debug_selector(|| "choose-speaker-library".into())
                     .secondary()
                     .compact()
                     .on_click(cx.listener(RootView::choose_speaker_library_directory)),
@@ -456,14 +457,9 @@ fn assistant_settings_section(
         .map(|profile| {
             let id = profile.id.clone();
             let selected = active == Some(id.as_str());
-            let mut button =
-                Button::new(format!("assistant-profile-{id}"), profile.name.clone()).compact();
-            button = if selected {
-                button.primary()
-            } else {
-                button.secondary()
-            };
-            button
+            Button::new(format!("assistant-profile-{id}"), profile.name.clone())
+                .compact()
+                .selected(selected)
                 .on_click(cx.listener(move |root, _, _, cx| root.edit_assistant_profile(&id, cx)))
                 .into_any_element()
         })
@@ -868,13 +864,9 @@ fn protocol_button(
     selected: LlmProtocol,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let mut button = Button::new(format!("assistant-protocol-{label}"), label).compact();
-    button = if protocol == selected {
-        button.primary()
-    } else {
-        button.secondary()
-    };
-    button
+    Button::new(format!("assistant-protocol-{label}"), label)
+        .compact()
+        .selected(protocol == selected)
         .on_click(cx.listener(move |root, _, _, cx| root.set_assistant_protocol(protocol, cx)))
         .into_any_element()
 }
@@ -900,13 +892,9 @@ fn auth_button(
     selected: AssistantAuthMode,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let mut button = Button::new(format!("assistant-auth-{label}"), label).compact();
-    button = if auth == selected {
-        button.primary()
-    } else {
-        button.secondary()
-    };
-    button
+    Button::new(format!("assistant-auth-{label}"), label)
+        .compact()
+        .selected(auth == selected)
         .on_click(cx.listener(move |root, _, _, cx| root.set_assistant_auth_mode(auth, cx)))
         .into_any_element()
 }
@@ -945,15 +933,10 @@ fn write_mode_button(
     selected: AgentWriteMode,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let mut button = Button::new(format!("assistant-write-{label}"), label)
+    Button::new(format!("assistant-write-{label}"), label)
         .debug_selector(move || selector.into())
-        .compact();
-    button = if mode == selected {
-        button.primary()
-    } else {
-        button.secondary()
-    };
-    button
+        .compact()
+        .selected(mode == selected)
         .on_click(cx.listener(move |root, _, _, cx| root.set_assistant_write_mode(mode, cx)))
         .into_any_element()
 }
@@ -972,13 +955,9 @@ where
         .gap_2()
         .children(choices.map(|(id, label, value)| {
             let action = action.clone();
-            let mut button = Button::new(id, label).compact();
-            button = if value == selected {
-                button.primary()
-            } else {
-                button.secondary()
-            };
-            button
+            Button::new(id, label)
+                .compact()
+                .selected(value == selected)
                 .on_click(cx.listener(move |root, _, _, cx| action(root, value, cx)))
                 .into_any_element()
         }))

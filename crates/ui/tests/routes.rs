@@ -476,3 +476,461 @@ fn the_settings_overlays_open_inside_the_window_over_the_page(cx: &mut TestAppCo
         );
     }
 }
+
+// Keyboard and focus. Every focusable control draws its focus ring, marked
+// `focus-ring`, only while it holds keyboard focus; a test tells which
+// control holds it by the smallest listed selector whose bounds contain the
+// ring. A press on a sidebar entry opens its route and leaves focus on the
+// entry, so each traversal starts there.
+
+/// The sidebar's tab stops, before the page's.
+const SIDEBAR_STOPS: [&str; 5] = [
+    "nav-Assistant",
+    "nav-Meetings",
+    "nav-Models",
+    "nav-Settings",
+    "import-audio",
+];
+
+/// The bounds of the focus ring, if a control shows one.
+fn ring(cx: &mut VisualTestContext) -> Option<Bounds<Pixels>> {
+    cx.debug_bounds("focus-ring")
+}
+
+/// The control of `candidates` that shows the focus ring: the smallest
+/// whose bounds contain the ring's.
+fn focused_control(
+    cx: &mut VisualTestContext,
+    candidates: &[&'static str],
+) -> Option<&'static str> {
+    let ring = ring(cx)?;
+    candidates
+        .iter()
+        .filter_map(|selector| Some((*selector, cx.debug_bounds(selector)?)))
+        .filter(|(_, bounds)| within(ring, *bounds))
+        .min_by(|(_, a), (_, b)| {
+            let area = |bounds: &Bounds<Pixels>| {
+                f32::from(bounds.size.width) * f32::from(bounds.size.height)
+            };
+            area(a).total_cmp(&area(b))
+        })
+        .map(|(selector, _)| selector)
+}
+
+/// Presses `key` until focus comes back to the stop the first press reached,
+/// and returns the stops in visiting order: the listed control each one is,
+/// or `None`. Every stop shows its ring inside the window: a stop in a
+/// scrolled list is scrolled into view.
+#[track_caller]
+fn cycle(
+    cx: &mut VisualTestContext,
+    key: &str,
+    candidates: &[&'static str],
+) -> Vec<Option<&'static str>> {
+    cx.simulate_keystrokes(key);
+    let first = focused_control(cx, candidates).expect("the first stop is a listed control");
+    let mut stops = vec![Some(first)];
+    for _ in 0..200 {
+        let bounds = ring(cx).unwrap_or_else(|| panic!("no ring after {stops:?}"));
+        assert!(
+            within(bounds, window_bounds()),
+            "the ring of the stop after {stops:?} leaves the window: {bounds:?}"
+        );
+        cx.simulate_keystrokes(key);
+        let stop = focused_control(cx, candidates);
+        if stop == Some(first) {
+            return stops;
+        }
+        stops.push(stop);
+    }
+    panic!("`{key}` never came back to `{first}`: {stops:?}")
+}
+
+/// `stops` rotated to start at the first sidebar entry.
+fn from_the_first_entry(mut stops: Vec<Option<&'static str>>) -> Vec<Option<&'static str>> {
+    let start = stops
+        .iter()
+        .position(|stop| *stop == Some(SIDEBAR_STOPS[0]))
+        .expect("the traversal reaches the first entry");
+    stops.rotate_left(start);
+    stops
+}
+
+/// Tab visits `expected` in order and nothing else, and Shift-Tab visits it
+/// in reverse.
+#[track_caller]
+fn assert_tab_order(cx: &mut VisualTestContext, expected: &[&'static str]) {
+    let forward = from_the_first_entry(cycle(cx, "tab", expected));
+    assert_eq!(
+        forward,
+        expected.iter().copied().map(Some).collect::<Vec<_>>(),
+        "Tab order"
+    );
+    let mut backward = cycle(cx, "shift-tab", expected);
+    backward.reverse();
+    assert_eq!(from_the_first_entry(backward), forward, "Shift-Tab order");
+}
+
+/// Presses and releases `key`: a keyboard click fires on the release.
+fn press(cx: &mut VisualTestContext, key: &str) {
+    let keystroke = gpui::Keystroke::parse(key).unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    cx.run_until_parked();
+}
+
+/// Presses Tab until `selector` of `candidates` holds keyboard focus.
+#[track_caller]
+fn tab_to(cx: &mut VisualTestContext, selector: &'static str, candidates: &[&'static str]) {
+    for _ in 0..60 {
+        cx.simulate_keystrokes("tab");
+        if focused_control(cx, candidates) == Some(selector) {
+            return;
+        }
+    }
+    panic!("Tab never reached `{selector}`");
+}
+
+#[gpui::test]
+fn tab_traverses_the_assistant_route_in_order(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Assistant);
+    let mut expected = SIDEBAR_STOPS.to_vec();
+    expected.extend([
+        "assistant-scene-ask",
+        "assistant-scene-organize",
+        "assistant-scene-topic-partition",
+        "assistant-scene-topic-extract",
+        "assistant-scene-move",
+        "assistant-scope-current",
+        "assistant-scope-all",
+        "assistant-input",
+        // Cancel is disabled while nothing runs, so it is no stop.
+        "assistant-submit",
+    ]);
+    assert_tab_order(cx, &expected);
+}
+
+#[gpui::test]
+fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Meetings);
+    let mut expected = SIDEBAR_STOPS.to_vec();
+    expected.extend([
+        // The tree is one stop, on its selected row.
+        leak(format!("project-row-{}", DOCUMENT_IDS[0])),
+        "process-project",
+        "open-project-detail",
+        "content-mode-summary",
+        "content-mode-original",
+        "content-mode-edit",
+    ]);
+    assert_tab_order(cx, &expected);
+}
+
+#[gpui::test]
+fn tab_traverses_the_models_route_in_order(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Models);
+    // Families in name order, each header before its cards; each card's
+    // actions in reading order.
+    let mut families = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for model in support::catalog().models {
+        families
+            .entry(model.model_family.clone())
+            .or_default()
+            .push(model.id.clone());
+    }
+    let mut expected = SIDEBAR_STOPS.to_vec();
+    for (family, models) in families {
+        expected.push(leak(format!("model-family-{family}")));
+        for model in models {
+            for action in ["download", "details-toggle", "retry", "reprobe"] {
+                let selector = leak(format!("model-{action}-{model}"));
+                if cx.debug_bounds(selector).is_some() {
+                    expected.push(selector);
+                }
+            }
+        }
+    }
+    assert!(expected.len() > SIDEBAR_STOPS.len() + 6);
+    assert_tab_order(cx, &expected);
+}
+
+#[gpui::test]
+fn tab_traverses_the_settings_route_in_order(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Settings);
+    // The form's selects, choose buttons and Assistant actions in reading
+    // order; its text fields and Speaker Library rows lie between them.
+    let mut listed = SIDEBAR_STOPS.to_vec();
+    listed.extend([
+        "select-theme",
+        "select-material",
+        "choose-documents-root",
+        "select-language",
+        "select-asr-backend",
+        "select-asr-model",
+        "select-transcription-language",
+        "select-diarization-backend",
+        "select-diarization-model",
+        "select-expected-speakers",
+        "choose-speaker-library",
+        "select-compute-device",
+        "assistant-api-key-field",
+        "assistant-api-key-file-field",
+        "settings-write-mode-automatic",
+        "settings-write-mode-confirm-each",
+        "assistant-save-settings",
+        "assistant-readiness",
+        "assistant-model-probe",
+    ]);
+    let forward = from_the_first_entry(cycle(cx, "tab", &listed));
+    assert_eq!(
+        forward.iter().flatten().copied().collect::<Vec<_>>(),
+        listed,
+        "Tab reaches every listed control once, in order"
+    );
+    assert!(
+        forward.len() > listed.len() + 10,
+        "the text fields and profile rows are stops too: {forward:?}"
+    );
+    let mut backward = cycle(cx, "shift-tab", &listed);
+    backward.reverse();
+    assert_eq!(from_the_first_entry(backward), forward, "Shift-Tab order");
+}
+
+#[gpui::test]
+fn the_ring_shows_for_keyboard_focus_only(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Assistant);
+    assert!(ring(cx).is_none(), "a press on an entry shows no ring");
+    cx.simulate_keystrokes("tab");
+    let focused = cx.update(|window, cx| window.focused(cx));
+    assert!(ring(cx).is_some(), "Tab shows the ring");
+    // Pointer input hides the ring; focus stays where it was.
+    cx.simulate_mouse_move(
+        gpui::point(gpui::px(600.), gpui::px(400.)),
+        None,
+        Modifiers::none(),
+    );
+    assert!(ring(cx).is_none(), "the pointer hides the ring");
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focused);
+
+    // A field focused by a press shows no ring, even while typing in it; one
+    // reached with Tab does.
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    cx.simulate_input("a");
+    assert!(
+        ring(cx).is_none(),
+        "typing in a pressed field shows no ring"
+    );
+    cx.simulate_keystrokes("tab shift-tab");
+    assert_eq!(
+        focused_control(cx, &["assistant-input"]),
+        Some("assistant-input")
+    );
+}
+
+#[gpui::test]
+fn enter_and_space_activate_the_focused_control(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    let stops = [
+        SIDEBAR_STOPS.as_slice(),
+        &["open-project-detail", "close-detail"],
+    ]
+    .concat();
+    tab_to(cx, "nav-Meetings", &stops);
+    press(cx, "space");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    assert_eq!(
+        focused_control(cx, &stops),
+        Some("nav-Meetings"),
+        "focus stays on the entry"
+    );
+
+    tab_to(cx, "open-project-detail", &stops);
+    press(cx, "enter");
+    assert!(
+        cx.debug_bounds("detail-panel").is_some(),
+        "Enter opens Detail"
+    );
+    tab_to(cx, "close-detail", &stops);
+    press(cx, "enter");
+    assert!(
+        cx.debug_bounds("detail-panel").is_none(),
+        "Enter closes Detail"
+    );
+    assert_eq!(
+        focused_control(cx, &stops),
+        Some("open-project-detail"),
+        "focus returns to the button that opened Detail"
+    );
+}
+
+#[gpui::test]
+fn a_route_change_leaves_focus_on_the_route_entry(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    click_entry(cx, &window, Route::Models);
+    // The prompt left with its page; Tab goes on from the Models entry.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(focused_control(cx, &SIDEBAR_STOPS), Some("nav-Settings"));
+    cx.simulate_keystrokes("shift-tab shift-tab");
+    assert_eq!(focused_control(cx, &SIDEBAR_STOPS), Some("nav-Meetings"));
+}
+
+#[gpui::test]
+fn up_and_down_move_between_the_sidebar_entries(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    tab_to(cx, "nav-Meetings", &SIDEBAR_STOPS);
+    cx.simulate_keystrokes("down");
+    assert_eq!(focused_control(cx, &SIDEBAR_STOPS), Some("nav-Models"));
+    cx.simulate_keystrokes("up up");
+    assert_eq!(focused_control(cx, &SIDEBAR_STOPS), Some("nav-Assistant"));
+    cx.simulate_keystrokes("up");
+    assert_eq!(
+        focused_control(cx, &SIDEBAR_STOPS),
+        Some("nav-Assistant"),
+        "Up stops at the first entry"
+    );
+    assert_eq!(
+        cx.update(|_, cx| window.route(cx)),
+        Route::Assistant,
+        "moving focus opens no route"
+    );
+}
+
+#[gpui::test]
+fn arrow_keys_move_through_the_project_tree(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    let [weekly, decisions, interview] = DOCUMENT_IDS;
+    let rows = DOCUMENT_IDS.map(|id| leak(format!("project-row-{id}")));
+    let selected = |cx: &mut VisualTestContext| cx.update(|_, cx| window.selected_document(cx));
+    tab_to(cx, rows[0], &rows);
+    let step = |cx: &mut VisualTestContext, key: &str, document: &str, row: &'static str| {
+        cx.simulate_keystrokes(key);
+        assert_eq!(selected(cx).as_deref(), Some(document), "after `{key}`");
+        assert_eq!(
+            focused_control(cx, &rows),
+            Some(row),
+            "the ring after `{key}`"
+        );
+    };
+    step(cx, "down", decisions, rows[1]);
+    step(cx, "down", interview, rows[2]);
+    step(cx, "down", interview, rows[2]);
+    step(cx, "up", decisions, rows[1]);
+    // Left on a child moves to its parent, then collapses the parent.
+    step(cx, "left", weekly, rows[0]);
+    cx.simulate_keystrokes("left");
+    assert!(
+        cx.debug_bounds(rows[1]).is_none(),
+        "Left collapses the parent"
+    );
+    step(cx, "down", interview, rows[2]);
+    step(cx, "up", weekly, rows[0]);
+    // Right expands the parent, then moves to its first child.
+    cx.simulate_keystrokes("right");
+    assert!(
+        cx.debug_bounds(rows[1]).is_some(),
+        "Right expands the parent"
+    );
+    assert_eq!(selected(cx).as_deref(), Some(weekly));
+    step(cx, "right", decisions, rows[1]);
+}
+
+#[gpui::test]
+fn escape_closes_the_select_and_focus_returns_to_its_trigger(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Settings);
+    let stops = [SIDEBAR_STOPS.as_slice(), &["select-theme"]].concat();
+    tab_to(cx, "select-theme", &stops);
+    for open in ["enter", "space"] {
+        cx.simulate_keystrokes(open);
+        assert!(
+            cx.debug_bounds("select-menu").is_some(),
+            "`{open}` opens the menu"
+        );
+        cx.simulate_keystrokes("escape");
+        assert!(
+            cx.debug_bounds("select-menu").is_none(),
+            "Esc closes the menu"
+        );
+        assert_eq!(focused_control(cx, &stops), Some("select-theme"));
+    }
+}
+
+#[gpui::test]
+fn a_dialog_a_select_opened_takes_focus_and_escape_returns_it(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::OriginalSpeakers, cx));
+    cx.run_until_parked();
+    let merge = "merge-speaker-speaker-0";
+    let stops = [SIDEBAR_STOPS.as_slice(), &[merge]].concat();
+    tab_to(cx, merge, &stops);
+    // Choosing the other speaker from the keyboard asks before merging.
+    cx.simulate_keystrokes("enter enter");
+    assert!(cx.debug_bounds("select-menu").is_none());
+    assert!(
+        cx.debug_bounds("confirm-dialog").is_some(),
+        "the merge asks first"
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(
+        cx.debug_bounds("confirm-dialog").is_none(),
+        "Esc cancels the merge"
+    );
+    assert_eq!(
+        focused_control(cx, &stops),
+        Some(merge),
+        "focus returns to the select that opened the dialog"
+    );
+}
+
+#[gpui::test]
+fn a_dialog_a_button_opened_returns_focus_to_it(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Settings);
+    let delete = "delete-speaker-profile-profile-li";
+    let stops = [SIDEBAR_STOPS.as_slice(), &[delete]].concat();
+    tab_to(cx, delete, &stops);
+    press(cx, "enter");
+    assert!(
+        cx.debug_bounds("confirm-dialog").is_some(),
+        "the delete asks first"
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(cx.debug_bounds("confirm-dialog").is_none());
+    assert_eq!(focused_control(cx, &stops), Some(delete));
+}
+
+#[gpui::test]
+fn ctrl_tab_leaves_a_text_area_that_takes_tab(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Meetings);
+    let edit = visible(cx, "content-mode-edit");
+    cx.simulate_click(edit.center(), Modifiers::none());
+    for _ in 0..500 {
+        cx.run_until_parked();
+        if cx.debug_bounds("document-editor").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let stops = [SIDEBAR_STOPS.as_slice(), &["select-document-status"]].concat();
+    tab_to(cx, "select-document-status", &stops);
+    // The summary is four rows tall and the body twelve; scrolling to
+    // reveal one moves the other, so they are told apart by height.
+    let height = |cx: &mut VisualTestContext| ring(cx).map(|ring| ring.size.height);
+    cx.simulate_keystrokes("tab");
+    let summary = height(cx).expect("Tab reaches the summary");
+    cx.simulate_keystrokes("tab");
+    assert_eq!(height(cx), Some(summary), "Tab indents inside the summary");
+    cx.simulate_keystrokes("ctrl-tab");
+    let body = height(cx).expect("Ctrl-Tab moves on");
+    assert!(
+        body > summary,
+        "Ctrl-Tab reaches the taller body: {summary:?} {body:?}"
+    );
+    cx.simulate_keystrokes("ctrl-shift-tab");
+    assert_eq!(height(cx), Some(summary), "Ctrl-Shift-Tab moves back");
+}

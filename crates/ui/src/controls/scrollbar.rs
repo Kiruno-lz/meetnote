@@ -2,7 +2,8 @@
 //! gpui-base's `Scrollbar`; it overlays the area it is a child of, which
 //! must be `relative`. The area scrolls by wheel, trackpad and keyboard
 //! without it, so a scrollbar is a pointer affordance only: no tab stop and
-//! no label.
+//! no label. Each scrollbar registers its area with the window root, which
+//! scrolls a control that keyboard focus moves to into view.
 //!
 //! gpui-base draws every scrollbar, including those inside text inputs,
 //! from its global scrollbar theme; `follow_tokens` keeps that theme on the
@@ -30,7 +31,9 @@ impl Scrollbar {
 }
 
 impl RenderOnce for Scrollbar {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        // The area reveals a control that keyboard focus moves to in it.
+        super::window::register_scroll_area(&self.scroll, cx);
         div().absolute().inset_0().child(
             gpui_base::Scrollbar::vertical(&self.scroll)
                 .id(self.id)

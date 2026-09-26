@@ -23,9 +23,6 @@ pub struct UiState {
     pub expanded_model_details: BTreeSet<String>,
     pub notice: String,
     pub processing: bool,
-    /// A left press in a titlebar drag strip that has not yet moved the
-    /// window (`pages::chrome`).
-    pub titlebar_drag_armed: bool,
 }
 
 impl UiState {
@@ -42,7 +39,6 @@ impl UiState {
             expanded_model_details: BTreeSet::new(),
             notice: super::i18n::text(locale, "ask_notice").into(),
             processing: false,
-            titlebar_drag_armed: false,
         }
     }
 
