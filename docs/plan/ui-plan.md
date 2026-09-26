@@ -133,7 +133,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 
 | 区域 | 已实现 | 当前缺口 |
 |---|---|---|
-| Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 MeetNote 窗口根；frosted 浮层与 edge fade 原语；全部控件为带 label 的 gpui-base 包装，按钮与折叠头有仅键盘聚焦时显示的焦点环 | 各 route 的键盘遍历顺序、方向键导航与焦点归还；无障碍手工检查 |
+| Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 MeetNote 窗口根；frosted 浮层与 edge fade 原语；全部控件为带 label 的 gpui-base 包装；每个可聚焦控件只在键盘聚焦时显示焦点环；Tab 顺序为侧栏四个入口、导入音频、页面，Tab 到达滚动区内的控件时自动滚入视野；侧栏是带 label 的 tab list，上下键切换；项目树是一个 Tab 停靠点，方向键选择、展开与进入父子；对话框关闭后焦点回到打开者，关闭 Detail 回到"打开详情"，切换 route 后停在对应侧栏入口；选择型按钮为 radio 角色 | 见下文键盘与无障碍的 `//TODO`；Accessibility Inspector 手工检查 |
 | Assistant | 内容平面底部的 frosted 输入条（Enter 发送）、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染；任务状态由共享 JobRuntime 的 `JobEvent` 按请求投影；pending 过期后队列推进到下一项 | — |
 | Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original/编辑、处理与取消；内容平面顶部列出 scanner issue（路径与原因）；标题、标签、状态、摘要与正文按文档保存草稿，经一次带 revision 的 `Update` 提交；树移动经 `Reparent`/`Reorder` 命令；revision 冲突显示通知并保留草稿，用户重新加载后才丢弃；Original 视图的 speaker 列表支持改名与确认后合并；scanner issue 按 `DocumentIssueKind` 本地化；选中文档的音频在后台检查，缺失或 checksum 不符时在树、标题栏与 Detail 标记并禁止处理，经文件选择按 revision 重新关联；列表读取与处理启动在后台执行，启动完成前的取消在启动返回后生效 | — |
 | Detail | 内容平面内右侧不透明面板：identity、audio source、层级、document status、revision、processing provenance、最近错误、结果统计与缺失的 provenance 项、transcript | 单文档的 Agent 变更来源（mutation journal 尚无按文档查询） |
@@ -144,7 +144,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 
 - L1：i18n key、颜色字面量、渲染路径文件探测，以及 `controller.rs` 中文件探测与线程创建的源码扫描；对比度、`effective_material` 与 token 纯函数；
 - L2：路由结构与交互测试（`crates/ui/tests/routes.rs`、`crates/ui/src/lib.rs`），其中阻塞的 fake repository/model manager 断言文件 IO 不占用 UI 线程；
-- L3：四个 route、打开的下拉与对话框、Detail 与 issue、编辑与冲突、speaker 列表与 Speaker Library、缺失音频与工作区设置、Assistant 部分结果与 review 队列在四种外观下的 52 张基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN），以及 release 构建的资源探测。
+- L3：四个 route、键盘焦点态、打开的下拉与对话框、Detail 与 issue、编辑与冲突、speaker 列表与 Speaker Library、缺失音频与工作区设置、Assistant 部分结果与 review 队列在四种外观下的 60 张基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN），以及 release 构建的资源探测。
 
 UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。音频处理与 Assistant 共用 `main.rs` 创建的应用级 JobRuntime，受同一并发上限约束；Assistant 任务状态由按请求标记的 `JobEvent` 投影，阶段与工具进度经 `AgentProgress` 回调补充细节。通用 session 不属于当前范围。
 
@@ -233,9 +233,13 @@ UI locale 与 transcription language 独立。backend 不支持的设备或 stag
   - `host_probe`：`host_probe_reads_the_api_key_file_that_settings_validates`、`host_probe_rejects_an_unreadable_api_key_file_before_contacting_the_provider`；
   - `meetnote` 二进制单元测试：`assistant_service::tests::resolves_api_key_file_from_the_settings_directory`。
 
-U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移、U3 token 与外壳、U4 玻璃原语与页面迁移已完成，当前状态见上文。
+U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移、U3 token 与外壳、U4 玻璃原语与页面迁移、U5 产品功能已完成，当前状态见上文。
 
-1. **U5 产品功能**
-   - 键盘、焦点与无障碍。验证：L2 键盘遍历全部 route；L1 扫描确认交互控件均经带 label 的包装创建；L3 基线覆盖焦点态；macOS 27 Accessibility Inspector 手工检查。
+键盘与无障碍的剩余缺口：
+
+- //TODO - 树的拖动 reparent 与前后 reorder 没有键盘等价操作。验证：L2 测试在树获得焦点时用快捷键把选中文档移入上一兄弟或调整顺序，经同一 `Reparent`/`Reorder` 命令写回，未触及文档 revision 不变。
+- //TODO - radio 按钮组（场景、scope、内容模式、协议、认证、写回策略）没有带 label 的组容器。验证：L1 扫描确认每组 radio 由带 label 的组包装创建。
+- //TODO - 删除 Speaker Library profile 后，打开对话框的按钮随行消失，焦点无处归还。验证：L2 测试删除后焦点落在列表的下一项或 Speaker Library 标题。
+- 发布前在 macOS 27 用 Accessibility Inspector 逐 route 检查 tab list、tree、combo box、radio、group、password input 的角色、label 与状态，以及焦点环与检查器焦点一致。
 
 UI 完成标准：完整产品流程不需要 CLI 或手工编辑 JSON；外部文件变化、版本冲突、模型失败和任务取消都有明确且可恢复的反馈；每个 route 在四种外观组合下通过视觉清单。
