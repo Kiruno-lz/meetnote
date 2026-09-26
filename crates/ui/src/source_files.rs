@@ -34,6 +34,8 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("pages/settings.rs", include_str!("pages/settings.rs")),
     ("route.rs", include_str!("route.rs")),
     ("source_files.rs", include_str!("source_files.rs")),
+    ("speaker_tests.rs", include_str!("speaker_tests.rs")),
+    ("speakers.rs", include_str!("speakers.rs")),
     ("state.rs", include_str!("state.rs")),
     ("test_support.rs", include_str!("test_support.rs")),
     ("theme/component.rs", include_str!("theme/component.rs")),

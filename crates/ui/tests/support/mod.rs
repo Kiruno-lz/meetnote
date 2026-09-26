@@ -126,7 +126,63 @@ fn services(appearance: settings::AppearanceSettings) -> ui::DesktopServices {
         asr_model: missing_model("whisper-rs"),
         diarization_model: missing_model("sherpa-onnx"),
         assistant: Arc::new(UnreachableAssistant),
+        speaker_library: speaker_library(),
     }
+}
+
+/// Three fixed profiles in memory, so no test reads or writes a library file.
+fn speaker_library() -> application::SpeakerLibraryService {
+    use application::SpeakerProfileStore as _;
+    let space = contracts::EmbeddingSpace {
+        backend_id: "diarization-native".into(),
+        model_id: "wespeaker-resnet34".into(),
+        model_revision: Some("1".into()),
+        dimension: 2,
+        sample_rate_hz: 16_000,
+        frontend: contracts::EmbeddingFrontend::default(),
+        legacy_feature_config: None,
+        normalization: contracts::EmbeddingNormalization::L2,
+    };
+    let profile = |id: &str, name: &str, aliases: &[&str], vector: [f32; 2], samples: usize| {
+        contracts::SpeakerProfile {
+            id: id.into(),
+            display_name: name.into(),
+            aliases: aliases.iter().map(|alias| alias.to_string()).collect(),
+            embedding_space: space.clone(),
+            samples: (0..samples)
+                .map(|index| contracts::SpeakerEmbeddingSample {
+                    id: format!("{id}-sample-{index}"),
+                    vector: vector.to_vec(),
+                    quality: 0.9,
+                    source: contracts::SpeakerSampleSource {
+                        project_id: Some(DOCUMENT_IDS[0].into()),
+                        source_segment_id: Some(format!("t-{index}")),
+                        start_ms: 0,
+                        end_ms: 4_000,
+                        audio_path: None,
+                        audio_sha256: None,
+                        backup_path: None,
+                    },
+                    created_at_ms: FIXTURE_TIME_MS,
+                })
+                .collect(),
+            match_threshold: 0.7,
+            created_at_ms: FIXTURE_TIME_MS,
+            updated_at_ms: FIXTURE_TIME_MS,
+        }
+    };
+    let store = application::InMemorySpeakerProfileStore::default();
+    store
+        .replace(&contracts::SpeakerLibraryDocument {
+            schema_version: contracts::SPEAKER_LIBRARY_SCHEMA_VERSION,
+            profiles: vec![
+                profile("profile-wang", "王经理", &["Wang"], [1.0, 0.0], 3),
+                profile("profile-li", "李工", &[], [0.0, 1.0], 2),
+                profile("profile-guest", "访谈嘉宾", &[], [0.7, 0.7], 1),
+            ],
+        })
+        .expect("the fixture library is valid");
+    application::SpeakerLibraryService::new(Arc::new(store))
 }
 
 /// A directory no other test uses; it is not created.

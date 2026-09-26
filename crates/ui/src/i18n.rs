@@ -46,7 +46,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "cancel") => "取消",
         (Locale::ZhCn, "summary") => "总结文",
         (Locale::ZhCn, "original") => "原始文",
-        (Locale::ZhCn, "merge_speaker") => "合并 speaker-1 到 speaker-0",
         (Locale::ZhCn, "no_summary") => "还没有总结。可以使用助手整理这个项目。",
         (Locale::ZhCn, "need_process") => "请先处理项目以生成带 speaker 的转录。",
         (Locale::ZhCn, "empty_meetings") => "导入音频以创建项目。",
@@ -97,6 +96,29 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "transcription_description") => "选择语音识别后端、模型和转录语言",
         (Locale::ZhCn, "speaker_description") => "选择说话人分离后端、模型和人数提示",
         (Locale::ZhCn, "speaker_library_path") => "声纹库地址",
+        (Locale::ZhCn, "speaker_library") => "声纹库",
+        (Locale::ZhCn, "speaker_library_loading") => "正在读取声纹库……",
+        (Locale::ZhCn, "speaker_library_empty") => "声纹库中还没有说话人档案。",
+        (Locale::ZhCn, "speaker_profile_name_placeholder") => "档案名称",
+        (Locale::ZhCn, "speakers") => "说话人",
+        (Locale::ZhCn, "speakers_hint") => {
+            "重命名只改变显示名称；合并把一位说话人的全部片段归给另一位。转录文字、时间和处理记录保持不变。"
+        }
+        (Locale::ZhCn, "no_speakers") => "这个文档没有说话人。",
+        (Locale::ZhCn, "speaker_name_unchanged") => "名称没有变化。",
+        (Locale::ZhCn, "rename") => "重命名",
+        (Locale::ZhCn, "merge") => "合并",
+        (Locale::ZhCn, "delete") => "删除",
+        (Locale::ZhCn, "merge_into_placeholder") => "合并到……",
+        (Locale::ZhCn, "merge_document_speaker_description") => {
+            "被合并说话人的全部片段将归给目标说话人，并使用目标的名称。转录文字、时间和处理记录不变；正文仍是自动生成的转录时会随之更新。"
+        }
+        (Locale::ZhCn, "delete_speaker_profile_description") => {
+            "档案会从声纹库文件中移除，之后的处理不再用它识别这位说话人。已处理文档中的说话人名称保持不变。"
+        }
+        (Locale::ZhCn, "merge_speaker_profiles_description") => {
+            "两份档案的声纹样本合并到目标档案，被合并档案的名称保留为别名，该档案随后从声纹库移除。已处理文档中的说话人名称保持不变。"
+        }
         (Locale::ZhCn, "choose_directory") => "选择目录",
         (Locale::ZhCn, "speaker_library_migration_title") => "是否迁移现有声纹库？",
         (Locale::ZhCn, "speaker_library_migration_description") => {
@@ -116,7 +138,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "hierarchy_updated") => "项目层级已更新。",
         (Locale::ZhCn, "order_updated") => "项目顺序已更新。",
         (Locale::ZhCn, "download_updated") => "下载任务已更新。",
-        (Locale::ZhCn, "speaker_merged") => "已将 speaker-1 合并到 speaker-0，并更新 Markdown。",
         (Locale::ZhCn, "cancellation_requested") => "已请求取消……",
         (Locale::ZhCn, "select_project_first") => "请先选择一个项目。",
         (Locale::ZhCn, "project_missing") => "选中的项目已不存在。",
@@ -295,7 +316,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "cancel") => "Cancel",
         (Locale::EnUs, "summary") => "Summary",
         (Locale::EnUs, "original") => "Original",
-        (Locale::EnUs, "merge_speaker") => "Merge speaker-1 into speaker-0",
         (Locale::EnUs, "no_summary") => {
             "No summary yet. Use the Assistant to organize this project."
         }
@@ -356,6 +376,29 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
             "Choose the speaker separation backend, model, and speaker hint"
         }
         (Locale::EnUs, "speaker_library_path") => "Speaker library path",
+        (Locale::EnUs, "speaker_library") => "Speaker Library",
+        (Locale::EnUs, "speaker_library_loading") => "Reading the speaker library…",
+        (Locale::EnUs, "speaker_library_empty") => "The speaker library has no profiles yet.",
+        (Locale::EnUs, "speaker_profile_name_placeholder") => "Profile name",
+        (Locale::EnUs, "speakers") => "Speakers",
+        (Locale::EnUs, "speakers_hint") => {
+            "Renaming changes only the displayed name; merging gives every segment of one speaker to another. Transcript text, timings and the processing record stay as they are."
+        }
+        (Locale::EnUs, "no_speakers") => "This document has no speakers.",
+        (Locale::EnUs, "speaker_name_unchanged") => "The name did not change.",
+        (Locale::EnUs, "rename") => "Rename",
+        (Locale::EnUs, "merge") => "Merge",
+        (Locale::EnUs, "delete") => "Delete",
+        (Locale::EnUs, "merge_into_placeholder") => "Merge into…",
+        (Locale::EnUs, "merge_document_speaker_description") => {
+            "Every segment of the merged speaker goes to the target speaker and takes its name. Transcript text, timings and the processing record do not change; a body that is still the generated transcript is regenerated."
+        }
+        (Locale::EnUs, "delete_speaker_profile_description") => {
+            "The profile is removed from the library file, and later processing no longer recognizes this speaker by it. Speaker names in processed documents stay as they are."
+        }
+        (Locale::EnUs, "merge_speaker_profiles_description") => {
+            "The voice samples of both profiles join the target profile, the merged profile's name is kept as an alias, and the merged profile leaves the library. Speaker names in processed documents stay as they are."
+        }
         (Locale::EnUs, "choose_directory") => "Choose directory",
         (Locale::EnUs, "speaker_library_migration_title") => {
             "Migrate the existing speaker library?"
@@ -381,7 +424,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "hierarchy_updated") => "Project hierarchy updated.",
         (Locale::EnUs, "order_updated") => "Project order updated.",
         (Locale::EnUs, "download_updated") => "Download task updated.",
-        (Locale::EnUs, "speaker_merged") => "Merged speaker-1 into speaker-0 and updated Markdown.",
         (Locale::EnUs, "cancellation_requested") => "Cancellation requested…",
         (Locale::EnUs, "select_project_first") => "Select a project first.",
         (Locale::EnUs, "project_missing") => "Selected project no longer exists.",
@@ -635,6 +677,40 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::EnUs, "reorder_failed") => format!("Cannot reorder project: {value}"),
         (Locale::ZhCn, "speaker_edit_failed") => format!("说话人编辑失败：{value}"),
         (Locale::EnUs, "speaker_edit_failed") => format!("Speaker edit failed: {value}"),
+        (Locale::ZhCn, "speaker_renamed") => format!("已将说话人重命名为「{value}」。"),
+        (Locale::EnUs, "speaker_renamed") => format!("Renamed the speaker to “{value}”."),
+        (Locale::ZhCn, "speaker_name_for") => format!("{value} 的名称"),
+        (Locale::EnUs, "speaker_name_for") => format!("Name of {value}"),
+        (Locale::ZhCn, "merge_speaker_for") => format!("把 {value} 合并到"),
+        (Locale::EnUs, "merge_speaker_for") => format!("Merge {value} into"),
+        (Locale::ZhCn, "speaker_segments") => format!("{value} 段"),
+        (Locale::EnUs, "speaker_segments") => format!("Segments: {value}"),
+        (Locale::ZhCn, "speaker_profile_renamed") => format!("已将档案重命名为「{value}」。"),
+        (Locale::EnUs, "speaker_profile_renamed") => {
+            format!("Renamed the profile to “{value}”.")
+        }
+        (Locale::ZhCn, "speaker_profile_deleted") => format!("已删除档案「{value}」。"),
+        (Locale::EnUs, "speaker_profile_deleted") => format!("Deleted the profile “{value}”."),
+        (Locale::ZhCn, "speaker_profile_name_for") => format!("档案 {value} 的名称"),
+        (Locale::EnUs, "speaker_profile_name_for") => format!("Name of the profile {value}"),
+        (Locale::ZhCn, "merge_speaker_profile_for") => format!("把档案 {value} 合并到"),
+        (Locale::EnUs, "merge_speaker_profile_for") => format!("Merge the profile {value} into"),
+        (Locale::ZhCn, "speaker_profile_samples") => format!("{value} 个样本"),
+        (Locale::EnUs, "speaker_profile_samples") => format!("Samples: {value}"),
+        (Locale::ZhCn, "speaker_profile_aliases") => format!("别名：{value}"),
+        (Locale::EnUs, "speaker_profile_aliases") => format!("Also: {value}"),
+        (Locale::ZhCn, "speaker_library_failed") => format!("声纹库没有更改：{value}"),
+        (Locale::EnUs, "speaker_library_failed") => {
+            format!("The speaker library was not changed: {value}")
+        }
+        (Locale::ZhCn, "speaker_library_read_failed") => format!("无法读取声纹库：{value}"),
+        (Locale::EnUs, "speaker_library_read_failed") => {
+            format!("Cannot read the speaker library: {value}")
+        }
+        (Locale::ZhCn, "delete_speaker_profile_title") => format!("删除档案「{value}」？"),
+        (Locale::EnUs, "delete_speaker_profile_title") => {
+            format!("Delete the profile “{value}”?")
+        }
         (Locale::ZhCn, "asr_model_required") => {
             format!("请先为 {value} 选择已安装的 ASR 模型。")
         }
@@ -726,6 +802,34 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
             format!("Cannot read the documents folder: {value}")
         }
         _ => value.to_string(),
+    }
+}
+
+/// A message naming two things, such as the speaker merged and the one it
+/// is merged into.
+pub fn message_pair(locale: Locale, key: &str, first: &str, second: &str) -> String {
+    match (locale, key) {
+        (Locale::ZhCn, "merge_document_speaker_title") => {
+            format!("将「{first}」合并到「{second}」？")
+        }
+        (Locale::EnUs, "merge_document_speaker_title") => {
+            format!("Merge “{first}” into “{second}”?")
+        }
+        (Locale::ZhCn, "speakers_merged") => format!("已将「{first}」合并到「{second}」。"),
+        (Locale::EnUs, "speakers_merged") => format!("Merged “{first}” into “{second}”."),
+        (Locale::ZhCn, "merge_speaker_profiles_title") => {
+            format!("将档案「{first}」合并到「{second}」？")
+        }
+        (Locale::EnUs, "merge_speaker_profiles_title") => {
+            format!("Merge the profile “{first}” into “{second}”?")
+        }
+        (Locale::ZhCn, "speaker_profiles_merged") => {
+            format!("已将档案「{first}」合并到「{second}」。")
+        }
+        (Locale::EnUs, "speaker_profiles_merged") => {
+            format!("Merged the profile “{first}” into “{second}”.")
+        }
+        _ => format!("{first} → {second}"),
     }
 }
 

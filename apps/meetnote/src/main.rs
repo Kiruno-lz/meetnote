@@ -203,6 +203,7 @@ fn main() {
         asr_model,
         diarization_model,
         assistant,
+        speaker_library: ui::speaker_library_at(&settings_snapshot.speaker_library_path),
     };
     ui::run(
         BackendInventory::new(

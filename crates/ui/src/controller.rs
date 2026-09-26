@@ -8,18 +8,20 @@ use crate::{
     editor::DocumentEditor,
     i18n, pages,
     route::Route,
+    speakers::{document_speakers, NameEntry, NameRows, SpeakerConfirmation, SpeakerProfiles},
     state::{ContentMode, UiState},
     theme,
 };
 use application::{
     BackendInventory, DocumentCommandError, DocumentIssue, DocumentSnapshot, InstallationQuery,
-    InstallationService, InstallationState, ProcessingOptions, WorkspaceService,
+    InstallationService, InstallationState, JsonSpeakerProfileStore, ProcessingOptions,
+    SpeakerLibraryError, SpeakerLibraryService, WorkspaceService,
 };
 use contracts::{
     AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, DocumentCommand,
     DocumentCommandEnvelope, DocumentCommandResult, DocumentRecord, ModelRef,
 };
-use domain::{DocumentState, ProjectId};
+use domain::{DocumentState, ProjectId, ProjectStatus};
 use futures::{FutureExt, StreamExt};
 use gpui::{
     prelude::*, App, Bounds, ClickEvent, Context, Entity, FocusHandle, PathPromptOptions,
@@ -308,6 +310,16 @@ pub struct DesktopServices {
     pub asr_model: ModelRef,
     pub diarization_model: ModelRef,
     pub assistant: Arc<dyn AssistantUiService>,
+    /// The Speaker Library at the configured `speaker_library_path`. The
+    /// desktop replaces it with [`speaker_library_at`] the new path whenever
+    /// that setting changes.
+    pub speaker_library: SpeakerLibraryService,
+}
+
+/// The Speaker Library stored at `path`. Opening it reads nothing; every
+/// call of the service reads or replaces the file.
+pub fn speaker_library_at(path: impl Into<std::path::PathBuf>) -> SpeakerLibraryService {
+    SpeakerLibraryService::new(Arc::new(JsonSpeakerProfileStore::new(path)))
 }
 
 /// The catalog and download operations the desktop calls. `ModelManager`
@@ -414,6 +426,19 @@ pub(crate) struct RootView {
     /// The last document write refused for a newer revision, until the user
     /// reloads.
     pub(crate) document_conflict: Option<DocumentConflict>,
+    /// The Speaker Library section's profiles and last outcome.
+    pub(crate) speaker_profiles: SpeakerProfiles,
+    /// The path `services.speaker_library` was opened on.
+    speaker_library_path: String,
+    /// The rename and merge controls of the speakers of the document shown
+    /// in the Original view, and the revision they were read at.
+    pub(crate) speaker_rows: Option<NameRows<(ProjectId, u64, i18n::Locale)>>,
+    /// The rename and merge controls of the Speaker Library profiles.
+    pub(crate) profile_rows: Option<NameRows<(u64, i18n::Locale)>>,
+    /// The document whose speaker correction is in flight.
+    pub(crate) speaker_command: Option<ProjectId>,
+    /// The speaker merge or profile change waiting for confirmation.
+    pub(crate) speaker_confirmation: Option<SpeakerConfirmation>,
 }
 
 /// A document write refused because the document changed after the UI read
@@ -437,6 +462,7 @@ pub(crate) struct ScrollAreas {
     pub(crate) document_issues: ScrollHandle,
     pub(crate) detail: ScrollHandle,
     pub(crate) models: ScrollHandle,
+    pub(crate) settings: ScrollHandle,
 }
 
 /// Asked when the Speaker Library moves to a path without a library while
@@ -492,6 +518,8 @@ impl RootView {
                 .iter()
                 .map(|model| model.model_family.clone()),
         );
+        // `main` opens the service on the configured path.
+        let speaker_library_path = settings_draft.speaker_library_path.clone();
         let mut this = Self {
             inventory,
             services,
@@ -524,9 +552,17 @@ impl RootView {
             document_issues: Vec::new(),
             editor,
             document_conflict: None,
+            speaker_profiles: SpeakerProfiles::default(),
+            speaker_library_path,
+            speaker_rows: None,
+            profile_rows: None,
+            speaker_command: None,
+            speaker_confirmation: None,
         };
-        // The tree stays empty until the list loads on a worker.
+        // The tree and the Speaker Library stay empty until they load on
+        // workers.
         this.reload_projects(cx);
+        this.reload_speaker_profiles(cx);
         this.follow_installation(cx);
         this.follow_assistant_jobs(cx);
         this.refresh_installation();
@@ -997,6 +1033,7 @@ impl RootView {
     ) {
         change(&mut self.settings_draft);
         self.sync_appearance(cx);
+        self.sync_speaker_library(cx);
         self.queue_settings_write(
             SettingsWrite::Field {
                 change: Arc::new(change),
@@ -1074,6 +1111,7 @@ impl RootView {
                 change(&mut self.settings_draft);
                 self.sync_locale(cx);
                 self.sync_appearance(cx);
+                self.sync_speaker_library(cx);
                 self.settings_error = None;
                 self.ui.notice = saved_notice;
             }
@@ -1117,6 +1155,7 @@ impl RootView {
         self.settings_selectors = None;
         self.sync_locale(cx);
         self.sync_appearance(cx);
+        self.sync_speaker_library(cx);
         self.refresh_installation();
         self.ui.notice = settings_error_text(self.ui.locale, &error);
         self.settings_error = Some(error);
@@ -1629,6 +1668,433 @@ impl RootView {
         );
     }
 
+    /// Follows the draft's Speaker Library path: a new path opens the
+    /// library there, gives processing and the workspace's documents-root
+    /// check the new path, and reads the profiles again.
+    fn sync_speaker_library(&mut self, cx: &mut Context<Self>) {
+        if self.speaker_library_path == self.settings_draft.speaker_library_path {
+            return;
+        }
+        self.speaker_library_path = self.settings_draft.speaker_library_path.clone();
+        self.services.speaker_library = speaker_library_at(&self.speaker_library_path);
+        if let Err(error) = self
+            .services
+            .workspace
+            .set_processing_options(processing_options(&self.settings_draft))
+        {
+            self.ui.notice = i18n::message(self.ui.locale, "processing_failed", &error);
+        }
+        self.speaker_profiles.status = None;
+        self.reload_speaker_profiles(cx);
+    }
+
+    /// Reads the Speaker Library profiles on a worker.
+    pub(crate) fn reload_speaker_profiles(&mut self, cx: &mut Context<Self>) {
+        let generation = self.speaker_profiles.begin_read();
+        let library = self.services.speaker_library.clone();
+        cx.spawn(async move |this, cx| {
+            let read = runtime::spawn_blocking(move || {
+                library.profiles().map_err(|error| error.to_string())
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                let locale = this.ui.locale;
+                this.speaker_profiles.apply_read(generation, read, locale);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Builds the rename and merge controls of the speakers of `document`
+    /// when the Original view shows it; they are rebuilt once its revision
+    /// or the locale changes.
+    fn ensure_speaker_rows(
+        &mut self,
+        document: Option<&DocumentState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ui.route != Route::Meetings || self.ui.content_mode != ContentMode::Original {
+            return;
+        }
+        let Some(document) =
+            document.filter(|document| document.processing_status() == ProjectStatus::Ready)
+        else {
+            return;
+        };
+        let locale = self.ui.locale;
+        let key = (document.id().clone(), document.revision(), locale);
+        if self
+            .speaker_rows
+            .as_ref()
+            .is_some_and(|rows| rows.is_for(&key))
+        {
+            return;
+        }
+        let entries = document_speakers(document)
+            .iter()
+            .map(|speaker| NameEntry::speaker(speaker, locale))
+            .collect::<Vec<_>>();
+        self.speaker_rows = Some(NameRows::build(
+            key,
+            &entries,
+            i18n::text(locale, "merge_into_placeholder"),
+            (
+                Self::rename_document_speaker,
+                Self::ask_merge_document_speaker,
+            ),
+            window,
+            cx,
+        ));
+    }
+
+    /// Builds the rename and merge controls of the Speaker Library profiles
+    /// on the Settings route; they are rebuilt once the list or the locale
+    /// changes.
+    fn ensure_profile_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.ui.route != Route::Settings {
+            return;
+        }
+        let locale = self.ui.locale;
+        let key = (self.speaker_profiles.version, locale);
+        if self
+            .profile_rows
+            .as_ref()
+            .is_some_and(|rows| rows.is_for(&key))
+        {
+            return;
+        }
+        let entries = self
+            .speaker_profiles
+            .profiles
+            .iter()
+            .map(|profile| NameEntry::profile(profile, locale))
+            .collect::<Vec<_>>();
+        self.profile_rows = Some(NameRows::build(
+            key,
+            &entries,
+            i18n::text(locale, "merge_into_placeholder"),
+            (
+                Self::rename_speaker_profile,
+                Self::ask_merge_speaker_profiles,
+            ),
+            window,
+            cx,
+        ));
+    }
+
+    /// Sets the typed name as `speaker_id`'s label, or clears it when the
+    /// field is blank: one `SetSpeakerLabel` against the revision the list
+    /// was read at.
+    pub(crate) fn rename_document_speaker(&mut self, speaker_id: String, cx: &mut Context<Self>) {
+        let Some(rows) = &self.speaker_rows else {
+            return;
+        };
+        let Some((name, changed)) = rows.edited_name(&speaker_id, cx) else {
+            return;
+        };
+        let (document_id, revision, _) = rows.key().clone();
+        if !changed {
+            self.ui.notice = i18n::text(self.ui.locale, "speaker_name_unchanged").into();
+            cx.notify();
+            return;
+        }
+        let shown = if name.is_empty() { &speaker_id } else { &name };
+        let done = i18n::message(self.ui.locale, "speaker_renamed", shown);
+        let label = (!name.is_empty()).then_some(name);
+        self.run_speaker_command(
+            DocumentCommand::SetSpeakerLabel {
+                document_id,
+                expected_revision: revision,
+                speaker_id,
+                label,
+            },
+            revision,
+            done,
+            cx,
+        );
+    }
+
+    /// Asks before `from`'s segments are given to `into`.
+    pub(crate) fn ask_merge_document_speaker(
+        &mut self,
+        from: String,
+        into: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(rows) = &self.speaker_rows else {
+            return;
+        };
+        let (document_id, revision, _) = rows.key().clone();
+        let Some(document) = self
+            .projects
+            .iter()
+            .find(|document| document.id() == &document_id)
+        else {
+            return;
+        };
+        let speakers = document_speakers(document);
+        let name = |id: &str| {
+            speakers
+                .iter()
+                .find(|speaker| speaker.id == id)
+                .map_or_else(|| id.to_string(), |speaker| speaker.name().to_string())
+        };
+        self.speaker_confirmation = Some(SpeakerConfirmation::MergeDocumentSpeaker {
+            document_id,
+            revision,
+            from_name: name(&from),
+            into_name: name(&into),
+            from,
+            into,
+        });
+        self.dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Runs a speaker correction on a worker and reloads the tree, whose
+    /// new revision rebuilds the speaker rows. A conflict opens the
+    /// conflict notice; nothing was written then.
+    fn run_speaker_command(
+        &mut self,
+        command: DocumentCommand,
+        revision: u64,
+        done: String,
+        cx: &mut Context<Self>,
+    ) {
+        let (DocumentCommand::SetSpeakerLabel { document_id, .. }
+        | DocumentCommand::MergeSpeaker { document_id, .. }) = &command
+        else {
+            return;
+        };
+        if self.speaker_command.is_some() {
+            return;
+        }
+        let envelope = DocumentCommandEnvelope::new(
+            format!("ui-speaker-{document_id}-{revision}"),
+            command.clone(),
+        );
+        self.speaker_command = Some(document_id.clone());
+        cx.notify();
+        let commands = self.services.workspace.document_commands();
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || commands.execute(envelope)).await;
+            this.update(cx, |this, cx| {
+                this.speaker_command = None;
+                match result {
+                    Ok(_) => {
+                        this.ui.notice = done;
+                        this.reload_projects(cx);
+                    }
+                    Err(error) => this.document_write_failed(error, "speaker_edit_failed", cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Renames profile `profile_id` to the typed name.
+    pub(crate) fn rename_speaker_profile(&mut self, profile_id: String, cx: &mut Context<Self>) {
+        let Some((name, changed)) = self
+            .profile_rows
+            .as_ref()
+            .and_then(|rows| rows.edited_name(&profile_id, cx))
+        else {
+            return;
+        };
+        if !changed {
+            let unchanged = i18n::text(self.ui.locale, "speaker_name_unchanged");
+            self.speaker_profiles.status = Some((unchanged.into(), false));
+            cx.notify();
+            return;
+        }
+        let done = i18n::message(self.ui.locale, "speaker_profile_renamed", &name);
+        self.run_speaker_library_call(
+            move |library| library.rename(&profile_id, name).map(drop),
+            done,
+            cx,
+        );
+    }
+
+    /// Asks before profile `profile_id` is deleted.
+    pub(crate) fn ask_delete_speaker_profile(
+        &mut self,
+        profile_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(profile) = self.speaker_profiles.find(&profile_id) else {
+            return;
+        };
+        self.speaker_confirmation = Some(SpeakerConfirmation::DeleteProfile {
+            name: profile.display_name.clone(),
+            profile_id,
+        });
+        self.dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Asks before profile `source_id` is merged into `target_id`.
+    pub(crate) fn ask_merge_speaker_profiles(
+        &mut self,
+        source_id: String,
+        target_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = |id: &str| {
+            self.speaker_profiles
+                .find(id)
+                .map(|profile| profile.display_name.clone())
+        };
+        let (Some(source_name), Some(target_name)) = (name(&source_id), name(&target_id)) else {
+            return;
+        };
+        self.speaker_confirmation = Some(SpeakerConfirmation::MergeProfiles {
+            source_id,
+            source_name,
+            target_id,
+            target_name,
+        });
+        self.dialog_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    /// Closes the open speaker confirmation; `confirmed` runs its change.
+    pub(crate) fn answer_speaker_confirmation(&mut self, confirmed: bool, cx: &mut Context<Self>) {
+        let Some(confirmation) = self.speaker_confirmation.take() else {
+            return;
+        };
+        let locale = self.ui.locale;
+        match confirmation {
+            SpeakerConfirmation::MergeDocumentSpeaker {
+                document_id,
+                revision,
+                from,
+                from_name,
+                into,
+                into_name,
+            } => {
+                if let Some(rows) = &self.speaker_rows {
+                    rows.clear_merge_choice(&from, cx);
+                }
+                if confirmed {
+                    let done =
+                        i18n::message_pair(locale, "speakers_merged", &from_name, &into_name);
+                    self.run_speaker_command(
+                        DocumentCommand::MergeSpeaker {
+                            document_id,
+                            expected_revision: revision,
+                            from_speaker_id: from,
+                            into_speaker_id: into,
+                        },
+                        revision,
+                        done,
+                        cx,
+                    );
+                }
+            }
+            SpeakerConfirmation::DeleteProfile { profile_id, name } => {
+                if confirmed {
+                    let done = i18n::message(locale, "speaker_profile_deleted", &name);
+                    self.run_speaker_library_call(
+                        move |library| match library.delete(&profile_id)? {
+                            true => Ok(()),
+                            false => Err(SpeakerLibraryError::ProfileNotFound(profile_id)),
+                        },
+                        done,
+                        cx,
+                    );
+                }
+            }
+            SpeakerConfirmation::MergeProfiles {
+                source_id,
+                source_name,
+                target_id,
+                target_name,
+            } => {
+                if let Some(rows) = &self.profile_rows {
+                    rows.clear_merge_choice(&source_id, cx);
+                }
+                if confirmed {
+                    let done = i18n::message_pair(
+                        locale,
+                        "speaker_profiles_merged",
+                        &source_name,
+                        &target_name,
+                    );
+                    self.run_speaker_library_call(
+                        move |library| library.merge_profiles(&target_id, &source_id).map(drop),
+                        done,
+                        cx,
+                    );
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    fn speaker_confirmation_dialog(&self, cx: &mut Context<Self>) -> Option<ConfirmDialog> {
+        let confirmation = self.speaker_confirmation.as_ref()?;
+        let locale = self.ui.locale;
+        let confirm = cx.entity().downgrade();
+        let cancel = confirm.clone();
+        Some(
+            ConfirmDialog::new(confirmation.title(locale), &self.dialog_focus)
+                .description(confirmation.description(locale))
+                .on_confirm(confirmation.confirm_label(locale), move |_, cx| {
+                    confirm
+                        .update(cx, |this, cx| this.answer_speaker_confirmation(true, cx))
+                        .ok();
+                })
+                .on_cancel(i18n::text(locale, "cancel"), move |_, cx| {
+                    cancel
+                        .update(cx, |this, cx| this.answer_speaker_confirmation(false, cx))
+                        .ok();
+                }),
+        )
+    }
+
+    /// Runs one Speaker Library call on a worker, shows its outcome and
+    /// reads the profiles again; calls run one at a time.
+    fn run_speaker_library_call(
+        &mut self,
+        call: impl FnOnce(&SpeakerLibraryService) -> Result<(), SpeakerLibraryError> + Send + 'static,
+        done: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.speaker_profiles.busy {
+            return;
+        }
+        self.speaker_profiles.busy = true;
+        cx.notify();
+        let library = self.services.speaker_library.clone();
+        cx.spawn(async move |this, cx| {
+            let result =
+                runtime::spawn_blocking(move || call(&library).map_err(|error| error.to_string()))
+                    .await;
+            this.update(cx, |this, cx| {
+                this.speaker_profiles.busy = false;
+                this.speaker_profiles.status = Some(match result {
+                    Ok(()) => (done, false),
+                    Err(error) => (
+                        i18n::message(this.ui.locale, "speaker_library_failed", &error),
+                        true,
+                    ),
+                });
+                this.reload_speaker_profiles(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(crate) fn select_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
         self.ui.selected_project = Some(project_id);
         self.ui.notice.clear();
@@ -1638,6 +2104,10 @@ impl RootView {
     pub(crate) fn navigate(&mut self, route: Route, cx: &mut Context<Self>) {
         self.ui.route = route;
         self.ui.detail_open = false;
+        // Processing or another writer may have changed the library.
+        if route == Route::Settings {
+            self.reload_speaker_profiles(cx);
+        }
         cx.notify();
     }
 
@@ -2658,37 +3128,6 @@ impl RootView {
         .detach();
     }
 
-    pub(crate) fn merge_speaker(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(project_id) = self.ui.selected_project.clone() else {
-            return;
-        };
-        let generation = self.begin_projects_reload();
-        let workspace = self.services.workspace.clone();
-        cx.spawn(async move |this, cx| {
-            let result = runtime::spawn_blocking(move || {
-                let project = workspace.merge_speaker(&project_id, "speaker-1", "speaker-0")?;
-                Ok::<_, String>((project, workspace.document_snapshot()))
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok((project, projects)) => {
-                        this.apply_projects(generation, projects, cx);
-                        this.ui.selected_project = Some(project.id().clone());
-                        this.ui.notice = i18n::text(this.ui.locale, "speaker_merged").into();
-                    }
-                    Err(error) => {
-                        this.ui.notice =
-                            i18n::message(this.ui.locale, "speaker_edit_failed", &error.to_string())
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     pub(crate) fn process_or_cancel(
         &mut self,
         event: &ClickEvent,
@@ -2744,6 +3183,7 @@ impl RootView {
         self.ui.notice = i18n::message(self.ui.locale, "processing", project.title());
         let workspace = self.services.workspace.clone();
         let settings = self.settings_draft.clone();
+        let options = processing_options(&settings);
         let asr_model = match (settings.asr_backend_id, settings.asr_model) {
             (Some(_), Some(model)) => model,
             (Some(backend_id), None) => {
@@ -2767,13 +3207,6 @@ impl RootView {
             }
             (None, None) => self.services.diarization_model.clone(),
             (None, Some(model)) => model,
-        };
-        let options = ProcessingOptions {
-            language: settings.language.clone(),
-            expected_speakers: settings.expected_speakers,
-            device: settings.compute_device,
-            speaker_library_path: Some(settings.speaker_library_path.clone()),
-            diarization_stages: settings.diarization_stages.clone(),
         };
         let speaker_library_path = settings.speaker_library_path;
         cx.notify();
@@ -2913,6 +3346,18 @@ impl RootView {
             JobEvent::Cancelled { .. } => i18n::message(self.ui.locale, "job_cancelled", source),
         };
         cx.notify();
+    }
+}
+
+/// What processing reads from the settings; the workspace also checks a
+/// documents root against its Speaker Library path.
+fn processing_options(settings: &AppSettings) -> ProcessingOptions {
+    ProcessingOptions {
+        language: settings.language.clone(),
+        expected_speakers: settings.expected_speakers,
+        device: settings.compute_device,
+        speaker_library_path: Some(settings.speaker_library_path.clone()),
+        diarization_stages: settings.diarization_stages.clone(),
     }
 }
 
@@ -3114,6 +3559,8 @@ impl Render for RootView {
             .as_ref()
             .and_then(|id| self.projects.iter().find(|project| project.id() == id))
             .cloned();
+        self.ensure_speaker_rows(selected.as_ref(), window, cx);
+        self.ensure_profile_rows(window, cx);
         let body = match self.ui.route {
             Route::Assistant => pages::assistant::render(self, cx).into_any_element(),
             Route::Meetings => {
@@ -3134,6 +3581,7 @@ impl Render for RootView {
         });
         pages::chrome::shell(self, body, detail, cx)
             .children(self.speaker_library_dialog(cx))
+            .children(self.speaker_confirmation_dialog(cx))
             .children(gpui_component::Root::render_dialog_layer(window, cx))
     }
 }

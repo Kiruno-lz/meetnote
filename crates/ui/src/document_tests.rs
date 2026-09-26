@@ -27,29 +27,29 @@ use persistence::FileDocumentRepository;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-type View = gpui::Entity<RootView>;
+pub(crate) type View = gpui::Entity<RootView>;
 type Area = gpui::Entity<controls::TextArea>;
 
 /// A documents root of its own, removed when the test ends.
-struct DocumentsRoot(PathBuf);
+pub(crate) struct DocumentsRoot(PathBuf);
 
 impl DocumentsRoot {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let path = temp_directory();
         std::fs::create_dir_all(&path).unwrap();
         Self(path)
     }
 
-    fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.0
     }
 
-    fn repository(&self) -> FileDocumentRepository {
+    pub(crate) fn repository(&self) -> FileDocumentRepository {
         FileDocumentRepository::open(&self.0).unwrap()
     }
 
     /// Stores `document` with its revision as set, and `markdown`.
-    fn put(&self, document: DocumentState, markdown: &str) {
+    pub(crate) fn put(&self, document: DocumentState, markdown: &str) {
         self.repository()
             .save(document, Some(markdown.into()))
             .unwrap();
@@ -57,25 +57,25 @@ impl DocumentsRoot {
 
     /// Another writer of the directory, such as an external editor or Agent:
     /// each save is the stored revision plus one.
-    fn external_save(&self, document: DocumentState) {
+    pub(crate) fn external_save(&self, document: DocumentState) {
         DocumentService::new(Arc::new(self.repository()))
             .save(document)
             .unwrap();
     }
 
-    fn read(&self, id: &str) -> DocumentRecord {
+    pub(crate) fn read(&self, id: &str) -> DocumentRecord {
         self.repository()
             .read(&ProjectId::new(id))
             .unwrap()
             .unwrap_or_else(|| panic!("`{id}` is on disk"))
     }
 
-    fn revision(&self, id: &str) -> u64 {
+    pub(crate) fn revision(&self, id: &str) -> u64 {
         self.read(id).state.revision()
     }
 
     /// The bytes of the package's `state.json` and `document.md`.
-    fn package_bytes(&self, id: &str) -> [Vec<u8>; 2] {
+    pub(crate) fn package_bytes(&self, id: &str) -> [Vec<u8>; 2] {
         ["state.json", "document.md"].map(|file| std::fs::read(self.0.join(id).join(file)).unwrap())
     }
 }
@@ -88,7 +88,7 @@ impl Drop for DocumentsRoot {
 
 /// The desktop on `root`, on the Meetings route once the list has loaded,
 /// and the change stream that reloads it.
-fn open_on<'a>(
+pub(crate) fn open_on<'a>(
     cx: &'a mut TestAppContext,
     root: &DocumentsRoot,
 ) -> (
@@ -115,24 +115,24 @@ fn open_on<'a>(
     (view, cx, changes)
 }
 
-fn leak(selector: String) -> &'static str {
+pub(crate) fn leak(selector: String) -> &'static str {
     Box::leak(selector.into_boxed_str())
 }
 
 #[track_caller]
-fn rendered(cx: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
+pub(crate) fn rendered(cx: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
     cx.debug_bounds(selector)
         .unwrap_or_else(|| panic!("`{selector}` is not rendered"))
 }
 
-fn within(inner: Bounds<Pixels>, outer: Bounds<Pixels>) -> bool {
+pub(crate) fn within(inner: Bounds<Pixels>, outer: Bounds<Pixels>) -> bool {
     inner.left() >= outer.left()
         && inner.top() >= outer.top()
         && inner.right() <= outer.right()
         && inner.bottom() <= outer.bottom()
 }
 
-fn select_row(cx: &mut VisualTestContext, view: &View, id: &str) {
+pub(crate) fn select_row(cx: &mut VisualTestContext, view: &View, id: &str) {
     click_selector(cx, leak(format!("project-row-{id}")));
     let id = ProjectId::new(id);
     wait_for(cx, view, |root| {
@@ -194,7 +194,7 @@ fn drag_row(cx: &mut VisualTestContext, id: &str, target: gpui::Point<Pixels>) {
 }
 
 /// A processed root document at revision 3 in the `review` status.
-fn processed(id: &str, title: &str) -> DocumentState {
+pub(crate) fn processed(id: &str, title: &str) -> DocumentState {
     let mut state = DocumentState::new(ProjectId::new(id), title, format!("{id}.wav"));
     state.schema.revision = 3;
     state.document_status.value = "review".into();

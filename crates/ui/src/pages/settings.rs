@@ -1,13 +1,17 @@
 use crate::{
     assistant_ui::ConnectionProbeKind,
-    components::{setting_control_row, settings_section, SETTING_CONTROL_WIDTH},
+    components::{
+        setting_control_row, settings_section, SETTING_CONTROL_WIDTH, SETTING_LABEL_WIDTH,
+    },
     controller::{settings_error_text, RootView},
     controls::{Dropdown, TextField},
     i18n::text as tr,
+    pages::meetings::marked_control,
+    speakers::profile_summary,
     theme::{self, Tokens},
 };
 use contracts::AgentWriteMode;
-use gpui::{div, prelude::*, px, Context, IntoElement};
+use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
 use gpui_component::{
     button::{Button, ButtonVariants},
     scroll::ScrollableElement as _,
@@ -22,12 +26,13 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         return div().flex_1().into_any_element();
     };
 
+    let scroll = root.scroll.settings.clone();
     let body = div()
         .id("settings-scroll")
         .debug_selector(|| "settings-scroll".into())
-        .flex_1()
-        .min_h_0()
-        .overflow_y_scrollbar()
+        .size_full()
+        .overflow_y_scroll()
+        .track_scroll(&scroll)
         .flex()
         .flex_col()
         .gap_5()
@@ -137,32 +142,9 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                     &tokens,
                 )
                 .into_any_element(),
-                setting_control_row(
-                    tr(root.ui.locale, "speaker_library_path"),
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .w(px(280.))
-                                .text_xs()
-                                .text_color(tokens.text_muted)
-                                .child(root.settings_draft.speaker_library_path.clone()),
-                        )
-                        .child(
-                            Button::new("choose-speaker-library")
-                                .secondary()
-                                .compact()
-                                .label(tr(root.ui.locale, "choose_directory"))
-                                .on_click(cx.listener(RootView::choose_speaker_library_directory)),
-                        )
-                        .into_any_element(),
-                    &tokens,
-                )
-                .into_any_element(),
             ],
         ))
+        .child(speaker_library_section(root, &tokens, cx))
         .child(settings_section(
             tr(root.ui.locale, "runtime"),
             vec![setting_control_row(
@@ -198,7 +180,184 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .text_sm()
                 .child(settings_error_text(root.ui.locale, error))
         }))
-        .child(body)
+        // The scrollbar stays outside the scrolled form.
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .child(body)
+                .vertical_scrollbar(&scroll),
+        )
+        .into_any_element()
+}
+
+/// The position of the Speaker Library section among the form's sections.
+pub(crate) const SPEAKER_LIBRARY_SECTION: usize = 4;
+/// The width of a profile's name field and merge select.
+const PROFILE_CONTROL_WIDTH: Pixels = px(200.);
+
+/// The Speaker Library: its path, then every profile with a name field and
+/// Rename, a select that merges it into another profile and Delete; merging
+/// and deleting ask first. Library calls run on workers; their outcome
+/// shows under the path.
+fn speaker_library_section(
+    root: &RootView,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let locale = root.ui.locale;
+    let library = &root.speaker_profiles;
+    let mut rows = vec![setting_control_row(
+        tr(locale, "speaker_library_path"),
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .w(px(280.))
+                    .text_xs()
+                    .text_color(tokens.text_muted)
+                    .child(root.settings_draft.speaker_library_path.clone()),
+            )
+            .child(
+                Button::new("choose-speaker-library")
+                    .secondary()
+                    .compact()
+                    .label(tr(locale, "choose_directory"))
+                    .on_click(cx.listener(RootView::choose_speaker_library_directory)),
+            )
+            .into_any_element(),
+        tokens,
+    )
+    .into_any_element()];
+    let outcome = library
+        .read_error
+        .clone()
+        .map(|error| (error, true))
+        .or_else(|| library.status.clone());
+    if let Some((message, failed)) = outcome {
+        rows.push(
+            div()
+                .id("speaker-library-status")
+                .debug_selector(|| "speaker-library-status".into())
+                .mt(tokens.spacing.sm)
+                .text_sm()
+                .text_color(if failed {
+                    tokens.warning_text
+                } else {
+                    tokens.text_muted
+                })
+                .child(message)
+                .into_any_element(),
+        );
+    }
+    let empty_key = if !library.loaded {
+        Some("speaker_library_loading")
+    } else if library.profiles.is_empty() && library.read_error.is_none() {
+        Some("speaker_library_empty")
+    } else {
+        None
+    };
+    if let Some(key) = empty_key {
+        rows.push(
+            div()
+                .mt(tokens.spacing.sm)
+                .text_sm()
+                .text_color(tokens.text_muted)
+                .child(tr(locale, key))
+                .into_any_element(),
+        );
+    }
+    let controls = root.profile_rows.as_ref();
+    for profile in &library.profiles {
+        let Some(row) = controls.and_then(|rows| rows.row(&profile.id)) else {
+            continue;
+        };
+        let id = profile.id.clone();
+        let (rename_id, delete_id) = (id.clone(), id.clone());
+        let marked = |name: &str| {
+            let selector = format!("{name}-{id}");
+            move || selector.clone()
+        };
+        rows.push(
+            div()
+                .debug_selector(marked("speaker-profile"))
+                .mt(tokens.spacing.sm)
+                .min_h(tokens.control_height.lg)
+                .flex()
+                .items_center()
+                .gap(tokens.spacing.lg)
+                .text_sm()
+                .child(
+                    div()
+                        .w(SETTING_LABEL_WIDTH)
+                        .flex_shrink_0()
+                        .flex()
+                        .flex_col()
+                        .child(theme::tail_faded_label(
+                            format!("speaker-profile-label-{id}"),
+                            profile.display_name.clone(),
+                            tokens.content,
+                        ))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(tokens.text_muted)
+                                .child(profile_summary(profile, locale)),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child(marked_control(
+                            format!("speaker-profile-name-{id}"),
+                            PROFILE_CONTROL_WIDTH,
+                            row.name.clone().into_any_element(),
+                        ))
+                        .child(
+                            Button::new(format!("rename-speaker-profile-{id}"))
+                                .debug_selector(marked("rename-speaker-profile"))
+                                .secondary()
+                                .compact()
+                                .label(tr(locale, "rename"))
+                                .disabled(library.busy)
+                                .on_click(cx.listener(move |root, _, _, cx| {
+                                    root.rename_speaker_profile(rename_id.clone(), cx)
+                                })),
+                        )
+                        .children(row.merge_into.as_ref().map(|select| {
+                            marked_control(
+                                format!("merge-speaker-profile-{id}"),
+                                PROFILE_CONTROL_WIDTH,
+                                select.clone().into_any_element(),
+                            )
+                        }))
+                        .child(
+                            Button::new(format!("delete-speaker-profile-{id}"))
+                                .debug_selector(marked("delete-speaker-profile"))
+                                .danger()
+                                .compact()
+                                .label(tr(locale, "delete"))
+                                .disabled(library.busy)
+                                .on_click(cx.listener(move |root, _, window, cx| {
+                                    root.ask_delete_speaker_profile(delete_id.clone(), window, cx)
+                                })),
+                        ),
+                )
+                .into_any_element(),
+        );
+    }
+    div()
+        .flex_shrink_0()
+        .debug_selector(|| "speaker-library-section".into())
+        .child(settings_section(tr(locale, "speaker_library"), rows))
         .into_any_element()
 }
 

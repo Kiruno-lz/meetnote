@@ -62,6 +62,54 @@ mod tests {
         assert!(found.is_empty(), "unchecked document writes: {found:#?}");
     }
 
+    /// The crate's code without its tests: test-only modules are skipped and
+    /// a file's `#[cfg(test)] mod tests`, always its last item, is cut off.
+    fn production_sources() -> impl Iterator<Item = (&'static str, &'static str)> {
+        const TEST_ONLY: [&str; 3] = ["document_tests.rs", "source_files.rs", "speaker_tests.rs"];
+        crate::source_files::SOURCES
+            .iter()
+            .filter(|(path, _)| !TEST_ONLY.contains(path))
+            .map(|(path, source)| {
+                let end = source
+                    .find("#[cfg(test)]\nmod tests")
+                    .unwrap_or(source.len());
+                (*path, &source[..end])
+            })
+    }
+
+    #[test]
+    fn production_sources_leave_out_the_tests() {
+        let lib = production_sources()
+            .find(|(path, _)| *path == "lib.rs")
+            .map(|(_, source)| source)
+            .unwrap();
+        assert!(lib.contains("pub use controller::"));
+        assert!(!lib.contains("mod tests"));
+        assert!(production_sources().all(|(path, _)| path != "speaker_tests.rs"));
+    }
+
+    /// Speakers are corrected by revision-checked commands on the speakers
+    /// the document has: the UI neither calls the workspace's unchecked
+    /// merge nor names a speaker of its own.
+    #[test]
+    fn the_ui_merges_no_fixed_speaker_and_no_unchecked_merge() {
+        const FORBIDDEN: [&str; 3] = [".merge_speaker(", "::merge_speaker(", "speaker-1"];
+        let found = production_sources()
+            .flat_map(|(path, source)| {
+                source.lines().enumerate().flat_map(move |(index, line)| {
+                    FORBIDDEN
+                        .iter()
+                        .filter(move |pattern| line.contains(**pattern))
+                        .map(move |pattern| format!("{path}:{}: {pattern}", index + 1))
+                })
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            found.is_empty(),
+            "fixed or unchecked speaker merges: {found:#?}"
+        );
+    }
+
     /// Installation facts, downloads and document changes arrive from
     /// service subscriptions; the controller neither probes files nor runs
     /// threads of its own.

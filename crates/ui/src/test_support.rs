@@ -24,6 +24,11 @@ pub enum Overlay {
     /// On Meetings: the editor on the selected document's draft, under the
     /// notice of a save another writer's change refused.
     EditorConflict,
+    /// On Meetings: the Original view of the selected document, its
+    /// speakers above the transcript.
+    OriginalSpeakers,
+    /// On Settings: the form scrolled to the Speaker Library section.
+    SpeakerLibrary,
 }
 
 /// The issues the scanner reports for an unreadable package and a stray
@@ -134,6 +139,13 @@ impl MainWindow {
                 });
                 cx.notify();
             }
+            Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Original, cx),
+            Overlay::SpeakerLibrary => {
+                root.scroll
+                    .settings
+                    .scroll_to_top_of_item(crate::pages::settings::SPEAKER_LIBRARY_SECTION);
+                cx.notify();
+            }
         });
     }
 
@@ -161,13 +173,20 @@ impl MainWindow {
                 root.document_conflict = None;
                 cx.notify();
             }
+            Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Summary, cx),
+            Overlay::SpeakerLibrary => {
+                root.scroll.settings.set_offset(gpui::Point::default());
+                cx.notify();
+            }
         });
     }
 
-    /// Whether the startup installation probe and project list, which load
-    /// on worker threads, have reached the view.
+    /// Whether the startup installation probe, project list and Speaker
+    /// Library, which load on worker threads, have reached the view.
     pub fn startup_loaded(&self, cx: &App) -> bool {
         let root = self.view.read(cx);
-        root.projects_loaded && !root.installation.catalog.is_empty()
+        root.projects_loaded
+            && !root.installation.catalog.is_empty()
+            && root.speaker_profiles.loaded
     }
 }

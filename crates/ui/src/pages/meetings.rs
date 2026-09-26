@@ -2,6 +2,7 @@ use crate::{
     components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
     i18n::{self, text as tr},
+    speakers::{document_speakers, DocumentSpeaker},
     state::{self, ContentMode},
     theme::{self, Tokens},
 };
@@ -17,6 +18,10 @@ use gpui_component::{
 const ISSUE_LIST_HEIGHT: Pixels = px(168.);
 /// The width of the document status select.
 const STATUS_SELECT_WIDTH: Pixels = px(240.);
+/// The name column of a speaker row.
+const SPEAKER_NAME_WIDTH: Pixels = px(160.);
+/// The width of a speaker's name field and merge select.
+const SPEAKER_FIELD_WIDTH: Pixels = px(200.);
 
 /// The current document in the content plane; its project tree lives in
 /// the sidebar (`project_tree`).
@@ -252,8 +257,9 @@ fn main_panel(
                         .unwrap_or_else(|| tr(locale, "no_summary").into()),
                 ),
             ),
-            ContentMode::Original if ready => {
-                content.children(project.results.speaker_segments.iter().map(|segment| {
+            ContentMode::Original if ready => content
+                .child(speakers_panel(root, project, &tokens, cx))
+                .children(project.results.speaker_segments.iter().map(|segment| {
                     div()
                         .pb_3()
                         .child(
@@ -270,8 +276,7 @@ fn main_panel(
                                 )),
                         )
                         .child(div().text_sm().child(segment.text.clone()))
-                }))
-            }
+                })),
             _ => content.child(
                 div()
                     .text_color(tokens.text_muted)
@@ -350,20 +355,6 @@ fn main_panel(
             mode,
             cx,
         ));
-        let has_second_speaker = project
-            .results
-            .speaker_segments
-            .iter()
-            .any(|segment| segment.speaker_id == "speaker-1");
-        if ready && has_second_speaker {
-            controls = controls.child(
-                Button::new("merge-speaker")
-                    .secondary()
-                    .compact()
-                    .label(tr(locale, "merge_speaker"))
-                    .on_click(cx.listener(RootView::merge_speaker)),
-            );
-        }
         panel = panel.child(controls);
         // The scrollbar stays outside the fade.
         panel = panel.child(
@@ -409,6 +400,129 @@ fn main_panel(
                 state::model_status(&root.installation, locale)
             )),
     )
+}
+
+/// The speakers of the document above its transcript, each with its
+/// segment count, a name field with Rename, and a select that merges it
+/// into another speaker after a confirmation.
+fn speakers_panel(
+    root: &RootView,
+    project: &DocumentState,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> AnyElement {
+    let locale = root.ui.locale;
+    let busy = root.speaker_command.is_some();
+    // Built for this document during the same render.
+    let rows = root
+        .speaker_rows
+        .as_ref()
+        .filter(|rows| &rows.key().0 == project.id());
+    let speakers = document_speakers(project);
+    let mut panel = div()
+        .debug_selector(|| "document-speakers".into())
+        .mb(tokens.spacing.lg)
+        .pb(tokens.spacing.md)
+        .border_b_1()
+        .border_color(tokens.hairline)
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.sm)
+        .child(div().text_sm().child(tr(locale, "speakers")))
+        .child(
+            div()
+                .text_xs()
+                .text_color(tokens.text_muted)
+                .child(tr(locale, "speakers_hint")),
+        );
+    if speakers.is_empty() {
+        panel = panel.child(
+            div()
+                .text_sm()
+                .text_color(tokens.text_muted)
+                .child(tr(locale, "no_speakers")),
+        );
+    }
+    for speaker in &speakers {
+        let Some(row) = rows.and_then(|rows| rows.row(&speaker.id)) else {
+            continue;
+        };
+        let id = speaker.id.clone();
+        let rename_id = id.clone();
+        panel = panel.child(
+            div()
+                .debug_selector(move || format!("speaker-row-{id}"))
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(tokens.spacing.sm)
+                .child(
+                    div()
+                        .w(SPEAKER_NAME_WIDTH)
+                        .flex_shrink_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().text_sm().child(theme::tail_faded_label(
+                            format!("speaker-label-{}", speaker.id),
+                            speaker.name().to_string(),
+                            tokens.surface,
+                        )))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(tokens.text_muted)
+                                .child(speaker_facts(speaker, locale)),
+                        ),
+                )
+                .child(marked_control(
+                    format!("speaker-name-{}", speaker.id),
+                    SPEAKER_FIELD_WIDTH,
+                    row.name.clone().into_any_element(),
+                ))
+                .child(
+                    Button::new(format!("rename-speaker-{}", speaker.id))
+                        .debug_selector({
+                            let id = speaker.id.clone();
+                            move || format!("rename-speaker-{id}")
+                        })
+                        .secondary()
+                        .compact()
+                        .label(tr(locale, "rename"))
+                        .disabled(busy)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.rename_document_speaker(rename_id.clone(), cx)
+                        })),
+                )
+                .children(row.merge_into.as_ref().map(|select| {
+                    marked_control(
+                        format!("merge-speaker-{}", speaker.id),
+                        SPEAKER_FIELD_WIDTH,
+                        select.clone().into_any_element(),
+                    )
+                })),
+        );
+    }
+    panel.into_any_element()
+}
+
+/// The quiet line under a speaker's name: its segment count, after its id
+/// when a label is shown above.
+fn speaker_facts(speaker: &DocumentSpeaker, locale: i18n::Locale) -> String {
+    let segments = i18n::message(locale, "speaker_segments", &speaker.segments.to_string());
+    match speaker.label {
+        Some(_) => format!("{} · {segments}", speaker.id),
+        None => segments,
+    }
+}
+
+/// A fixed-width wrapper that `selector` marks for tests; the control
+/// inside carries its own label.
+pub(crate) fn marked_control(selector: String, width: Pixels, control: AnyElement) -> gpui::Div {
+    div()
+        .debug_selector(move || selector.clone())
+        .w(width)
+        .flex_shrink_0()
+        .child(control)
 }
 
 /// The notice of a document write another writer's change refused, with

@@ -52,6 +52,16 @@ impl SelectOption {
         }
     }
 
+    /// An option whose value is not what the user reads, such as an id.
+    pub(crate) fn labelled(value: impl Into<String>, label: impl Into<SharedString>) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+            detail: None,
+            disabled: false,
+        }
+    }
+
     /// A quiet note after the label, in the menu only.
     pub(crate) fn detail(mut self, detail: impl Into<SharedString>) -> Self {
         self.detail = Some(detail.into());

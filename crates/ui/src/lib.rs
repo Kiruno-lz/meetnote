@@ -10,12 +10,15 @@ mod pages;
 mod route;
 #[cfg(test)]
 mod source_files;
+#[cfg(test)]
+mod speaker_tests;
+mod speakers;
 mod state;
 #[doc(hidden)]
 pub mod test_support;
 mod theme;
 
-pub use controller::{run, DesktopServices, ModelService};
+pub use controller::{run, speaker_library_at, DesktopServices, ModelService};
 
 #[cfg(test)]
 mod tests {
@@ -372,6 +375,10 @@ mod tests {
                 artifacts: Vec::new(),
             },
             assistant,
+            // Nothing on disk; a test that changes the path opens a file.
+            speaker_library: application::SpeakerLibraryService::new(Arc::new(
+                application::InMemorySpeakerProfileStore::default(),
+            )),
         }
     }
 
@@ -796,15 +803,28 @@ mod tests {
         let gate = Gate::default();
         let inner = InMemoryDocumentRepository::default();
         let mut merged = DocumentState::new(ProjectId::new("merge"), "Merge", "merge.wav");
-        merged.results.speaker_segments = vec![domain::SpeakerTaggedSegment {
-            transcript_segment_id: "t-1".into(),
-            speaker_id: "speaker-1".into(),
-            speaker_profile_id: None,
-            speaker_label: None,
-            start_ms: 0,
-            end_ms: 1_000,
-            text: "merge me".into(),
-        }];
+        merged.results.speaker_segments = ["speaker-0", "speaker-1"]
+            .into_iter()
+            .map(|speaker| domain::SpeakerTaggedSegment {
+                transcript_segment_id: format!("t-{speaker}"),
+                speaker_id: speaker.into(),
+                speaker_profile_id: None,
+                speaker_label: None,
+                start_ms: 0,
+                end_ms: 1_000,
+                text: "merge me".into(),
+            })
+            .collect();
+        // Processed, so the Original view lists its speakers.
+        merged.record_processing(domain::ProcessingRecord {
+            processing_revision: 1,
+            completed_at_ms: 0,
+            input_audio_checksum: None,
+            asr: Default::default(),
+            diarization: Default::default(),
+            alignment: Default::default(),
+            runtime: Default::default(),
+        });
         application::DocumentRepository::save(&inner, merged, None).unwrap();
         let settings = test_settings();
         let mut services = desktop_services(
@@ -835,15 +855,30 @@ mod tests {
         assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-import");
         wait_for(cx, &view, |root| root.projects.len() == 3);
 
-        // A speaker merge.
+        // A confirmed speaker merge in the Original view; the list reload
+        // after it waits in the gate.
+        view.update(cx, |root, cx| {
+            root.ui.selected_project = Some(ProjectId::new("merge"));
+            root.set_content_mode(state::ContentMode::Original, cx);
+        });
+        cx.run_until_parked();
         gate.arm();
         view.update_in(cx, |root, window, cx| {
-            root.ui.selected_project = Some(ProjectId::new("merge"));
-            root.merge_speaker(&gpui::ClickEvent::default(), window, cx)
+            root.ask_merge_document_speaker("speaker-1".into(), "speaker-0".into(), window, cx);
+            root.answer_speaker_confirmation(true, cx);
         });
         assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-merge");
-        let merged = i18n::text(i18n::Locale::ZhCn, "speaker_merged");
-        wait_for(cx, &view, |root| root.ui.notice == merged);
+        // The released reload shows the merged document.
+        wait_for(cx, &view, |root| {
+            root.projects.iter().any(|project| {
+                project.id().as_str() == "merge"
+                    && project
+                        .results
+                        .speaker_segments
+                        .iter()
+                        .all(|segment| segment.speaker_id == "speaker-0")
+            })
+        });
     }
 
     /// A repository holding the `first` document.
