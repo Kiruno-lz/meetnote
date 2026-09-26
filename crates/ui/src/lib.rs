@@ -7,6 +7,8 @@ mod controls;
 mod document_tests;
 mod editor;
 mod i18n;
+#[cfg(test)]
+mod model_tests;
 mod pages;
 mod route;
 #[cfg(test)]
@@ -557,7 +559,7 @@ mod tests {
     /// Serializes the tests that hold a `runtime::spawn_blocking` worker in a
     /// gate: every test in the process shares that pool of at most four
     /// workers, and a held test still needs a free one for its settings save.
-    fn hold_a_worker_alone() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn hold_a_worker_alone() -> std::sync::MutexGuard<'static, ()> {
         static HELD: Mutex<()> = Mutex::new(());
         HELD.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -565,7 +567,7 @@ mod tests {
 
     /// Holds the calls that pass it while armed, until released.
     #[derive(Clone, Default)]
-    struct Gate(Arc<(Mutex<GateState>, std::sync::Condvar)>);
+    pub(crate) struct Gate(Arc<(Mutex<GateState>, std::sync::Condvar)>);
 
     #[derive(Default)]
     struct GateState {
@@ -577,7 +579,7 @@ mod tests {
     }
 
     impl Gate {
-        fn arm(&self) {
+        pub(crate) fn arm(&self) {
             let mut state = self.0 .0.lock().unwrap();
             state.armed = true;
             state.entered = 0;
@@ -586,7 +588,7 @@ mod tests {
         /// Lets the held calls go and waits until each has left, so arming
         /// the gate again cannot catch a call that was already released.
         #[track_caller]
-        fn release(&self) {
+        pub(crate) fn release(&self) {
             let (lock, changed) = &*self.0;
             let mut state = lock.lock().unwrap();
             state.armed = false;
@@ -600,7 +602,7 @@ mod tests {
             assert!(!left.timed_out(), "a released call did not leave the gate");
         }
 
-        fn counts(&self) -> (usize, usize) {
+        pub(crate) fn counts(&self) -> (usize, usize) {
             let state = self.0 .0.lock().unwrap();
             (state.entered, state.holding)
         }
@@ -608,7 +610,7 @@ mod tests {
         /// Waits while armed. The wait is bounded, so a call made on the UI
         /// thread stalls the test briefly and then fails it instead of
         /// hanging it.
-        fn pass(&self) {
+        pub(crate) fn pass(&self) {
             let (lock, released) = &*self.0;
             let mut state = lock.lock().unwrap();
             if !state.armed {
@@ -764,12 +766,19 @@ mod tests {
         ) -> Result<(), models::manager::ModelManagerError> {
             self.inner.cancel(id)
         }
+
+        fn reprobe(
+            &self,
+            model_id: &str,
+        ) -> Result<models::manager::ReprobeTask, models::manager::ModelManagerError> {
+            self.inner.reprobe(model_id)
+        }
     }
 
     /// While `gate` holds the one call the UI just started, navigating and
     /// an instant settings save still complete; then the call is released.
     #[track_caller]
-    fn assert_ui_responsive_while_held(
+    pub(crate) fn assert_ui_responsive_while_held(
         cx: &mut gpui::VisualTestContext,
         view: &gpui::Entity<controller::RootView>,
         gate: &Gate,

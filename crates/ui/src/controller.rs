@@ -32,6 +32,7 @@ use gpui::{
 use gpui_platform::application;
 use models::manager::{
     DownloadEvent, DownloadId, DownloadState, DownloadTask, ModelManager, ModelManagerError,
+    ReprobeTask,
 };
 use models::{ModelAvailability, ModelCatalog, ModelInstallState};
 use runtime::{JobContext, JobEvent};
@@ -40,6 +41,7 @@ use settings::{
     AssistantSettings, CredentialUpdate, LlmProtocol, MaterialPreference, SettingsService,
     ThemePreference,
 };
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -393,6 +395,7 @@ pub trait ModelService: Send + Sync {
     fn pause(&self, id: DownloadId) -> Result<(), ModelManagerError>;
     fn resume(&self, id: DownloadId) -> Result<(), ModelManagerError>;
     fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError>;
+    fn reprobe(&self, model_id: &str) -> Result<ReprobeTask, ModelManagerError>;
 }
 
 impl ModelService for ModelManager {
@@ -422,6 +425,40 @@ impl ModelService for ModelManager {
 
     fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError> {
         ModelManager::cancel(self, id)
+    }
+
+    fn reprobe(&self, model_id: &str) -> Result<ReprobeTask, ModelManagerError> {
+        ModelManager::reprobe(self, model_id)
+    }
+}
+
+/// A re-probe the Models page shows as running: while `reprobe` runs, then
+/// until the installation service publishes the state that carries the
+/// record it wrote.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReprobeWait {
+    Running,
+    /// The record probed at `probed_at_ms` is written.
+    Written {
+        probed_at_ms: u64,
+    },
+}
+
+impl ReprobeWait {
+    /// Whether `entry`, the model's entry in a published state, ends the
+    /// wait: it carries the written record or a later one, or its record
+    /// cannot be read. A model no longer in the catalog ends it too.
+    pub(crate) fn settled_by(&self, entry: Option<&ModelAvailability>) -> bool {
+        let Self::Written { probed_at_ms } = *self else {
+            return false;
+        };
+        entry.is_none_or(|entry| {
+            entry.record_error.is_some()
+                || entry
+                    .probe
+                    .as_ref()
+                    .is_some_and(|probe| probe.probed_at_ms >= probed_at_ms)
+        })
     }
 }
 
@@ -505,6 +542,8 @@ pub(crate) struct RootView {
     pub(crate) audio: AudioCheck,
     /// The Workspace section's documents-root switch.
     pub(crate) documents_root_switch: DocumentsRootSwitch,
+    /// The models the Models page shows re-probing.
+    pub(crate) model_reprobes: BTreeMap<String, ReprobeWait>,
 }
 
 /// A documents-root switch in flight, and the outcome of the last one: its
@@ -635,6 +674,7 @@ impl RootView {
             speaker_confirmation: None,
             audio: AudioCheck::default(),
             documents_root_switch: DocumentsRootSwitch::default(),
+            model_reprobes: Default::default(),
         };
         // The tree and the Speaker Library stay empty until they load on
         // workers.
@@ -673,6 +713,7 @@ impl RootView {
                 let applied = this.update(cx, |this, cx| {
                     if installation != this.installation {
                         this.installation = installation;
+                        this.settle_reprobes();
                         // Model selects show install state; rebuild them.
                         this.settings_selectors = None;
                         cx.notify();
@@ -684,6 +725,14 @@ impl RootView {
             }
         })
         .detach();
+    }
+
+    /// Ends the re-probe waits the current installation state settles.
+    fn settle_reprobes(&mut self) {
+        let catalog = &self.installation.catalog;
+        self.model_reprobes.retain(|model_id, wait| {
+            !wait.settled_by(catalog.iter().find(|entry| entry.model.id == *model_id))
+        });
     }
 
     /// Asks the installation service to probe the current query on its
@@ -3286,6 +3335,14 @@ impl RootView {
         cx.notify();
     }
 
+    /// Shows or hides a model card's checksums and probe results.
+    pub(crate) fn toggle_model_details(&mut self, model_id: String, cx: &mut Context<Self>) {
+        if !self.ui.expanded_model_details.insert(model_id.clone()) {
+            self.ui.expanded_model_details.remove(&model_id);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn select_asr_backend(&mut self, backend_id: String, cx: &mut Context<Self>) {
         self.ui.notice = i18n::message(
             self.ui.locale,
@@ -3394,6 +3451,57 @@ impl RootView {
                         this.ui.notice = i18n::message(
                             this.ui.locale,
                             "download_failed",
+                            &format!("{model_id}: {error}"),
+                        );
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Re-probes an installed model: `reprobe` runs off the main thread and
+    /// the manager probes on a thread of its own. The page shows it running
+    /// until the installation service, which republishes when a re-probe
+    /// ends, publishes the state that carries the written record.
+    pub(crate) fn reprobe_model(&mut self, model_id: String, cx: &mut Context<Self>) {
+        if self.model_reprobes.contains_key(&model_id) {
+            return;
+        }
+        self.model_reprobes
+            .insert(model_id.clone(), ReprobeWait::Running);
+        self.ui.notice = i18n::message(self.ui.locale, "reprobing_model", &model_id);
+        cx.notify();
+        let models = self.services.model_manager.clone();
+        cx.spawn(async move |this, cx| {
+            let id = model_id.clone();
+            let finished = match runtime::spawn_blocking(move || models.reprobe(&id)).await {
+                Ok(task) => match task.finished.await {
+                    Ok(written) => written.map_err(|error| error.to_string()),
+                    Err(canceled) => Err(canceled.to_string()),
+                },
+                Err(error) => Err(error.to_string()),
+            };
+            this.update(cx, |this, cx| {
+                match finished {
+                    Ok(record) => {
+                        this.ui.notice = i18n::message(this.ui.locale, "reprobed", &model_id);
+                        this.model_reprobes.insert(
+                            model_id,
+                            ReprobeWait::Written {
+                                probed_at_ms: record.probed_at_ms,
+                            },
+                        );
+                        // The state may have arrived first.
+                        this.settle_reprobes();
+                    }
+                    Err(error) => {
+                        this.model_reprobes.remove(&model_id);
+                        this.ui.notice = i18n::message(
+                            this.ui.locale,
+                            "reprobe_failed",
                             &format!("{model_id}: {error}"),
                         );
                     }

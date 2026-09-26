@@ -1,8 +1,10 @@
 //! The fixture the L2 route tests (`routes.rs`) and the L3 screenshots
 //! (`visual.rs`) both render: settings in a directory of their own, three
 //! in-memory documents (one a semantic child), the `zh-CN` locale, a pinned
-//! appearance (dark opaque unless a test picks another), a model root that
-//! holds no model, and an Assistant service that is never reached. The
+//! appearance (dark opaque unless a test picks another), a model root in
+//! which Paraformer is installed with a passing probe record and the native
+//! diarization bundle failed its download probe (`install_fixture_models`),
+//! and an Assistant service that is never reached. The
 //! weekly recording both of its documents name exists and the interview's
 //! does not (`fixture_directory`). Every value is fixed, so a route renders
 //! the same frame on every run. `pixels.rs` beside this file is not part of
@@ -135,6 +137,7 @@ fn services(appearance: settings::AppearanceSettings) -> ui::DesktopServices {
         repository.save(document, None).expect("fixture document");
     }
     let temp = temp_directory();
+    install_fixture_models(&temp.join("models"));
     let model_manager = ModelManager::new(catalog(), temp.join("models"));
     ui::DesktopServices {
         workspace: WorkspaceService::new(
@@ -145,7 +148,6 @@ fn services(appearance: settings::AppearanceSettings) -> ui::DesktopServices {
             DocumentService::new(repository),
         ),
         settings: settings(&temp, appearance),
-        // A model root that does not exist: every catalog model is missing.
         installation: application::InstallationService::new(model_manager.clone()),
         model_manager: Arc::new(model_manager),
         asr_model: missing_model("whisper-rs"),
@@ -153,6 +155,84 @@ fn services(appearance: settings::AppearanceSettings) -> ui::DesktopServices {
         assistant: Arc::new(UnreachableAssistant),
         speaker_library: speaker_library(),
     }
+}
+
+/// The installed model with a passing record and the failed one.
+const PASSING_MODEL: &str = "paraformer-zh";
+const FAILING_MODEL: &str = "speakrs-community-1-cpu";
+const REJECTION: &str = "the embedding graph cannot find its external data";
+
+/// Writes the probe records the manager would have written at the fixed
+/// instant, in its `meetnote.model-probe.v1` format: Paraformer's download
+/// verified its archive and passed its backend, and its files are
+/// installed; the native bundle's backend rejected the download, so the
+/// manager removed the files and kept the failure. Every other model has no
+/// file and no record.
+fn install_fixture_models(model_root: &std::path::Path) {
+    let catalog = catalog();
+    let model = |id: &str| {
+        catalog
+            .find(id)
+            .expect("the catalog lists the fixture model")
+    };
+    let checksums = |entry: &models::ModelCatalogEntry, result: &str| {
+        entry
+            .artifacts
+            .iter()
+            .map(|artifact| {
+                format!(
+                    r#"{{"filename": "{}", "expectedSha256": "{}", "result": "{result}"}}"#,
+                    artifact.filename,
+                    artifact
+                        .sha256
+                        .as_deref()
+                        .expect("the fixture pins every checksum")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let write = |path: std::path::PathBuf, content: String| {
+        std::fs::create_dir_all(path.parent().expect("a model file has a folder"))
+            .expect("the fixture model folder");
+        std::fs::write(path, content).expect("a fixture model file");
+    };
+
+    let passing = model(PASSING_MODEL);
+    for artifact in passing.artifact_paths(model_root) {
+        write(artifact, "fixture weights".into());
+    }
+    write(
+        passing.probe_record_path(model_root),
+        format!(
+            r#"{{"schemaVersion": "meetnote.model-probe.v1", "modelId": "{PASSING_MODEL}",
+  "probe": {{"kind": "download", "probedAtMs": {FIXTURE_TIME_MS}, "revision": "{}",
+    "checksums": [{}],
+    "backends": [{{"backendId": "sherpa-onnx", "result": "passed"}}],
+    "outcome": {{"result": "passed"}}}}}}"#,
+            passing.revision.as_deref().unwrap_or_default(),
+            checksums(passing, "archive-matched"),
+        ),
+    );
+
+    let failing = model(FAILING_MODEL);
+    let reason = format!(
+        r#"{{"kind": "backend-probe", "backendId": "diarization-native", "message": "{REJECTION}"}}"#
+    );
+    let revision = failing.revision.as_deref().unwrap_or_default();
+    write(
+        failing.probe_record_path(model_root),
+        format!(
+            r#"{{"schemaVersion": "meetnote.model-probe.v1", "modelId": "{FAILING_MODEL}",
+  "probe": {{"kind": "download", "probedAtMs": {FIXTURE_TIME_MS}, "revision": "{revision}",
+    "checksums": [{}],
+    "backends": [{{"backendId": "diarization-native", "result": "failed", "message": "{REJECTION}"}}],
+    "outcome": {{"result": "failed", "reason": {reason}}}}},
+  "failure": {{"operation": "download", "failedAtMs": {FIXTURE_TIME_MS}, "revision": "{revision}",
+    "reason": {reason}}}}}"#,
+            checksums(failing, "matched"),
+        ),
+    );
 }
 
 /// Three fixed profiles in memory, so no test reads or writes a library file.

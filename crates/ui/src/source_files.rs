@@ -26,6 +26,7 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("editor.rs", include_str!("editor.rs")),
     ("i18n.rs", include_str!("i18n.rs")),
     ("lib.rs", include_str!("lib.rs")),
+    ("model_tests.rs", include_str!("model_tests.rs")),
     ("pages/assistant.rs", include_str!("pages/assistant.rs")),
     ("pages/chrome.rs", include_str!("pages/chrome.rs")),
     ("pages/detail.rs", include_str!("pages/detail.rs")),

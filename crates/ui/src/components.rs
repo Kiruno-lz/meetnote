@@ -172,10 +172,57 @@ pub(crate) fn timestamp(milliseconds: u64) -> String {
     )
 }
 
+/// A Unix-millisecond instant as its minute in UTC, `2026-08-29 10:40 UTC`:
+/// UTC, so the text does not depend on the machine's time zone.
+pub(crate) fn utc_time(unix_ms: u64) -> String {
+    let seconds = unix_ms / 1_000;
+    let (year, month, day) = civil_from_days((seconds / 86_400) as i64);
+    let minute = seconds % 86_400 / 60;
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
+        minute / 60,
+        minute % 60
+    )
+}
+
+/// The proleptic Gregorian date `days` after 1970-01-01 (Howard Hinnant's
+/// `civil_from_days`).
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_from_march = (5 * day_of_year + 2) / 153;
+    let day = (day_of_year - (153 * month_from_march + 2) / 5 + 1) as u32;
+    let month = if month_from_march < 10 {
+        month_from_march + 3
+    } else {
+        month_from_march - 9
+    } as u32;
+    (year_of_era + era * 400 + i64::from(month <= 2), month, day)
+}
+
 pub(crate) fn backend_ids(descriptors: &[application::BackendDescriptor]) -> String {
     descriptors
         .iter()
         .map(|descriptor| descriptor.id.as_str())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::utc_time;
+
+    #[test]
+    fn utc_time_reads_the_gregorian_minute_in_utc() {
+        assert_eq!(utc_time(0), "1970-01-01 00:00 UTC");
+        // A leap day, and its last minute's seconds are dropped.
+        assert_eq!(utc_time(951_782_400_000), "2000-02-29 00:00 UTC");
+        assert_eq!(utc_time(951_868_799_999), "2000-02-29 23:59 UTC");
+        assert_eq!(utc_time(1_788_000_000_000), "2026-08-29 10:40 UTC");
+        assert_eq!(utc_time(4_107_542_400_000), "2100-03-01 00:00 UTC");
+    }
 }

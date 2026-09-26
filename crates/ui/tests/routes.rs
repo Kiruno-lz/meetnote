@@ -290,6 +290,39 @@ fn the_models_route_shows_the_catalog_and_aligned_status_chips(cx: &mut TestAppC
     }
 }
 
+/// The fixture's records load through the installation service: the
+/// installed model shows its passing probe and offers a re-probe, the
+/// failed one its failure and a retry, and neither record is unreadable.
+#[gpui::test]
+fn the_models_route_shows_the_fixture_probe_record_and_failure(cx: &mut TestAppContext) {
+    let (_window, cx, page) = open_route(cx, Route::Models);
+    let [passing, failing] = ["paraformer-zh", "speakrs-community-1-cpu"];
+    for (selector, shown) in [
+        (format!("model-probe-{passing}"), true),
+        (format!("model-reprobe-{passing}"), true),
+        (format!("model-failure-{passing}"), false),
+        (format!("model-record-error-{passing}"), false),
+        (format!("model-probe-{failing}"), true),
+        (format!("model-failure-{failing}"), true),
+        (format!("model-retry-{failing}"), true),
+        (format!("model-download-{failing}"), false),
+        (format!("model-record-error-{failing}"), false),
+    ] {
+        let selector = leak(selector);
+        if shown {
+            assert!(
+                within(visible(cx, selector), page),
+                "{selector} is on the page"
+            );
+        } else {
+            assert!(
+                cx.debug_bounds(selector).is_none(),
+                "{selector} is not shown"
+            );
+        }
+    }
+}
+
 #[gpui::test]
 fn the_settings_route_shows_the_form_and_language_select(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Settings);
