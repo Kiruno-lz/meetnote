@@ -4,11 +4,11 @@
 //! The saved `AppearanceSettings` resolve against the window's system
 //! appearance (`ThemePreference::System`) and the system's reduce-transparency
 //! flag into a light or dark palette and a glass or opaque material. The
-//! resulting `Tokens` live in a gpui global that pages read through
-//! `tokens(cx)`; the same tokens drive gpui-component (`component`) and the
-//! window's background appearance. Only this module holds color literals.
+//! resulting `Tokens` live in a gpui global that pages and controls read
+//! through `tokens(cx)`; the same tokens set the window's background
+//! appearance and gpui-base's scrollbar theme. Only this module holds color
+//! literals.
 
-mod component;
 mod contrast;
 mod edge_fade;
 mod frost;
@@ -22,6 +22,7 @@ pub(crate) use material::{Material, Mode};
 pub(crate) use platform::{system_accessibility, Accessibility};
 pub(crate) use tokens::Tokens;
 
+use crate::controls;
 use gpui::{App, Global, Window, WindowAppearance, WindowBackgroundAppearance};
 use settings::AppearanceSettings;
 
@@ -55,8 +56,8 @@ struct ThemeState {
 
 impl Global for ThemeState {}
 
-/// Installs the theme after `gpui_component::init`. Until `attach` applies
-/// the saved appearance to a window, the tokens are the dark opaque palette.
+/// Installs the theme. Until `attach` applies the saved appearance to a
+/// window, the tokens are the dark opaque palette.
 pub(crate) fn init(accessibility: Accessibility, cx: &mut App) {
     cx.set_reduce_motion(accessibility.reduce_motion);
     let tokens = Tokens::new(Mode::Dark, Material::Opaque, cx.reduce_motion());
@@ -66,7 +67,7 @@ pub(crate) fn init(accessibility: Accessibility, cx: &mut App) {
         tokens,
         background: WindowBackgroundAppearance::Opaque,
     });
-    component::write(&tokens, None, cx);
+    controls::follow_tokens(&tokens, cx);
 }
 
 /// The tokens in effect.
@@ -129,13 +130,15 @@ fn apply_for(system: WindowAppearance, window: &mut Window, cx: &mut App) {
     let background = material.window_background_appearance();
     state.tokens = tokens;
     state.background = background;
-    component::write(&tokens, Some(window), cx);
+    controls::follow_tokens(&tokens, cx);
     // Re-applied on every change: gpui's macOS window removes its
     // `NSVisualEffectView` whenever the value is not `Blurred`.
     window.set_background_appearance(background);
+    window.refresh();
 }
 
-/// Installs `tokens` alone, without gpui-component, for primitive tests.
+/// Installs `tokens` alone, without a window to follow, for primitive
+/// tests.
 #[cfg(test)]
 pub(crate) fn install_for_test(tokens: Tokens, cx: &mut App) {
     cx.set_global(ThemeState {

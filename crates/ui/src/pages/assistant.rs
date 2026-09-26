@@ -4,16 +4,12 @@ use crate::{
         AssistantTaskState, AssistantUiError, PendingReviewState,
     },
     controller::RootView,
+    controls::{Button, Scrollbar},
     i18n::{text as tr, Locale},
     theme::{self, BlurLevel, Tokens},
 };
 use contracts::{AgentScene, DocumentProjection};
 use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Pixels, SharedString};
-use gpui_component::{
-    button::{Button, ButtonVariants},
-    scroll::ScrollableElement as _,
-    Disableable,
-};
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
@@ -126,26 +122,23 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         .child(root.assistant_inputs.prompt.clone()),
                 )
                 .child(
-                    Button::new("assistant-submit")
+                    Button::new("assistant-submit", tr(root.ui.locale, "send"))
                         .debug_selector(|| "assistant-submit".into())
                         .primary()
-                        .label(tr(root.ui.locale, "send"))
                         .disabled(busy)
                         .on_click(cx.listener(RootView::assistant_action)),
                 )
                 .child(
-                    Button::new("assistant-cancel")
+                    Button::new("assistant-cancel", tr(root.ui.locale, "cancel"))
                         .debug_selector(|| "assistant-cancel".into())
                         .secondary()
-                        .label(tr(root.ui.locale, "cancel"))
                         .disabled(!cancellable)
                         .on_click(cx.listener(RootView::cancel_assistant)),
                 )
                 .children(retry.then(|| {
-                    Button::new("assistant-retry")
+                    Button::new("assistant-retry", tr(root.ui.locale, "assistant_retry"))
                         .debug_selector(|| "assistant-retry".into())
                         .secondary()
-                        .label(tr(root.ui.locale, "assistant_retry"))
                         .disabled(busy)
                         .on_click(cx.listener(RootView::retry_assistant_run))
                 })),
@@ -296,7 +289,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .min_h_0()
                 // The scrollbar stays outside the fade.
                 .child(theme::scroll_faded(&scroll, tokens.content, results))
-                .vertical_scrollbar(&scroll)
+                .child(Scrollbar::vertical("assistant-results-scrollbar", &scroll))
                 .child(
                     div()
                         .debug_selector(|| "assistant-input-bar".into())
@@ -332,9 +325,7 @@ fn scope_button(
         AssistantScopeMode::CurrentDocument => tr(locale, "assistant_current_document"),
         AssistantScopeMode::AllVisibleDocuments => tr(locale, "assistant_all_visible_documents"),
     };
-    let mut button = Button::new(format!("assistant-scope-{label}"))
-        .compact()
-        .label(label);
+    let mut button = Button::new(format!("assistant-scope-{label}"), label).compact();
     button = if scope == selected {
         button.primary()
     } else {
@@ -351,8 +342,10 @@ fn scene_button(
     locale: Locale,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let mut button = Button::new(format!("assistant-scene-{}", scene.skill_id()))
-        .label(tr(locale, scene_key(scene)));
+    let mut button = Button::new(
+        format!("assistant-scene-{}", scene.skill_id()),
+        tr(locale, scene_key(scene)),
+    );
     button = if scene == selected {
         button.primary()
     } else {
@@ -703,13 +696,12 @@ fn render_mutation(
                 .debug_selector(move || undo.clone())
                 .flex_shrink_0()
                 .child(
-                    Button::new(format!("assistant-undo-button-{mutation_id}"))
+                    Button::new(format!("assistant-undo-button-{mutation_id}"), undo_label)
                         .when(undone, |this| {
                             this.debug_selector(move || undone_marker.clone())
                         })
                         .secondary()
                         .compact()
-                        .label(undo_label)
                         .disabled(undone || undo_in_flight)
                         .on_click(cx.listener(move |root, _, _window, cx| {
                             root.undo_assistant_mutation_for(mutation_id.clone(), cx)
@@ -927,18 +919,16 @@ fn render_pending(
                 .flex()
                 .gap_2()
                 .child(
-                    Button::new("assistant-confirm")
+                    Button::new("assistant-confirm", accept_label)
                         .debug_selector(|| "assistant-confirm".into())
                         .primary()
-                        .label(accept_label)
                         .disabled(busy)
                         .on_click(cx.listener(RootView::accept_assistant_pending)),
                 )
                 .child(
-                    Button::new("assistant-reject")
+                    Button::new("assistant-reject", reject_label)
                         .debug_selector(|| "assistant-reject".into())
                         .secondary()
-                        .label(reject_label)
                         .disabled(busy)
                         .on_click(cx.listener(RootView::reject_assistant_pending)),
                 ),

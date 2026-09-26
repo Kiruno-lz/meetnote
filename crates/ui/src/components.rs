@@ -1,13 +1,12 @@
 use crate::{
     controller::RootView,
+    controls::{Button, Separator},
     i18n,
     state::ContentMode,
     theme::{self, Tokens},
 };
 use domain::{DocumentState, ProjectId, ProjectStatus};
 use gpui::{div, prelude::*, px, Context, Pixels, Render, SharedString, Window};
-use gpui_component::button::{Button, ButtonVariants};
-use gpui_component::separator::Separator;
 
 /// A tree row being dragged, with the revision the row showed when the drag
 /// started; the move is checked against it.
@@ -108,10 +107,9 @@ pub(crate) fn mode_button(
         ContentMode::Original => "original",
         ContentMode::Edit => "edit",
     };
-    let button = Button::new(format!("content-mode-{name}"))
+    let button = Button::new(format!("content-mode-{name}"), label)
         .debug_selector(move || format!("content-mode-{name}"))
-        .compact()
-        .label(label);
+        .compact();
     let button = if mode == active {
         button.primary()
     } else {

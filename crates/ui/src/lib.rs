@@ -1317,6 +1317,49 @@ mod tests {
         std::fs::remove_dir_all(directory).ok();
     }
 
+    /// The window's focused handle.
+    fn focused(cx: &mut gpui::VisualTestContext) -> Option<gpui::FocusHandle> {
+        cx.update(|window, cx| window.focused(cx))
+    }
+
+    #[gpui::test]
+    fn tab_and_shift_tab_cycle_inside_the_open_dialog(cx: &mut TestAppContext) {
+        let (view, cx, _, [directory, ..]) = open_speaker_library_prompt(cx);
+        let dialog = view.read_with(cx, |root, _| root.dialog_focus.clone());
+        assert_eq!(
+            focused(cx).as_ref(),
+            Some(&dialog),
+            "the dialog opens focused"
+        );
+        // The page behind the dialog has tab stops of its own.
+        assert!(cx.debug_bounds("import-audio").is_some());
+
+        let mut stops = Vec::new();
+        for _ in 0..4 {
+            cx.simulate_keystrokes("tab");
+            let stop = focused(cx).expect("Tab keeps a focused control");
+            assert_ne!(stop, dialog, "Tab moves onto a control of the dialog");
+            assert!(
+                cx.update(|window, cx| dialog.contains_focused(window, cx)),
+                "Tab left the dialog"
+            );
+            stops.push(stop);
+        }
+        assert_ne!(stops[0], stops[1], "Tab moves between the dialog's buttons");
+        assert_eq!(
+            [&stops[2], &stops[3]],
+            [&stops[0], &stops[1]],
+            "Tab wraps around the dialog's two buttons"
+        );
+
+        for expected in [&stops[0], &stops[1], &stops[0]] {
+            cx.simulate_keystrokes("shift-tab");
+            assert_eq!(focused(cx).as_ref(), Some(expected), "Shift-Tab goes back");
+            assert!(cx.update(|window, cx| dialog.contains_focused(window, cx)));
+        }
+        std::fs::remove_dir_all(directory).ok();
+    }
+
     #[gpui::test]
     fn enter_confirms_the_migration_dialog(cx: &mut TestAppContext) {
         answer_migration_with_key(cx, "enter", true);
@@ -1973,38 +2016,39 @@ mod tests {
         });
     }
 
-    /// gpui-component's resolved colors except the window background.
-    fn component_colors_without_background(cx: &mut gpui::VisualTestContext) -> String {
+    /// The colors every control and page paints, except the window fill.
+    fn painted_colors_without_the_window_fill(cx: &mut gpui::VisualTestContext) -> String {
         cx.update(|_, cx| {
-            let theme = gpui_component::Theme::global(cx);
-            let mut colors = theme.colors;
-            colors.background = gpui::Hsla::default();
-            let mut tokens = theme.tokens;
-            tokens.background = gpui::Hsla::default().into();
-            format!("{colors:?}\n{tokens:?}")
+            let tokens = theme::Tokens {
+                material: theme::Material::Opaque,
+                window: gpui::Hsla::default(),
+                ..*theme::tokens(cx)
+            };
+            format!("{tokens:?}")
         })
     }
 
     #[track_caller]
     fn assert_material(cx: &mut gpui::VisualTestContext, material: theme::Material) {
         cx.update(|_, cx| {
-            let component = gpui_component::Theme::global(cx);
+            let tokens = theme::tokens(cx);
             let (alpha, background) = match material {
                 theme::Material::Glass => (0., gpui::WindowBackgroundAppearance::Blurred),
                 theme::Material::Opaque => (1., gpui::WindowBackgroundAppearance::Opaque),
             };
-            assert_eq!(theme::tokens(cx).material, material);
+            assert_eq!(tokens.material, material);
+            assert_eq!(tokens.window.a < 1., material == theme::Material::Glass);
             assert_eq!(
-                component.background.a, alpha,
-                "{material:?} component background"
+                tokens.root_background().a,
+                alpha,
+                "{material:?}: the window root's fill"
             );
-            assert_eq!(component.tokens.background.color.a, alpha, "Root's fill");
             assert_eq!(theme::window_background(cx), background);
         });
     }
 
     #[gpui::test]
-    fn glass_clears_the_component_background_and_blurs_the_window(cx: &mut TestAppContext) {
+    fn glass_clears_the_root_fill_and_blurs_the_window(cx: &mut TestAppContext) {
         // Saved settings default to the glass material.
         let services =
             desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
@@ -2031,11 +2075,11 @@ mod tests {
                         settings::MaterialPreference::Opaque => theme::Material::Opaque,
                     },
                 );
-                colors.push(component_colors_without_background(cx));
+                colors.push(painted_colors_without_the_window_fill(cx));
             }
             assert_eq!(
                 colors[0], colors[1],
-                "{theme:?}: the material may change only the background gpui-component paints"
+                "{theme:?}: the material may change only the window fill"
             );
         }
     }
@@ -2081,8 +2125,11 @@ mod tests {
             appearance(&settings).theme == settings::ThemePreference::Dark
         });
         cx.update(|_, cx| {
-            assert_eq!(theme::tokens(cx).mode, theme::Mode::Dark);
-            assert!(gpui_component::Theme::global(cx).is_dark());
+            assert_eq!(
+                *theme::tokens(cx),
+                theme::Tokens::new(theme::Mode::Dark, theme::Material::Glass, false),
+                "every control paints the dark palette"
+            );
         });
         assert_material(cx, theme::Material::Glass);
 
@@ -2129,12 +2176,13 @@ mod tests {
         let (_view, cx) = open_main_window(cx, services);
         let mode = |cx: &mut gpui::VisualTestContext| {
             cx.update(|_, cx| {
-                let mode = theme::tokens(cx).mode;
+                let tokens = *theme::tokens(cx);
                 assert_eq!(
-                    gpui_component::Theme::global(cx).is_dark(),
-                    mode == theme::Mode::Dark
+                    tokens,
+                    theme::Tokens::new(tokens.mode, tokens.material, false),
+                    "the whole palette follows the mode"
                 );
-                mode
+                tokens.mode
             })
         };
         // gpui's test window is always light.

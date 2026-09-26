@@ -57,6 +57,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "need_process") => "请先处理项目以生成带 speaker 的转录。",
         (Locale::ZhCn, "empty_meetings") => "导入音频以创建项目。",
         (Locale::ZhCn, "project_detail") => "项目详情",
+        (Locale::ZhCn, "close_detail") => "关闭详情",
         (Locale::ZhCn, "catalog_description") => "模型目录、安装状态和下载任务",
         (Locale::ZhCn, "download") => "下载",
         (Locale::ZhCn, "downloaded") => "已下载",
@@ -383,6 +384,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         }
         (Locale::EnUs, "empty_meetings") => "Import audio to create a project.",
         (Locale::EnUs, "project_detail") => "PROJECT DETAIL",
+        (Locale::EnUs, "close_detail") => "Close detail",
         (Locale::EnUs, "catalog_description") => "Catalog, installation state, and download tasks",
         (Locale::EnUs, "download") => "Download",
         (Locale::EnUs, "downloaded") => "Downloaded",

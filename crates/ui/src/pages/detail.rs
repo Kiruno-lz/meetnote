@@ -1,16 +1,13 @@
 use crate::{
     components::{empty_card, timestamp},
     controller::RootView,
+    controls::{Button, Scrollbar},
     i18n::{text as tr, Locale},
     theme::{self, Tokens},
 };
 use application::{AudioSourceError, AudioStatus};
 use domain::{document_result_statistics, DocumentState, ProvenanceGap};
 use gpui::{div, prelude::*, px, Context, IntoElement, Pixels, ScrollHandle};
-use gpui_component::{
-    button::{Button, ButtonVariants},
-    scroll::ScrollableElement as _,
-};
 
 const DETAIL_WIDTH: Pixels = px(400.);
 /// The label column of a Detail row.
@@ -69,7 +66,7 @@ pub(crate) fn render(
                 .flex_1()
                 .min_h_0()
                 .child(theme::scroll_faded(scroll, tokens.raised, body))
-                .vertical_scrollbar(scroll)
+                .child(Scrollbar::vertical("detail-scrollbar", scroll))
                 .into_any_element()
         })
         .unwrap_or_else(|| {
@@ -102,11 +99,11 @@ pub(crate) fn render(
                         .child(tr(locale, "project_detail")),
                 )
                 .child(
-                    Button::new("close-detail")
+                    Button::new("close-detail", tr(locale, "close_detail"))
                         .debug_selector(|| "close-detail".into())
                         .ghost()
                         .compact()
-                        .label("×")
+                        .glyph("×")
                         .on_click(cx.listener(RootView::close_detail)),
                 ),
         )

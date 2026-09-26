@@ -24,6 +24,31 @@ pub(crate) struct StatusColors {
     pub(crate) failed: Hsla,
 }
 
+/// The fills and text of one button variant. Hover and pressed fills
+/// replace `fill` while the pointer is over or pressing the button.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ButtonColors {
+    pub(crate) fill: Hsla,
+    pub(crate) hover: Hsla,
+    pub(crate) pressed: Hsla,
+    pub(crate) text: Hsla,
+    /// The fill of a disabled button.
+    pub(crate) disabled: Hsla,
+}
+
+/// The button variants: the one primary action of a group, secondary
+/// actions and unselected choices, borderless actions on panels, and
+/// destructive actions.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Buttons {
+    pub(crate) primary: ButtonColors,
+    pub(crate) secondary: ButtonColors,
+    pub(crate) ghost: ButtonColors,
+    pub(crate) danger: ButtonColors,
+    /// The text of every disabled button.
+    pub(crate) disabled_text: Hsla,
+}
+
 /// Corner radii: controls, cards, panels, sheets.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Radius {
@@ -145,7 +170,16 @@ pub(crate) struct Tokens {
     pub(crate) warning_text: Hsla,
     pub(crate) success: Hsla,
     pub(crate) status: StatusColors,
+    pub(crate) button: Buttons,
+    /// The ring around a control that has keyboard focus.
+    pub(crate) focus_ring: Hsla,
+    /// A scroll area's scrollbar thumb, and the thumb under the pointer or
+    /// being dragged.
+    pub(crate) scrollbar_thumb: Hsla,
+    pub(crate) scrollbar_thumb_hover: Hsla,
     pub(crate) drag_ghost: Hsla,
+    /// The UI font: the system font (SF, with PingFang for Chinese).
+    pub(crate) font_family: &'static str,
     pub(crate) radius: Radius,
     pub(crate) spacing: Spacing,
     pub(crate) control_height: ControlHeight,
@@ -176,6 +210,8 @@ const CONTROL_HEIGHT: ControlHeight = ControlHeight {
     md: px(32.),
     lg: px(40.),
 };
+
+const FONT_FAMILY: &str = ".SystemUIFont";
 
 const FONT_SIZE: FontSize = FontSize {
     xs: px(12.),
@@ -215,8 +251,8 @@ impl Tokens {
         }
     }
 
-    /// The fill gpui-component's `Root` paints over the whole window: clear
-    /// under glass, so the chrome's own tint over the blurred desktop shows.
+    /// The fill the window root paints under everything: clear under
+    /// glass, so the chrome's own tint over the blurred desktop shows.
     pub(crate) fn root_background(&self) -> Hsla {
         match self.material {
             Material::Glass => self.window.alpha(0.),
@@ -237,6 +273,55 @@ fn glass_alpha(opaque: &Tokens) -> f32 {
 
 fn hex(value: u32) -> Hsla {
     gpui::rgb(value).into()
+}
+
+/// A palette's button colors: `[fill, hover, pressed]` of the solid
+/// variants, `[hover, pressed]` of the ghost variant, the danger hue and
+/// its text, and the palette's muted text.
+struct ButtonPalette {
+    primary: [Hsla; 3],
+    primary_text: Hsla,
+    secondary: [Hsla; 3],
+    secondary_text: Hsla,
+    ghost: [Hsla; 2],
+    danger: Hsla,
+    danger_text: Hsla,
+    text_muted: Hsla,
+}
+
+/// The fill alphas of the danger wash: resting, hovered and pressed.
+const DANGER_WASH: [f32; 3] = [0.2, 0.3, 0.4];
+/// How much of a solid fill a disabled primary or danger button keeps.
+const DISABLED_FILL: f32 = 0.15;
+
+fn buttons(palette: ButtonPalette) -> Buttons {
+    let solid = |[fill, hover, pressed]: [Hsla; 3], text: Hsla, disabled: Hsla| ButtonColors {
+        fill,
+        hover,
+        pressed,
+        text,
+        disabled,
+    };
+    let [primary, ..] = palette.primary;
+    let [secondary, ..] = palette.secondary;
+    let clear = gpui::transparent_black();
+    let wash = DANGER_WASH.map(|alpha| palette.danger.alpha(alpha));
+    Buttons {
+        primary: solid(
+            palette.primary,
+            palette.primary_text,
+            primary.opacity(DISABLED_FILL),
+        ),
+        // A disabled secondary button keeps its plate; only its text dims.
+        secondary: solid(palette.secondary, palette.secondary_text, secondary),
+        ghost: solid(
+            [clear, palette.ghost[0], palette.ghost[1]],
+            palette.secondary_text,
+            clear,
+        ),
+        danger: solid(wash, palette.danger_text, wash[0].opacity(DISABLED_FILL)),
+        disabled_text: palette.text_muted.opacity(0.5),
+    }
 }
 
 /// The opaque dark palette.
@@ -275,7 +360,21 @@ fn dark() -> Tokens {
             ready: hex(0x166534),
             failed: hex(0x991b1b),
         },
+        button: buttons(ButtonPalette {
+            primary: [hex(0xf9f9f9), hex(0xf5f5f5), hex(0xe4e4e4)],
+            primary_text: hex(0x161616),
+            secondary: [hex(0x252525), hex(0x292929), hex(0x212121)],
+            secondary_text: hex(0xf9f9f9),
+            ghost: [hsla(0., 0., 0.164, 0.8), hsla(0., 0., 0.179, 0.8)],
+            danger: hex(0xf87171),
+            danger_text: hex(0xf87171),
+            text_muted: hex(0x8992a3),
+        }),
+        focus_ring: hex(0x3b82f6),
+        scrollbar_thumb: hsla(0., 0., 0.32, 0.9),
+        scrollbar_thumb_hover: hsla(0., 0., 0.32, 1.),
         drag_ghost: hex(0x263142),
+        font_family: FONT_FAMILY,
         radius: RADIUS,
         spacing: SPACING,
         control_height: CONTROL_HEIGHT,
@@ -321,7 +420,22 @@ fn light() -> Tokens {
             ready: hex(0xbbf7d0),
             failed: hex(0xfecaca),
         },
+        button: buttons(ButtonPalette {
+            primary: [hex(0x161616), hex(0x252525), hex(0x090909)],
+            primary_text: hex(0xf9f9f9),
+            secondary: [hex(0xe4e4e4), hex(0xe4e4e4), hex(0xd3d3d3)],
+            secondary_text: hex(0x161616),
+            ghost: [hsla(0., 0., 0.808, 0.8), hsla(0., 0., 0.718, 0.8)],
+            danger: hex(0xdc2626),
+            // Darker than `danger`: legible on its own wash.
+            danger_text: hex(0xa51d1d),
+            text_muted: hex(0x566072),
+        }),
+        focus_ring: hex(0x2563eb),
+        scrollbar_thumb: hsla(0., 0., 0.64, 0.9),
+        scrollbar_thumb_hover: hsla(0., 0., 0.64, 1.),
         drag_ghost: hex(0xdbe3ef),
+        font_family: FONT_FAMILY,
         radius: RADIUS,
         spacing: SPACING,
         control_height: CONTROL_HEIGHT,
@@ -463,6 +577,34 @@ mod tests {
                     ratio(tokens.text, tokens.status(status)) >= 4.5,
                     "{mode:?} text on {status:?}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn button_text_is_legible_on_every_resting_variant_and_the_ring_stands_out() {
+        for mode in MODES {
+            let tokens = Tokens::new(mode, Material::Opaque, false);
+            let buttons = tokens.button;
+            for (variant, colors) in [
+                ("primary", buttons.primary),
+                ("secondary", buttons.secondary),
+                ("ghost", buttons.ghost),
+                ("danger", buttons.danger),
+            ] {
+                for (plane, background) in
+                    [("content", tokens.content), ("surface", tokens.surface)]
+                {
+                    let fill = contrast::composite(colors.fill.into(), background.into());
+                    assert!(
+                        contrast_ratio(colors.text.into(), fill) >= BODY_TEXT_CONTRAST,
+                        "{mode:?} {variant} text on {plane}"
+                    );
+                }
+            }
+            // A focus indicator needs 3:1 against what it sits on.
+            for background in [tokens.content, tokens.surface, tokens.window] {
+                assert!(ratio(tokens.focus_ring, background) >= 3., "{mode:?} ring");
             }
         }
     }

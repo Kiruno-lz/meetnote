@@ -10,12 +10,11 @@
 //! card inset from the window edges and shows only the current route's page,
 //! with Detail as a panel at its right edge.
 
-use crate::{controller::RootView, i18n::text as tr, route::Route, theme};
+use crate::{controller::RootView, controls::Button, i18n::text as tr, route::Route, theme};
 use gpui::{
     div, point, prelude::*, px, size, AnyElement, Context, FontWeight, IntoElement, MouseButton,
     MouseMoveEvent, Pixels, Point, Size, TitlebarOptions, WindowControlArea,
 };
-use gpui_component::button::{Button, ButtonVariants};
 
 /// The window title. The transparent titlebar hides it; the Window menu,
 /// Mission Control and assistive technology read it.
@@ -118,11 +117,10 @@ fn sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement 
                 .gap(tokens.spacing.md)
                 .child(entries)
                 .child(
-                    Button::new("import-audio")
+                    Button::new("import-audio", tr(locale, "import_audio"))
                         .debug_selector(|| "import-audio".into())
                         .primary()
                         .w_full()
-                        .label(tr(locale, "import_audio"))
                         .on_click(cx.listener(RootView::import_audio)),
                 ),
         );

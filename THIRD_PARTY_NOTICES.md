@@ -72,8 +72,10 @@ changes.
   `5086ff4fb162ae97ca9d806876e7c6694ac3a81f`, a fork of
   https://github.com/longbridge/gpui-component
 - License: Apache License, Version 2.0 (full text under "Apache License 2.0" below)
-- Use: the `gpui-component` (including `gpui-base`) and
-  `gpui-component-assets` crates.
+- Use: the `gpui-base` and `gpui-component-assets` crates. The styled
+  `gpui-component` crate is not linked; MeetNote's controls keep its button
+  metrics and default button palette, and `crates/ui/src/controls/window.rs`
+  cycles Tab inside `gpui-base` focus traps as its `Root` did.
 
 ## Lucide icons
 

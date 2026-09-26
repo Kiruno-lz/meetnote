@@ -44,7 +44,6 @@ ndarray = "0.17"
 # only to the pair of revisions pinned in Zeron's Cargo.toml.
 gpui = { git = "https://github.com/zeronsh/zui", rev = "1561532176f54262e360acbb8bc00c6fcf183975", package = "gpui", default-features = false }
 gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "1561532176f54262e360acbb8bc00c6fcf183975", package = "gpui_platform", default-features = false, features = ["font-kit", "runtime_shaders"] }
-gpui-component = { git = "https://github.com/zeronsh/gpui-component", rev = "5086ff4fb162ae97ca9d806876e7c6694ac3a81f" }
 gpui-component-assets = { git = "https://github.com/zeronsh/gpui-component", rev = "5086ff4fb162ae97ca9d806876e7c6694ac3a81f" }
 gpui-base = { git = "https://github.com/zeronsh/gpui-component", rev = "5086ff4fb162ae97ca9d806876e7c6694ac3a81f" }
 

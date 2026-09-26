@@ -5,7 +5,9 @@ use crate::{
     },
     audio::AudioCheck,
     components::ProjectDrag,
-    controls::{ConfirmDialog, Dropdown, DropdownEvent, SelectOption, TextField, TextFieldEvent},
+    controls::{
+        self, ConfirmDialog, Dropdown, DropdownEvent, SelectOption, TextField, TextFieldEvent,
+    },
     editor::DocumentEditor,
     i18n, pages,
     route::Route,
@@ -516,7 +518,7 @@ pub(crate) struct RootView {
     pub(crate) speaker_library_prompt: Option<SpeakerLibraryPrompt>,
     pub(crate) scroll: ScrollAreas,
     /// Holds focus while a dialog is open, so Enter and Esc reach it.
-    dialog_focus: FocusHandle,
+    pub(crate) dialog_focus: FocusHandle,
     /// The awaiting review's card on the Assistant page.
     pub(crate) review_focus: FocusHandle,
     /// Moves focus to the awaiting review on the next render.
@@ -4166,10 +4168,10 @@ impl Render for RootView {
             )
             .into_any_element()
         });
-        pages::chrome::shell(self, body, detail, cx)
+        let shell = pages::chrome::shell(self, body, detail, cx)
             .children(self.speaker_library_dialog(cx))
-            .children(self.speaker_confirmation_dialog(cx))
-            .children(gpui_component::Root::render_dialog_layer(window, cx))
+            .children(self.speaker_confirmation_dialog(cx));
+        controls::window::root(shell, cx)
     }
 }
 
@@ -4224,7 +4226,7 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
 /// tests under `crates/ui/tests` perform the same setup with fixed
 /// accessibility flags, where `run` reads the system's.
 pub(crate) fn init_app(accessibility: theme::Accessibility, cx: &mut App) {
-    gpui_component::init(cx);
+    controls::window::init(cx);
     theme::init(accessibility, cx);
 }
 
@@ -4233,9 +4235,9 @@ pub(crate) fn init_app(accessibility: theme::Accessibility, cx: &mut App) {
 /// `options` supplies placement and visibility; this function owns the
 /// titlebar (the title, a transparent titlebar with content under it, and
 /// dragging through the shell's own strips) and the least size the shell
-/// fits. The first layer is gpui-component's `Root`: it paints the window
-/// background, hosts the styled crate's tooltips and cycles Tab inside
-/// gpui-base focus traps such as the confirm dialog's.
+/// fits. The first layer is the root view itself, rendered through
+/// `controls::window::root`: it paints the window's base fill and cycles Tab
+/// inside gpui-base focus traps such as the confirm dialog's.
 pub(crate) fn open_main_window(
     inventory: BackendInventory,
     services: DesktopServices,
@@ -4256,10 +4258,11 @@ pub(crate) fn open_main_window(
         // window records.
         window.set_window_title(pages::chrome::WINDOW_TITLE);
         theme::attach(saved.appearance, window, cx);
+        controls::window::attach(window, cx);
         let view = cx.new(|cx| RootView::new(inventory, services, window, cx));
         view.update(cx, |view, cx| view.watch_documents(cx));
         root_view = Some(view.clone());
-        cx.new(|cx| gpui_component::Root::new(view, window, cx))
+        view
     })?;
     let view = root_view.expect("the window builds its root view");
     Ok((window.into(), view))

@@ -210,7 +210,9 @@ mod screenshots {
             .expect("the workspace Cargo.lock is readable");
         let revisions = [
             ("gpui", locked_revision(&lock, "gpui")),
-            ("gpui_component", locked_revision(&lock, "gpui-component")),
+            // gpui-base and the icon assets come from the gpui-component
+            // fork at one revision.
+            ("gpui_component", locked_revision(&lock, "gpui-base")),
         ];
         let recorded = (!update).then(|| {
             std::fs::read_to_string(baselines.join("baseline.json")).unwrap_or_else(|error| {

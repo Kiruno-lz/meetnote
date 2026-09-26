@@ -4,7 +4,7 @@ use crate::{
         setting_control_row, settings_section, SETTING_CONTROL_WIDTH, SETTING_LABEL_WIDTH,
     },
     controller::{settings_error_text, RootView},
-    controls::{Dropdown, TextField},
+    controls::{Button, Dropdown, Scrollbar, TextField},
     i18n::text as tr,
     pages::meetings::marked_control,
     speakers::profile_summary,
@@ -12,11 +12,6 @@ use crate::{
 };
 use contracts::AgentWriteMode;
 use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
-use gpui_component::{
-    button::{Button, ButtonVariants},
-    scroll::ScrollableElement as _,
-    Disableable,
-};
 use settings::{AssistantAuthMode, LlmProtocol};
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
@@ -189,7 +184,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .flex_1()
                 .min_h_0()
                 .child(body)
-                .vertical_scrollbar(&scroll),
+                .child(Scrollbar::vertical("settings-scrollbar", &scroll)),
         )
         .into_any_element()
 }
@@ -229,11 +224,10 @@ fn workspace_section(
                     .child(root.settings_draft.documents_root.clone()),
             )
             .child(
-                Button::new("choose-documents-root")
+                Button::new("choose-documents-root", tr(locale, "choose_directory"))
                     .debug_selector(|| "choose-documents-root".into())
                     .secondary()
                     .compact()
-                    .label(tr(locale, "choose_directory"))
                     .disabled(switch.switching)
                     .on_click(cx.listener(RootView::choose_documents_root_directory)),
             )
@@ -297,10 +291,9 @@ fn speaker_library_section(
                     .child(root.settings_draft.speaker_library_path.clone()),
             )
             .child(
-                Button::new("choose-speaker-library")
+                Button::new("choose-speaker-library", tr(locale, "choose_directory"))
                     .secondary()
                     .compact()
-                    .label(tr(locale, "choose_directory"))
                     .on_click(cx.listener(RootView::choose_speaker_library_directory)),
             )
             .into_any_element(),
@@ -397,15 +390,19 @@ fn speaker_library_section(
                             row.name.clone().into_any_element(),
                         ))
                         .child(
-                            Button::new(format!("rename-speaker-profile-{id}"))
-                                .debug_selector(marked("rename-speaker-profile"))
-                                .secondary()
-                                .compact()
-                                .label(tr(locale, "rename"))
-                                .disabled(library.busy)
-                                .on_click(cx.listener(move |root, _, _, cx| {
+                            Button::new(
+                                format!("rename-speaker-profile-{id}"),
+                                tr(locale, "rename"),
+                            )
+                            .debug_selector(marked("rename-speaker-profile"))
+                            .secondary()
+                            .compact()
+                            .disabled(library.busy)
+                            .on_click(cx.listener(
+                                move |root, _, _, cx| {
                                     root.rename_speaker_profile(rename_id.clone(), cx)
-                                })),
+                                },
+                            )),
                         )
                         .children(row.merge_into.as_ref().map(|select| {
                             marked_control(
@@ -415,15 +412,19 @@ fn speaker_library_section(
                             )
                         }))
                         .child(
-                            Button::new(format!("delete-speaker-profile-{id}"))
-                                .debug_selector(marked("delete-speaker-profile"))
-                                .danger()
-                                .compact()
-                                .label(tr(locale, "delete"))
-                                .disabled(library.busy)
-                                .on_click(cx.listener(move |root, _, window, cx| {
+                            Button::new(
+                                format!("delete-speaker-profile-{id}"),
+                                tr(locale, "delete"),
+                            )
+                            .debug_selector(marked("delete-speaker-profile"))
+                            .danger()
+                            .compact()
+                            .disabled(library.busy)
+                            .on_click(cx.listener(
+                                move |root, _, window, cx| {
                                     root.ask_delete_speaker_profile(delete_id.clone(), window, cx)
-                                })),
+                                },
+                            )),
                         ),
                 )
                 .into_any_element(),
@@ -455,9 +456,8 @@ fn assistant_settings_section(
         .map(|profile| {
             let id = profile.id.clone();
             let selected = active == Some(id.as_str());
-            let mut button = Button::new(format!("assistant-profile-{id}"))
-                .compact()
-                .label(profile.name.clone());
+            let mut button =
+                Button::new(format!("assistant-profile-{id}"), profile.name.clone()).compact();
             button = if selected {
                 button.primary()
             } else {
@@ -499,10 +499,9 @@ fn assistant_settings_section(
                     .gap_2()
                     .children(profiles)
                     .child(
-                        Button::new("assistant-new-profile")
+                        Button::new("assistant-new-profile", tr(locale, "assistant_new_profile"))
                             .secondary()
                             .compact()
-                            .label(tr(locale, "assistant_new_profile"))
                             .on_click(cx.listener(RootView::new_assistant_profile)),
                     )
                     .into_any_element(),
@@ -580,49 +579,38 @@ fn assistant_settings_section(
                     .flex()
                     .gap_2()
                     .child(
-                        Button::new("assistant-save-settings")
+                        Button::new("assistant-save-settings", tr(locale, "save"))
                             .debug_selector(|| "assistant-save-settings".into())
                             .primary()
                             .compact()
-                            .label(tr(locale, "save"))
                             .on_click(cx.listener(RootView::save_assistant_settings)),
                     )
                     .child(
-                        Button::new("assistant-readiness")
+                        Button::new("assistant-readiness", tr(locale, "assistant_readiness"))
                             .debug_selector(|| "assistant-readiness".into())
                             .secondary()
                             .compact()
-                            .label(tr(locale, "assistant_readiness"))
                             .disabled(root.assistant.probe_running.is_some())
                             .on_click(cx.listener(RootView::probe_assistant_readiness)),
                     )
                     .child(
-                        Button::new("assistant-model-probe")
+                        Button::new("assistant-model-probe", tr(locale, "assistant_model_probe"))
                             .debug_selector(|| "assistant-model-probe".into())
                             .secondary()
                             .compact()
-                            .label(tr(locale, "assistant_model_probe"))
                             .disabled(root.assistant.probe_running.is_some())
                             .on_click(cx.listener(RootView::probe_assistant_model)),
                     )
                     .children(root.assistant.probe_running.map(|kind| {
-                        Button::new("assistant-cancel-probe")
+                        let probe = match kind {
+                            ConnectionProbeKind::Readiness => "assistant_probe_readiness",
+                            ConnectionProbeKind::Model => "assistant_probe_model",
+                        };
+                        let label = format!("{} ({})", tr(locale, "cancel"), tr(locale, probe));
+                        Button::new("assistant-cancel-probe", label)
                             .debug_selector(|| "assistant-cancel-probe".into())
                             .secondary()
                             .compact()
-                            .label(format!(
-                                "{} ({})",
-                                tr(locale, "cancel"),
-                                tr(
-                                    locale,
-                                    match kind {
-                                        ConnectionProbeKind::Readiness => {
-                                            "assistant_probe_readiness"
-                                        }
-                                        ConnectionProbeKind::Model => "assistant_probe_model",
-                                    }
-                                )
-                            ))
                             .on_click(cx.listener(RootView::cancel_assistant_probe))
                     }))
                     .into_any_element(),
@@ -825,11 +813,10 @@ fn probe_outcome(root: &RootView, tokens: &Tokens, cx: &mut Context<RootView>) -
                 tokens,
             ))
             .children(assistant.probe_to_retry().map(|_| {
-                Button::new("assistant-probe-retry")
+                Button::new("assistant-probe-retry", tr(locale, "assistant_retry"))
                     .debug_selector(|| "assistant-probe-retry".into())
                     .secondary()
                     .compact()
-                    .label(tr(locale, "assistant_retry"))
                     .on_click(cx.listener(RootView::retry_assistant_probe))
             }))
             .into_any_element(),
@@ -881,9 +868,7 @@ fn protocol_button(
     selected: LlmProtocol,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let mut button = Button::new(format!("assistant-protocol-{label}"))
-        .compact()
-        .label(label);
+    let mut button = Button::new(format!("assistant-protocol-{label}"), label).compact();
     button = if protocol == selected {
         button.primary()
     } else {
@@ -915,9 +900,7 @@ fn auth_button(
     selected: AssistantAuthMode,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let mut button = Button::new(format!("assistant-auth-{label}"))
-        .compact()
-        .label(label);
+    let mut button = Button::new(format!("assistant-auth-{label}"), label).compact();
     button = if auth == selected {
         button.primary()
     } else {
@@ -962,10 +945,9 @@ fn write_mode_button(
     selected: AgentWriteMode,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let mut button = Button::new(format!("assistant-write-{label}"))
+    let mut button = Button::new(format!("assistant-write-{label}"), label)
         .debug_selector(move || selector.into())
-        .compact()
-        .label(label);
+        .compact();
     button = if mode == selected {
         button.primary()
     } else {
@@ -990,7 +972,7 @@ where
         .gap_2()
         .children(choices.map(|(id, label, value)| {
             let action = action.clone();
-            let mut button = Button::new(id).compact().label(label);
+            let mut button = Button::new(id, label).compact();
             button = if value == selected {
                 button.primary()
             } else {

@@ -1,6 +1,7 @@
 use crate::{
     components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
+    controls::{Button, Scrollbar},
     i18n::{self, text as tr},
     speakers::{document_speakers, DocumentSpeaker},
     state::{self, ContentMode},
@@ -8,11 +9,6 @@ use crate::{
 };
 use domain::{DocumentState, ProjectStatus};
 use gpui::{div, prelude::*, px, AnyElement, Context, IntoElement, Pixels};
-use gpui_component::{
-    button::{Button, ButtonVariants},
-    scroll::ScrollableElement as _,
-    Disableable,
-};
 
 /// The tallest the issue list grows before it scrolls.
 const ISSUE_LIST_HEIGHT: Pixels = px(168.);
@@ -208,7 +204,7 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .flex_1()
                 .min_h_0()
                 .child(theme::scroll_faded(&scroll, tokens.window, tree))
-                .vertical_scrollbar(&scroll),
+                .child(Scrollbar::vertical("project-tree-scrollbar", &scroll)),
         )
 }
 
@@ -263,6 +259,14 @@ fn main_panel(
     if let Some(project) = project {
         let ready = project.processing_status() == ProjectStatus::Ready;
         let audio_problem = root.audio.problem(project.id());
+        let process_label = tr(
+            locale,
+            if root.ui.processing {
+                "cancel"
+            } else {
+                "process"
+            },
+        );
         let mode = root.ui.content_mode;
         let scroll = root.scroll.meeting_content.clone();
         let mut content = div()
@@ -358,34 +362,27 @@ fn main_panel(
                             .child(tr(locale, problem.label_key()))
                     }))
                     .child(
-                        Button::new("process-project")
+                        Button::new("process-project", process_label)
                             .debug_selector(|| "process-project".into())
                             .primary()
                             .compact()
-                            .label(if root.ui.processing {
-                                tr(locale, "cancel")
-                            } else {
-                                tr(locale, "process")
-                            })
                             // Missing audio cannot be processed; relink it.
                             .disabled(!root.ui.processing && root.audio.missing(project.id()))
                             .on_click(cx.listener(RootView::process_or_cancel)),
                     )
                     .children(audio_problem.map(|_| {
-                        Button::new("relink-audio")
+                        Button::new("relink-audio", tr(locale, "relink_audio"))
                             .debug_selector(|| "relink-audio".into())
                             .secondary()
                             .compact()
-                            .label(tr(locale, "relink_audio"))
                             .disabled(root.audio.relinking.is_some())
                             .on_click(cx.listener(RootView::relink_audio))
                     }))
                     .child(
-                        Button::new("open-project-detail")
+                        Button::new("open-project-detail", tr(locale, "open_detail"))
                             .debug_selector(|| "open-project-detail".into())
                             .secondary()
                             .compact()
-                            .label(tr(locale, "open_detail"))
                             .on_click(cx.listener(RootView::open_detail)),
                     ),
             );
@@ -418,7 +415,7 @@ fn main_panel(
                 .child(
                     theme::scroll_faded(&scroll, tokens.surface, content).rounded(tokens.radius.md),
                 )
-                .vertical_scrollbar(&scroll),
+                .child(Scrollbar::vertical("meeting-content-scrollbar", &scroll)),
         );
     } else {
         panel = panel
@@ -533,18 +530,20 @@ fn speakers_panel(
                     row.name.clone().into_any_element(),
                 ))
                 .child(
-                    Button::new(format!("rename-speaker-{}", speaker.id))
-                        .debug_selector({
-                            let id = speaker.id.clone();
-                            move || format!("rename-speaker-{id}")
-                        })
-                        .secondary()
-                        .compact()
-                        .label(tr(locale, "rename"))
-                        .disabled(busy)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.rename_document_speaker(rename_id.clone(), cx)
-                        })),
+                    Button::new(
+                        format!("rename-speaker-{}", speaker.id),
+                        tr(locale, "rename"),
+                    )
+                    .debug_selector({
+                        let id = speaker.id.clone();
+                        move || format!("rename-speaker-{id}")
+                    })
+                    .secondary()
+                    .compact()
+                    .disabled(busy)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.rename_document_speaker(rename_id.clone(), cx)
+                    })),
                 )
                 .children(row.merge_into.as_ref().map(|select| {
                     marked_control(
@@ -619,11 +618,10 @@ fn conflict_notice(
                     ))),
             )
             .child(
-                Button::new("reload-conflicted-document")
+                Button::new("reload-conflicted-document", tr(locale, "reload"))
                     .debug_selector(|| "reload-conflicted-document".into())
                     .secondary()
                     .compact()
-                    .label(tr(locale, "reload"))
                     .on_click(cx.listener(RootView::reload_conflicted_document)),
             )
             .into_any_element(),
@@ -693,7 +691,7 @@ fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
                 div()
                     .relative()
                     .child(theme::scroll_faded(&scroll, tokens.warning_surface, list))
-                    .vertical_scrollbar(&scroll),
+                    .child(Scrollbar::vertical("document-issues-scrollbar", &scroll)),
             )
             .into_any_element(),
     )
@@ -757,11 +755,10 @@ fn editor_form(
         ))
         .child(
             div().flex().items_center().gap_3().child(
-                Button::new("save-document")
+                Button::new("save-document", tr(locale, "save_document"))
                     .debug_selector(|| "save-document".into())
                     .primary()
                     .compact()
-                    .label(tr(locale, "save_document"))
                     .disabled(saving)
                     .on_click(cx.listener(RootView::save_document_draft)),
             ),

@@ -1,16 +1,11 @@
 use crate::{
     components::empty_card,
     controller::{DownloadAction, RootView},
-    controls::ProgressBar,
+    controls::{Button, Collapsible, ProgressBar, Scrollbar},
     i18n::{self, text as tr, Locale},
     theme::{self, Tokens},
 };
 use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
-use gpui_component::{
-    button::{Button, ButtonVariants},
-    collapsible::Collapsible,
-    scroll::ScrollableElement as _,
-};
 use models::{
     manager::{DownloadProgress, DownloadState},
     ArtifactChecksum, ModelAvailability, ModelCatalogEntry, ModelInstallState,
@@ -83,32 +78,29 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .rounded(tokens.radius.md)
                 .bg(tokens.surface)
                 .child(
-                    Collapsible::new()
+                    Collapsible::new(format!("model-family-{family}"), family.clone())
+                        .debug_selector(|| format!("model-family-{family}"))
                         .open(expanded)
+                        .p_4()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .on_toggle(cx.listener(move |this, _, _, cx| {
+                            this.toggle_model_family(family_for_click.clone(), cx)
+                        }))
                         .child(
                             div()
-                                .id(format!("model-family-{family}"))
-                                .debug_selector(|| format!("model-family-{family}"))
-                                .cursor_pointer()
-                                .p_4()
                                 .flex()
                                 .items_center()
-                                .justify_between()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.toggle_model_family(family_for_click.clone(), cx)
-                                }))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_2()
-                                        .child(if expanded { "▾" } else { "▸" })
-                                        .child(div().text_lg().child(family.clone())),
-                                )
-                                .child(div().text_sm().text_color(tokens.text_muted).child(
-                                    format!("{} {}", model_count, tr(locale, "models_count")),
-                                )),
+                                .gap_2()
+                                .child(if expanded { "▾" } else { "▸" })
+                                .child(div().text_lg().child(family.clone())),
                         )
+                        .child(div().text_sm().text_color(tokens.text_muted).child(format!(
+                            "{} {}",
+                            model_count,
+                            tr(locale, "models_count")
+                        )))
                         .content(
                             div()
                                 .px_4()
@@ -153,7 +145,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .flex_1()
                 .min_h_0()
                 .child(theme::scroll_faded(&scroll, tokens.content, content))
-                .vertical_scrollbar(&scroll),
+                .child(Scrollbar::vertical("models-scrollbar", &scroll)),
         )
         .child(
             div()
@@ -199,11 +191,10 @@ fn model_card(
 
     let download = (action == CardAction::Download).then(|| {
         let id = model_id.clone();
-        Button::new(format!("download-{id}"))
+        Button::new(format!("download-{id}"), tr(locale, "download"))
             .debug_selector(marked("download"))
             .primary()
             .compact()
-            .label(tr(locale, "download"))
             .on_click(cx.listener(move |this, _, _, cx| this.download_model(id.clone(), cx)))
     });
     let header = div()
@@ -282,6 +273,7 @@ fn model_card(
             "show_model_details"
         },
     );
+    let details_label = format!("{details_label} {}", if expanded { "▾" } else { "▸" });
     let details_id = model_id.clone();
     let provenance = div()
         .mt_1()
@@ -336,14 +328,10 @@ fn model_card(
                 )),
         )
         .child(
-            Button::new(format!("model-details-{model_id}"))
+            Button::new(format!("model-details-{model_id}"), details_label)
                 .debug_selector(marked("details-toggle"))
                 .ghost()
                 .compact()
-                .label(format!(
-                    "{details_label} {}",
-                    if expanded { "▾" } else { "▸" }
-                ))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.toggle_model_details(details_id.clone(), cx)
                 })),
@@ -352,11 +340,10 @@ fn model_card(
     let failure = facts.failure.clone().map(|failure| {
         let retry = (action == CardAction::Retry).then(|| {
             let id = model_id.clone();
-            Button::new(format!("retry-{id}"))
+            Button::new(format!("retry-{id}"), tr(locale, "retry_download"))
                 .debug_selector(marked("retry"))
                 .primary()
                 .compact()
-                .label(tr(locale, "retry_download"))
                 .on_click(cx.listener(move |this, _, _, cx| this.download_model(id.clone(), cx)))
         });
         notice(&tokens)
@@ -395,11 +382,10 @@ fn model_card(
         });
         let reprobe = (action == CardAction::Reprobe).then(|| {
             let id = model_id.clone();
-            Button::new(format!("reprobe-{id}"))
+            Button::new(format!("reprobe-{id}"), tr(locale, "reprobe"))
                 .debug_selector(marked("reprobe"))
                 .secondary()
                 .compact()
-                .label(tr(locale, "reprobe"))
                 .on_click(cx.listener(move |this, _, _, cx| this.reprobe_model(id.clone(), cx)))
         });
         div()
@@ -577,10 +563,9 @@ fn download_progress_view(
                 )),
         )
         .child(
-            Button::new(format!("download-action-{}", progress.id.0))
+            Button::new(format!("download-action-{}", progress.id.0), label)
                 .secondary()
                 .compact()
-                .label(label)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.control_download(progress.id, action, cx)
                 })),

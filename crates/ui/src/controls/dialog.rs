@@ -1,11 +1,11 @@
 //! `ConfirmDialog`: a modal confirm/cancel question. gpui-base's
-//! `AlertDialog` host owns modality: it traps focus (Tab cycles inside it
-//! through gpui-component's `Root`), maps Enter to confirm and Esc to cancel,
+//! `AlertDialog` host owns modality: it traps focus (the window root cycles
+//! Tab inside it), maps Enter to confirm and Esc to cancel,
 //! ignores presses on the backdrop and orders the callbacks. MeetNote paints
 //! a scrim, a frosted sheet (`BlurLevel::Sheet`) and, on the sheet, the
 //! opaque panel that holds the question and its two buttons.
 
-use super::entrance;
+use super::{entrance, Button};
 use crate::theme::{self, BlurLevel};
 use gpui::{
     div, prelude::*, px, App, FocusHandle, IntoElement, Pixels, Role, SharedString, Window,
@@ -13,7 +13,6 @@ use gpui::{
 use gpui_base::{
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogDescription, AlertDialogTitle,
 };
-use gpui_component::button::{Button, ButtonVariants};
 use std::rc::Rc;
 
 const PANEL_WIDTH: Pixels = px(460.);
@@ -113,18 +112,16 @@ impl RenderOnce for ConfirmDialog {
                     .gap(tokens.spacing.sm)
                     .child(
                         AlertDialogCancel::new().child(
-                            Button::new("dialog-cancel")
+                            Button::new("dialog-cancel", self.cancel_label)
                                 .debug_selector(|| "dialog-cancel".into())
-                                .secondary()
-                                .label(self.cancel_label),
+                                .secondary(),
                         ),
                     )
                     .child(
                         AlertDialogAction::new().child(
-                            Button::new("dialog-confirm")
+                            Button::new("dialog-confirm", self.confirm_label)
                                 .debug_selector(|| "dialog-confirm".into())
-                                .primary()
-                                .label(self.confirm_label),
+                                .primary(),
                         ),
                     ),
             );
