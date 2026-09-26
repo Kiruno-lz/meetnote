@@ -246,7 +246,10 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_undone") => "已撤销",
         (Locale::ZhCn, "assistant_pending") => "等待写回确认",
         (Locale::ZhCn, "assistant_pending_queue") => "排队中的确认",
-        (Locale::ZhCn, "assistant_pending_overflow") => "超出队列上限、未列出的确认",
+        (Locale::ZhCn, "assistant_pending_paused") => "任务在这项写回前暂停：接受才会写入，拒绝则丢弃这项变更。",
+        (Locale::ZhCn, "assistant_accepting") => "正在写回……",
+        (Locale::ZhCn, "assistant_rejecting") => "正在拒绝……",
+        (Locale::ZhCn, "assistant_retry") => "重试",
         (Locale::ZhCn, "assistant_field_diff") => "字段差异",
         (Locale::ZhCn, "assistant_tree_change") => "树结构变化",
         (Locale::ZhCn, "assistant_range") => "语义范围与证据",
@@ -259,6 +262,13 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_new_document") => "新文档",
         (Locale::ZhCn, "assistant_probe_readiness") => "连接测试",
         (Locale::ZhCn, "assistant_probe_model") => "模型能力探测",
+        (Locale::ZhCn, "assistant_probe_running") => "正在检测连接……",
+        (Locale::ZhCn, "assistant_probe_cancelled") => "检测已取消。",
+        (Locale::ZhCn, "assistant_api_key_kept") => "留空则保留已保存的密钥；修改协议、地址、模型或认证方式时须重新输入。",
+        (Locale::ZhCn, "assistant_credential_target_conflict") => "协议、地址、模型或认证方式已修改：请为新的连接目标重新输入 API Key 或密钥文件。本次没有保存。",
+        (Locale::ZhCn, "assistant_write_automatic_notice") => "自动写回：变更立即写入文档，助手页为每项变更提供撤销。",
+        (Locale::ZhCn, "assistant_write_confirm_each_notice") => "自动写回已关闭：Assistant 在每次写入前暂停，在助手页列出变更等你接受或拒绝。接受前不会写入文档，过期的确认不会写入。",
+        (Locale::ZhCn, "assistant_write_mode_unsaved") => "尚未保存，点击保存后生效。",
         (Locale::ZhCn, "projection_metadata") => "元数据",
         (Locale::ZhCn, "projection_markdown") => "Markdown 正文",
         (Locale::ZhCn, "projection_transcript") => "转录文本",
@@ -576,7 +586,10 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_undone") => "Undone",
         (Locale::EnUs, "assistant_pending") => "Write confirmation pending",
         (Locale::EnUs, "assistant_pending_queue") => "Queued confirmations",
-        (Locale::EnUs, "assistant_pending_overflow") => "Confirmations over the queue limit, not listed",
+        (Locale::EnUs, "assistant_pending_paused") => "The run paused before this write: accepting writes it, rejecting discards it.",
+        (Locale::EnUs, "assistant_accepting") => "Writing…",
+        (Locale::EnUs, "assistant_rejecting") => "Rejecting…",
+        (Locale::EnUs, "assistant_retry") => "Retry",
         (Locale::EnUs, "assistant_field_diff") => "Field differences",
         (Locale::EnUs, "assistant_tree_change") => "Tree changes",
         (Locale::EnUs, "assistant_range") => "Semantic ranges and evidence",
@@ -589,6 +602,13 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_new_document") => "new document",
         (Locale::EnUs, "assistant_probe_readiness") => "connection test",
         (Locale::EnUs, "assistant_probe_model") => "model probe",
+        (Locale::EnUs, "assistant_probe_running") => "Checking the connection…",
+        (Locale::EnUs, "assistant_probe_cancelled") => "The check was cancelled.",
+        (Locale::EnUs, "assistant_api_key_kept") => "Leave empty to keep the stored key; changing the protocol, URL, model or authentication requires entering it again.",
+        (Locale::EnUs, "assistant_credential_target_conflict") => "The protocol, URL, model or authentication changed: enter the API key or key file again for the new target. Nothing was saved.",
+        (Locale::EnUs, "assistant_write_automatic_notice") => "Automatic write-back: changes are written at once, and the Assistant page offers an undo for each.",
+        (Locale::EnUs, "assistant_write_confirm_each_notice") => "Automatic write-back is off: the Assistant pauses before every write and lists it on the Assistant page for you to accept or reject. Nothing is written until you accept, and an expired confirmation is never written.",
+        (Locale::EnUs, "assistant_write_mode_unsaved") => "Not saved yet; takes effect after Save.",
         (Locale::EnUs, "projection_metadata") => "Metadata",
         (Locale::EnUs, "projection_markdown") => "Markdown body",
         (Locale::EnUs, "projection_transcript") => "Transcript",
@@ -912,6 +932,28 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         ),
         (Locale::ZhCn, "audio_relinked") => format!("已重新关联「{value}」的音频。"),
         (Locale::EnUs, "audio_relinked") => format!("Relinked the audio of “{value}”."),
+        (Locale::ZhCn, "assistant_pending_position") => {
+            let (position, total) = value.split_once('|').unwrap_or((value, value));
+            format!("第 {position} / {total} 项")
+        }
+        (Locale::EnUs, "assistant_pending_position") => {
+            let (position, total) = value.split_once('|').unwrap_or((value, value));
+            format!("Review {position} of {total}")
+        }
+        (Locale::ZhCn, "assistant_receipts") => format!("已写入 {value} 项变更，可逐项撤销"),
+        (Locale::EnUs, "assistant_receipts") => {
+            format!("{value} writes applied; each can be undone")
+        }
+        (Locale::ZhCn, "assistant_pending_expires") => format!("{value} 过期"),
+        (Locale::EnUs, "assistant_pending_expires") => format!("Expires {value}"),
+        (Locale::ZhCn, "assistant_pending_overflow") => format!(
+            "另有 {value} 项确认超出队列上限，未列出，也不会写入；处理完当前队列后请重新运行任务。"
+        ),
+        (Locale::EnUs, "assistant_pending_overflow") => format!(
+            "{value} more confirmations exceed the queue limit; they are not listed and will not be written. Run the task again after this queue."
+        ),
+        (Locale::ZhCn, "assistant_probe_failed") => format!("检测失败：{value}"),
+        (Locale::EnUs, "assistant_probe_failed") => format!("Check failed: {value}"),
         (Locale::ZhCn, "documents_load_failed") => format!("无法读取文档目录：{value}"),
         (Locale::EnUs, "documents_load_failed") => {
             format!("Cannot read the documents folder: {value}")

@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod assistant_tests;
 pub mod assistant_ui;
 mod audio;
 mod components;
@@ -47,26 +49,38 @@ mod tests {
 
     #[derive(Clone, Default)]
     pub(crate) struct FakeAssistantUiService {
-        undo_calls: Arc<Mutex<Vec<String>>>,
-        run_result: Arc<Mutex<Option<AssistantRunResult>>>,
-        confirm_result: Arc<Mutex<Option<AssistantRunResult>>>,
+        pub(crate) undo_calls: Arc<Mutex<Vec<String>>>,
+        pub(crate) run_result: Arc<Mutex<Option<AssistantRunResult>>>,
+        /// Errors the next runs fail with, in order, before `run_result`.
+        pub(crate) run_errors: Arc<Mutex<std::collections::VecDeque<AssistantUiError>>>,
+        pub(crate) confirm_result: Arc<Mutex<Option<AssistantRunResult>>>,
         /// `(operation, authorized_document_ids)` for every service call.
-        grants: Arc<Mutex<Vec<(&'static str, Vec<String>)>>>,
+        pub(crate) grants: Arc<Mutex<Vec<(&'static str, Vec<String>)>>>,
         /// Settings that `save_assistant_settings` writes to, when exercised.
-        settings: Option<SettingsService>,
+        pub(crate) settings: Option<SettingsService>,
         /// The write mode of every run request.
-        write_modes: Arc<Mutex<Vec<contracts::AgentWriteMode>>>,
-        /// The request id of every run.
-        run_request_ids: Arc<Mutex<Vec<String>>>,
+        pub(crate) write_modes: Arc<Mutex<Vec<contracts::AgentWriteMode>>>,
+        /// The request id and prompt of every run.
+        pub(crate) run_request_ids: Arc<Mutex<Vec<String>>>,
+        pub(crate) run_prompts: Arc<Mutex<Vec<String>>>,
         /// Holds each run until released, when set.
-        run_gate: Option<Gate>,
+        pub(crate) run_gate: Option<Gate>,
+        /// Holds each confirm, reject and undo until released, when set.
+        pub(crate) decision_gate: Option<Gate>,
+        /// What the next probes answer, in order; a ready diagnostic after.
+        pub(crate) probe_results:
+            Arc<Mutex<std::collections::VecDeque<Result<ConnectionDiagnostic, AssistantUiError>>>>,
+        /// The kind of every probe.
+        pub(crate) probe_calls: Arc<Mutex<Vec<ConnectionProbeKind>>>,
+        /// Holds each probe until released, when set.
+        pub(crate) probe_gate: Option<Gate>,
         /// Subscribers of `job_events`; tests publish through `publish_job`.
-        job_subscribers:
+        pub(crate) job_subscribers:
             Arc<Mutex<Vec<futures::channel::mpsc::UnboundedSender<AssistantJobEvent>>>>,
     }
 
     impl FakeAssistantUiService {
-        fn publish_job(&self, request_id: Option<&str>, event: runtime::JobEvent) {
+        pub(crate) fn publish_job(&self, request_id: Option<&str>, event: runtime::JobEvent) {
             for subscriber in self.job_subscribers.lock().unwrap().iter() {
                 subscriber
                     .unbounded_send(AssistantJobEvent {
@@ -81,7 +95,7 @@ mod tests {
             self.grants.lock().unwrap().push((operation, document_ids));
         }
 
-        fn grants_for(&self, operation: &str) -> Vec<Vec<String>> {
+        pub(crate) fn grants_for(&self, operation: &str) -> Vec<Vec<String>> {
             self.grants
                 .lock()
                 .unwrap()
@@ -119,6 +133,13 @@ mod tests {
             kind: ConnectionProbeKind,
             _: AssistantCancellation,
         ) -> Result<ConnectionDiagnostic, AssistantUiError> {
+            self.probe_calls.lock().unwrap().push(kind);
+            if let Some(gate) = &self.probe_gate {
+                gate.pass();
+            }
+            if let Some(result) = self.probe_results.lock().unwrap().pop_front() {
+                return result;
+            }
             Ok(ConnectionDiagnostic {
                 kind,
                 ready: true,
@@ -143,8 +164,15 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(request.request_id.clone());
+            self.run_prompts
+                .lock()
+                .unwrap()
+                .push(request.prompt.clone());
             if let Some(gate) = &self.run_gate {
                 gate.pass();
+            }
+            if let Some(error) = self.run_errors.lock().unwrap().pop_front() {
+                return Err(error);
             }
             self.record(
                 "run",
@@ -167,6 +195,9 @@ mod tests {
             authorized_document_ids: Vec<String>,
         ) -> Result<AssistantRunResult, AssistantUiError> {
             self.record("confirm", authorized_document_ids);
+            if let Some(gate) = &self.decision_gate {
+                gate.pass();
+            }
             self.confirm_result
                 .lock()
                 .unwrap()
@@ -180,6 +211,9 @@ mod tests {
             authorized_document_ids: Vec<String>,
         ) -> Result<(), AssistantUiError> {
             self.record("reject", authorized_document_ids);
+            if let Some(gate) = &self.decision_gate {
+                gate.pass();
+            }
             Ok(())
         }
 
@@ -190,6 +224,9 @@ mod tests {
         ) -> Result<AssistantMutationSummary, AssistantUiError> {
             self.record("undo", authorized_document_ids);
             self.undo_calls.lock().unwrap().push(undo_token.clone());
+            if let Some(gate) = &self.decision_gate {
+                gate.pass();
+            }
             Ok(AssistantMutationSummary {
                 mutation_id: "undo-result".into(),
                 affected_documents: Vec::new(),
@@ -222,48 +259,25 @@ mod tests {
     #[gpui::test]
     fn renders_assistant_mutation_and_dispatches_undo_click(cx: &mut TestAppContext) {
         let assistant = Arc::new(FakeAssistantUiService::default());
-        let services = desktop_services(assistant.clone(), test_settings());
-        // Undo runs on a `runtime::spawn_blocking` worker thread.
-        cx.executor().allow_parking();
-        cx.update(|cx| controller::init_app(theme::Accessibility::default(), cx));
-        let (view, cx) = cx.add_window_view(|window, cx| {
-            controller::RootView::new(BackendInventory::new(vec![], vec![]), services, window, cx)
+        *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+            answer: Some("done".into()),
+            mutation: Some(AssistantMutationSummary {
+                mutation_id: "ui-mutation".into(),
+                affected_documents: Vec::new(),
+                undo_token: "undo-ui-mutation".into(),
+                uncovered_segment_ids: Vec::new(),
+            }),
+            ..empty_result()
         });
-        view.update(cx, |root, cx| {
-            root.assistant.result = Some(AssistantRunResult {
-                answer: Some("done".into()),
-                warning: None,
-                warnings: Vec::new(),
-                evidence_segment_ids: Vec::new(),
-                usage: None,
-                requested_model: None,
-                resolved_model: None,
-                mutation: Some(AssistantMutationSummary {
-                    mutation_id: "ui-mutation".into(),
-                    affected_documents: Vec::new(),
-                    undo_token: "undo-ui-mutation".into(),
-                    uncovered_segment_ids: Vec::new(),
-                }),
-                mutations: Vec::new(),
-                pending: None,
-                pending_reviews: Vec::new(),
-                diagnostics: None,
-            });
-            root.assistant.task = AssistantTaskState::Completed;
-            cx.notify();
+        let (view, cx) = open_desktop_with(cx, assistant.clone(), stored_key_settings());
+        start_run(cx, &view);
+        wait_for(cx, &view, |root| {
+            root.assistant.task == AssistantTaskState::Completed
         });
-        cx.run_until_parked();
-        let bounds = cx
-            .debug_bounds("assistant-undo-ui-mutation")
-            .expect("rendered Assistant mutation must expose an undo button");
-        cx.simulate_click(bounds.center(), Modifiers::none());
-        for _ in 0..100 {
-            cx.run_until_parked();
-            if !assistant.undo_calls.lock().unwrap().is_empty() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
+        click_selector(cx, "assistant-undo-ui-mutation");
+        wait_for(cx, &view, |_| {
+            !assistant.undo_calls.lock().unwrap().is_empty()
+        });
         assert_eq!(
             assistant.undo_calls.lock().unwrap().as_slice(),
             ["undo-ui-mutation"]
@@ -292,10 +306,10 @@ mod tests {
         .unwrap()
     }
 
-    const STORED_KEY: &str = "stored-secret";
+    pub(crate) const STORED_KEY: &str = "stored-secret";
 
     /// Settings whose active connection `local` has a stored API key.
-    fn stored_key_settings() -> SettingsService {
+    pub(crate) fn stored_key_settings() -> SettingsService {
         let settings = test_settings();
         let mut value = settings.snapshot().unwrap();
         value.assistant.active_connection_id = Some("local".into());
@@ -394,7 +408,7 @@ mod tests {
         cx.update(|cx| controller::init_app(theme::Accessibility::default(), cx));
     }
 
-    fn open_desktop_with(
+    pub(crate) fn open_desktop_with(
         cx: &mut TestAppContext,
         assistant: Arc<FakeAssistantUiService>,
         settings: SettingsService,
@@ -1444,7 +1458,10 @@ mod tests {
 
     /// Selects the `first` document and starts a run; the desktop must have
     /// saved settings with an active connection (`stored_key_settings`).
-    fn start_run(cx: &mut gpui::VisualTestContext, view: &gpui::Entity<controller::RootView>) {
+    pub(crate) fn start_run(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<controller::RootView>,
+    ) {
         view.update_in(cx, |root, window, cx| {
             let first = DocumentState::new(ProjectId::new("first"), "First", "first.wav");
             let second = DocumentState::new(ProjectId::new("second"), "Second", "second.wav");

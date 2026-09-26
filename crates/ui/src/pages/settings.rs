@@ -198,6 +198,9 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
 pub(crate) const WORKSPACE_SECTION: usize = 1;
 /// The position of the Speaker Library section among the form's sections.
 pub(crate) const SPEAKER_LIBRARY_SECTION: usize = 5;
+/// The position of the Assistant section among the form's sections.
+#[cfg(test)]
+pub(crate) const ASSISTANT_SECTION: usize = 7;
 /// The width of a path shown beside its choose button.
 const PATH_WIDTH: Pixels = px(280.);
 
@@ -465,40 +468,10 @@ fn assistant_settings_section(
                 .into_any_element()
         })
         .collect::<Vec<_>>();
-    let diagnostic = root
-        .assistant
-        .diagnostic
-        .as_ref()
-        .map(|result| match result {
-            Ok(diagnostic) => format!(
-                "{} · {} · text={} · tools={} · {} → {} · context={} · models={} · {}",
-                if diagnostic.local {
-                    tr(locale, "assistant_local_connection")
-                } else {
-                    tr(locale, "assistant_remote_connection")
-                },
-                if diagnostic.ready {
-                    tr(locale, "ready")
-                } else {
-                    tr(locale, "failed")
-                },
-                tr(locale, capability_key(diagnostic.text)),
-                tr(locale, capability_key(diagnostic.client_tools)),
-                diagnostic.requested_model,
-                diagnostic.resolved_model.as_deref().unwrap_or("—"),
-                diagnostic
-                    .context_window_tokens
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "—".into()),
-                diagnostic
-                    .models
-                    .as_ref()
-                    .map(|models| models.join(", "))
-                    .unwrap_or_else(|| "—".into()),
-                diagnostic.message
-            ),
-            Err(error) => error.to_string(),
-        });
+    let probe = probe_outcome(root, tokens, cx);
+    let write_mode = root.settings_draft.assistant.write_mode;
+    let write_mode_notice = write_mode_notice(write_mode, root.saved_write_mode(), locale, tokens);
+    let credential = credential_caption(root, tokens, cx);
     let inputs = &root.assistant_inputs;
 
     settings_section(
@@ -560,10 +533,17 @@ fn assistant_settings_section(
                 tokens,
             )
             .into_any_element(),
-            assistant_text_row(tr(locale, "assistant_api_key"), &inputs.api_key, tokens),
-            assistant_text_row(
+            marked_text_row(
+                tr(locale, "assistant_api_key"),
+                &inputs.api_key,
+                "assistant-api-key-field",
+                tokens,
+            ),
+            credential,
+            marked_text_row(
                 tr(locale, "assistant_api_key_file"),
                 &inputs.api_key_file,
+                "assistant-api-key-file-field",
                 tokens,
             ),
             assistant_text_row(
@@ -579,10 +559,11 @@ fn assistant_settings_section(
             ),
             setting_control_row(
                 tr(locale, "assistant_write_mode"),
-                write_mode_buttons(root.settings_draft.assistant.write_mode, locale, cx),
+                write_mode_buttons(write_mode, locale, cx),
                 tokens,
             )
             .into_any_element(),
+            write_mode_notice,
             assistant_text_row(
                 tr(locale, "assistant_max_rounds"),
                 &inputs.max_tool_rounds,
@@ -600,6 +581,7 @@ fn assistant_settings_section(
                     .gap_2()
                     .child(
                         Button::new("assistant-save-settings")
+                            .debug_selector(|| "assistant-save-settings".into())
                             .primary()
                             .compact()
                             .label(tr(locale, "save"))
@@ -607,6 +589,7 @@ fn assistant_settings_section(
                     )
                     .child(
                         Button::new("assistant-readiness")
+                            .debug_selector(|| "assistant-readiness".into())
                             .secondary()
                             .compact()
                             .label(tr(locale, "assistant_readiness"))
@@ -615,6 +598,7 @@ fn assistant_settings_section(
                     )
                     .child(
                         Button::new("assistant-model-probe")
+                            .debug_selector(|| "assistant-model-probe".into())
                             .secondary()
                             .compact()
                             .label(tr(locale, "assistant_model_probe"))
@@ -623,6 +607,7 @@ fn assistant_settings_section(
                     )
                     .children(root.assistant.probe_running.map(|kind| {
                         Button::new("assistant-cancel-probe")
+                            .debug_selector(|| "assistant-cancel-probe".into())
                             .secondary()
                             .compact()
                             .label(format!(
@@ -644,15 +629,7 @@ fn assistant_settings_section(
                 tokens,
             )
             .into_any_element(),
-            diagnostic
-                .map(|message| {
-                    div()
-                        .text_xs()
-                        .text_color(tokens.text_muted)
-                        .child(message)
-                        .into_any_element()
-                })
-                .unwrap_or_else(|| div().into_any_element()),
+            probe,
         ],
     )
     .into_any_element()
@@ -673,6 +650,191 @@ fn assistant_text_row(
         tokens,
     )
     .into_any_element()
+}
+
+/// A text row whose control is marked `selector` for tests.
+fn marked_text_row(
+    label: &'static str,
+    field: &gpui::Entity<TextField>,
+    selector: &'static str,
+    tokens: &Tokens,
+) -> gpui::AnyElement {
+    setting_control_row(
+        label,
+        div()
+            .debug_selector(move || selector.into())
+            .w(SETTING_CONTROL_WIDTH)
+            .child(field.clone())
+            .into_any_element(),
+        tokens,
+    )
+    .into_any_element()
+}
+
+/// A line under a settings row, in the control column: muted, or in the
+/// warning color when it reports a failure.
+fn caption(
+    selector: &'static str,
+    message: impl Into<gpui::SharedString>,
+    failed: bool,
+    tokens: &Tokens,
+) -> gpui::Div {
+    div()
+        .debug_selector(move || selector.into())
+        .mt(tokens.spacing.xs)
+        .ml(SETTING_LABEL_WIDTH + tokens.spacing.lg)
+        .max_w(SETTING_CONTROL_WIDTH + px(160.))
+        .text_xs()
+        .text_color(if failed {
+            tokens.warning_text
+        } else {
+            tokens.text_muted
+        })
+        .child(message.into())
+}
+
+/// Under the key field: why a save that changed the connection target was
+/// refused, or that an empty field keeps the stored key.
+fn credential_caption(
+    root: &RootView,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let locale = root.ui.locale;
+    if root
+        .settings_error
+        .as_ref()
+        .is_some_and(|error| error.is_credential_target_conflict())
+    {
+        caption(
+            "assistant-credential-target-conflict",
+            tr(locale, "assistant_credential_target_conflict"),
+            true,
+            tokens,
+        )
+        .into_any_element()
+    } else if root.form_keeps_stored_credential(cx) {
+        caption(
+            "assistant-api-key-kept",
+            tr(locale, "assistant_api_key_kept"),
+            false,
+            tokens,
+        )
+        .into_any_element()
+    } else {
+        div().into_any_element()
+    }
+}
+
+/// What the chosen write mode means, and that it waits for Save while it
+/// differs from the saved one.
+fn write_mode_notice(
+    draft: AgentWriteMode,
+    saved: AgentWriteMode,
+    locale: crate::i18n::Locale,
+    tokens: &Tokens,
+) -> gpui::AnyElement {
+    let (selector, key) = match draft {
+        AgentWriteMode::Automatic => (
+            "settings-write-mode-notice-automatic",
+            "assistant_write_automatic_notice",
+        ),
+        AgentWriteMode::ConfirmEach => (
+            "settings-write-mode-notice-confirm-each",
+            "assistant_write_confirm_each_notice",
+        ),
+    };
+    div()
+        .child(caption(selector, tr(locale, key), false, tokens))
+        .children((draft != saved).then(|| {
+            caption(
+                "settings-write-mode-unsaved",
+                tr(locale, "assistant_write_mode_unsaved"),
+                true,
+                tokens,
+            )
+        }))
+        .into_any_element()
+}
+
+/// The last connection probe: running, cancelled, its diagnostic, or its
+/// error with a retry when the error is retryable.
+fn probe_outcome(root: &RootView, tokens: &Tokens, cx: &mut Context<RootView>) -> gpui::AnyElement {
+    let locale = root.ui.locale;
+    let assistant = &root.assistant;
+    if assistant.probe_running.is_some() {
+        return caption(
+            "assistant-probe-running",
+            tr(locale, "assistant_probe_running"),
+            false,
+            tokens,
+        )
+        .into_any_element();
+    }
+    if assistant.probe_cancelled {
+        return caption(
+            "assistant-probe-cancelled",
+            tr(locale, "assistant_probe_cancelled"),
+            false,
+            tokens,
+        )
+        .into_any_element();
+    }
+    match &assistant.diagnostic {
+        Some(Ok(diagnostic)) => caption(
+            "assistant-probe-result",
+            format!(
+                "{} · {} · text={} · tools={} · {} → {} · context={} · models={} · {}",
+                if diagnostic.local {
+                    tr(locale, "assistant_local_connection")
+                } else {
+                    tr(locale, "assistant_remote_connection")
+                },
+                if diagnostic.ready {
+                    tr(locale, "ready")
+                } else {
+                    tr(locale, "failed")
+                },
+                tr(locale, capability_key(diagnostic.text)),
+                tr(locale, capability_key(diagnostic.client_tools)),
+                diagnostic.requested_model,
+                diagnostic.resolved_model.as_deref().unwrap_or("—"),
+                diagnostic
+                    .context_window_tokens
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "—".into()),
+                diagnostic
+                    .models
+                    .as_ref()
+                    .map(|models| models.join(", "))
+                    .unwrap_or_else(|| "—".into()),
+                diagnostic.message
+            ),
+            false,
+            tokens,
+        )
+        .into_any_element(),
+        Some(Err(error)) => div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(caption(
+                "assistant-probe-error",
+                crate::i18n::message(locale, "assistant_probe_failed", &error.to_string()),
+                true,
+                tokens,
+            ))
+            .children(assistant.probe_to_retry().map(|_| {
+                Button::new("assistant-probe-retry")
+                    .debug_selector(|| "assistant-probe-retry".into())
+                    .secondary()
+                    .compact()
+                    .label(tr(locale, "assistant_retry"))
+                    .on_click(cx.listener(RootView::retry_assistant_probe))
+            }))
+            .into_any_element(),
+        None => div().into_any_element(),
+    }
 }
 
 fn protocol_buttons(
@@ -778,12 +940,14 @@ fn write_mode_buttons(
             write_mode_button(
                 AgentWriteMode::Automatic,
                 tr(locale, "assistant_automatic"),
+                "settings-write-mode-automatic",
                 selected,
                 cx,
             ),
             write_mode_button(
                 AgentWriteMode::ConfirmEach,
                 tr(locale, "assistant_confirm_each"),
+                "settings-write-mode-confirm-each",
                 selected,
                 cx,
             ),
@@ -794,10 +958,12 @@ fn write_mode_buttons(
 fn write_mode_button(
     mode: AgentWriteMode,
     label: &'static str,
+    selector: &'static str,
     selected: AgentWriteMode,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
     let mut button = Button::new(format!("assistant-write-{label}"))
+        .debug_selector(move || selector.into())
         .compact()
         .label(label);
     button = if mode == selected {

@@ -8,7 +8,7 @@ use crate::{
     theme::{self, BlurLevel, Tokens},
 };
 use contracts::{AgentScene, DocumentProjection};
-use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
+use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Pixels, SharedString};
 use gpui_component::{
     button::{Button, ButtonVariants},
     scroll::ScrollableElement as _,
@@ -63,8 +63,19 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .job_progress
         .map(|progress| job_progress_label(root.ui.locale, progress));
     let result = root.assistant.result.clone();
-    let pending = root.assistant.pending.clone();
+    let render_model = result.as_ref().map(result_render_model);
+    let (warnings, receipts) = render_model
+        .map(|model| (model.warnings, model.mutations))
+        .unwrap_or_default();
+    let pending = root.assistant.pending.clone().map(|state| PendingCard {
+        state,
+        queued: root.assistant.pending_queue_len(),
+        position: root.assistant.pending_position(),
+    });
     let busy = root.assistant_busy();
+    let cancellable = root.assistant_cancellable();
+    let retry = root.assistant.retry_prompt().is_some();
+    let review_focus = root.review_focus.clone();
     let scroll = root.scroll.assistant_results.clone();
     // Results, diffs and pending cards stay on the opaque plane and scroll
     // under the frosted input bar; the padding lets the last card clear it.
@@ -78,15 +89,12 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .flex()
         .flex_col()
         .gap_3()
-        .children(result.map(|result| render_result(result, root.ui.locale, cx, &root.assistant)))
-        .children(pending.map(|pending| {
-            render_pending(
-                pending,
-                root.assistant.pending_queue_len(),
-                root.ui.locale,
-                cx,
-            )
-        }))
+        .children(result.map(|result| render_result(result, warnings, root.ui.locale, cx)))
+        .children(
+            (!receipts.is_empty())
+                .then(|| render_receipts(receipts, root.ui.locale, cx, &root.assistant)),
+        )
+        .children(pending.map(|pending| render_pending(pending, &review_focus, root.ui.locale, cx)))
         .children((root.assistant.pending_overflow_count() > 0).then(|| {
             render_pending_overflow(
                 root.assistant.pending_overflow_count(),
@@ -127,11 +135,20 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 )
                 .child(
                     Button::new("assistant-cancel")
+                        .debug_selector(|| "assistant-cancel".into())
                         .secondary()
                         .label(tr(root.ui.locale, "cancel"))
-                        .disabled(!busy)
+                        .disabled(!cancellable)
                         .on_click(cx.listener(RootView::cancel_assistant)),
-                ),
+                )
+                .children(retry.then(|| {
+                    Button::new("assistant-retry")
+                        .debug_selector(|| "assistant-retry".into())
+                        .secondary()
+                        .label(tr(root.ui.locale, "assistant_retry"))
+                        .disabled(busy)
+                        .on_click(cx.listener(RootView::retry_assistant_run))
+                })),
         )
         .child(
             div()
@@ -432,11 +449,17 @@ fn task_label(locale: Locale, task: &AssistantTaskState) -> String {
     }
 }
 
+/// The position of the receipts among the results of a run that wrote:
+/// after its result, before its pending review.
+pub(crate) const RECEIPTS_ITEM: usize = 1;
+
+/// The run's answer, evidence, model route, usage, diagnostics and every
+/// warning it returned.
 fn render_result(
     result: AssistantRunResult,
+    warnings: Vec<AssistantUiError>,
     locale: Locale,
     cx: &mut Context<RootView>,
-    controller: &AssistantController,
 ) -> gpui::AnyElement {
     let answer = result
         .answer
@@ -482,10 +505,10 @@ fn render_result(
             )
         })
         .unwrap_or_else(|| "—".into());
-    let render_model = result_render_model(&result);
     let tokens = *theme::tokens(cx);
 
     div()
+        .debug_selector(|| "assistant-result".into())
         .rounded(tokens.radius.md)
         .border_1()
         .border_color(tokens.border)
@@ -511,12 +534,43 @@ fn render_result(
             &tokens,
         ))
         .children(
-            render_model
-                .warnings
+            warnings
                 .into_iter()
-                .map(|warning| render_warning(warning, locale, &tokens)),
+                .enumerate()
+                .map(|(index, warning)| render_warning(index, warning, locale, &tokens)),
         )
-        .children(render_model.mutations.into_iter().map(|mutation| {
+        .into_any_element()
+}
+
+/// Every write the run applied, each with its own undo entry; kept after
+/// the run failed or was cancelled.
+fn render_receipts(
+    mutations: Vec<AssistantMutationSummary>,
+    locale: Locale,
+    cx: &mut Context<RootView>,
+    controller: &AssistantController,
+) -> gpui::AnyElement {
+    let tokens = *theme::tokens(cx);
+    div()
+        .debug_selector(|| "assistant-receipts".into())
+        .rounded(tokens.radius.md)
+        .border_1()
+        .border_color(tokens.border)
+        .p_3()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(
+            div()
+                .text_sm()
+                .text_color(tokens.text_muted)
+                .child(crate::i18n::message(
+                    locale,
+                    "assistant_receipts",
+                    &mutations.len().to_string(),
+                )),
+        )
+        .children(mutations.into_iter().map(|mutation| {
             let mutation_id = mutation.mutation_id.clone();
             render_mutation(
                 mutation,
@@ -542,10 +596,18 @@ fn result_render_model(result: &AssistantRunResult) -> AssistantResultRenderMode
     }
 }
 
-fn render_warning(warning: AssistantUiError, locale: Locale, tokens: &Tokens) -> gpui::AnyElement {
+/// A warning of the run, marked `assistant-warning-<index>` in the order
+/// the result lists them.
+fn render_warning(
+    index: usize,
+    warning: AssistantUiError,
+    locale: Locale,
+    tokens: &Tokens,
+) -> gpui::AnyElement {
     div()
-        .mt_2()
-        .p_3()
+        .debug_selector(move || format!("assistant-warning-{index}"))
+        .px_3()
+        .py_2()
         .rounded(tokens.radius.sm)
         .bg(tokens.warning_surface)
         .text_color(tokens.warning_text)
@@ -557,6 +619,9 @@ fn render_warning(warning: AssistantUiError, locale: Locale, tokens: &Tokens) ->
         .into_any_element()
 }
 
+/// A receipt of a write the run applied: the mutation, the documents it
+/// changed and the segments it left uncovered on one line, with its own
+/// undo entry beside it.
 fn render_mutation(
     mutation: AssistantMutationSummary,
     locale: Locale,
@@ -596,36 +661,54 @@ fn render_mutation(
     } else {
         tr(locale, "assistant_undo")
     };
+    let receipt = format!("assistant-receipt-{mutation_id}");
+    let undo = format!("assistant-undo-{mutation_id}");
+    let undone_marker = format!("assistant-undone-{mutation_id}");
 
     div()
-        .mt_2()
-        .p_3()
+        .debug_selector(move || receipt.clone())
+        .px_3()
+        .py_2()
         .rounded(tokens.radius.sm)
         .bg(tokens.raised)
         .flex()
-        .flex_col()
-        .gap_2()
-        .child(info_line(
-            tr(locale, "assistant_mutation"),
-            mutation.mutation_id,
-            &tokens,
-        ))
-        .child(info_line(
-            tr(locale, "assistant_affected"),
-            affected,
-            &tokens,
-        ))
-        .child(info_line(tr(locale, "assistant_uncovered"), gaps, &tokens))
+        .items_center()
+        .gap_3()
         .child(
             div()
-                .id(format!("assistant-undo-{mutation_id}"))
-                .debug_selector({
-                    let selector = mutation_id.clone();
-                    move || format!("assistant-undo-{selector}")
-                })
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(info_line(
+                    tr(locale, "assistant_mutation"),
+                    mutation.mutation_id,
+                    &tokens,
+                ))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_x_4()
+                        .text_xs()
+                        .text_color(tokens.text_muted)
+                        .child(format!("{} {affected}", tr(locale, "assistant_affected")))
+                        .child(format!("{} {gaps}", tr(locale, "assistant_uncovered"))),
+                ),
+        )
+        .child(
+            div()
+                .id(SharedString::from(undo.clone()))
+                .debug_selector(move || undo.clone())
+                .flex_shrink_0()
                 .child(
                     Button::new(format!("assistant-undo-button-{mutation_id}"))
+                        .when(undone, |this| {
+                            this.debug_selector(move || undone_marker.clone())
+                        })
                         .secondary()
+                        .compact()
                         .label(undo_label)
                         .disabled(undone || undo_in_flight)
                         .on_click(cx.listener(move |root, _, _window, cx| {
@@ -636,27 +719,63 @@ fn render_mutation(
         .into_any_element()
 }
 
-fn render_pending(
+/// The review the pending card shows, with its place in the run.
+struct PendingCard {
     state: PendingReviewState,
-    queued_count: usize,
+    queued: usize,
+    position: Option<(usize, usize)>,
+}
+
+/// The awaiting review: the run is paused before this write. The card
+/// holds `focus`, which a decision or expiry moves to the next review; both
+/// decisions are disabled while one is in flight.
+fn render_pending(
+    card: PendingCard,
+    focus: &FocusHandle,
     locale: Locale,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
     let tokens = *theme::tokens(cx);
-    let busy = matches!(
-        &state,
-        PendingReviewState::Accepting(_) | PendingReviewState::Rejecting(_)
-    );
+    let PendingCard {
+        state,
+        queued,
+        position,
+    } = card;
+    let decision = match &state {
+        PendingReviewState::Accepting(_) => Some("assistant-review-accepting"),
+        PendingReviewState::Rejecting(_) => Some("assistant-review-rejecting"),
+        _ => None,
+    };
+    let (accept_label, reject_label) = match &state {
+        PendingReviewState::Accepting(_) => (
+            tr(locale, "assistant_accepting"),
+            tr(locale, "assistant_reject"),
+        ),
+        PendingReviewState::Rejecting(_) => (
+            tr(locale, "assistant_accept"),
+            tr(locale, "assistant_rejecting"),
+        ),
+        _ => (
+            tr(locale, "assistant_accept"),
+            tr(locale, "assistant_reject"),
+        ),
+    };
     let (PendingReviewState::Awaiting(pending)
     | PendingReviewState::Accepting(pending)
     | PendingReviewState::Rejecting(pending)) = state
     else {
-        let label = match state {
-            PendingReviewState::Rejected => tr(locale, "assistant_rejected"),
-            PendingReviewState::Expired => tr(locale, "assistant_expired"),
+        let (label, selector) = match state {
+            PendingReviewState::Rejected => (
+                tr(locale, "assistant_rejected"),
+                "assistant-pending-rejected",
+            ),
+            PendingReviewState::Expired => {
+                (tr(locale, "assistant_expired"), "assistant-pending-expired")
+            }
             _ => unreachable!(),
         };
         return div()
+            .debug_selector(move || selector.into())
             .p_3()
             .text_color(tokens.text_muted)
             .child(label)
@@ -716,19 +835,63 @@ fn render_pending(
         .collect::<Vec<_>>()
         .join("; ");
     let gaps = pending.uncovered_segment_ids.join(", ");
+    let busy = decision.is_some();
+    let card_selector = format!("assistant-pending-{}", pending.confirmation_id);
+    let expires = crate::i18n::message(
+        locale,
+        "assistant_pending_expires",
+        &crate::components::utc_time(pending.expires_at_ms),
+    );
 
     div()
+        .id(SharedString::from(card_selector.clone()))
+        .debug_selector(move || card_selector.clone())
+        .track_focus(focus)
         .rounded(tokens.radius.md)
         .border_1()
         .border_color(tokens.warning)
+        .focus(|style| style.border_color(tokens.accent))
         .p_4()
         .flex()
         .flex_col()
         .gap_2()
-        .child(div().text_lg().child(tr(locale, "assistant_pending")))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(div().text_lg().child(tr(locale, "assistant_pending")))
+                .children(position.map(|(position, total)| {
+                    div()
+                        .debug_selector(move || {
+                            format!("assistant-pending-position-{position}-of-{total}")
+                        })
+                        .text_sm()
+                        .text_color(tokens.text_muted)
+                        .child(crate::i18n::message(
+                            locale,
+                            "assistant_pending_position",
+                            &format!("{position}|{total}"),
+                        ))
+                }))
+                .child(
+                    div()
+                        .debug_selector(|| "assistant-pending-expires".into())
+                        .text_sm()
+                        .text_color(tokens.text_muted)
+                        .child(expires),
+                ),
+        )
+        .child(
+            div()
+                .debug_selector(|| "assistant-pending-paused".into())
+                .text_sm()
+                .text_color(tokens.warning_text)
+                .child(tr(locale, "assistant_pending_paused")),
+        )
         .child(info_line(
             tr(locale, "assistant_pending_queue"),
-            queued_count.to_string(),
+            queued.to_string(),
             &tokens,
         ))
         .child(info_line(
@@ -758,19 +921,24 @@ fn render_pending(
         ))
         .child(
             div()
+                .when_some(decision, |this, decision| {
+                    this.debug_selector(move || decision.into())
+                })
                 .flex()
                 .gap_2()
                 .child(
                     Button::new("assistant-confirm")
+                        .debug_selector(|| "assistant-confirm".into())
                         .primary()
-                        .label(tr(locale, "assistant_accept"))
+                        .label(accept_label)
                         .disabled(busy)
                         .on_click(cx.listener(RootView::accept_assistant_pending)),
                 )
                 .child(
                     Button::new("assistant-reject")
+                        .debug_selector(|| "assistant-reject".into())
                         .secondary()
-                        .label(tr(locale, "assistant_reject"))
+                        .label(reject_label)
                         .disabled(busy)
                         .on_click(cx.listener(RootView::reject_assistant_pending)),
                 ),
@@ -778,16 +946,26 @@ fn render_pending(
         .into_any_element()
 }
 
+/// The reviews of the run beyond the queue limit: not listed, not written.
 fn render_pending_overflow(count: usize, locale: Locale, tokens: &Tokens) -> gpui::AnyElement {
     div()
         .id("assistant-pending-overflow")
         .debug_selector(|| "assistant-pending-overflow".into())
-        .p_3()
-        .child(info_line(
-            tr(locale, "assistant_pending_overflow"),
-            count.to_string(),
-            tokens,
-        ))
+        .px_3()
+        .py_2()
+        .rounded(tokens.radius.sm)
+        .bg(tokens.warning_surface)
+        .text_sm()
+        .text_color(tokens.warning_text)
+        .child(
+            div()
+                .debug_selector(move || format!("assistant-pending-overflow-{count}"))
+                .child(crate::i18n::message(
+                    locale,
+                    "assistant_pending_overflow",
+                    &count.to_string(),
+                )),
+        )
         .into_any_element()
 }
 

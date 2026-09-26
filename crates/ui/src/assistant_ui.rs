@@ -47,6 +47,10 @@ pub struct AssistantUiError {
 }
 
 pub const SETTINGS_REVISION_CONFLICT: &str = "SETTINGS_REVISION_CONFLICT";
+/// A connection's protocol, base URL, model or authentication changed while
+/// its stored credential was left as it was; the key must be entered again.
+pub const SETTINGS_CREDENTIAL_TARGET_CONFLICT: &str = "SETTINGS_CREDENTIAL_TARGET_CONFLICT";
+const TASK_CANCELLED: &str = "TASK_CANCELLED";
 
 impl AssistantUiError {
     pub fn unavailable(message: impl Into<String>) -> Self {
@@ -58,23 +62,27 @@ impl AssistantUiError {
     }
 
     /// A settings write that lost a compare-and-swap is retryable once the
-    /// caller reloads; every other settings error is not.
+    /// caller reloads; every other settings error is not. A changed
+    /// connection target keeps the code Settings reports it with.
     pub fn from_settings(error: &SettingsError) -> Self {
-        let conflict = matches!(error, SettingsError::RevisionConflict);
+        let code = match error {
+            SettingsError::RevisionConflict => SETTINGS_REVISION_CONFLICT,
+            SettingsError::CredentialTargetConflict => SETTINGS_CREDENTIAL_TARGET_CONFLICT,
+            _ => "ASSISTANT_SETTINGS_INVALID",
+        };
         Self {
-            code: if conflict {
-                SETTINGS_REVISION_CONFLICT
-            } else {
-                "ASSISTANT_SETTINGS_INVALID"
-            }
-            .into(),
+            code: code.into(),
             message: error.to_string(),
-            retryable: conflict,
+            retryable: matches!(error, SettingsError::RevisionConflict),
         }
     }
 
     pub fn is_settings_conflict(&self) -> bool {
         self.code == SETTINGS_REVISION_CONFLICT
+    }
+
+    pub fn is_credential_target_conflict(&self) -> bool {
+        self.code == SETTINGS_CREDENTIAL_TARGET_CONFLICT
     }
 }
 
@@ -366,11 +374,25 @@ pub struct AssistantController {
     pub job: Option<JobId>,
     pub job_progress: Option<Progress>,
     pub probe_running: Option<ConnectionProbeKind>,
+    /// The last probe was cancelled before it answered.
+    pub probe_cancelled: bool,
+    /// The kind of the last probe started, which a retry repeats.
+    last_probe: Option<ConnectionProbeKind>,
     /// The run whose result, error and job events the controller still
     /// accepts; a job event may end the task before the result arrives.
     active_request: Option<String>,
+    /// The run whose result, reviews and undo entries are shown. Confirm,
+    /// reject and undo outcomes of any other run arrive late and change
+    /// nothing.
+    result_run: Option<String>,
+    /// The prompt of the current run, which a retry sends again.
+    prompt: Option<String>,
+    /// The run failed with a retryable error of its own.
+    retryable_failure: bool,
     pending_queue: VecDeque<AssistantPendingReview>,
     pending_overflow_ids: HashSet<String>,
+    /// Reviews of the current run that were accepted, rejected or expired.
+    pending_decided: usize,
     /// Document ids authorized when the current result's run started.
     result_grant: Vec<String>,
     undone_mutation_ids: HashSet<String>,
@@ -396,9 +418,15 @@ impl Default for AssistantController {
             job: None,
             job_progress: None,
             probe_running: None,
+            probe_cancelled: false,
+            last_probe: None,
             active_request: None,
+            result_run: None,
+            prompt: None,
+            retryable_failure: false,
             pending_queue: VecDeque::new(),
             pending_overflow_ids: HashSet::new(),
+            pending_decided: 0,
             result_grant: Vec::new(),
             undone_mutation_ids: HashSet::new(),
             undo_in_flight: HashSet::new(),
@@ -478,7 +506,7 @@ impl AssistantController {
             request_id: request_id.clone(),
             scene: self.scene,
             skill: AgentSkillSelector::for_scene(self.scene),
-            prompt,
+            prompt: prompt.clone(),
             authorized_documents: self.authorized_documents.clone(),
             projection: self.projection,
             write_mode: settings.write_mode,
@@ -489,7 +517,10 @@ impl AssistantController {
         self.task = AssistantTaskState::Running {
             request_id: request_id.clone(),
         };
-        self.active_request = Some(request_id);
+        self.active_request = Some(request_id.clone());
+        self.result_run = Some(request_id);
+        self.prompt = Some(prompt);
+        self.retryable_failure = false;
         self.job = None;
         self.job_progress = None;
         self.result = None;
@@ -501,6 +532,7 @@ impl AssistantController {
         self.pending = None;
         self.pending_queue.clear();
         self.pending_overflow_ids.clear();
+        self.pending_decided = 0;
         self.undone_mutation_ids.clear();
         self.undo_in_flight.clear();
         self.progress = None;
@@ -513,16 +545,61 @@ impl AssistantController {
             return;
         }
         let pending_reviews = result.all_pending_reviews();
-        let warning = result.all_warnings().into_iter().next();
         self.result = Some(result);
         self.set_pending_reviews(pending_reviews);
-        self.task = match (warning, self.pending.is_some()) {
-            (Some(warning), _) => AssistantTaskState::Partial(warning),
-            (None, true) => AssistantTaskState::AwaitingConfirmation,
-            (None, false) => AssistantTaskState::Completed,
-        };
+        self.task = self.settled_task();
         self.cancellation = None;
         self.active_request = None;
+    }
+
+    /// The task once nothing of the shown result is in flight: partial while
+    /// the result carries a warning, awaiting while a review awaits.
+    fn settled_task(&self) -> AssistantTaskState {
+        let warning = self
+            .result
+            .as_ref()
+            .and_then(|result| result.all_warnings().into_iter().next());
+        match (warning, self.pending.as_ref()) {
+            (Some(warning), _) => AssistantTaskState::Partial(warning),
+            (None, Some(PendingReviewState::Awaiting(_))) => {
+                AssistantTaskState::AwaitingConfirmation
+            }
+            (None, _) => AssistantTaskState::Completed,
+        }
+    }
+
+    /// Whether the current run's typed result or error has not arrived yet.
+    /// A job event may already have ended the task; the result, with the
+    /// receipts of whatever it wrote, still replaces it, so no other run
+    /// starts before it arrives.
+    pub fn awaiting_result(&self) -> bool {
+        self.active_request.is_some()
+    }
+
+    /// Whether an accept, reject or undo of the shown result is in flight.
+    pub fn decision_in_flight(&self) -> bool {
+        matches!(
+            self.pending,
+            Some(PendingReviewState::Accepting(_) | PendingReviewState::Rejecting(_))
+        ) || !self.undo_in_flight.is_empty()
+    }
+
+    /// The run whose result, reviews and undo entries are shown; confirm,
+    /// reject and undo outcomes name it when they arrive.
+    pub fn result_run(&self) -> Option<String> {
+        self.result_run.clone()
+    }
+
+    /// The prompt to send again when the run failed with a retryable error.
+    pub fn retry_prompt(&self) -> Option<String> {
+        self.retryable_failure
+            .then(|| self.prompt.clone())
+            .flatten()
+    }
+
+    /// Whether a decision or undo that started for `run` still applies.
+    fn shows_run(&self, run: &str) -> bool {
+        self.result_run.as_deref() == Some(run)
     }
 
     /// Projects a job event of the current run; returns whether the state
@@ -567,7 +644,8 @@ impl AssistantController {
         if !self.matches_active_request(request_id) {
             return;
         }
-        self.task = if error.code == "TASK_CANCELLED" {
+        self.retryable_failure = error.retryable && error.code != TASK_CANCELLED;
+        self.task = if error.code == TASK_CANCELLED {
             AssistantTaskState::Cancelled
         } else {
             AssistantTaskState::Failed(error)
@@ -615,9 +693,17 @@ impl AssistantController {
         Some(pending)
     }
 
-    pub fn confirmation_complete(&mut self, result: AssistantRunResult) {
+    /// The accepted review of `run` was written. Nothing changes when the
+    /// page shows another run by now.
+    pub fn confirmation_complete(&mut self, run: &str, result: AssistantRunResult) {
+        if !self.shows_run(run) {
+            return;
+        }
         let accepted_confirmation_id = match self.pending.take() {
-            Some(PendingReviewState::Accepting(pending)) => Some(pending.confirmation_id),
+            Some(PendingReviewState::Accepting(pending)) => {
+                self.pending_decided += 1;
+                Some(pending.confirmation_id)
+            }
             other => {
                 self.pending = other;
                 None
@@ -653,19 +739,15 @@ impl AssistantController {
         pending_reviews.extend(queued);
         self.result = Some(result);
         self.set_pending_reviews(pending_reviews);
-        self.task = match (
-            self.result
-                .as_ref()
-                .and_then(|result| result.all_warnings().into_iter().next()),
-            self.pending.is_some(),
-        ) {
-            (Some(warning), _) => AssistantTaskState::Partial(warning),
-            (None, true) => AssistantTaskState::AwaitingConfirmation,
-            (None, false) => AssistantTaskState::Completed,
-        };
+        self.task = self.settled_task();
     }
 
-    pub fn confirmation_failed(&mut self, error: AssistantUiError) {
+    /// The decision on the review of `run` failed; an expired review hands
+    /// over to the next one, any other failure lets the user decide again.
+    pub fn confirmation_failed(&mut self, run: &str, error: AssistantUiError) {
+        if !self.shows_run(run) {
+            return;
+        }
         if error.code == "WRITE_CONFIRMATION_EXPIRED" {
             self.advance_past_expired();
         } else {
@@ -679,13 +761,30 @@ impl AssistantController {
         self.task = AssistantTaskState::Failed(error);
     }
 
-    pub fn rejection_complete(&mut self) {
-        if let Some(next) = self.pending_queue.pop_front() {
-            self.pending = Some(PendingReviewState::Awaiting(next));
-            self.task = AssistantTaskState::AwaitingConfirmation;
-        } else {
-            self.pending = Some(PendingReviewState::Rejected);
-            self.task = AssistantTaskState::Completed;
+    pub fn rejection_complete(&mut self, run: &str) {
+        if !self.shows_run(run) {
+            return;
+        }
+        self.pending_decided += 1;
+        self.pending = Some(match self.pending_queue.pop_front() {
+            Some(next) => PendingReviewState::Awaiting(next),
+            None => PendingReviewState::Rejected,
+        });
+        self.task = self.settled_task();
+    }
+
+    /// The awaiting review's place among the reviews of the run: its
+    /// 1-based position and the number of reviews decided, awaiting or
+    /// queued. Reviews over the queue limit are not counted.
+    pub fn pending_position(&self) -> Option<(usize, usize)> {
+        match self.pending.as_ref()? {
+            PendingReviewState::Awaiting(_)
+            | PendingReviewState::Accepting(_)
+            | PendingReviewState::Rejecting(_) => Some((
+                self.pending_decided + 1,
+                self.pending_decided + 1 + self.pending_queue.len(),
+            )),
+            PendingReviewState::Rejected | PendingReviewState::Expired => None,
         }
     }
 
@@ -705,22 +804,26 @@ impl AssistantController {
         Some((mutation.undo_token, mutation_id.to_string()))
     }
 
+    /// The undo of `mutation_id`, a write of `run`, was applied. Nothing
+    /// changes when the page shows another run by now.
     pub fn mutation_undo_complete(
         &mut self,
+        run: &str,
         mutation_id: &str,
         _undo_receipt: AssistantMutationSummary,
     ) {
+        if !self.shows_run(run) {
+            return;
+        }
         self.undo_in_flight.remove(mutation_id);
         self.undone_mutation_ids.insert(mutation_id.to_string());
-        self.task = self
-            .result
-            .as_ref()
-            .and_then(|result| result.all_warnings().into_iter().next())
-            .map(AssistantTaskState::Partial)
-            .unwrap_or(AssistantTaskState::Completed);
+        self.task = self.settled_task();
     }
 
-    pub fn mutation_undo_failed(&mut self, mutation_id: &str, error: AssistantUiError) {
+    pub fn mutation_undo_failed(&mut self, run: &str, mutation_id: &str, error: AssistantUiError) {
+        if !self.shows_run(run) {
+            return;
+        }
         self.undo_in_flight.remove(mutation_id);
         self.task = AssistantTaskState::Failed(error);
     }
@@ -776,6 +879,7 @@ impl AssistantController {
             return false;
         }
         self.advance_past_expired();
+        self.task = self.settled_task();
         true
     }
 
@@ -790,12 +894,16 @@ impl AssistantController {
         }
         self.task = AssistantTaskState::Idle;
         self.active_request = None;
+        self.result_run = None;
+        self.prompt = None;
+        self.retryable_failure = false;
         self.authorized_documents.clear();
         self.result = None;
         self.result_grant.clear();
         self.pending = None;
         self.pending_queue.clear();
         self.pending_overflow_ids.clear();
+        self.pending_decided = 0;
         self.undone_mutation_ids.clear();
         self.undo_in_flight.clear();
         self.progress = None;
@@ -814,9 +922,19 @@ impl AssistantController {
         self.probe_sequence += 1;
         self.active_probe = Some(self.probe_sequence);
         self.probe_running = Some(kind);
+        self.probe_cancelled = false;
+        self.last_probe = Some(kind);
         self.diagnostic = None;
         self.probe_cancellation = Some(cancellation.clone());
         (self.probe_sequence, cancellation)
+    }
+
+    /// The probe to repeat when the last one failed with a retryable error.
+    pub fn probe_to_retry(&self) -> Option<ConnectionProbeKind> {
+        match &self.diagnostic {
+            Some(Err(error)) if error.retryable => self.last_probe,
+            _ => None,
+        }
     }
 
     /// Records a probe result unless the probe was cancelled or superseded.
@@ -841,6 +959,7 @@ impl AssistantController {
         cancellation.cancel();
         self.active_probe = None;
         self.probe_running = None;
+        self.probe_cancelled = true;
         true
     }
 
@@ -855,12 +974,16 @@ impl AssistantController {
             self.advance_past_expired();
             expired = true;
         }
+        if expired {
+            self.task = self.settled_task();
+        }
         expired
     }
 
     /// The current review expired: the next queued review awaits, or the
     /// expiry is shown when the queue is empty.
     fn advance_past_expired(&mut self) {
+        self.pending_decided += 1;
         self.pending = Some(match self.pending_queue.pop_front() {
             Some(next) => PendingReviewState::Awaiting(next),
             None => PendingReviewState::Expired,
@@ -1006,6 +1129,11 @@ mod tests {
         ) -> Result<AssistantMutationSummary, AssistantUiError> {
             Ok(mutation("undone"))
         }
+    }
+
+    /// The run whose result the controller shows.
+    fn shown(controller: &AssistantController) -> String {
+        controller.result_run().expect("a run's result is shown")
     }
 
     fn mutation(id: &str) -> AssistantMutationSummary {
@@ -1225,11 +1353,14 @@ mod tests {
         assert_eq!(controller.pending, Some(PendingReviewState::Expired));
 
         controller.pending = Some(PendingReviewState::Accepting(pending()));
-        controller.confirmation_failed(AssistantUiError {
-            code: "WRITE_CONFIRMATION_EXPIRED".into(),
-            message: "expired by runtime".into(),
-            retryable: true,
-        });
+        controller.confirmation_failed(
+            &shown(&controller),
+            AssistantUiError {
+                code: "WRITE_CONFIRMATION_EXPIRED".into(),
+                message: "expired by runtime".into(),
+                retryable: true,
+            },
+        );
         assert_eq!(controller.pending, Some(PendingReviewState::Expired));
     }
 
@@ -1349,6 +1480,7 @@ mod tests {
         let (token, mutation_id) = controller.begin_mutation_undo("automatic").unwrap();
         assert_eq!(token, "undo-automatic");
         controller.mutation_undo_complete(
+            &shown(&controller),
             &mutation_id,
             service.undo(token, vec!["document".into()]).unwrap(),
         );
@@ -1385,6 +1517,7 @@ mod tests {
         assert_eq!(selected.ranges.len(), 1);
         assert_eq!(selected.uncovered_segment_ids, ["seg-gap"]);
         controller.confirmation_complete(
+            &shown(&controller),
             service
                 .confirm(selected.confirmation_id, vec!["document".into()])
                 .unwrap(),
@@ -1404,7 +1537,7 @@ mod tests {
         service
             .reject(selected.confirmation_id, vec!["document".into()])
             .unwrap();
-        controller.rejection_complete();
+        controller.rejection_complete(&shown(&controller));
         assert_eq!(controller.pending, Some(PendingReviewState::Rejected));
     }
 
@@ -1478,7 +1611,7 @@ mod tests {
 
         let accepted = controller.pending_for_accept(0).unwrap();
         assert_eq!(accepted.confirmation_id, "confirmation-0");
-        controller.confirmation_complete(empty_result());
+        controller.confirmation_complete(&shown(&controller), empty_result());
         assert_eq!(
             controller.pending,
             Some(PendingReviewState::Awaiting(pending_with_id(
@@ -1489,7 +1622,7 @@ mod tests {
 
         let rejected = controller.pending_for_reject(0).unwrap();
         assert_eq!(rejected.confirmation_id, "confirmation-1");
-        controller.rejection_complete();
+        controller.rejection_complete(&shown(&controller));
         assert_eq!(
             controller.pending,
             Some(PendingReviewState::Awaiting(pending_with_id(
@@ -1500,7 +1633,7 @@ mod tests {
         for index in 2..8 {
             let accepted = controller.pending_for_accept(0).unwrap();
             assert_eq!(accepted.confirmation_id, format!("confirmation-{index}"));
-            controller.confirmation_complete(empty_result());
+            controller.confirmation_complete(&shown(&controller), empty_result());
         }
 
         assert_eq!(controller.pending, None);
@@ -1602,11 +1735,14 @@ mod tests {
         );
 
         controller.pending_for_accept(10).unwrap();
-        controller.confirmation_failed(AssistantUiError {
-            code: "WRITE_CONFIRMATION_EXPIRED".into(),
-            message: "expired by runtime".into(),
-            retryable: true,
-        });
+        controller.confirmation_failed(
+            &shown(&controller),
+            AssistantUiError {
+                code: "WRITE_CONFIRMATION_EXPIRED".into(),
+                message: "expired by runtime".into(),
+                retryable: true,
+            },
+        );
         assert_eq!(
             controller.pending,
             Some(PendingReviewState::Awaiting(pending_with_id("last")))
@@ -1634,13 +1770,13 @@ mod tests {
         let (token, first_id) = controller.begin_mutation_undo("first").unwrap();
         assert_eq!(token, "undo-first");
         assert!(controller.begin_mutation_undo("first").is_none());
-        controller.mutation_undo_complete(&first_id, mutation("undo-first"));
+        controller.mutation_undo_complete(&shown(&controller), &first_id, mutation("undo-first"));
         assert!(controller.is_mutation_undone("first"));
         assert!(!controller.is_mutation_undone("second"));
 
         let (token, second_id) = controller.begin_mutation_undo("second").unwrap();
         assert_eq!(token, "undo-second");
-        controller.mutation_undo_complete(&second_id, mutation("undo-second"));
+        controller.mutation_undo_complete(&shown(&controller), &second_id, mutation("undo-second"));
         assert!(controller.is_mutation_undone("second"));
         assert_eq!(
             controller
@@ -1701,6 +1837,192 @@ mod tests {
     }
 
     #[test]
+    fn late_decisions_and_undos_of_a_run_no_longer_shown_change_nothing() {
+        let document = DocumentState::new(ProjectId::new("late"), "Late", "late.wav");
+        let mut controller = AssistantController::default();
+        controller.authorize_document(Some(&document));
+        let (request, _) = controller.begin("organize".into(), &settings()).unwrap();
+        controller.complete(
+            &request.request_id,
+            AssistantRunResult {
+                mutations: vec![mutation("first"), mutation("second")],
+                pending_reviews: vec![pending_with_id("review-1"), pending_with_id("review-2")],
+                ..empty_result()
+            },
+        );
+        let old = shown(&controller);
+        controller.begin_mutation_undo("first").unwrap();
+        controller.pending_for_accept(0).unwrap();
+
+        // A newer run starts before the old outcomes arrive.
+        controller.authorize_document(Some(&document));
+        let (newer, _) = controller.begin("again".into(), &settings()).unwrap();
+        let running = controller.task.clone();
+        controller.mutation_undo_complete(&old, "first", mutation("undo-first"));
+        controller.mutation_undo_failed(&old, "second", AssistantUiError::unavailable("late"));
+        controller.confirmation_complete(
+            &old,
+            AssistantRunResult {
+                mutation: Some(mutation("confirmed")),
+                ..empty_result()
+            },
+        );
+        controller.confirmation_failed(&old, AssistantUiError::unavailable("late"));
+        controller.rejection_complete(&old);
+        assert_eq!(controller.task, running, "the newer run keeps running");
+        assert!(controller.result.is_none() && controller.pending.is_none());
+        assert!(!controller.is_mutation_undone("first"));
+        assert_eq!(controller.result_run(), Some(newer.request_id.clone()));
+
+        // A forgotten workspace drops the outcomes too.
+        controller.complete(
+            &newer.request_id,
+            AssistantRunResult {
+                mutations: vec![mutation("third")],
+                ..empty_result()
+            },
+        );
+        let forgotten = shown(&controller);
+        controller.begin_mutation_undo("third").unwrap();
+        controller.forget_workspace();
+        controller.mutation_undo_complete(&forgotten, "third", mutation("undo-third"));
+        assert_eq!(controller.task, AssistantTaskState::Idle);
+        assert!(!controller.is_mutation_undone("third"));
+    }
+
+    #[test]
+    fn a_run_waits_for_its_result_after_its_job_ended_and_only_run_failures_retry() {
+        let document = DocumentState::new(ProjectId::new("wait"), "Wait", "wait.wav");
+        let mut controller = AssistantController::default();
+        controller.authorize_document(Some(&document));
+        let (request, _) = controller.begin("organize".into(), &settings()).unwrap();
+        assert!(controller.awaiting_result());
+        assert!(controller.apply_job_event(AssistantJobEvent {
+            request_id: Some(request.request_id.clone()),
+            event: JobEvent::Cancelled { job_id: JobId(1) },
+        }));
+        assert_eq!(controller.task, AssistantTaskState::Cancelled);
+        assert!(
+            controller.awaiting_result(),
+            "the receipts of what the run wrote are still to come"
+        );
+        controller.complete(
+            &request.request_id,
+            AssistantRunResult {
+                warning: Some(AssistantUiError {
+                    code: "TASK_CANCELLED".into(),
+                    message: "cancelled after two writes".into(),
+                    retryable: false,
+                }),
+                mutations: vec![mutation("first"), mutation("second")],
+                ..empty_result()
+            },
+        );
+        assert!(!controller.awaiting_result());
+        assert_eq!(controller.result.as_ref().unwrap().all_mutations().len(), 2);
+        assert_eq!(controller.retry_prompt(), None);
+
+        let (request, _) = controller.begin("ask again".into(), &settings()).unwrap();
+        controller.fail(
+            &request.request_id,
+            AssistantUiError {
+                code: "PROVIDER_TIMEOUT".into(),
+                message: "timed out".into(),
+                retryable: true,
+            },
+        );
+        assert_eq!(controller.retry_prompt().as_deref(), Some("ask again"));
+        let (request, _) = controller.begin("cancel me".into(), &settings()).unwrap();
+        controller.fail(
+            &request.request_id,
+            AssistantUiError {
+                code: "TASK_CANCELLED".into(),
+                message: "cancelled".into(),
+                retryable: true,
+            },
+        );
+        assert_eq!(controller.retry_prompt(), None, "a cancel is not retried");
+    }
+
+    #[test]
+    fn the_awaiting_review_knows_its_place_in_the_run() {
+        let document = DocumentState::new(ProjectId::new("place"), "Place", "place.wav");
+        let mut controller = AssistantController::default();
+        controller.authorize_document(Some(&document));
+        let (request, _) = controller.begin("queue".into(), &settings()).unwrap();
+        controller.complete(
+            &request.request_id,
+            AssistantRunResult {
+                pending_reviews: vec![
+                    AssistantPendingReview {
+                        expires_at_ms: 10,
+                        ..pending_with_id("first")
+                    },
+                    pending_with_id("second"),
+                    pending_with_id("third"),
+                ],
+                ..empty_result()
+            },
+        );
+        assert_eq!(controller.pending_position(), Some((1, 3)));
+        assert!(controller.expire_pending("first"));
+        assert_eq!(controller.pending_position(), Some((2, 3)));
+        assert_eq!(controller.task, AssistantTaskState::AwaitingConfirmation);
+        controller.pending_for_accept(10).unwrap();
+        assert!(controller.decision_in_flight());
+        assert_eq!(controller.pending_position(), Some((2, 3)));
+        controller.confirmation_complete(&shown(&controller), empty_result());
+        assert_eq!(controller.pending_position(), Some((3, 3)));
+        controller.pending_for_reject(10).unwrap();
+        controller.rejection_complete(&shown(&controller));
+        assert_eq!(controller.pending_position(), None);
+        assert_eq!(controller.task, AssistantTaskState::Completed);
+    }
+
+    #[test]
+    fn a_changed_connection_target_keeps_its_settings_code() {
+        let error = AssistantUiError::from_settings(&SettingsError::CredentialTargetConflict);
+        assert_eq!(error.code, SETTINGS_CREDENTIAL_TARGET_CONFLICT);
+        assert!(error.is_credential_target_conflict() && !error.retryable);
+        let conflict = AssistantUiError::from_settings(&SettingsError::RevisionConflict);
+        assert!(conflict.is_settings_conflict() && conflict.retryable);
+    }
+
+    #[test]
+    fn a_retryable_probe_failure_offers_its_kind_again_and_a_cancel_is_shown() {
+        let mut controller = AssistantController::default();
+        let (probe, _) = controller.begin_probe(ConnectionProbeKind::Model);
+        controller.finish_probe(
+            probe,
+            Err(AssistantUiError {
+                code: "PROVIDER_TIMEOUT".into(),
+                message: "timed out".into(),
+                retryable: true,
+            }),
+        );
+        assert_eq!(
+            controller.probe_to_retry(),
+            Some(ConnectionProbeKind::Model)
+        );
+        let (probe, _) = controller.begin_probe(ConnectionProbeKind::Readiness);
+        assert_eq!(controller.probe_to_retry(), None);
+        controller.finish_probe(
+            probe,
+            Err(AssistantUiError {
+                code: "PROVIDER_AUTHENTICATION_FAILED".into(),
+                message: "401".into(),
+                retryable: false,
+            }),
+        );
+        assert_eq!(controller.probe_to_retry(), None);
+        controller.begin_probe(ConnectionProbeKind::Readiness);
+        assert!(controller.request_probe_cancel());
+        assert!(controller.probe_cancelled);
+        controller.begin_probe(ConnectionProbeKind::Readiness);
+        assert!(!controller.probe_cancelled);
+    }
+
+    #[test]
     fn probe_cancellation_is_visible_to_the_runtime_boundary() {
         let mut controller = AssistantController::default();
         let (_, cancellation) = controller.begin_probe(ConnectionProbeKind::Readiness);
@@ -1729,7 +2051,7 @@ mod tests {
         assert_eq!(controller.pending_overflow_count(), 4);
 
         controller.pending_for_accept(0).unwrap();
-        controller.confirmation_complete(empty_result());
+        controller.confirmation_complete(&shown(&controller), empty_result());
         assert_eq!(controller.pending_queue_len(), 6);
         assert_eq!(controller.pending_overflow_count(), 4);
 

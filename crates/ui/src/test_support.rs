@@ -3,6 +3,11 @@
 //! `run` never calls them; the module is hidden from the docs and is not a
 //! stable API.
 
+use crate::assistant_ui::{
+    AssistantDocumentChange, AssistantFieldDiff, AssistantMutationSummary, AssistantPendingReview,
+    AssistantRangePreview, AssistantRunDiagnostics, AssistantRunResult, AssistantTreeChange,
+    AssistantUiError, AssistantUsage,
+};
 use crate::controller::{self, DocumentConflict, RootView, SpeakerLibraryPrompt};
 use crate::state::ContentMode;
 use application::{BackendInventory, DocumentIssue, DocumentIssueKind};
@@ -35,6 +40,116 @@ pub enum Overlay {
     /// On Settings: the form scrolled to the Workspace section, under the
     /// reason a documents-root switch was refused while two jobs ran.
     WorkspaceBusy,
+    /// On Assistant: a run that wrote twice before its provider timed out,
+    /// with its warnings and both receipts (the first undone), paused at the
+    /// first of three reviews; the results scrolled to the receipts.
+    AssistantReview,
+}
+
+/// A receipt of the fixture run: `document` moved from `revision` to the
+/// next one.
+fn fixture_receipt(
+    id: &str,
+    document: &str,
+    revision: u64,
+    gaps: &[&str],
+) -> AssistantMutationSummary {
+    AssistantMutationSummary {
+        mutation_id: id.into(),
+        affected_documents: vec![AssistantDocumentChange {
+            document_id: document.into(),
+            previous_revision: Some(revision),
+            revision: Some(revision + 1),
+            deleted: false,
+        }],
+        undo_token: format!("undo-{id}"),
+        uncovered_segment_ids: gaps.iter().map(|gap| gap.to_string()).collect(),
+    }
+}
+
+/// A review of the fixture run. Every review expires at 2100-01-01 00:00
+/// UTC, so the page shows the same instant on every run.
+fn fixture_review(id: &str) -> AssistantPendingReview {
+    AssistantPendingReview {
+        confirmation_id: id.into(),
+        expires_at_ms: 4_102_444_800_000,
+        affected_document_ids: vec!["doc-1-weekly-sync-decisions".into()],
+        field_diffs: vec![AssistantFieldDiff {
+            document_id: "doc-1-weekly-sync-decisions".into(),
+            field: "summary".into(),
+            before: None,
+            after: Some("确认 10 月 8 日发布，由王敏负责回归".into()),
+        }],
+        tree_changes: vec![AssistantTreeChange {
+            document_id: "doc-1-weekly-sync-decisions".into(),
+            previous_parent_id: None,
+            new_parent_id: Some("doc-1-weekly-sync".into()),
+            previous_sibling_order: Some(1),
+            new_sibling_order: Some(0),
+        }],
+        ranges: vec![AssistantRangePreview {
+            document_id: Some("doc-1-weekly-sync-decisions".into()),
+            start_segment_id: "seg-014".into(),
+            end_segment_id: "seg-020".into(),
+            evidence_segment_ids: vec!["seg-014".into(), "seg-018".into()],
+        }],
+        uncovered_segment_ids: vec!["seg-021".into()],
+    }
+}
+
+/// The result the fixture run returns: an answer, two receipts, the
+/// timeout it stopped with and a provider notice, and three reviews.
+fn fixture_review_result() -> AssistantRunResult {
+    let timeout = AssistantUiError {
+        code: "PROVIDER_TIMEOUT".into(),
+        message: "第三次写入前模型响应超时，已写入的两项保留".into(),
+        retryable: true,
+    };
+    AssistantRunResult {
+        answer: Some("已更新本周同步的标题与摘要，决策记录等待确认。".into()),
+        warning: Some(timeout.clone()),
+        warnings: vec![
+            timeout,
+            AssistantUiError {
+                code: "PROVIDER_NOTICE".into(),
+                message: "上下文按窗口截断到 128000 token".into(),
+                retryable: false,
+            },
+        ],
+        evidence_segment_ids: vec!["seg-001".into(), "seg-014".into()],
+        usage: Some(AssistantUsage {
+            input_tokens: 1_840,
+            output_tokens: 260,
+            total_tokens: 2_100,
+            cost_microusd: None,
+        }),
+        requested_model: Some("assistant-default".into()),
+        resolved_model: Some("assistant-default".into()),
+        mutation: None,
+        mutations: vec![
+            fixture_receipt("mutation-weekly-title", "doc-1-weekly-sync", 3, &[]),
+            fixture_receipt(
+                "mutation-weekly-summary",
+                "doc-1-weekly-sync",
+                4,
+                &["seg-021"],
+            ),
+        ],
+        pending: None,
+        pending_reviews: vec![
+            fixture_review("review-decisions"),
+            fixture_review("review-actions"),
+            fixture_review("review-risks"),
+        ],
+        diagnostics: Some(AssistantRunDiagnostics {
+            path: "short_document".into(),
+            tool_rounds: 3,
+            validation_retries: 0,
+            input_segments: 24,
+            input_bytes: 9_612,
+            elapsed_ms: 4_210,
+        }),
+    }
 }
 
 /// The issues the scanner reports for an unreadable package and a stray
@@ -156,6 +271,30 @@ impl MainWindow {
                 root.select_project(domain::ProjectId::new(id), cx);
                 root.ui.detail_open = true;
             }
+            Overlay::AssistantReview => {
+                let documents = root.projects.clone();
+                root.assistant.authorize_documents(&documents);
+                let settings = root.saved_assistant().clone();
+                let (request, _) = root
+                    .assistant
+                    .begin("整理本周同步并拆出决策".into(), &settings)
+                    .expect("the fixture has an active connection and documents");
+                root.assistant
+                    .complete(&request.request_id, fixture_review_result());
+                let (_, undone) = root
+                    .assistant
+                    .begin_mutation_undo("mutation-weekly-title")
+                    .expect("the fixture run wrote the title");
+                root.assistant.mutation_undo_complete(
+                    &request.request_id,
+                    &undone,
+                    fixture_receipt("undo-mutation-weekly-title", "doc-1-weekly-sync", 4, &[]),
+                );
+                root.scroll
+                    .assistant_results
+                    .scroll_to_top_of_item(crate::pages::assistant::RECEIPTS_ITEM);
+                cx.notify();
+            }
             Overlay::WorkspaceBusy => {
                 let busy = application::DocumentsRootError::WorkspaceBusy {
                     job_ids: vec![runtime::JobId(1), runtime::JobId(2)],
@@ -208,6 +347,13 @@ impl MainWindow {
             Overlay::WorkspaceBusy => {
                 root.documents_root_switch.status = None;
                 root.scroll.settings.set_offset(gpui::Point::default());
+                cx.notify();
+            }
+            Overlay::AssistantReview => {
+                root.assistant = Default::default();
+                root.scroll
+                    .assistant_results
+                    .set_offset(gpui::Point::default());
                 cx.notify();
             }
         });

@@ -517,6 +517,10 @@ pub(crate) struct RootView {
     pub(crate) scroll: ScrollAreas,
     /// Holds focus while a dialog is open, so Enter and Esc reach it.
     dialog_focus: FocusHandle,
+    /// The awaiting review's card on the Assistant page.
+    pub(crate) review_focus: FocusHandle,
+    /// Moves focus to the awaiting review on the next render.
+    review_focus_request: Option<ReviewFocus>,
     /// Scanner issues of the documents directory, as the last project-list
     /// reload read them.
     pub(crate) document_issues: Vec<DocumentIssue>,
@@ -544,6 +548,17 @@ pub(crate) struct RootView {
     pub(crate) documents_root_switch: DocumentsRootSwitch,
     /// The models the Models page shows re-probing.
     pub(crate) model_reprobes: BTreeMap<String, ReprobeWait>,
+}
+
+/// Why the next review awaits, which decides whether it takes the focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewFocus {
+    /// The user accepted or rejected the one before: the next review takes
+    /// the focus, so the queue can be worked through from the keyboard.
+    Decision,
+    /// The one before expired: the next review takes the focus only from
+    /// the review that had it, never from a field the user is typing in.
+    Expiry,
 }
 
 /// A documents-root switch in flight, and the outcome of the last one: its
@@ -663,6 +678,8 @@ impl RootView {
             speaker_library_prompt: None,
             scroll: ScrollAreas::default(),
             dialog_focus: cx.focus_handle(),
+            review_focus: cx.focus_handle(),
+            review_focus_request: None,
             document_issues: Vec::new(),
             editor,
             document_conflict: None,
@@ -2692,7 +2709,40 @@ impl RootView {
         self.assistant_protocol = profile.protocol;
         self.assistant_auth_mode = profile.auth_mode;
         self.assistant_inputs.load_profile(Some(&profile), cx);
+        self.forget_credential_target_conflict();
         cx.notify();
+    }
+
+    /// A refused credential belongs to the profile the form held.
+    fn forget_credential_target_conflict(&mut self) {
+        if self
+            .settings_error
+            .as_ref()
+            .is_some_and(AssistantUiError::is_credential_target_conflict)
+        {
+            self.settings_error = None;
+        }
+    }
+
+    /// Whether the profile in the form keeps a stored credential while its
+    /// key and key file fields are left as loaded.
+    pub(crate) fn form_keeps_stored_credential(&self, cx: &App) -> bool {
+        let id = AssistantInputs::value(&self.assistant_inputs.connection_id, cx);
+        let key = AssistantInputs::value(&self.assistant_inputs.api_key, cx);
+        let key_file = AssistantInputs::value(&self.assistant_inputs.api_key_file, cx);
+        self.assistant_origin
+            .connections
+            .iter()
+            .find(|profile| profile.id == id)
+            .is_some_and(|stored| {
+                (stored.api_key.is_some() || stored.api_key_file.is_some())
+                    && credential_update(&key, &key_file, Some(stored)).is_none()
+            })
+    }
+
+    /// The write mode the settings hold; the form's is a draft until saved.
+    pub(crate) fn saved_write_mode(&self) -> AgentWriteMode {
+        self.assistant_origin.write_mode
     }
 
     pub(crate) fn new_assistant_profile(
@@ -2704,6 +2754,7 @@ impl RootView {
         self.assistant_protocol = LlmProtocol::OpenAiChatCompletions;
         self.assistant_auth_mode = AssistantAuthMode::Bearer;
         self.assistant_inputs.load_profile(None, cx);
+        self.forget_credential_target_conflict();
         cx.notify();
     }
 
@@ -2912,6 +2963,19 @@ impl RootView {
         self.probe_assistant_connection(ConnectionProbeKind::Model, cx);
     }
 
+    /// Repeats the probe that failed with a retryable error, on the form's
+    /// current connection.
+    pub(crate) fn retry_assistant_probe(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(kind) = self.assistant.probe_to_retry() {
+            self.probe_assistant_connection(kind, cx);
+        }
+    }
+
     pub(crate) fn cancel_assistant_probe(
         &mut self,
         _: &ClickEvent,
@@ -2924,19 +2988,23 @@ impl RootView {
         }
     }
 
-    /// Whether a run is in flight; the send button and Enter start none then.
+    /// Whether a run's result, a decision on a review or an undo is still
+    /// to come; the send button and Enter start no run then, so nothing the
+    /// page shows is replaced before its outcome arrives.
     pub(crate) fn assistant_busy(&self) -> bool {
-        matches!(
-            self.assistant.task,
-            AssistantTaskState::Running { .. } | AssistantTaskState::Cancelling { .. }
-        )
+        self.assistant.awaiting_result() || self.assistant.decision_in_flight()
+    }
+
+    /// Whether the run can still be cancelled: it runs and no cancel was
+    /// requested or reported.
+    pub(crate) fn assistant_cancellable(&self) -> bool {
+        matches!(self.assistant.task, AssistantTaskState::Running { .. })
     }
 
     /// Enter in the prompt sends it, as the send button does.
     fn submit_assistant_prompt(&mut self, cx: &mut Context<Self>) {
-        if !self.assistant_busy() {
-            self.start_assistant_run(cx);
-        }
+        let query = AssistantInputs::value(&self.assistant_inputs.prompt, cx);
+        self.start_assistant_run(query, cx);
     }
 
     pub(crate) fn assistant_action(
@@ -2945,11 +3013,26 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.start_assistant_run(cx);
+        let query = AssistantInputs::value(&self.assistant_inputs.prompt, cx);
+        self.start_assistant_run(query, cx);
     }
 
-    fn start_assistant_run(&mut self, cx: &mut Context<Self>) {
-        let query = AssistantInputs::value(&self.assistant_inputs.prompt, cx);
+    /// Sends the prompt of a run that failed with a retryable error again.
+    pub(crate) fn retry_assistant_run(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(prompt) = self.assistant.retry_prompt() {
+            self.start_assistant_run(prompt, cx);
+        }
+    }
+
+    fn start_assistant_run(&mut self, query: String, cx: &mut Context<Self>) {
+        if self.assistant_busy() {
+            return;
+        }
         match self.assistant.scope_mode {
             AssistantScopeMode::CurrentDocument => {
                 let selected = self
@@ -3078,7 +3161,10 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pending) = self.assistant.pending_for_accept(now_ms()) else {
+        let (Some(run), Some(pending)) = (
+            self.assistant.result_run(),
+            self.assistant.pending_for_accept(now_ms()),
+        ) else {
             cx.notify();
             return;
         };
@@ -3092,9 +3178,10 @@ impl RootView {
             .await;
             this.update(cx, |this, cx| {
                 match result {
-                    Ok(result) => this.assistant.confirmation_complete(result),
-                    Err(error) => this.assistant.confirmation_failed(error),
+                    Ok(result) => this.assistant.confirmation_complete(&run, result),
+                    Err(error) => this.assistant.confirmation_failed(&run, error),
                 }
+                this.review_focus_request = Some(ReviewFocus::Decision);
                 this.schedule_pending_expiry(cx);
                 cx.notify();
             })
@@ -3109,7 +3196,10 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(pending) = self.assistant.pending_for_reject(now_ms()) else {
+        let (Some(run), Some(pending)) = (
+            self.assistant.result_run(),
+            self.assistant.pending_for_reject(now_ms()),
+        ) else {
             cx.notify();
             return;
         };
@@ -3123,9 +3213,10 @@ impl RootView {
             .await;
             this.update(cx, |this, cx| {
                 match result {
-                    Ok(()) => this.assistant.rejection_complete(),
-                    Err(error) => this.assistant.confirmation_failed(error),
+                    Ok(()) => this.assistant.rejection_complete(&run),
+                    Err(error) => this.assistant.confirmation_failed(&run, error),
                 }
+                this.review_focus_request = Some(ReviewFocus::Decision);
                 this.schedule_pending_expiry(cx);
                 cx.notify();
             })
@@ -3147,6 +3238,7 @@ impl RootView {
                             if this.assistant.expire_pending(&confirmation_id) {
                                 this.ui.notice =
                                     i18n::text(this.ui.locale, "assistant_expired").into();
+                                this.review_focus_request.get_or_insert(ReviewFocus::Expiry);
                                 // The next queued review, if any, awaits now.
                                 this.schedule_pending_expiry(cx);
                                 cx.notify();
@@ -3162,6 +3254,9 @@ impl RootView {
         mutation_id: String,
         cx: &mut Context<Self>,
     ) {
+        let Some(run) = self.assistant.result_run() else {
+            return;
+        };
         let Some((token, mutation_id)) = self.assistant.begin_mutation_undo(&mutation_id) else {
             return;
         };
@@ -3173,10 +3268,13 @@ impl RootView {
                 runtime::spawn_blocking(move || service.undo(token, authorized_document_ids)).await;
             this.update(cx, |this, cx| {
                 match result {
-                    Ok(mutation) => this
+                    Ok(mutation) => {
+                        this.assistant
+                            .mutation_undo_complete(&run, &mutation_id, mutation)
+                    }
+                    Err(error) => this
                         .assistant
-                        .mutation_undo_complete(&mutation_id, mutation),
-                    Err(error) => this.assistant.mutation_undo_failed(&mutation_id, error),
+                        .mutation_undo_failed(&run, &mutation_id, error),
                 }
                 cx.notify();
             })
@@ -3989,6 +4087,8 @@ fn connection_patch(
 pub(crate) fn settings_error_text(locale: i18n::Locale, error: &AssistantUiError) -> String {
     if error.is_settings_conflict() {
         i18n::text(locale, "settings_conflict").into()
+    } else if error.is_credential_target_conflict() {
+        i18n::text(locale, "assistant_credential_target_conflict").into()
     } else {
         i18n::message(locale, "settings_failed", &error.to_string())
     }
@@ -4034,6 +4134,7 @@ fn stage_selection<'a>(options: &'a [SelectOption], saved: Option<&'a str>) -> O
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.focus_awaiting_review(window, cx);
         self.ensure_settings_selectors(window, cx);
         self.ensure_document_editor(cx);
         let selected = self
@@ -4069,6 +4170,33 @@ impl Render for RootView {
             .children(self.speaker_library_dialog(cx))
             .children(self.speaker_confirmation_dialog(cx))
             .children(gpui_component::Root::render_dialog_layer(window, cx))
+    }
+}
+
+impl RootView {
+    /// Moves focus to the awaiting review when a decision or an expiry
+    /// brought it up, after this frame, on the Assistant page only.
+    fn focus_awaiting_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(request) = self.review_focus_request.take() else {
+            return;
+        };
+        let awaiting = matches!(
+            self.assistant.pending,
+            Some(crate::assistant_ui::PendingReviewState::Awaiting(_))
+        );
+        if !awaiting || self.ui.route != Route::Assistant {
+            return;
+        }
+        let take = match request {
+            ReviewFocus::Decision => true,
+            ReviewFocus::Expiry => {
+                window.focused(cx).is_none() || self.review_focus.contains_focused(window, cx)
+            }
+        };
+        if take {
+            let focus = self.review_focus.clone();
+            window.defer(cx, move |window, cx| focus.focus(window, cx));
+        }
     }
 }
 
