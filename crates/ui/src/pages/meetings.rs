@@ -162,13 +162,16 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                                 ),
                             )),
                     )
-                    .child(
-                        div()
-                            .mt_1()
-                            .text_xs()
-                            .text_color(tokens.text_muted)
-                            .child(status_label(root.ui.locale, display_status)),
-                    )
+                    .child(status_line(
+                        status_label(root.ui.locale, display_status),
+                        root.audio.problem(project.id()).map(|problem| {
+                            (
+                                format!("audio-indicator-{}", project.id().as_str()),
+                                tr(root.ui.locale, problem.label_key()),
+                            )
+                        }),
+                        &tokens,
+                    ))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.select_project(project_id.clone(), cx)
                     }))
@@ -209,6 +212,30 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
         )
 }
 
+/// A tree row's processing status, and beside it the audio problem the
+/// last check found, if any, as `(selector, label)`.
+fn status_line(
+    status: &'static str,
+    audio_problem: Option<(String, &'static str)>,
+    tokens: &Tokens,
+) -> gpui::Div {
+    let line = div().mt_1().text_xs();
+    match audio_problem {
+        None => line.text_color(tokens.text_muted).child(status),
+        Some((selector, label)) => line
+            .flex()
+            .items_center()
+            .gap(tokens.spacing.sm)
+            .child(div().text_color(tokens.text_muted).child(status))
+            .child(
+                div()
+                    .debug_selector(move || selector.clone())
+                    .text_color(tokens.warning_text)
+                    .child(label),
+            ),
+    }
+}
+
 fn main_panel(
     root: &mut RootView,
     project: Option<&DocumentState>,
@@ -235,6 +262,7 @@ fn main_panel(
         .children(issues_panel(root, &tokens));
     if let Some(project) = project {
         let ready = project.processing_status() == ProjectStatus::Ready;
+        let audio_problem = root.audio.problem(project.id());
         let mode = root.ui.content_mode;
         let scroll = root.scroll.meeting_content.clone();
         let mut content = div()
@@ -297,10 +325,13 @@ fn main_panel(
                     .text_color(tokens.text_muted)
                     .child(project.audio_path().to_string()),
             )
+            // The status and actions wrap beside an open Detail rather than
+            // run past the content column.
             .child(
                 div()
                     .flex_shrink_0()
                     .flex()
+                    .flex_wrap()
                     .items_center()
                     .gap_3()
                     .child(
@@ -315,6 +346,17 @@ fn main_panel(
                                 display_status.unwrap_or(ProjectStatus::Imported),
                             )),
                     )
+                    .children(audio_problem.map(|problem| {
+                        div()
+                            .debug_selector(|| "audio-problem".into())
+                            .px_3()
+                            .py_1()
+                            .rounded(tokens.radius.sm)
+                            .bg(tokens.warning_surface)
+                            .text_color(tokens.warning_text)
+                            .text_sm()
+                            .child(tr(locale, problem.label_key()))
+                    }))
                     .child(
                         Button::new("process-project")
                             .debug_selector(|| "process-project".into())
@@ -325,8 +367,19 @@ fn main_panel(
                             } else {
                                 tr(locale, "process")
                             })
+                            // Missing audio cannot be processed; relink it.
+                            .disabled(!root.ui.processing && root.audio.missing(project.id()))
                             .on_click(cx.listener(RootView::process_or_cancel)),
                     )
+                    .children(audio_problem.map(|_| {
+                        Button::new("relink-audio")
+                            .debug_selector(|| "relink-audio".into())
+                            .secondary()
+                            .compact()
+                            .label(tr(locale, "relink_audio"))
+                            .disabled(root.audio.relinking.is_some())
+                            .on_click(cx.listener(RootView::relink_audio))
+                    }))
                     .child(
                         Button::new("open-project-detail")
                             .debug_selector(|| "open-project-detail".into())
@@ -577,6 +630,15 @@ fn conflict_notice(
     )
 }
 
+/// The sentence the issues panel shows for `issue`: its kind's in
+/// `locale`, or the English sentence of an issue built without a kind.
+pub(crate) fn issue_sentence(issue: &application::DocumentIssue, locale: i18n::Locale) -> String {
+    issue.kind.as_ref().map_or_else(
+        || issue.message.clone(),
+        |kind| i18n::document_issue(locale, kind),
+    )
+}
+
 /// The scanner's issues of the documents directory, each with its path and
 /// reason, as the last reload read them. Nothing when there are none.
 fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
@@ -606,7 +668,7 @@ fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
                             div()
                                 .text_sm()
                                 .text_color(tokens.text)
-                                .child(issue.message.clone()),
+                                .child(issue_sentence(issue, root.ui.locale)),
                         )
                 }),
         );

@@ -324,6 +324,13 @@ impl DocumentEditor {
         }
     }
 
+    /// Drops every draft, as when the documents root changes.
+    pub(crate) fn discard_all(&mut self) {
+        self.drafts.clear();
+        self.loading.clear();
+        self.shown = None;
+    }
+
     /// The status the select last confirmed for the shown draft.
     pub(crate) fn set_status(&mut self, value: String) {
         self.status_value = value;

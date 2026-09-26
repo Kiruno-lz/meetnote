@@ -2,8 +2,10 @@
 //! (`visual.rs`) both render: settings in a directory of their own, three
 //! in-memory documents (one a semantic child), the `zh-CN` locale, a pinned
 //! appearance (dark opaque unless a test picks another), a model root that
-//! holds no model, and an Assistant service that is never reached. Every
-//! value is fixed, so a route renders the same frame on every run. `pixels.rs` beside this file is not part of
+//! holds no model, and an Assistant service that is never reached. The
+//! weekly recording both of its documents name exists and the interview's
+//! does not (`fixture_directory`). Every value is fixed, so a route renders
+//! the same frame on every run. `pixels.rs` beside this file is not part of
 //! the fixture; `visual.rs` and the `pixels` target include it directly.
 
 use application::{
@@ -43,6 +45,9 @@ pub const DOCUMENT_IDS: [&str; 3] = [
 
 /// A fixed instant, so no document carries the time the test ran.
 const FIXTURE_TIME_MS: u64 = 1_788_000_000_000;
+/// The recordings the documents name, relative to `fixture_directory`.
+const WEEKLY_AUDIO: &str = "fixtures/weekly-sync.wav";
+const INTERVIEW_AUDIO: &str = "fixtures/customer-interview.wav";
 
 /// The app-wide setup `run` performs.
 pub fn init(cx: &mut App) {
@@ -102,7 +107,27 @@ fn inventory() -> BackendInventory {
     )
 }
 
+/// The directory the test process runs in from the first fixture window on.
+/// It holds the weekly recording at the relative path its documents name,
+/// so its audio check finds the file, and not the interview's, whose audio
+/// is missing. Owning the working directory keeps every relative path of
+/// the fixture off the checkout.
+fn fixture_directory() -> &'static std::path::Path {
+    static DIRECTORY: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    DIRECTORY.get_or_init(|| {
+        let directory =
+            std::env::temp_dir().join(format!("meetnote-ui-fixture-cwd-{}", std::process::id()));
+        let weekly = directory.join(WEEKLY_AUDIO);
+        std::fs::create_dir_all(weekly.parent().expect("the recording has a folder"))
+            .expect("the fixture directory");
+        std::fs::write(&weekly, b"fixture recording").expect("the weekly recording");
+        std::env::set_current_dir(&directory).expect("the fixture working directory");
+        directory
+    })
+}
+
 fn services(appearance: settings::AppearanceSettings) -> ui::DesktopServices {
+    fixture_directory();
     let repository = Arc::new(InMemoryDocumentRepository::default());
     for document in documents() {
         // The repository keeps the fixed revision and timestamps;
@@ -245,11 +270,7 @@ fn documents() -> Vec<DocumentState> {
             end_ms,
             text: text.into(),
         };
-    let mut weekly = DocumentState::new(
-        ProjectId::new(DOCUMENT_IDS[0]),
-        "产品周会",
-        "fixtures/weekly-sync.wav",
-    );
+    let mut weekly = DocumentState::new(ProjectId::new(DOCUMENT_IDS[0]), "产品周会", WEEKLY_AUDIO);
     weekly.content.tags = vec!["周会".into()];
     weekly.content.summary = Some(
         "确认 GPUI 依赖迁移前先建立各页面的截图基线；Models 页补充 license 与来源展示；\
@@ -345,11 +366,8 @@ fn documents() -> Vec<DocumentState> {
         95_000,
         vec!["决策".into()],
     );
-    let mut interview = DocumentState::new(
-        ProjectId::new(DOCUMENT_IDS[2]),
-        "客户访谈",
-        "fixtures/customer-interview.wav",
-    );
+    let mut interview =
+        DocumentState::new(ProjectId::new(DOCUMENT_IDS[2]), "客户访谈", INTERVIEW_AUDIO);
     interview.hierarchy.sibling_order = 1;
     let mut documents = vec![weekly, decisions, interview];
     for document in &mut documents {

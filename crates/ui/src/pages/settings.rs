@@ -22,6 +22,7 @@ use settings::{AssistantAuthMode, LlmProtocol};
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
     let assistant = assistant_settings_section(root, &tokens, cx);
+    let workspace = workspace_section(root, &tokens, cx);
     let Some(selectors) = root.settings_selectors.as_ref() else {
         return div().flex_1().into_any_element();
     };
@@ -53,6 +54,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .into_any_element(),
             ],
         ))
+        .child(workspace)
         .child(settings_section(
             tr(root.ui.locale, "interface"),
             vec![setting_control_row(
@@ -192,8 +194,78 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .into_any_element()
 }
 
+/// The position of the Workspace section among the form's sections.
+pub(crate) const WORKSPACE_SECTION: usize = 1;
 /// The position of the Speaker Library section among the form's sections.
-pub(crate) const SPEAKER_LIBRARY_SECTION: usize = 4;
+pub(crate) const SPEAKER_LIBRARY_SECTION: usize = 5;
+/// The width of a path shown beside its choose button.
+const PATH_WIDTH: Pixels = px(280.);
+
+/// The Workspace: the documents root the workspace reads and writes, and a
+/// button that chooses another folder. The switch runs on a worker; while
+/// it runs the button is disabled, and its outcome shows under the path.
+fn workspace_section(
+    root: &RootView,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let locale = root.ui.locale;
+    let switch = &root.documents_root_switch;
+    let mut rows = vec![setting_control_row(
+        tr(locale, "documents_root"),
+        div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .debug_selector(|| "documents-root-path".into())
+                    .w(PATH_WIDTH)
+                    .text_xs()
+                    .text_color(tokens.text_muted)
+                    .child(root.settings_draft.documents_root.clone()),
+            )
+            .child(
+                Button::new("choose-documents-root")
+                    .debug_selector(|| "choose-documents-root".into())
+                    .secondary()
+                    .compact()
+                    .label(tr(locale, "choose_directory"))
+                    .disabled(switch.switching)
+                    .on_click(cx.listener(RootView::choose_documents_root_directory)),
+            )
+            .into_any_element(),
+        tokens,
+    )
+    .into_any_element()];
+    let status = if switch.switching {
+        Some((tr(locale, "documents_root_switching").to_string(), false))
+    } else {
+        switch.status.clone()
+    };
+    if let Some((message, failed)) = status {
+        rows.push(
+            div()
+                .id("documents-root-status")
+                .debug_selector(|| "documents-root-status".into())
+                .mt(tokens.spacing.sm)
+                .text_sm()
+                .text_color(if failed {
+                    tokens.warning_text
+                } else {
+                    tokens.text_muted
+                })
+                .child(message)
+                .into_any_element(),
+        );
+    }
+    div()
+        .flex_shrink_0()
+        .debug_selector(|| "workspace-section".into())
+        .child(settings_section(tr(locale, "workspace"), rows))
+        .into_any_element()
+}
+
 /// The width of a profile's name field and merge select.
 const PROFILE_CONTROL_WIDTH: Pixels = px(200.);
 
@@ -216,7 +288,7 @@ fn speaker_library_section(
             .gap_2()
             .child(
                 div()
-                    .w(px(280.))
+                    .w(PATH_WIDTH)
                     .text_xs()
                     .text_color(tokens.text_muted)
                     .child(root.settings_draft.speaker_library_path.clone()),

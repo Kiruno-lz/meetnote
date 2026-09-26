@@ -65,7 +65,12 @@ mod tests {
     /// The crate's code without its tests: test-only modules are skipped and
     /// a file's `#[cfg(test)] mod tests`, always its last item, is cut off.
     fn production_sources() -> impl Iterator<Item = (&'static str, &'static str)> {
-        const TEST_ONLY: [&str; 3] = ["document_tests.rs", "source_files.rs", "speaker_tests.rs"];
+        const TEST_ONLY: [&str; 4] = [
+            "document_tests.rs",
+            "source_files.rs",
+            "speaker_tests.rs",
+            "workspace_tests.rs",
+        ];
         crate::source_files::SOURCES
             .iter()
             .filter(|(path, _)| !TEST_ONLY.contains(path))

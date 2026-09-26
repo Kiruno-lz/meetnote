@@ -118,11 +118,13 @@ impl std::fmt::Display for DocumentIssueKind {
 }
 
 impl DocumentIssue {
-    /// The issue the UI lists: the affected path and a readable sentence.
+    /// The issue the UI lists: the affected path, a readable English
+    /// sentence and the kind a client localizes.
     pub fn from_kind(root: &Path, kind: &DocumentIssueKind) -> Self {
         Self {
             path: kind.path(root).display().to_string(),
             message: kind.to_string(),
+            kind: Some(kind.clone()),
         }
     }
 }
@@ -224,6 +226,16 @@ mod tests {
             issue.message,
             "Document doc-3 is its own ancestor through its parent links."
         );
+    }
+
+    #[test]
+    fn issues_built_from_a_kind_carry_it_beside_the_english_sentence() {
+        let root = Path::new("/work/documents");
+        for kind in every_kind() {
+            let issue = DocumentIssue::from_kind(root, &kind);
+            assert_eq!(issue.kind.as_ref(), Some(&kind));
+            assert_eq!(issue.message, kind.to_string());
+        }
     }
 
     #[test]

@@ -1,4 +1,5 @@
 pub mod assistant_ui;
+mod audio;
 mod components;
 mod controller;
 mod controls;
@@ -17,6 +18,8 @@ mod state;
 #[doc(hidden)]
 pub mod test_support;
 mod theme;
+#[cfg(test)]
+mod workspace_tests;
 
 pub use controller::{run, speaker_library_at, DesktopServices, ModelService};
 
@@ -837,7 +840,9 @@ mod tests {
         let (changes, receiver) = futures::channel::mpsc::unbounded();
         view.update(cx, |root, cx| root.follow_document_changes(receiver, cx));
 
-        // Another writer adds a document to the directory.
+        // Another writer adds a document to the directory. The selected
+        // document's audio check lists the documents too; it has landed.
+        wait_for(cx, &view, |root| !root.audio.pending());
         let external = DocumentState::new(ProjectId::new("external"), "External", "external.wav");
         application::DocumentRepository::save(&inner, external, None).unwrap();
         gate.arm();
@@ -845,7 +850,9 @@ mod tests {
             .unbounded_send(application::DocumentChange::Changed)
             .unwrap();
         assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-change");
-        wait_for(cx, &view, |root| root.projects.len() == 2);
+        wait_for(cx, &view, |root| {
+            root.projects.len() == 2 && !root.audio.pending()
+        });
 
         // An import.
         gate.arm();
@@ -853,7 +860,9 @@ mod tests {
             root.import_audio_path("imported.wav".into(), cx)
         });
         assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-import");
-        wait_for(cx, &view, |root| root.projects.len() == 3);
+        wait_for(cx, &view, |root| {
+            root.projects.len() == 3 && !root.audio.pending()
+        });
 
         // A confirmed speaker merge in the Original view; the list reload
         // after it waits in the gate.
@@ -937,8 +946,19 @@ mod tests {
             Arc::new(FakeAssistantUiService::default()),
             settings.clone(),
         );
-        services.workspace =
-            gated_workspace(repository_with_first_document(), &Gate::default(), &gate);
+        // Its audio file exists, so the document may be processed.
+        let directory = temp_directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        let audio = directory.join("first.wav");
+        std::fs::write(&audio, b"audio").unwrap();
+        let inner = InMemoryDocumentRepository::default();
+        let first = DocumentState::new(
+            ProjectId::new("first"),
+            "First",
+            audio.display().to_string(),
+        );
+        application::DocumentRepository::save(&inner, first, None).unwrap();
+        services.workspace = gated_workspace(inner, &Gate::default(), &gate);
         let (view, cx) = open_desktop_on(cx, services);
 
         // Starting reads the document the job processes.
@@ -950,6 +970,188 @@ mod tests {
         assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-start");
         // The fixture has no model, so the job fails and processing ends.
         wait_for(cx, &view, |root| !root.ui.processing);
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    fn cancelled_error() -> contracts::BackendError {
+        contracts::BackendError {
+            code: contracts::BackendErrorCode::Cancelled,
+            message: "cancelled".into(),
+        }
+    }
+
+    /// ASR that probes fine and returns one segment, or `Cancelled` once
+    /// its job has been cancelled.
+    struct CancellableAsr;
+
+    impl application::AsrBackend for CancellableAsr {
+        fn descriptor(&self) -> contracts::BackendDescriptor {
+            application::asr_descriptor("cancellable-asr", &[])
+        }
+
+        fn probe(&self, _: &ModelRef) -> Result<(), contracts::BackendError> {
+            Ok(())
+        }
+
+        fn transcribe(
+            &self,
+            request: contracts::AsrRequest,
+            context: runtime::JobContext,
+        ) -> application::BackendFuture<contracts::AsrResult> {
+            Box::pin(async move {
+                if context.is_cancelled() {
+                    return Err(cancelled_error());
+                }
+                Ok(contracts::AsrResult {
+                    backend: application::asr_descriptor("cancellable-asr", &[]),
+                    model: request.model,
+                    language: None,
+                    segments: vec![domain::TranscriptSegment {
+                        id: "t-1".into(),
+                        start_ms: 0,
+                        end_ms: 1_000,
+                        text: "written back".into(),
+                    }],
+                })
+            })
+        }
+    }
+
+    /// Diarization that probes fine and finds one speaker, or `Cancelled`
+    /// once its job has been cancelled.
+    struct CancellableDiarization;
+
+    impl application::DiarizationBackend for CancellableDiarization {
+        fn descriptor(&self) -> contracts::BackendDescriptor {
+            application::diarization_descriptor("cancellable-diarization", &[])
+        }
+
+        fn probe(&self, _: &ModelRef) -> Result<(), contracts::BackendError> {
+            Ok(())
+        }
+
+        fn diarize(
+            &self,
+            request: contracts::DiarizationRequest,
+            context: runtime::JobContext,
+        ) -> application::BackendFuture<contracts::DiarizationResult> {
+            Box::pin(async move {
+                if context.is_cancelled() {
+                    return Err(cancelled_error());
+                }
+                Ok(contracts::DiarizationResult {
+                    backend: application::diarization_descriptor("cancellable-diarization", &[]),
+                    model: request.model,
+                    segments: vec![domain::DiarizationSegment {
+                        id: "d-1".into(),
+                        speaker_id: "speaker-0".into(),
+                        speaker_profile_id: None,
+                        speaker_label: None,
+                        start_ms: 0,
+                        end_ms: 1_000,
+                        confidence: None,
+                    }],
+                    speaker_count: Some(1),
+                    embedding_observations: Vec::new(),
+                    speaker_profile_candidates: Vec::new(),
+                })
+            })
+        }
+    }
+
+    fn cancellable_model(backend_id: &str) -> ModelRef {
+        ModelRef {
+            backend_id: backend_id.into(),
+            model_id: "cancellable".into(),
+            revision: None,
+            artifact_path: "cancellable-model".into(),
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[gpui::test]
+    fn a_cancel_clicked_while_processing_starts_cancels_the_job_once_it_starts(
+        cx: &mut TestAppContext,
+    ) {
+        let _alone = hold_a_worker_alone();
+        let gate = Gate::default();
+        // An audio file that exists, so the document may be processed.
+        let directory = temp_directory();
+        std::fs::create_dir_all(&directory).unwrap();
+        let audio = directory.join("first.wav");
+        std::fs::write(&audio, b"audio").unwrap();
+        let inner = InMemoryDocumentRepository::default();
+        let first = DocumentState::new(
+            ProjectId::new("first"),
+            "First",
+            audio.display().to_string(),
+        );
+        application::DocumentRepository::save(&inner, first, None).unwrap();
+        let settings = test_settings();
+        let mut value = settings.snapshot().unwrap();
+        value.asr_backend_id = Some("cancellable-asr".into());
+        value.asr_model = Some(cancellable_model("cancellable-asr"));
+        value.diarization_backend_id = Some("cancellable-diarization".into());
+        value.diarization_model = Some(cancellable_model("cancellable-diarization"));
+        settings.update(value).unwrap();
+        let jobs = Arc::new(runtime::JobRuntime::default());
+        let mut services = desktop_services(Arc::new(FakeAssistantUiService::default()), settings);
+        services.workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(CancellableAsr), Arc::new(CancellableDiarization))
+                .with_job_runtime(jobs.clone()),
+            DocumentService::new(Arc::new(GatedRepository {
+                inner: inner.clone(),
+                list_gate: Gate::default(),
+                get_gate: gate.clone(),
+            })),
+        );
+        let (view, cx) = open_desktop_on(cx, services);
+        view.update(cx, |root, cx| root.navigate(route::Route::Meetings, cx));
+        cx.run_until_parked();
+
+        // Starting reads the document in the gate; the button turns into
+        // Cancel while it is held.
+        gate.arm();
+        click_selector(cx, "process-project");
+        wait_for(cx, &view, |_| gate.counts().1 == 1);
+        assert!(view.read_with(cx, |root, _| root.ui.processing));
+        click_selector(cx, "process-project");
+        let requested = i18n::text(i18n::Locale::ZhCn, "cancellation_requested");
+        assert_eq!(
+            view.read_with(cx, |root, _| root.ui.notice.clone()),
+            requested
+        );
+
+        gate.release();
+        wait_for(cx, &view, |root| !root.ui.processing);
+        cx.run_until_parked();
+        let states = jobs
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|job| job.state)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            states,
+            [runtime::JobState::Cancelled, runtime::JobState::Cancelled],
+            "both jobs end cancelled"
+        );
+        let stored = application::DocumentRepository::get(&inner, &ProjectId::new("first"))
+            .unwrap()
+            .unwrap();
+        assert!(
+            stored.results.transcript.is_empty() && stored.processing.latest.is_none(),
+            "no result is written back: {:?}",
+            stored.results
+        );
+        view.read_with(cx, |root, _| {
+            assert!(root.cancel_contexts.is_none());
+            assert_eq!(
+                root.ui.notice,
+                i18n::message(i18n::Locale::ZhCn, "cancelled", "First")
+            );
+        });
+        std::fs::remove_dir_all(directory).ok();
     }
 
     #[gpui::test]
@@ -1202,7 +1404,7 @@ mod tests {
         panic!("assistant state did not settle");
     }
 
-    fn empty_result() -> AssistantRunResult {
+    pub(crate) fn empty_result() -> AssistantRunResult {
         AssistantRunResult {
             answer: None,
             warning: None,
@@ -1219,7 +1421,7 @@ mod tests {
         }
     }
 
-    fn pending_review(id: &str, expires_at_ms: u64) -> AssistantPendingReview {
+    pub(crate) fn pending_review(id: &str, expires_at_ms: u64) -> AssistantPendingReview {
         AssistantPendingReview {
             confirmation_id: id.into(),
             expires_at_ms,

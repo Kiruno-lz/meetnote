@@ -29,6 +29,12 @@ pub enum Overlay {
     OriginalSpeakers,
     /// On Settings: the form scrolled to the Speaker Library section.
     SpeakerLibrary,
+    /// On Meetings: the document with this id selected, with Detail open;
+    /// the fixture gives it no audio file, so its audio is missing.
+    MissingAudio(&'static str),
+    /// On Settings: the form scrolled to the Workspace section, under the
+    /// reason a documents-root switch was refused while two jobs ran.
+    WorkspaceBusy,
 }
 
 /// The issues the scanner reports for an unreadable package and a stray
@@ -146,6 +152,23 @@ impl MainWindow {
                     .scroll_to_top_of_item(crate::pages::settings::SPEAKER_LIBRARY_SECTION);
                 cx.notify();
             }
+            Overlay::MissingAudio(id) => {
+                root.select_project(domain::ProjectId::new(id), cx);
+                root.ui.detail_open = true;
+            }
+            Overlay::WorkspaceBusy => {
+                let busy = application::DocumentsRootError::WorkspaceBusy {
+                    job_ids: vec![runtime::JobId(1), runtime::JobId(2)],
+                };
+                root.documents_root_switch.status = Some((
+                    crate::i18n::documents_root_error(root.ui.locale, &busy),
+                    true,
+                ));
+                root.scroll
+                    .settings
+                    .scroll_to_top_of_item(crate::pages::settings::WORKSPACE_SECTION);
+                cx.notify();
+            }
         });
     }
 
@@ -178,15 +201,26 @@ impl MainWindow {
                 root.scroll.settings.set_offset(gpui::Point::default());
                 cx.notify();
             }
+            Overlay::MissingAudio(_) => {
+                root.ui.detail_open = false;
+                cx.notify();
+            }
+            Overlay::WorkspaceBusy => {
+                root.documents_root_switch.status = None;
+                root.scroll.settings.set_offset(gpui::Point::default());
+                cx.notify();
+            }
         });
     }
 
-    /// Whether the startup installation probe, project list and Speaker
-    /// Library, which load on worker threads, have reached the view.
+    /// Whether the startup installation probe, project list, Speaker
+    /// Library and the selected document's audio check, which run on worker
+    /// threads, have reached the view.
     pub fn startup_loaded(&self, cx: &App) -> bool {
         let root = self.view.read(cx);
         root.projects_loaded
             && !root.installation.catalog.is_empty()
             && root.speaker_profiles.loaded
+            && !root.audio.pending()
     }
 }

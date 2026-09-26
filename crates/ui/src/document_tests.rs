@@ -11,7 +11,12 @@ use crate::tests::{
     click_selector, desktop_services, field_value, focus_field, open_desktop_on, temp_directory,
     test_settings, wait_for, FakeAssistantUiService, Field,
 };
-use crate::{controller::RootView, controls, i18n, pages::detail, route::Route};
+use crate::{
+    controller::RootView,
+    controls, i18n,
+    pages::{detail, meetings},
+    route::Route,
+};
 use application::{
     DocumentChange, DocumentRepository as _, DocumentService, ProcessingService, WorkspaceService,
 };
@@ -307,6 +312,71 @@ fn scanner_issues_list_path_and_reason_until_the_files_are_fixed(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn scanner_issues_read_in_the_ui_locale_and_keep_their_kind_after_a_move(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    for (index, id) in ["a", "b"].into_iter().enumerate() {
+        let mut document = DocumentState::new(ProjectId::new(id), id.to_uppercase(), "a.wav");
+        document.hierarchy.sibling_order = index as u32;
+        root.put(document, "# Document\n");
+    }
+    let broken = root.path().join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("state.json"), "{ not json").unwrap();
+    std::fs::write(root.path().join("notes.txt"), "stray").unwrap();
+    let (view, cx, _changes) = open_on(cx, &root);
+    for index in 0..2 {
+        rendered(cx, leak(format!("document-issue-{index}")));
+    }
+
+    // Under zh-CN the panel reads each issue in Chinese, not the scanner's
+    // English sentence.
+    let sentences = |cx: &mut VisualTestContext, locale| {
+        view.read_with(cx, |root, _| {
+            root.document_issues
+                .iter()
+                .map(|issue| {
+                    (
+                        issue.kind.clone(),
+                        issue.message.clone(),
+                        meetings::issue_sentence(issue, locale),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    let chinese = sentences(cx, i18n::Locale::ZhCn);
+    assert_eq!(chinese.len(), 2, "{chinese:#?}");
+    for (kind, message, sentence) in &chinese {
+        let kind = kind.as_ref().expect("the scanner names the issue's kind");
+        assert_eq!(sentence, &i18n::document_issue(i18n::Locale::ZhCn, kind));
+        assert_ne!(sentence, message, "not the English fallback");
+        let expected = match kind {
+            application::DocumentIssueKind::InvalidPackage { .. } => "无法读取",
+            application::DocumentIssueKind::UnexpectedFile { .. } => "不是文档包",
+            other => panic!("unexpected issue {other:?}"),
+        };
+        assert!(sentence.contains(expected), "{sentence}");
+    }
+    for (_, message, sentence) in sentences(cx, i18n::Locale::EnUs) {
+        assert_eq!(sentence, message);
+    }
+
+    // A tree move returns the issues with the listing; they keep their kind.
+    let before_a = rendered(cx, "before-a").center();
+    drag_row(cx, "b", before_a);
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|project| project.id().as_str() == "b" && project.hierarchy.sibling_order == 0)
+    });
+    let moved = sentences(cx, i18n::Locale::ZhCn);
+    assert_eq!(
+        moved, chinese,
+        "the moved listing keeps the localized issues"
+    );
+}
+
+#[gpui::test]
 fn detail_shows_revision_status_provenance_and_statistics(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();
     root.put(processed("weekly", "产品周会"), "# 产品周会\n");
@@ -350,7 +420,7 @@ fn detail_shows_revision_status_provenance_and_statistics(cx: &mut TestAppContex
             .iter()
             .find(|project| project.id().as_str() == "weekly")
             .unwrap();
-        detail::detail_sections(weekly, &root.projects, root.ui.locale)
+        detail::detail_sections(weekly, &root.projects, root.ui.locale, None)
     });
     let value = |key: &str| {
         sections

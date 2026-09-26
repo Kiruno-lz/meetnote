@@ -4,6 +4,7 @@ use crate::{
     i18n::{text as tr, Locale},
     theme::{self, Tokens},
 };
+use application::{AudioSourceError, AudioStatus};
 use domain::{document_result_statistics, DocumentState, ProvenanceGap};
 use gpui::{div, prelude::*, px, Context, IntoElement, Pixels, ScrollHandle};
 use gpui_component::{
@@ -24,6 +25,7 @@ const MISSING: &str = "—";
 pub(crate) fn render(
     project: Option<&DocumentState>,
     projects: &[DocumentState],
+    audio: Option<&Result<AudioStatus, AudioSourceError>>,
     locale: Locale,
     scroll: &ScrollHandle,
     cx: &mut Context<RootView>,
@@ -55,7 +57,7 @@ pub(crate) fn render(
                 .track_scroll(scroll)
                 .pb(tokens.spacing.lg)
                 .children(
-                    detail_sections(project, projects, locale)
+                    detail_sections(project, projects, locale, audio)
                         .into_iter()
                         .map(|section| render_section(section, &tokens)),
                 )
@@ -166,13 +168,15 @@ pub(crate) struct DetailSection {
 }
 
 /// The read-only facts Detail shows for `project`, whose tree is `projects`:
-/// identity, audio source, hierarchy, workflow state and revision, the
-/// processing record and the result statistics. A pure projection of the
-/// loaded state; nothing here reads files.
+/// identity, audio source and what the latest `audio` check of it found,
+/// hierarchy, workflow state and revision, the processing record and the
+/// result statistics. A pure projection of the loaded state; nothing here
+/// reads files.
 pub(crate) fn detail_sections(
     project: &DocumentState,
     projects: &[DocumentState],
     locale: Locale,
+    audio: Option<&Result<AudioStatus, AudioSourceError>>,
 ) -> Vec<DetailSection> {
     let text = |key| tr(locale, key);
     let row = |key: &'static str, value: String| DetailRow {
@@ -200,7 +204,17 @@ pub(crate) fn detail_sections(
         }
     };
 
-    let mut source = vec![row("detail_audio_path", known(Some(project.audio_path())))];
+    let mut source = vec![
+        row("detail_audio_path", known(Some(project.audio_path()))),
+        row(
+            "detail_audio_status",
+            match audio {
+                None => text("audio_checking").to_string(),
+                Some(Ok(status)) => crate::i18n::audio_status(locale, status),
+                Some(Err(error)) => crate::i18n::audio_source_error(locale, error),
+            },
+        ),
+    ];
     if let Some(end_ms) = project.source.audio_end_ms {
         source.push(row(
             "detail_audio_range",
@@ -463,7 +477,7 @@ mod tests {
             Vec::new(),
         );
         let projects = [parent.clone(), child.clone()];
-        let sections = detail_sections(&parent, &projects, Locale::ZhCn);
+        let sections = detail_sections(&parent, &projects, Locale::ZhCn, None);
         for (key, expected) in [
             ("detail_title", "产品周会"),
             ("detail_id", "weekly"),
@@ -490,7 +504,7 @@ mod tests {
         assert_eq!(value(&sections, "detail_processing_record"), None);
         assert_eq!(value(&sections, "detail_last_error"), None);
 
-        let child_sections = detail_sections(&child, &projects, Locale::EnUs);
+        let child_sections = detail_sections(&child, &projects, Locale::EnUs, None);
         assert_eq!(value(&child_sections, "detail_parent"), Some("产品周会"));
         assert_eq!(value(&child_sections, "detail_depth"), Some("1"));
         assert_eq!(
@@ -502,7 +516,7 @@ mod tests {
     #[test]
     fn an_unprocessed_document_says_so_and_shows_its_last_error() {
         let mut state = DocumentState::new(ProjectId::new("new"), "New", "new.wav");
-        let sections = detail_sections(&state, &[state.clone()], Locale::EnUs);
+        let sections = detail_sections(&state, &[state.clone()], Locale::EnUs, None);
         assert_eq!(
             value(&sections, "detail_processing_record"),
             Some("Not processed")
@@ -516,7 +530,7 @@ mod tests {
         );
 
         state.set_processing_error("model missing");
-        let sections = detail_sections(&state, &[state.clone()], Locale::EnUs);
+        let sections = detail_sections(&state, &[state.clone()], Locale::EnUs, None);
         assert_eq!(value(&sections, "detail_last_error"), Some("model missing"));
     }
 
@@ -527,7 +541,7 @@ mod tests {
             record.input_audio_checksum = None;
             record.asr.revision = None;
         }
-        let sections = detail_sections(&state, &[state.clone()], Locale::ZhCn);
+        let sections = detail_sections(&state, &[state.clone()], Locale::ZhCn, None);
         assert_eq!(value(&sections, "detail_input_checksum"), Some("—"));
         assert_eq!(
             value(&sections, "detail_asr"),
@@ -536,6 +550,35 @@ mod tests {
         assert_eq!(
             value(&sections, "detail_provenance_gaps"),
             Some("输入音频校验和、ASR 模型版本")
+        );
+    }
+
+    fn audio_row(
+        state: &DocumentState,
+        audio: Option<&Result<AudioStatus, AudioSourceError>>,
+    ) -> Option<String> {
+        let sections = detail_sections(state, &[state.clone()], Locale::ZhCn, audio);
+        value(&sections, "detail_audio_status").map(str::to_string)
+    }
+
+    #[test]
+    fn the_audio_row_reads_the_latest_check() {
+        let state = processed();
+        assert_eq!(
+            audio_row(&state, None).as_deref(),
+            Some(tr(Locale::ZhCn, "audio_checking"))
+        );
+        let missing = AudioStatus::Missing {
+            path: "weekly.wav".into(),
+        };
+        assert_eq!(
+            audio_row(&state, Some(&Ok(missing.clone()))),
+            Some(crate::i18n::audio_status(Locale::ZhCn, &missing))
+        );
+        let failed = AudioSourceError::Service("offline".into());
+        assert_eq!(
+            audio_row(&state, Some(&Err(failed.clone()))),
+            Some(crate::i18n::audio_source_error(Locale::ZhCn, &failed))
         );
     }
 
@@ -551,7 +594,7 @@ mod tests {
         for locale in [Locale::ZhCn, Locale::EnUs] {
             let mut keys = std::collections::BTreeSet::new();
             for project in &projects {
-                for section in detail_sections(project, &projects, locale) {
+                for section in detail_sections(project, &projects, locale, None) {
                     assert!(!section.title.is_empty(), "{locale:?} section title");
                     for row in section.rows {
                         assert!(!row.label.is_empty(), "{} ({locale:?})", row.key);

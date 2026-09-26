@@ -26,8 +26,10 @@
 //! glass/opaque, into `<route>-<dark|light>-<glass|opaque>.png`; so do the
 //! overlays over their route (an open Settings select, the migration dialog,
 //! Meetings with scanner issues and Detail, the Meetings editor under a
-//! revision conflict, the Original view with its speakers, and Settings at
-//! the Speaker Library), into `<overlay>-<appearance>.png`, once their entrance
+//! revision conflict, the Original view with its speakers, Settings at the
+//! Speaker Library, Meetings with Detail on a document whose audio is
+//! missing, and Settings at the Workspace under a refused documents-root
+//! switch), into `<overlay>-<appearance>.png`, once their entrance
 //! animation has finished. Under glass
 //! the window background is clear, so the chrome's pixels carry the glass
 //! alpha: the capture has no desktop behind it, and the desktop blur is
@@ -137,7 +139,7 @@ mod screenshots {
         (Route::Settings, "settings"),
     ];
     /// Overlays captured over a route, with their baseline file name prefix.
-    const OVERLAYS: [(Route, Overlay, &str); 6] = [
+    const OVERLAYS: [(Route, Overlay, &str); 8] = [
         (Route::Settings, Overlay::ThemeSelect, "settings-select"),
         (
             Route::Settings,
@@ -155,6 +157,16 @@ mod screenshots {
             Route::Settings,
             Overlay::SpeakerLibrary,
             "settings-speakers",
+        ),
+        (
+            Route::Meetings,
+            Overlay::MissingAudio(support::DOCUMENT_IDS[2]),
+            "meetings-audio",
+        ),
+        (
+            Route::Settings,
+            Overlay::WorkspaceBusy,
+            "settings-workspace",
         ),
     ];
     /// Frames drawn at most while waiting for two identical ones.
@@ -234,7 +246,9 @@ mod screenshots {
                 cx.update_window(handle, |_, window, cx| window.draw(cx).clear())
                     .expect("the route window draws");
                 cx.update(|cx| window.open_overlay(overlay, cx));
-                cx.run_until_parked();
+                // An overlay may start a check on a worker, such as the
+                // audio check of the document it selects.
+                wait_for_startup(cx, &window);
                 cx.update_window(handle, |_, window, cx| window.draw(cx).clear())
                     .expect("the route window draws");
                 std::thread::sleep(OVERLAY_SETTLE);

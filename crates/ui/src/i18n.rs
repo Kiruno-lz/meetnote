@@ -1,3 +1,6 @@
+use application::{
+    AudioSourceError, AudioStatus, DocumentIssueKind, DocumentsRootError, ReservedLocation,
+};
 use contracts::ComputeDevice;
 use domain::ProjectStatus;
 
@@ -296,6 +299,18 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "gap_clustering") => "聚类算法",
         (Locale::ZhCn, "gap_alignment") => "对齐算法",
         (Locale::ZhCn, "gap_runtime_device") => "运行设备",
+        (Locale::ZhCn, "workspace") => "工作区",
+        (Locale::ZhCn, "documents_root") => "文档目录",
+        (Locale::ZhCn, "documents_root_switching") => "正在切换文档目录……",
+        (Locale::ZhCn, "detail_audio_status") => "音频状态",
+        (Locale::ZhCn, "audio_checking") => "正在检查……",
+        (Locale::ZhCn, "audio_missing") => "音频缺失",
+        (Locale::ZhCn, "audio_mismatch") => "音频不一致",
+        (Locale::ZhCn, "relink_audio") => "重新关联音频",
+        (Locale::ZhCn, "relinking_audio") => "正在重新关联音频……",
+        (Locale::ZhCn, "audio_missing_cannot_process") => {
+            "音频文件缺失；重新关联音频后才能处理。"
+        }
         (Locale::EnUs, "assistant") => "Assistant",
         (Locale::EnUs, "meetings") => "Meetings",
         (Locale::EnUs, "models") => "Models",
@@ -584,6 +599,18 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "gap_clustering") => "Clustering algorithm",
         (Locale::EnUs, "gap_alignment") => "Alignment algorithm",
         (Locale::EnUs, "gap_runtime_device") => "Runtime device",
+        (Locale::EnUs, "workspace") => "Workspace",
+        (Locale::EnUs, "documents_root") => "Documents folder",
+        (Locale::EnUs, "documents_root_switching") => "Switching the documents folder…",
+        (Locale::EnUs, "detail_audio_status") => "Audio status",
+        (Locale::EnUs, "audio_checking") => "Checking…",
+        (Locale::EnUs, "audio_missing") => "Audio missing",
+        (Locale::EnUs, "audio_mismatch") => "Audio differs",
+        (Locale::EnUs, "relink_audio") => "Relink audio",
+        (Locale::EnUs, "relinking_audio") => "Relinking the audio…",
+        (Locale::EnUs, "audio_missing_cannot_process") => {
+            "The audio file is missing; relink the audio before processing."
+        }
         _ => "",
     }
 }
@@ -797,6 +824,24 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::EnUs, "document_issues") => {
             format!("{value} entries in the documents folder could not be loaded")
         }
+        (Locale::ZhCn, "documents_root_switched") => format!("文档目录已切换到 {value}"),
+        (Locale::EnUs, "documents_root_switched") => {
+            format!("Switched the documents folder to {value}")
+        }
+        (Locale::ZhCn, "documents_root_not_saved") => {
+            format!("文档目录保持不变：设置保存失败：{value}")
+        }
+        (Locale::EnUs, "documents_root_not_saved") => {
+            format!("The documents folder stays unchanged: saving the setting failed: {value}")
+        }
+        (Locale::ZhCn, "documents_root_restore_failed") => {
+            format!("设置保存失败，且无法切回原文档目录：{value}")
+        }
+        (Locale::EnUs, "documents_root_restore_failed") => format!(
+            "Saving the setting failed and the documents folder could not be switched back: {value}"
+        ),
+        (Locale::ZhCn, "audio_relinked") => format!("已重新关联「{value}」的音频。"),
+        (Locale::EnUs, "audio_relinked") => format!("Relinked the audio of “{value}”."),
         (Locale::ZhCn, "documents_load_failed") => format!("无法读取文档目录：{value}"),
         (Locale::EnUs, "documents_load_failed") => {
             format!("Cannot read the documents folder: {value}")
@@ -830,6 +875,225 @@ pub fn message_pair(locale: Locale, key: &str, first: &str, second: &str) -> Str
             format!("Merged the profile “{first}” into “{second}”.")
         }
         _ => format!("{first} → {second}"),
+    }
+}
+
+/// The sentence the issues panel shows for a scanner issue, with the ids
+/// and depths it names. The English sentence is the application's own.
+pub fn document_issue(locale: Locale, kind: &DocumentIssueKind) -> String {
+    use DocumentIssueKind as Kind;
+    match (locale, kind) {
+        (Locale::EnUs, kind) => kind.to_string(),
+        (Locale::ZhCn, Kind::InvalidPackage { message, .. }) => {
+            format!("无法读取这个文档包：{message}。")
+        }
+        (Locale::ZhCn, Kind::DuplicateDocumentId { document_id, .. }) => {
+            format!("另一个文档包已经使用文档 ID {document_id}。")
+        }
+        (
+            Locale::ZhCn,
+            Kind::MissingParent {
+                document_id,
+                parent_id,
+            },
+        ) => format!("文档 {document_id} 的父文档 {parent_id} 不存在。"),
+        (Locale::ZhCn, Kind::Cycle { document_id }) => {
+            format!("文档 {document_id} 经父文档链接成为了自己的祖先。")
+        }
+        (Locale::ZhCn, Kind::MaximumDepth { document_id }) => {
+            format!("文档 {document_id} 超出了三层树的深度上限。")
+        }
+        (Locale::ZhCn, Kind::CrossAudioAsset { document_id }) => {
+            format!("文档 {document_id} 的父文档来自另一段录音。")
+        }
+        (
+            Locale::ZhCn,
+            Kind::DepthMismatch {
+                document_id,
+                declared,
+                actual,
+            },
+        ) => format!("文档 {document_id} 声明深度为 {declared}，但按父文档应为 {actual}。"),
+        (Locale::ZhCn, Kind::UnexpectedFile { .. }) => {
+            "这个文件不是文档包；每个文档都是包含 document.md 和 state.json 的文件夹。".into()
+        }
+    }
+}
+
+/// Why the documents root was not switched.
+pub fn documents_root_error(locale: Locale, error: &DocumentsRootError) -> String {
+    use DocumentsRootError as Error;
+    let reserved_name = |location: &ReservedLocation| match (locale, location) {
+        (Locale::ZhCn, ReservedLocation::SpeakerLibrary) => "声纹库",
+        (Locale::ZhCn, ReservedLocation::ModelDirectory) => "模型目录",
+        (Locale::EnUs, ReservedLocation::SpeakerLibrary) => "Speaker Library",
+        (Locale::EnUs, ReservedLocation::ModelDirectory) => "model directory",
+    };
+    match (locale, error) {
+        (Locale::ZhCn, Error::Unsupported) => "这个工作区不能切换文档目录。".into(),
+        (Locale::EnUs, Error::Unsupported) => {
+            "This workspace cannot switch its documents folder.".into()
+        }
+        (Locale::ZhCn, Error::Empty) => "文档目录不能为空。".into(),
+        (Locale::EnUs, Error::Empty) => "The documents folder must not be empty.".into(),
+        (Locale::ZhCn, Error::NotADirectory { path }) => {
+            format!("{} 不是文件夹。", path.display())
+        }
+        (Locale::EnUs, Error::NotADirectory { path }) => {
+            format!("{} is not a folder.", path.display())
+        }
+        (
+            Locale::ZhCn,
+            Error::Reserved {
+                path,
+                location,
+                reserved,
+            },
+        ) => format!(
+            "{} 与{}（{}）重叠，不能存放文档。",
+            path.display(),
+            reserved_name(location),
+            reserved.display()
+        ),
+        (
+            Locale::EnUs,
+            Error::Reserved {
+                path,
+                location,
+                reserved,
+            },
+        ) => format!(
+            "{} overlaps the {} at {}; it cannot hold the documents.",
+            path.display(),
+            reserved_name(location),
+            reserved.display()
+        ),
+        (Locale::ZhCn, Error::WorkspaceBusy { job_ids }) => format!(
+            "有 {} 个处理或助手任务正在运行；等它们结束或取消后再切换文档目录。",
+            job_ids.len()
+        ),
+        (Locale::EnUs, Error::WorkspaceBusy { job_ids }) => format!(
+            "{} processing or Assistant job(s) are running; switch the documents folder once they finish or are cancelled.",
+            job_ids.len()
+        ),
+        (Locale::ZhCn, Error::Create { path, message }) => {
+            format!("无法创建文档目录 {}：{message}", path.display())
+        }
+        (Locale::EnUs, Error::Create { path, message }) => {
+            format!("Cannot create the documents folder {}: {message}", path.display())
+        }
+        (Locale::ZhCn, Error::Open { path, message }) => {
+            format!("无法打开文档目录 {}：{message}", path.display())
+        }
+        (Locale::EnUs, Error::Open { path, message }) => {
+            format!("Cannot open the documents folder {}: {message}", path.display())
+        }
+        (Locale::ZhCn, Error::Jobs(message)) => format!("无法读取任务状态：{message}"),
+        (Locale::EnUs, Error::Jobs(message)) => format!("Cannot read the jobs: {message}"),
+    }
+}
+
+/// The first characters of a checksum, enough to tell two apart.
+fn short_checksum(checksum: &str) -> &str {
+    checksum.get(..12).unwrap_or(checksum)
+}
+
+/// What the last check found about a document's source audio.
+pub fn audio_status(locale: Locale, status: &AudioStatus) -> String {
+    match (locale, status) {
+        (Locale::ZhCn, AudioStatus::Present { .. }) => "与处理时的音频一致".into(),
+        (Locale::EnUs, AudioStatus::Present { .. }) => "Matches the processed audio".into(),
+        (Locale::ZhCn, AudioStatus::Missing { .. }) => "音频文件缺失；重新关联后才能处理".into(),
+        (Locale::EnUs, AudioStatus::Missing { .. }) => {
+            "The audio file is missing; relink it to process".into()
+        }
+        (
+            Locale::ZhCn,
+            AudioStatus::ChecksumMismatch {
+                expected, actual, ..
+            },
+        ) => format!(
+            "与处理时的音频不一致（记录 {}…，现为 {}…）",
+            short_checksum(expected),
+            short_checksum(actual)
+        ),
+        (
+            Locale::EnUs,
+            AudioStatus::ChecksumMismatch {
+                expected, actual, ..
+            },
+        ) => format!(
+            "Differs from the processed audio (recorded {}…, now {}…)",
+            short_checksum(expected),
+            short_checksum(actual)
+        ),
+        (Locale::ZhCn, AudioStatus::Unverifiable { .. }) => {
+            "文件存在；没有处理时记录的校验和可供核对".into()
+        }
+        (Locale::EnUs, AudioStatus::Unverifiable { .. }) => {
+            "The file exists; no recorded checksum to verify it against".into()
+        }
+    }
+}
+
+/// Why an audio check or relink failed; a refused relink wrote nothing.
+pub fn audio_source_error(locale: Locale, error: &AudioSourceError) -> String {
+    use AudioSourceError as Error;
+    match (locale, error) {
+        (Locale::ZhCn, Error::NotFound(document_id)) => format!("文档 {document_id} 不存在。"),
+        (Locale::EnUs, Error::NotFound(document_id)) => {
+            format!("Document {document_id} does not exist.")
+        }
+        (
+            Locale::ZhCn,
+            Error::RevisionConflict {
+                expected, actual, ..
+            },
+        ) => format!("文档已在别处修改（版本 {expected} → {actual}），音频没有重新关联。"),
+        (
+            Locale::EnUs,
+            Error::RevisionConflict {
+                expected, actual, ..
+            },
+        ) => format!(
+            "The document changed elsewhere (revision {expected} → {actual}); the audio was not relinked."
+        ),
+        (Locale::ZhCn, Error::FileMissing { path }) => format!("所选音频文件不存在：{path}"),
+        (Locale::EnUs, Error::FileMissing { path }) => {
+            format!("The chosen audio file does not exist: {path}")
+        }
+        (
+            Locale::ZhCn,
+            Error::ChecksumMismatch {
+                path,
+                expected,
+                actual,
+            },
+        ) => format!(
+            "{path} 不是处理时的音频（校验和 {}…，应为 {}…），没有写入。",
+            short_checksum(actual),
+            short_checksum(expected)
+        ),
+        (
+            Locale::EnUs,
+            Error::ChecksumMismatch {
+                path,
+                expected,
+                actual,
+            },
+        ) => format!(
+            "{path} is not the processed audio (checksum {}…, expected {}…); nothing was written.",
+            short_checksum(actual),
+            short_checksum(expected)
+        ),
+        (Locale::ZhCn, Error::Read { path, message }) => {
+            format!("无法读取音频文件 {path}：{message}")
+        }
+        (Locale::EnUs, Error::Read { path, message }) => {
+            format!("Cannot read the audio file {path}: {message}")
+        }
+        (Locale::ZhCn, Error::Service(message)) => format!("文档服务出错：{message}"),
+        (Locale::EnUs, Error::Service(message)) => format!("Document service error: {message}"),
     }
 }
 
@@ -1005,6 +1269,190 @@ mod tests {
             translation_keys(source),
             ["helper_key", "other_helper", "direct", "arm_a", "arm_b"]
         );
+    }
+
+    fn every_issue_kind() -> Vec<DocumentIssueKind> {
+        use domain::DocumentId;
+        let id = DocumentId::new;
+        vec![
+            DocumentIssueKind::InvalidPackage {
+                path: "/work/documents/broken".into(),
+                message: "cannot parse /work/documents/broken/state.json".into(),
+            },
+            DocumentIssueKind::DuplicateDocumentId {
+                document_id: id("doc-1"),
+                path: "/work/documents/copy".into(),
+            },
+            DocumentIssueKind::MissingParent {
+                document_id: id("doc-2"),
+                parent_id: id("gone"),
+            },
+            DocumentIssueKind::Cycle {
+                document_id: id("doc-3"),
+            },
+            DocumentIssueKind::MaximumDepth {
+                document_id: id("doc-4"),
+            },
+            DocumentIssueKind::CrossAudioAsset {
+                document_id: id("doc-5"),
+            },
+            DocumentIssueKind::DepthMismatch {
+                document_id: id("doc-6"),
+                declared: 2,
+                actual: 1,
+            },
+            DocumentIssueKind::UnexpectedFile {
+                path: "/work/documents/notes.txt".into(),
+            },
+        ]
+    }
+
+    /// Whether `text` has a CJK character, as a Chinese sentence does.
+    fn has_chinese(text: &str) -> bool {
+        text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    }
+
+    #[test]
+    fn every_scanner_issue_kind_reads_as_a_sentence_in_both_locales() {
+        for kind in every_issue_kind() {
+            let chinese = document_issue(Locale::ZhCn, &kind);
+            let english = document_issue(Locale::EnUs, &kind);
+            assert!(has_chinese(&chinese), "{kind:?}: {chinese}");
+            assert_eq!(english, kind.to_string(), "{kind:?}");
+            let named: Vec<String> = match &kind {
+                DocumentIssueKind::InvalidPackage { message, .. } => vec![message.clone()],
+                DocumentIssueKind::DuplicateDocumentId { document_id, .. }
+                | DocumentIssueKind::Cycle { document_id }
+                | DocumentIssueKind::MaximumDepth { document_id }
+                | DocumentIssueKind::CrossAudioAsset { document_id } => {
+                    vec![document_id.to_string()]
+                }
+                DocumentIssueKind::MissingParent {
+                    document_id,
+                    parent_id,
+                } => vec![document_id.to_string(), parent_id.to_string()],
+                DocumentIssueKind::DepthMismatch {
+                    document_id,
+                    declared,
+                    actual,
+                } => vec![
+                    document_id.to_string(),
+                    declared.to_string(),
+                    actual.to_string(),
+                ],
+                DocumentIssueKind::UnexpectedFile { .. } => vec!["document.md".into()],
+            };
+            for fact in named {
+                assert!(chinese.contains(&fact), "{chinese} names {fact}");
+            }
+        }
+    }
+
+    #[test]
+    fn documents_root_errors_and_audio_states_read_in_both_locales() {
+        use application::ReservedLocation;
+        use std::path::PathBuf;
+        let path = PathBuf::from("/work/elsewhere");
+        let root_errors = [
+            DocumentsRootError::Unsupported,
+            DocumentsRootError::Empty,
+            DocumentsRootError::NotADirectory { path: path.clone() },
+            DocumentsRootError::Reserved {
+                path: path.clone(),
+                location: ReservedLocation::SpeakerLibrary,
+                reserved: "/work/speakers".into(),
+            },
+            DocumentsRootError::Reserved {
+                path: path.clone(),
+                location: ReservedLocation::ModelDirectory,
+                reserved: "/work/models".into(),
+            },
+            DocumentsRootError::WorkspaceBusy {
+                job_ids: vec![runtime::JobId(4), runtime::JobId(5)],
+            },
+            DocumentsRootError::Create {
+                path: path.clone(),
+                message: "permission denied".into(),
+            },
+            DocumentsRootError::Open {
+                path: path.clone(),
+                message: "cannot watch".into(),
+            },
+            DocumentsRootError::Jobs("poisoned".into()),
+        ];
+        for error in &root_errors {
+            let chinese = documents_root_error(Locale::ZhCn, error);
+            let english = documents_root_error(Locale::EnUs, error);
+            assert!(has_chinese(&chinese), "{error:?}: {chinese}");
+            assert!(!english.is_empty() && !has_chinese(&english), "{error:?}");
+        }
+        let busy = &root_errors[5];
+        assert!(documents_root_error(Locale::ZhCn, busy).contains('2'));
+        let reserved = [&root_errors[3], &root_errors[4]]
+            .map(|error| documents_root_error(Locale::ZhCn, error));
+        assert_ne!(reserved[0], reserved[1], "the reserved location is named");
+        assert!(reserved[0].contains("/work/speakers"));
+
+        let statuses = [
+            AudioStatus::Present {
+                path: "a.wav".into(),
+                checksum: "ab".repeat(32),
+            },
+            AudioStatus::Missing {
+                path: "a.wav".into(),
+            },
+            AudioStatus::ChecksumMismatch {
+                path: "a.wav".into(),
+                expected: "ab".repeat(32),
+                actual: "cd".repeat(32),
+            },
+            AudioStatus::Unverifiable {
+                path: "a.wav".into(),
+            },
+        ];
+        let errors = [
+            AudioSourceError::NotFound(domain::DocumentId::new("doc")),
+            AudioSourceError::RevisionConflict {
+                document_id: domain::DocumentId::new("doc"),
+                expected: 3,
+                actual: 4,
+            },
+            AudioSourceError::FileMissing {
+                path: "b.wav".into(),
+            },
+            AudioSourceError::ChecksumMismatch {
+                path: "b.wav".into(),
+                expected: "ab".repeat(32),
+                actual: "cd".repeat(32),
+            },
+            AudioSourceError::Read {
+                path: "b.wav".into(),
+                message: "denied".into(),
+            },
+            AudioSourceError::Service("offline".into()),
+        ];
+        let mut sentences = std::collections::BTreeSet::new();
+        for (chinese, english) in statuses
+            .iter()
+            .map(|status| {
+                (
+                    audio_status(Locale::ZhCn, status),
+                    audio_status(Locale::EnUs, status),
+                )
+            })
+            .chain(errors.iter().map(|error| {
+                (
+                    audio_source_error(Locale::ZhCn, error),
+                    audio_source_error(Locale::EnUs, error),
+                )
+            }))
+        {
+            assert!(has_chinese(&chinese), "{chinese}");
+            assert!(!english.is_empty() && !has_chinese(&english), "{english}");
+            assert!(sentences.insert(chinese), "each state reads differently");
+        }
+        assert!(audio_source_error(Locale::ZhCn, &errors[1]).contains("3"));
+        assert!(audio_source_error(Locale::EnUs, &errors[2]).contains("b.wav"));
     }
 
     #[test]

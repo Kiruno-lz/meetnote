@@ -3,6 +3,7 @@ use crate::{
         now_ms, AssistantController, AssistantScopeMode, AssistantSettingsSave, AssistantTaskState,
         AssistantUiError, AssistantUiService, ConnectionProbeKind,
     },
+    audio::AudioCheck,
     components::ProjectDrag,
     controls::{ConfirmDialog, Dropdown, DropdownEvent, SelectOption, TextField, TextFieldEvent},
     editor::DocumentEditor,
@@ -13,9 +14,10 @@ use crate::{
     theme,
 };
 use application::{
-    BackendInventory, DocumentCommandError, DocumentIssue, DocumentSnapshot, InstallationQuery,
-    InstallationService, InstallationState, JsonSpeakerProfileStore, ProcessingOptions,
-    SpeakerLibraryError, SpeakerLibraryService, WorkspaceService,
+    AudioSourceError, BackendInventory, DocumentCommandError, DocumentIssue, DocumentSnapshot,
+    DocumentsRootError, InstallationQuery, InstallationService, InstallationState,
+    JsonSpeakerProfileStore, ProcessingOptions, SpeakerLibraryError, SpeakerLibraryService,
+    WorkspaceService,
 };
 use contracts::{
     AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, DocumentCommand,
@@ -38,7 +40,7 @@ use settings::{
     AssistantSettings, CredentialUpdate, LlmProtocol, MaterialPreference, SettingsService,
     ThemePreference,
 };
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 type SettingsChange = Arc<dyn Fn(&mut AppSettings) + Send + Sync>;
@@ -52,6 +54,8 @@ enum SettingsWrite {
     },
     /// The Assistant form, relative to the settings it was loaded from.
     Assistant(AssistantSettingsSave),
+    /// A documents-root switch and the save of `documents_root` it needs.
+    DocumentsRoot { root: PathBuf },
 }
 
 /// A failed settings write and, after a revision conflict, the settings the
@@ -59,6 +63,61 @@ enum SettingsWrite {
 struct SettingsWriteFailure {
     error: AssistantUiError,
     reloaded: Option<AppSettings>,
+}
+
+/// A documents root saved in the settings; `switched` is false when the
+/// workspace was already on it.
+struct DocumentsRootSwitched {
+    saved: AppSettings,
+    switched: bool,
+}
+
+/// Why a documents-root switch left the workspace on the root it had.
+enum DocumentsRootSwitchFailure {
+    /// The workspace refused the root; nothing changed.
+    Refused(DocumentsRootError),
+    /// The setting was not saved. A workspace that `switched` was switched
+    /// back; `restore` is why that failed, if it did.
+    NotSaved {
+        failure: SettingsWriteFailure,
+        switched: bool,
+        restore: Option<DocumentsRootError>,
+    },
+}
+
+/// Switches `workspace` to `root`, then saves it as `documents_root` in the
+/// settings compared against `expected`; a failed save switches the
+/// workspace back. Blocking: it runs on the settings write's worker.
+fn switch_documents_root(
+    workspace: &WorkspaceService,
+    settings: &SettingsService,
+    expected: &AppSettings,
+    root: PathBuf,
+) -> Result<DocumentsRootSwitched, DocumentsRootSwitchFailure> {
+    let previous = workspace.documents_root();
+    workspace
+        .switch_documents_root(&root)
+        .map_err(DocumentsRootSwitchFailure::Refused)?;
+    // A switch to the root the workspace is on changes nothing.
+    let switched = workspace.documents_root() != previous;
+    let mut next = expected.clone();
+    next.documents_root = root.display().to_string();
+    let saved = settings
+        .update_if_equal(expected, next)
+        .map_err(|error| AssistantUiError::from_settings(&error));
+    match reload_after_conflict(settings, saved) {
+        Ok(saved) => Ok(DocumentsRootSwitched { saved, switched }),
+        Err(failure) => {
+            let restore = previous
+                .filter(|_| switched)
+                .and_then(|previous| workspace.switch_documents_root(previous).err());
+            Err(DocumentsRootSwitchFailure::NotSaved {
+                failure,
+                switched,
+                restore,
+            })
+        }
+    }
 }
 
 /// Re-reads the repository after a revision conflict, on the write's worker,
@@ -401,6 +460,9 @@ pub(crate) struct RootView {
     pub(crate) assistant_protocol: LlmProtocol,
     pub(crate) assistant_auth_mode: AssistantAuthMode,
     pub(crate) cancel_contexts: Option<(JobContext, JobContext)>,
+    /// Cancel was clicked while processing was still starting; the job is
+    /// cancelled as soon as the start returns.
+    processing_cancel_requested: bool,
     pub(crate) settings_selectors: Option<SettingsSelectors>,
     /// The last failed settings write, shown on the settings page.
     pub(crate) settings_error: Option<AssistantUiError>,
@@ -439,6 +501,18 @@ pub(crate) struct RootView {
     pub(crate) speaker_command: Option<ProjectId>,
     /// The speaker merge or profile change waiting for confirmation.
     pub(crate) speaker_confirmation: Option<SpeakerConfirmation>,
+    /// The selected document's source audio, as the last check found it.
+    pub(crate) audio: AudioCheck,
+    /// The Workspace section's documents-root switch.
+    pub(crate) documents_root_switch: DocumentsRootSwitch,
+}
+
+/// A documents-root switch in flight, and the outcome of the last one: its
+/// message and whether it failed.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DocumentsRootSwitch {
+    pub(crate) switching: bool,
+    pub(crate) status: Option<(String, bool)>,
 }
 
 /// A document write refused because the document changed after the UI read
@@ -540,6 +614,7 @@ impl RootView {
                 .map(|profile| profile.auth_mode)
                 .unwrap_or(AssistantAuthMode::Bearer),
             cancel_contexts: None,
+            processing_cancel_requested: false,
             settings_selectors: None,
             settings_error: None,
             pending_expiry: None,
@@ -558,6 +633,8 @@ impl RootView {
             profile_rows: None,
             speaker_command: None,
             speaker_confirmation: None,
+            audio: AudioCheck::default(),
+            documents_root_switch: DocumentsRootSwitch::default(),
         };
         // The tree and the Speaker Library stay empty until they load on
         // workers.
@@ -659,8 +736,36 @@ impl RootView {
                 self.ui.open_loaded_projects(&self.projects);
                 self.projects_loaded = true;
             }
+            self.check_selected_audio(cx);
             cx.notify();
         }
+    }
+
+    /// Checks the selected document's source audio on a worker (it hashes
+    /// the file); the tree row, the Meetings header and Detail show what it
+    /// finds.
+    fn check_selected_audio(&mut self, cx: &mut Context<Self>) {
+        let Some(document_id) = self
+            .ui
+            .selected_project
+            .clone()
+            .filter(|id| self.projects.iter().any(|project| project.id() == id))
+        else {
+            return;
+        };
+        let generation = self.audio.begin(document_id.clone());
+        let workspace = self.services.workspace.clone();
+        cx.spawn(async move |this, cx| {
+            let result =
+                runtime::spawn_blocking(move || workspace.audio_status(&document_id)).await;
+            this.update(cx, |this, cx| {
+                if this.audio.apply(generation, result) {
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The persisted Assistant settings; the settings form's unsaved draft
@@ -1054,10 +1159,11 @@ impl RootView {
             if let Some(previous) = previous {
                 previous.await;
             }
-            let Ok((settings, assistant, expected)) = this.update(cx, |this, _| {
+            let Ok((settings, assistant, workspace, expected)) = this.update(cx, |this, _| {
                 (
                     this.services.settings.clone(),
                     this.services.assistant.clone(),
+                    this.services.workspace.clone(),
                     this.settings_base.clone(),
                 )
             }) else {
@@ -1093,8 +1199,105 @@ impl RootView {
                     this.update(cx, |this, cx| this.finish_assistant_save(result, cx))
                         .ok();
                 }
+                SettingsWrite::DocumentsRoot { root } => {
+                    let result = runtime::spawn_blocking(move || {
+                        switch_documents_root(&workspace, &settings, &expected, root)
+                    })
+                    .await;
+                    this.update(cx, |this, cx| this.finish_documents_root_switch(result, cx))
+                        .ok();
+                }
             }
         }));
+    }
+
+    /// Shows how a documents-root switch ended. A switch saved in the
+    /// settings shows the new root's tree; a refused one changes nothing; a
+    /// switch whose save failed was switched back and adopts the settings
+    /// the conflict reloaded.
+    fn finish_documents_root_switch(
+        &mut self,
+        result: Result<DocumentsRootSwitched, DocumentsRootSwitchFailure>,
+        cx: &mut Context<Self>,
+    ) {
+        self.documents_root_switch.switching = false;
+        let locale = self.ui.locale;
+        let (message, failed) = match result {
+            Ok(DocumentsRootSwitched { saved, switched }) => {
+                self.settings_draft.documents_root = saved.documents_root.clone();
+                self.settings_base = saved;
+                self.settings_error = None;
+                if switched {
+                    self.follow_documents_root(true, cx);
+                }
+                (
+                    i18n::message(
+                        locale,
+                        "documents_root_switched",
+                        &self.settings_draft.documents_root,
+                    ),
+                    false,
+                )
+            }
+            Err(DocumentsRootSwitchFailure::Refused(error)) => {
+                (i18n::documents_root_error(locale, &error), true)
+            }
+            Err(DocumentsRootSwitchFailure::NotSaved {
+                failure,
+                switched,
+                restore,
+            }) => {
+                let reason = settings_error_text(locale, &failure.error);
+                self.settings_write_failed(failure, cx);
+                // Switching there and back ended the feeds of both roots.
+                if switched {
+                    self.follow_documents_root(restore.is_some(), cx);
+                }
+                let message = match restore {
+                    None => i18n::message(locale, "documents_root_not_saved", &reason),
+                    Some(error) => i18n::message(
+                        locale,
+                        "documents_root_restore_failed",
+                        &format!("{reason} {}", i18n::documents_root_error(locale, &error)),
+                    ),
+                };
+                (message, true)
+            }
+        };
+        self.ui.notice = message.clone();
+        self.documents_root_switch.status = Some((message, failed));
+        cx.notify();
+    }
+
+    /// After a switch, follows the changes of the workspace's documents
+    /// root again (every switch ends the feeds of the root it left) and
+    /// reloads the tree. When the root changed, everything read from the
+    /// old one is dropped first: the selection, drafts, conflict notice,
+    /// audio check, document speaker controls and the Assistant's results,
+    /// reviews and undo entries.
+    fn follow_documents_root(&mut self, root_changed: bool, cx: &mut Context<Self>) {
+        if root_changed {
+            self.projects.clear();
+            self.document_issues.clear();
+            self.projects_loaded = false;
+            self.ui.selected_project = None;
+            self.ui.expanded_projects.clear();
+            self.ui.content_mode = ContentMode::Summary;
+            self.editor.discard_all();
+            self.document_conflict = None;
+            self.audio.clear();
+            self.speaker_rows = None;
+            if matches!(
+                self.speaker_confirmation,
+                Some(SpeakerConfirmation::MergeDocumentSpeaker { .. })
+            ) {
+                self.speaker_confirmation = None;
+            }
+            self.assistant.forget_workspace();
+            self.pending_expiry = None;
+        }
+        self.watch_documents(cx);
+        self.reload_projects(cx);
     }
 
     fn finish_field_write(
@@ -2098,6 +2301,7 @@ impl RootView {
     pub(crate) fn select_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
         self.ui.selected_project = Some(project_id);
         self.ui.notice.clear();
+        self.check_selected_audio(cx);
         cx.notify();
     }
 
@@ -2388,11 +2592,23 @@ impl RootView {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(DocumentCommandResult::Snapshot { documents, issues }) => {
+                        // The listing's issues carry no kind; each keeps
+                        // the kind the last scan read for it.
                         let issues = issues
                             .into_iter()
-                            .map(|issue| DocumentIssue {
-                                path: issue.path,
-                                message: issue.message,
+                            .map(|issue| {
+                                let kind = this
+                                    .document_issues
+                                    .iter()
+                                    .find(|known| {
+                                        known.path == issue.path && known.message == issue.message
+                                    })
+                                    .and_then(|known| known.kind.clone());
+                                DocumentIssue {
+                                    path: issue.path,
+                                    message: issue.message,
+                                    kind,
+                                }
                             })
                             .collect();
                         this.apply_projects(
@@ -2920,6 +3136,142 @@ impl RootView {
         .detach();
     }
 
+    /// The Workspace section's button: asks for a folder and switches the
+    /// documents root to it.
+    pub(crate) fn choose_documents_root_directory(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(i18n::text(self.ui.locale, "choose_directory").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(directory) = paths.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |this, cx| this.choose_documents_root(directory, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Switches the workspace to the documents root `root` on a worker and
+    /// saves it with the settings' revision check, queued behind the other
+    /// settings writes. A refused root changes nothing; a save that fails
+    /// after the switch switches the workspace back.
+    pub(crate) fn choose_documents_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
+        self.documents_root_switch.switching = true;
+        self.documents_root_switch.status = None;
+        self.ui.notice = i18n::text(self.ui.locale, "documents_root_switching").into();
+        self.queue_settings_write(SettingsWrite::DocumentsRoot { root }, cx);
+        cx.notify();
+    }
+
+    /// The Meetings header's relink button: asks for the selected
+    /// document's audio file and relinks it.
+    pub(crate) fn relink_audio(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(i18n::text(self.ui.locale, "choose_audio").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |this, cx| this.relink_audio_path(path, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Points the selected document's recording (it and every document
+    /// sharing its audio) at `path` on a worker, checked against the
+    /// revision the tree read and the checksum processing recorded. A
+    /// refused relink writes nothing; a revision conflict opens the
+    /// conflict notice.
+    pub(crate) fn relink_audio_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.audio.relinking.is_some() {
+            return;
+        }
+        let Some(document) = self
+            .ui
+            .selected_project
+            .as_ref()
+            .and_then(|id| self.projects.iter().find(|project| project.id() == id))
+        else {
+            self.ui.notice = i18n::text(self.ui.locale, "select_project_first").into();
+            cx.notify();
+            return;
+        };
+        let (document_id, revision) = (document.id().clone(), document.revision());
+        let title = document.title().to_string();
+        self.audio.relinking = Some(document_id.clone());
+        self.ui.notice = i18n::text(self.ui.locale, "relinking_audio").into();
+        cx.notify();
+        let workspace = self.services.workspace.clone();
+        let path = path.display().to_string();
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || {
+                workspace.relink_audio(&document_id, revision, path)
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.audio.relinking = None;
+                let locale = this.ui.locale;
+                match result {
+                    Ok(_) => {
+                        this.ui.notice = i18n::message(locale, "audio_relinked", &title);
+                        this.reload_projects(cx);
+                    }
+                    Err(error) => {
+                        this.ui.notice = i18n::audio_source_error(locale, &error);
+                        if let AudioSourceError::RevisionConflict {
+                            document_id,
+                            expected,
+                            actual,
+                        } = error
+                        {
+                            let title = this
+                                .projects
+                                .iter()
+                                .find(|project| project.id() == &document_id)
+                                .map_or_else(
+                                    || document_id.to_string(),
+                                    |project| project.title().into(),
+                                );
+                            this.document_conflict = Some(DocumentConflict {
+                                document_id,
+                                title,
+                                expected,
+                                actual,
+                            });
+                            this.reload_projects(cx);
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(crate) fn toggle_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
         if !self.ui.expanded_projects.insert(project_id.clone()) {
             self.ui.expanded_projects.remove(&project_id);
@@ -3150,9 +3502,14 @@ impl RootView {
         if let Some((asr_context, diarization_context)) = &self.cancel_contexts {
             asr_context.cancel();
             diarization_context.cancel();
-            self.ui.notice = i18n::text(self.ui.locale, "cancellation_requested").into();
-            cx.notify();
+        } else if self.ui.processing {
+            // Still starting: the job is cancelled once the start returns.
+            self.processing_cancel_requested = true;
+        } else {
+            return;
         }
+        self.ui.notice = i18n::text(self.ui.locale, "cancellation_requested").into();
+        cx.notify();
     }
 
     pub(crate) fn process_selected(
@@ -3169,6 +3526,11 @@ impl RootView {
         if self.ui.processing {
             return;
         }
+        if self.audio.missing(&project_id) {
+            self.ui.notice = i18n::text(self.ui.locale, "audio_missing_cannot_process").into();
+            cx.notify();
+            return;
+        }
         let Some(project) = self
             .projects
             .iter()
@@ -3180,6 +3542,7 @@ impl RootView {
             return;
         };
         self.ui.processing = true;
+        self.processing_cancel_requested = false;
         self.ui.notice = i18n::message(self.ui.locale, "processing", project.title());
         let workspace = self.services.workspace.clone();
         let settings = self.settings_draft.clone();
@@ -3209,6 +3572,7 @@ impl RootView {
             (None, Some(model)) => model,
         };
         let speaker_library_path = settings.speaker_library_path;
+        let title = project.title().to_string();
         cx.notify();
         cx.spawn(async move |this, cx| {
             // Starting reads the document and probes the models.
@@ -3229,6 +3593,7 @@ impl RootView {
                 Err(error) => {
                     this.update(cx, |this, cx| {
                         this.ui.processing = false;
+                        this.processing_cancel_requested = false;
                         this.ui.notice = i18n::message(this.ui.locale, "processing_failed", &error);
                         cx.notify();
                     })
@@ -3237,11 +3602,21 @@ impl RootView {
                 }
             };
             let contexts = (job.asr_context.clone(), job.diarization_context.clone());
-            let shown = this.update(cx, |this, cx| {
-                this.cancel_contexts = Some(contexts);
+            let follow = this.update(cx, |this, cx| {
                 cx.notify();
+                if std::mem::take(&mut this.processing_cancel_requested) {
+                    this.ui.processing = false;
+                    this.ui.notice = i18n::message(this.ui.locale, "cancelled", &title);
+                    return false;
+                }
+                this.cancel_contexts = Some(contexts);
+                true
             });
-            if shown.is_err() {
+            if !matches!(follow, Ok(true)) {
+                // Cancelled while it started, or the window closed: both
+                // jobs end cancelled and the unpolled job, dropped here,
+                // writes nothing.
+                job.cancel();
                 return;
             }
             Self::follow_processing(this, job, cx).await;
@@ -3573,6 +3948,9 @@ impl Render for RootView {
             pages::detail::render(
                 selected.as_ref(),
                 &self.projects,
+                selected
+                    .as_ref()
+                    .and_then(|project| self.audio.result_for(project.id())),
                 self.ui.locale,
                 &self.scroll.detail,
                 cx,

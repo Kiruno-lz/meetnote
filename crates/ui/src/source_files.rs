@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 /// Every `.rs` file under `crates/ui/src`, by its path relative to it.
 pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("assistant_ui.rs", include_str!("assistant_ui.rs")),
+    ("audio.rs", include_str!("audio.rs")),
     ("components.rs", include_str!("components.rs")),
     ("controller.rs", include_str!("controller.rs")),
     ("controls/dialog.rs", include_str!("controls/dialog.rs")),
@@ -46,6 +47,7 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("theme/mod.rs", include_str!("theme/mod.rs")),
     ("theme/platform.rs", include_str!("theme/platform.rs")),
     ("theme/tokens.rs", include_str!("theme/tokens.rs")),
+    ("workspace_tests.rs", include_str!("workspace_tests.rs")),
 ];
 
 /// The modules a file declares with `mod name;`.

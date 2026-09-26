@@ -779,6 +779,30 @@ impl AssistantController {
         true
     }
 
+    /// Drops everything that belongs to the documents root the workspace
+    /// left: the result with its undo entries, the pending reviews, the
+    /// authorized documents and a run still going, which is cancelled and
+    /// whose late result is ignored. The scene, scope and connection
+    /// diagnostics stay.
+    pub fn forget_workspace(&mut self) {
+        if let Some(cancellation) = self.cancellation.take() {
+            cancellation.cancel();
+        }
+        self.task = AssistantTaskState::Idle;
+        self.active_request = None;
+        self.authorized_documents.clear();
+        self.result = None;
+        self.result_grant.clear();
+        self.pending = None;
+        self.pending_queue.clear();
+        self.pending_overflow_ids.clear();
+        self.undone_mutation_ids.clear();
+        self.undo_in_flight.clear();
+        self.progress = None;
+        self.job = None;
+        self.job_progress = None;
+    }
+
     pub fn begin_probe(
         &mut self,
         kind: ConnectionProbeKind,
@@ -1631,6 +1655,49 @@ mod tests {
         );
         assert!(controller.begin_mutation_undo("first").is_none());
         assert!(controller.begin_mutation_undo("second").is_none());
+    }
+
+    #[test]
+    fn forgetting_the_workspace_drops_its_results_reviews_and_undo_entries() {
+        let document = DocumentState::new(ProjectId::new("old"), "Old", "old.wav");
+        let mut controller = AssistantController::default();
+        controller.select_scene(AgentScene::Organize);
+        controller.authorize_document(Some(&document));
+        let (request, _) = controller.begin("organize".into(), &settings()).unwrap();
+        controller.complete(
+            &request.request_id,
+            AssistantRunResult {
+                mutations: vec![mutation("first")],
+                pending_reviews: vec![pending_with_id("review-1"), pending_with_id("review-2")],
+                ..empty_result()
+            },
+        );
+        controller.begin_mutation_undo("first").unwrap();
+        // A later run is still going when the workspace is forgotten.
+        let (late, cancellation) = controller.begin("again".into(), &settings()).unwrap();
+
+        controller.forget_workspace();
+        assert!(
+            cancellation.is_cancelled(),
+            "the old root's run is cancelled"
+        );
+        assert_eq!(controller.task, AssistantTaskState::Idle);
+        assert!(controller.result.is_none() && controller.pending.is_none());
+        assert_eq!(controller.pending_queue_len(), 0);
+        assert!(controller.authorized_documents.is_empty());
+        assert!(controller.result_authorized_document_ids().is_empty());
+        assert!(!controller.is_mutation_undo_in_flight("first"));
+        assert!(controller.begin_mutation_undo("first").is_none());
+        assert_eq!(controller.scene, AgentScene::Organize, "the scene stays");
+        // The forgotten run's result lands later and is dropped.
+        controller.complete(
+            &late.request_id,
+            AssistantRunResult {
+                mutations: vec![mutation("late")],
+                ..empty_result()
+            },
+        );
+        assert!(controller.result.is_none());
     }
 
     #[test]

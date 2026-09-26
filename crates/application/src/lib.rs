@@ -199,7 +199,11 @@ pub trait DiarizationBackendProvider: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentIssue {
     pub path: String,
+    /// The English sentence; clients that localize read `kind` instead.
     pub message: String,
+    /// Why the path is an issue, when the issue was built from a kind
+    /// ([`DocumentIssue::from_kind`]).
+    pub kind: Option<DocumentIssueKind>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
