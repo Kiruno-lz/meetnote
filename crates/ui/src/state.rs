@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 pub enum ContentMode {
     Summary,
     Original,
+    /// The editor of the document's semantic fields.
+    Edit,
 }
 
 #[derive(Debug, Clone)]

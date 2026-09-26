@@ -24,9 +24,10 @@
 //!
 //! Each route renders in each of the four pinned appearances, dark/light ×
 //! glass/opaque, into `<route>-<dark|light>-<glass|opaque>.png`; so do the
-//! overlays over their route (an open Settings select and the migration
-//! dialog), into `<overlay>-<appearance>.png`, once their entrance animation
-//! has finished. Under glass
+//! overlays over their route (an open Settings select, the migration dialog,
+//! Meetings with scanner issues and Detail, and the Meetings editor under a
+//! revision conflict), into `<overlay>-<appearance>.png`, once their entrance
+//! animation has finished. Under glass
 //! the window background is clear, so the chrome's pixels carry the glass
 //! alpha: the capture has no desktop behind it, and the desktop blur is
 //! checked by hand.
@@ -135,13 +136,15 @@ mod screenshots {
         (Route::Settings, "settings"),
     ];
     /// Overlays captured over a route, with their baseline file name prefix.
-    const OVERLAYS: [(Route, Overlay, &str); 2] = [
+    const OVERLAYS: [(Route, Overlay, &str); 4] = [
         (Route::Settings, Overlay::ThemeSelect, "settings-select"),
         (
             Route::Settings,
             Overlay::SpeakerLibraryDialog,
             "settings-dialog",
         ),
+        (Route::Meetings, Overlay::IssuesAndDetail, "meetings-detail"),
+        (Route::Meetings, Overlay::EditorConflict, "meetings-edit"),
     ];
     /// Frames drawn at most while waiting for two identical ones.
     const MAX_FRAMES: usize = 8;

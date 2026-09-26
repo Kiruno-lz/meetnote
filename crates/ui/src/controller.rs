@@ -3,17 +3,22 @@ use crate::{
         now_ms, AssistantController, AssistantScopeMode, AssistantSettingsSave, AssistantTaskState,
         AssistantUiError, AssistantUiService, ConnectionProbeKind,
     },
+    components::ProjectDrag,
     controls::{ConfirmDialog, Dropdown, DropdownEvent, SelectOption, TextField, TextFieldEvent},
+    editor::DocumentEditor,
     i18n, pages,
     route::Route,
     state::{ContentMode, UiState},
     theme,
 };
 use application::{
-    BackendInventory, InstallationQuery, InstallationService, InstallationState, ProcessingOptions,
-    WorkspaceService,
+    BackendInventory, DocumentCommandError, DocumentIssue, DocumentSnapshot, InstallationQuery,
+    InstallationService, InstallationState, ProcessingOptions, WorkspaceService,
 };
-use contracts::{AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, ModelRef};
+use contracts::{
+    AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, DocumentCommand,
+    DocumentCommandEnvelope, DocumentCommandResult, DocumentRecord, ModelRef,
+};
 use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
@@ -401,6 +406,25 @@ pub(crate) struct RootView {
     pub(crate) scroll: ScrollAreas,
     /// Holds focus while a dialog is open, so Enter and Esc reach it.
     dialog_focus: FocusHandle,
+    /// Scanner issues of the documents directory, as the last project-list
+    /// reload read them.
+    pub(crate) document_issues: Vec<DocumentIssue>,
+    /// The editor of the selected document's semantic fields.
+    pub(crate) editor: DocumentEditor,
+    /// The last document write refused for a newer revision, until the user
+    /// reloads.
+    pub(crate) document_conflict: Option<DocumentConflict>,
+}
+
+/// A document write refused because the document changed after the UI read
+/// it; nothing was written. Reloading reads the document again and discards
+/// its draft.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DocumentConflict {
+    pub(crate) document_id: ProjectId,
+    pub(crate) title: String,
+    pub(crate) expected: u64,
+    pub(crate) actual: u64,
 }
 
 /// The scroll positions of the lists that fade at their edges; each fade
@@ -410,7 +434,8 @@ pub(crate) struct ScrollAreas {
     pub(crate) assistant_results: ScrollHandle,
     pub(crate) project_tree: ScrollHandle,
     pub(crate) meeting_content: ScrollHandle,
-    pub(crate) detail_transcript: ScrollHandle,
+    pub(crate) document_issues: ScrollHandle,
+    pub(crate) detail: ScrollHandle,
     pub(crate) models: ScrollHandle,
 }
 
@@ -451,6 +476,13 @@ impl RootView {
             },
         )
         .detach();
+        let editor = DocumentEditor::new(locale, window, cx);
+        cx.subscribe_in(&editor.status, window, |this, _, event, _, cx| {
+            let DropdownEvent::Confirm(value) = event;
+            this.editor.set_status(value.clone());
+            cx.notify();
+        })
+        .detach();
         let mut ui = UiState::new(locale);
         ui.expanded_model_families.extend(
             services
@@ -489,6 +521,9 @@ impl RootView {
             speaker_library_prompt: None,
             scroll: ScrollAreas::default(),
             dialog_focus: cx.focus_handle(),
+            document_issues: Vec::new(),
+            editor,
+            document_conflict: None,
         };
         // The tree stays empty until the list loads on a worker.
         this.reload_projects(cx);
@@ -547,13 +582,13 @@ impl RootView {
             .refresh(self.installation_query());
     }
 
-    /// Re-reads the project list off the main thread.
-    fn reload_projects(&mut self, cx: &mut Context<Self>) {
+    /// Re-reads the project list and the scanner issues off the main thread.
+    pub(crate) fn reload_projects(&mut self, cx: &mut Context<Self>) {
         let generation = self.begin_projects_reload();
         let workspace = self.services.workspace.clone();
         cx.spawn(async move |this, cx| {
-            let projects = runtime::spawn_blocking(move || workspace.list_projects()).await;
-            this.update(cx, |this, cx| this.apply_projects(generation, projects, cx))
+            let snapshot = runtime::spawn_blocking(move || workspace.document_snapshot()).await;
+            this.update(cx, |this, cx| this.apply_projects(generation, snapshot, cx))
                 .ok();
         })
         .detach();
@@ -564,16 +599,26 @@ impl RootView {
         self.projects_generation
     }
 
-    /// Shows a reloaded project list unless a newer reload has started; the
-    /// first list to land also opens the tree.
+    /// Shows a reloaded project list and its scanner issues unless a newer
+    /// reload has started; the first list to land also opens the tree.
     fn apply_projects(
         &mut self,
         generation: u64,
-        projects: Result<Vec<DocumentState>, String>,
+        snapshot: Result<DocumentSnapshot, String>,
         cx: &mut Context<Self>,
     ) {
         if generation == self.projects_generation {
-            self.projects = projects.unwrap_or_default();
+            match snapshot {
+                Ok(snapshot) => {
+                    self.projects = snapshot.documents;
+                    self.document_issues = snapshot.issues;
+                }
+                Err(error) => {
+                    self.projects.clear();
+                    self.document_issues.clear();
+                    self.ui.notice = i18n::message(self.ui.locale, "documents_load_failed", &error);
+                }
+            }
             if !self.projects_loaded {
                 self.ui.open_loaded_projects(&self.projects);
                 self.projects_loaded = true;
@@ -1087,6 +1132,7 @@ impl RootView {
         self.ui.locale = locale;
         self.settings_selectors = None;
         self.assistant_inputs.follow_locale(locale, cx);
+        self.editor.follow_locale(locale, &self.projects, cx);
     }
 
     /// Follows the draft's appearance; the theme re-applies it to the window.
@@ -1409,7 +1455,7 @@ impl RootView {
         cx.spawn(async move |this, cx| {
             let imported = runtime::spawn_blocking(move || {
                 let project = workspace.import_audio(path.display().to_string())?;
-                Ok::<_, String>((project, workspace.list_projects()))
+                Ok::<_, String>((project, workspace.document_snapshot()))
             })
             .await;
             this.update(cx, |this, cx| {
@@ -1620,6 +1666,280 @@ impl RootView {
     pub(crate) fn set_content_mode(&mut self, mode: ContentMode, cx: &mut Context<Self>) {
         self.ui.content_mode = mode;
         cx.notify();
+    }
+
+    /// Shows the selected document's draft in the editor, first reading it
+    /// on a worker when it has none. Edit mode calls it on every render; it
+    /// does nothing once the draft is shown or being read.
+    fn ensure_document_editor(&mut self, cx: &mut Context<Self>) {
+        if self.ui.route != Route::Meetings || self.ui.content_mode != ContentMode::Edit {
+            return;
+        }
+        let Some(document_id) = self.ui.selected_project.clone() else {
+            return;
+        };
+        if self.editor.loading.contains(&document_id)
+            || self
+                .editor
+                .show(&document_id, &self.projects, self.ui.locale, cx)
+        {
+            return;
+        }
+        self.load_document_draft(document_id, cx);
+    }
+
+    /// Reads `document_id` (state and Markdown body) on a worker and makes it
+    /// the document's draft, replacing any edits.
+    fn load_document_draft(&mut self, document_id: ProjectId, cx: &mut Context<Self>) {
+        self.editor.loading.insert(document_id.clone());
+        let commands = self.services.workspace.document_commands();
+        let read_id = document_id.clone();
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || {
+                commands.execute(DocumentCommandEnvelope::new(
+                    format!("ui-read-{read_id}"),
+                    DocumentCommand::Read {
+                        document_id: read_id,
+                    },
+                ))
+            })
+            .await;
+            this.update(cx, |this, cx| {
+                this.editor.loading.remove(&document_id);
+                match result {
+                    Ok(DocumentCommandResult::Document(Some(record))) => {
+                        this.show_loaded_draft(&record, cx)
+                    }
+                    Ok(_) => this.ui.notice = i18n::text(this.ui.locale, "project_missing").into(),
+                    Err(error) => {
+                        this.ui.notice = i18n::message(
+                            this.ui.locale,
+                            "document_read_failed",
+                            &error.to_string(),
+                        )
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Makes `record` its document's draft, shown when it is selected.
+    pub(crate) fn show_loaded_draft(&mut self, record: &DocumentRecord, cx: &mut Context<Self>) {
+        let show = self.ui.selected_project.as_ref() == Some(record.state.id());
+        let locale = self.ui.locale;
+        self.editor.load(record, show, &self.projects, locale, cx);
+    }
+
+    /// Saves the shown draft: one `Update` with only the changed fields,
+    /// checked against the revision the draft was read at, on a worker.
+    pub(crate) fn save_document_draft(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor.saving.is_some() {
+            return;
+        }
+        let Some(draft) = self.editor.current(cx) else {
+            return;
+        };
+        let patch = match crate::editor::draft_patch(&draft.base, &draft.edits) {
+            Ok(patch) if patch == contracts::DocumentPatch::default() => {
+                self.ui.notice = i18n::text(self.ui.locale, "no_document_changes").into();
+                cx.notify();
+                return;
+            }
+            Ok(patch) => patch,
+            Err(error) => {
+                self.ui.notice = i18n::text(self.ui.locale, error.notice_key()).into();
+                cx.notify();
+                return;
+            }
+        };
+        let document_id = draft.document_id;
+        self.editor.saving = Some(document_id.clone());
+        cx.notify();
+        let commands = self.services.workspace.document_commands();
+        let envelope = DocumentCommandEnvelope::new(
+            format!("ui-update-{document_id}-{}", draft.revision),
+            DocumentCommand::Update {
+                document_id,
+                expected_revision: draft.revision,
+                patch,
+            },
+        );
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || commands.execute(envelope)).await;
+            this.update(cx, |this, cx| {
+                this.editor.saving = None;
+                match result {
+                    Ok(DocumentCommandResult::Updated(record)) => {
+                        this.ui.notice =
+                            i18n::message(this.ui.locale, "document_saved", record.state.title());
+                        this.editor.saved(&record);
+                        this.reload_projects(cx);
+                    }
+                    Ok(_) => {}
+                    Err(error) => this.document_write_failed(error, "document_save_failed", cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// A refused document write: a revision conflict opens the conflict
+    /// notice and reloads the tree; any other error is reported with
+    /// `failure_key`. The draft is kept either way.
+    fn document_write_failed(
+        &mut self,
+        error: DocumentCommandError,
+        failure_key: &str,
+        cx: &mut Context<Self>,
+    ) {
+        match error {
+            DocumentCommandError::RevisionConflict {
+                document_id,
+                expected,
+                actual,
+            } => {
+                let title = self
+                    .projects
+                    .iter()
+                    .find(|project| project.id() == &document_id)
+                    .map_or_else(|| document_id.to_string(), |project| project.title().into());
+                self.ui.notice = i18n::message(self.ui.locale, "document_conflict", &title);
+                self.document_conflict = Some(DocumentConflict {
+                    document_id,
+                    title,
+                    expected,
+                    actual,
+                });
+                self.reload_projects(cx);
+            }
+            error => {
+                self.ui.notice = i18n::message(self.ui.locale, failure_key, &error.to_string())
+            }
+        }
+    }
+
+    /// The conflict notice's reload: reads the tree and the conflicting
+    /// document again, discarding that document's draft, and closes the
+    /// notice.
+    pub(crate) fn reload_conflicted_document(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(conflict) = self.document_conflict.take() else {
+            return;
+        };
+        let had_draft = self.editor.has_draft(&conflict.document_id);
+        self.editor.discard(&conflict.document_id);
+        if had_draft {
+            self.load_document_draft(conflict.document_id, cx);
+        }
+        self.reload_projects(cx);
+        self.ui.notice = i18n::message(self.ui.locale, "document_reloaded", &conflict.title);
+        cx.notify();
+    }
+
+    /// Drops the dragged row onto `new_parent_id`: a `Reparent` checked
+    /// against the revision the row showed when the drag started. The row
+    /// becomes the new parent's last child.
+    pub(crate) fn reparent_document(
+        &mut self,
+        drag: ProjectDrag,
+        new_parent_id: ProjectId,
+        cx: &mut Context<Self>,
+    ) {
+        let sibling_order = self
+            .projects
+            .iter()
+            .filter(|project| {
+                project.hierarchy.parent_id.as_ref() == Some(&new_parent_id)
+                    && project.id() != &drag.project_id
+            })
+            .count() as u32;
+        self.run_tree_command(
+            DocumentCommand::Reparent {
+                document_id: drag.project_id,
+                expected_revision: drag.revision,
+                new_parent_id: Some(new_parent_id),
+                sibling_order,
+            },
+            "hierarchy_updated",
+            "move_failed",
+            cx,
+        );
+    }
+
+    /// Drops the dragged row before or after its sibling `target_id`: a
+    /// `Reorder` checked against the revision read at drag start.
+    pub(crate) fn reorder_document(
+        &mut self,
+        drag: ProjectDrag,
+        target_id: ProjectId,
+        before: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.run_tree_command(
+            DocumentCommand::Reorder {
+                document_id: drag.project_id,
+                expected_revision: drag.revision,
+                target_id,
+                before,
+            },
+            "order_updated",
+            "reorder_failed",
+            cx,
+        );
+    }
+
+    /// Runs a tree command on a worker and shows the tree it returns.
+    fn run_tree_command(
+        &mut self,
+        command: DocumentCommand,
+        success_key: &'static str,
+        failure_key: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = self.begin_projects_reload();
+        let commands = self.services.workspace.document_commands();
+        let envelope = DocumentCommandEnvelope::new("ui-tree-move", command);
+        cx.spawn(async move |this, cx| {
+            let result = runtime::spawn_blocking(move || commands.execute(envelope)).await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(DocumentCommandResult::Snapshot { documents, issues }) => {
+                        let issues = issues
+                            .into_iter()
+                            .map(|issue| DocumentIssue {
+                                path: issue.path,
+                                message: issue.message,
+                            })
+                            .collect();
+                        this.apply_projects(
+                            generation,
+                            Ok(DocumentSnapshot { documents, issues }),
+                            cx,
+                        );
+                        this.ui.notice = i18n::text(this.ui.locale, success_key).into();
+                    }
+                    Ok(_) => this.reload_projects(cx),
+                    Err(error) => this.document_write_failed(error, failure_key, cx),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn edit_assistant_profile(&mut self, id: &str, cx: &mut Context<Self>) {
@@ -2144,67 +2464,6 @@ impl RootView {
         cx.notify();
     }
 
-    pub(crate) fn move_project(
-        &mut self,
-        project_id: ProjectId,
-        new_parent_id: ProjectId,
-        cx: &mut Context<Self>,
-    ) {
-        let workspace = self.services.workspace.clone();
-        cx.spawn(async move |this, cx| {
-            let result = runtime::spawn_blocking(move || {
-                workspace.reparent_project(&project_id, Some(&new_parent_id), 0)
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(projects) => {
-                        this.projects = projects;
-                        this.ui.notice = i18n::text(this.ui.locale, "hierarchy_updated").into();
-                    }
-                    Err(error) => {
-                        this.ui.notice =
-                            i18n::message(this.ui.locale, "move_failed", &error.to_string())
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    pub(crate) fn reorder_project(
-        &mut self,
-        project_id: ProjectId,
-        target_id: ProjectId,
-        before: bool,
-        cx: &mut Context<Self>,
-    ) {
-        let workspace = self.services.workspace.clone();
-        cx.spawn(async move |this, cx| {
-            let result = runtime::spawn_blocking(move || {
-                workspace.reorder_project(&project_id, &target_id, before)
-            })
-            .await;
-            this.update(cx, |this, cx| {
-                match result {
-                    Ok(projects) => {
-                        this.projects = projects;
-                        this.ui.notice = i18n::text(this.ui.locale, "order_updated").into();
-                    }
-                    Err(error) => {
-                        this.ui.notice =
-                            i18n::message(this.ui.locale, "reorder_failed", &error.to_string())
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     pub(crate) fn select_asr_backend(&mut self, backend_id: String, cx: &mut Context<Self>) {
         self.ui.notice = i18n::message(
             self.ui.locale,
@@ -2408,7 +2667,7 @@ impl RootView {
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || {
                 let project = workspace.merge_speaker(&project_id, "speaker-1", "speaker-0")?;
-                Ok::<_, String>((project, workspace.list_projects()))
+                Ok::<_, String>((project, workspace.document_snapshot()))
             })
             .await;
             this.update(cx, |this, cx| {
@@ -2848,6 +3107,7 @@ fn stage_selection<'a>(options: &'a [SelectOption], saved: Option<&'a str>) -> O
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_settings_selectors(window, cx);
+        self.ensure_document_editor(cx);
         let selected = self
             .ui
             .selected_project
@@ -2865,8 +3125,9 @@ impl Render for RootView {
         let detail = (self.ui.detail_open && self.ui.route == Route::Meetings).then(|| {
             pages::detail::render(
                 selected.as_ref(),
+                &self.projects,
                 self.ui.locale,
-                &self.scroll.detail_transcript,
+                &self.scroll.detail,
                 cx,
             )
             .into_any_element()

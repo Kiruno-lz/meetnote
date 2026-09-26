@@ -2,6 +2,9 @@ pub mod assistant_ui;
 mod components;
 mod controller;
 mod controls;
+#[cfg(test)]
+mod document_tests;
+mod editor;
 mod i18n;
 mod pages;
 mod route;
@@ -35,7 +38,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone, Default)]
-    struct FakeAssistantUiService {
+    pub(crate) struct FakeAssistantUiService {
         undo_calls: Arc<Mutex<Vec<String>>>,
         run_result: Arc<Mutex<Option<AssistantRunResult>>>,
         confirm_result: Arc<Mutex<Option<AssistantRunResult>>>,
@@ -260,7 +263,7 @@ mod tests {
     }
 
     /// A temporary directory no other test uses; it is not created.
-    fn temp_directory() -> std::path::PathBuf {
+    pub(crate) fn temp_directory() -> std::path::PathBuf {
         static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         std::env::temp_dir().join(format!(
             "meetnote-ui-test-{}-{}-{}",
@@ -274,7 +277,7 @@ mod tests {
     }
 
     /// Settings in a directory of their own, so parallel tests never share a file.
-    fn test_settings() -> SettingsService {
+    pub(crate) fn test_settings() -> SettingsService {
         SettingsService::open(Arc::new(JsonSettingsRepository::open(
             temp_directory().join("settings.json"),
         )))
@@ -337,7 +340,7 @@ mod tests {
         )
     }
 
-    fn desktop_services(
+    pub(crate) fn desktop_services(
         assistant: Arc<FakeAssistantUiService>,
         settings: SettingsService,
     ) -> DesktopServices {
@@ -392,7 +395,7 @@ mod tests {
 
     /// The desktop once its startup project list has loaded, so a test's
     /// own project list is not replaced by it.
-    fn open_desktop_on(
+    pub(crate) fn open_desktop_on(
         cx: &mut TestAppContext,
         services: DesktopServices,
     ) -> (
@@ -985,7 +988,7 @@ mod tests {
     }
 
     #[track_caller]
-    fn click_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    pub(crate) fn click_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
         let bounds = cx
             .debug_bounds(selector)
             .unwrap_or_else(|| panic!("`{selector}` is not rendered"));
@@ -1149,7 +1152,7 @@ mod tests {
     /// Drives the GPUI executor until `done` holds; service calls run on real
     /// worker threads, so parked GPUI tasks may still be waiting on them.
     #[track_caller]
-    fn wait_for(
+    pub(crate) fn wait_for(
         cx: &mut gpui::VisualTestContext,
         view: &gpui::Entity<controller::RootView>,
         done: impl Fn(&controller::RootView) -> bool,
@@ -2164,14 +2167,14 @@ mod tests {
 
     // Text fields. The helpers keep the tests on the field API.
 
-    type Field = gpui::Entity<controls::TextField>;
+    pub(crate) type Field = gpui::Entity<controls::TextField>;
     type InputHandler = controls::FieldInput;
 
-    fn field_value(cx: &mut gpui::VisualTestContext, field: &Field) -> String {
+    pub(crate) fn field_value(cx: &mut gpui::VisualTestContext, field: &Field) -> String {
         field.read_with(cx, |field, cx| field.value(cx))
     }
 
-    fn focus_field(cx: &mut gpui::VisualTestContext, field: &Field) {
+    pub(crate) fn focus_field(cx: &mut gpui::VisualTestContext, field: &Field) {
         cx.update(|window, cx| gpui::Focusable::focus_handle(field.read(cx), cx).focus(window, cx));
         cx.run_until_parked();
     }

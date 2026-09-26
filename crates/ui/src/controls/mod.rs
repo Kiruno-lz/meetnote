@@ -10,15 +10,18 @@
 //!   host with a frosted sheet.
 //! - `TextField`: a single-line text field on gpui-base's `InputState`, with
 //!   a secret mode that masks the value and keeps it off the clipboard.
+//! - `TextArea`: a multi-line text field on gpui-base's `TextareaState`.
 
 mod dialog;
 mod progress;
 mod select;
+mod text_area;
 mod text_field;
 
 pub(crate) use dialog::ConfirmDialog;
 pub(crate) use progress::ProgressBar;
 pub(crate) use select::{Dropdown, DropdownEvent, SelectOption};
+pub(crate) use text_area::TextArea;
 #[cfg(test)]
 pub(crate) use text_field::FieldInput;
 pub(crate) use text_field::{TextField, TextFieldEvent};

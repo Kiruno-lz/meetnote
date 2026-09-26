@@ -156,6 +156,19 @@ impl Dropdown {
         }
     }
 
+    /// Renames the select and its placeholder, e.g. after the locale
+    /// changed.
+    pub(crate) fn set_label(
+        &mut self,
+        label: impl Into<SharedString>,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.label = label.into();
+        self.placeholder = placeholder.into();
+        cx.notify();
+    }
+
     /// The name assistive technology announces for the select and its menu.
     #[cfg(test)]
     pub(crate) fn accessibility_label(&self) -> &SharedString {

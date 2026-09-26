@@ -9,9 +9,12 @@ use gpui::{div, prelude::*, px, Context, Pixels, Render, SharedString, Window};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::separator::Separator;
 
+/// A tree row being dragged, with the revision the row showed when the drag
+/// started; the move is checked against it.
 #[derive(Clone)]
 pub(crate) struct ProjectDrag {
     pub(crate) project_id: ProjectId,
+    pub(crate) revision: u64,
 }
 
 pub(crate) struct DragGhost {
@@ -100,7 +103,13 @@ pub(crate) fn mode_button(
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
     let label = label.into();
-    let button = Button::new(format!("content-mode-{}", label))
+    let name = match mode {
+        ContentMode::Summary => "summary",
+        ContentMode::Original => "original",
+        ContentMode::Edit => "edit",
+    };
+    let button = Button::new(format!("content-mode-{name}"))
+        .debug_selector(move || format!("content-mode-{name}"))
         .compact()
         .label(label);
     let button = if mode == active {

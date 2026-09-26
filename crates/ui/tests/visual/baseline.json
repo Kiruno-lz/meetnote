@@ -5,6 +5,6 @@
   "window": { "width": 1180, "height": 760 },
   "locale": "zh-CN",
   "routes": ["assistant", "meetings", "models", "settings"],
-  "overlays": ["settings-select", "settings-dialog"],
+  "overlays": ["settings-select", "settings-dialog", "meetings-detail", "meetings-edit"],
   "appearances": ["dark-glass", "dark-opaque", "light-glass", "light-opaque"]
 }

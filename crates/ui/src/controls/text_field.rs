@@ -60,8 +60,8 @@ impl Focusable for TextField {
 }
 
 /// The colors the input paints its text, placeholder, selection and caret
-/// with; the frame paints the fill and the border.
-fn editor_style(tokens: &Tokens) -> InputEditorStyle {
+/// with; the frame paints the fill and the border. `TextArea` shares them.
+pub(super) fn editor_style(tokens: &Tokens) -> InputEditorStyle {
     InputEditorStyle {
         foreground: tokens.text,
         muted_foreground: tokens.text_muted,

@@ -41,6 +41,27 @@ mod tests {
         assert!(found.is_empty(), "render paths probe files: {found:#?}");
     }
 
+    /// Every document write the UI makes names the revision it was read at
+    /// (`DocumentCommandService`); the workspace's unchecked writes, which
+    /// overwrite newer documents, are not called anywhere in the crate.
+    #[test]
+    fn the_ui_calls_no_unchecked_document_write() {
+        const UNCHECKED: [&str; 3] = ["reparent_project(", "reorder_project(", "update_summary("];
+        let found = crate::source_files::SOURCES
+            .iter()
+            .filter(|(path, _)| *path != "pages/mod.rs")
+            .flat_map(|(path, source)| {
+                source.lines().enumerate().flat_map(move |(index, line)| {
+                    UNCHECKED
+                        .iter()
+                        .filter(move |call| line.contains(**call))
+                        .map(move |call| format!("{path}:{}: {call}", index + 1))
+                })
+            })
+            .collect::<Vec<_>>();
+        assert!(found.is_empty(), "unchecked document writes: {found:#?}");
+    }
+
     /// Installation facts, downloads and document changes arrive from
     /// service subscriptions; the controller neither probes files nor runs
     /// threads of its own.

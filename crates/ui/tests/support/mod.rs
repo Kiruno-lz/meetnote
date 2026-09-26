@@ -13,7 +13,10 @@ use application::{
 use asr_whisper_rs::WhisperRsBackend;
 use contracts::ModelRef;
 use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
-use domain::{DocumentState, ProcessingRecord, ProjectId, SpeakerTaggedSegment};
+use domain::{
+    DiarizationProvenance, DiarizationSegment, DocumentState, ModelProvenance, ProcessingRecord,
+    ProjectId, RuntimeProvenance, SpeakerTaggedSegment, TranscriptSegment,
+};
 use gpui::{px, size, App, Bounds, WindowBounds, WindowOptions};
 use models::{ModelCatalog, ModelManager};
 use persistence::InMemoryDocumentRepository;
@@ -213,14 +216,71 @@ fn documents() -> Vec<DocumentState> {
             "截图基线和结构测试都要在当前依赖上生成。",
         ),
     ];
+    // The transcript and speaker turns the aligned segments came from.
+    weekly.results.transcript = weekly
+        .results
+        .speaker_segments
+        .iter()
+        .map(|segment| TranscriptSegment {
+            id: segment.transcript_segment_id.clone(),
+            start_ms: segment.start_ms,
+            end_ms: segment.end_ms,
+            text: segment.text.clone(),
+        })
+        .collect();
+    weekly.results.diarization = weekly
+        .results
+        .speaker_segments
+        .iter()
+        .map(|segment| DiarizationSegment {
+            id: format!("d-{}", segment.transcript_segment_id),
+            speaker_id: segment.speaker_id.clone(),
+            speaker_profile_id: None,
+            speaker_label: None,
+            start_ms: segment.start_ms,
+            end_ms: segment.end_ms,
+            confidence: None,
+        })
+        .collect();
+    // Complete provenance except the input audio checksum, so Detail lists
+    // one missing fact.
     weekly.record_processing(ProcessingRecord {
         processing_revision: 1,
         completed_at_ms: FIXTURE_TIME_MS,
         input_audio_checksum: None,
-        asr: Default::default(),
-        diarization: Default::default(),
-        alignment: Default::default(),
-        runtime: Default::default(),
+        asr: ModelProvenance {
+            backend_id: "whisper-rs".into(),
+            model_id: "whisper-large-v3-turbo".into(),
+            revision: Some("v3-turbo".into()),
+            artifact_sha256: Some(
+                "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69".into(),
+            ),
+            artifact_path: "models/asr/whisper-large-v3-turbo/ggml-large-v3-turbo.bin".into(),
+            artifacts: Vec::new(),
+        },
+        diarization: DiarizationProvenance {
+            backend_id: "sherpa-onnx".into(),
+            model_revision: Some("2024-10".into()),
+            segmentation: None,
+            embedding: None,
+            clustering: domain::AlgorithmProvenance {
+                id: "fast-clustering".into(),
+                revision: Some("1".into()),
+                parameters: None,
+            },
+            identity_matching: None,
+        },
+        alignment: domain::AlgorithmProvenance {
+            id: "max-overlap-speaker-alignment".into(),
+            revision: Some("1".into()),
+            parameters: None,
+        },
+        runtime: RuntimeProvenance {
+            device: "Metal".into(),
+            language: Some("zh".into()),
+            sample_rate_hz: Some(16_000),
+            ..Default::default()
+        },
     });
     let decisions = weekly.semantic_child(
         ProjectId::new(DOCUMENT_IDS[1]),
