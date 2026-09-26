@@ -136,16 +136,16 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 |---|---|---|
 | Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 gpui-component `Root`；frosted 浮层与 edge fade 原语；下拉、进度条、对话框与文本输入为带 label 的 gpui-base 包装 | 按钮、折叠、分隔线、滚动条与 tooltip 仍用 styled gpui-component；键盘遍历、焦点环与无障碍 |
 | Assistant | 内容平面底部的 frosted 输入条（Enter 发送）、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染；任务状态由共享 JobRuntime 的 `JobEvent` 按请求投影；pending 过期后队列推进到下一项 | 下文三项页面验收 |
-| Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original、处理与取消；列表读取与处理启动在后台执行 | 文档编辑、scanner issue、revision 冲突与通用 speaker 校正的 UI；服务已由 `WorkspaceService::document_commands()` 提供 |
-| Detail | 内容平面内右侧不透明面板、基础 transcript | 状态、来源、处理记录与结果统计的展示；统计由 `domain::document_result_statistics` 提供 |
+| Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original/编辑、处理与取消；内容平面顶部列出 scanner issue（路径与原因）；标题、标签、状态、摘要与正文按文档保存草稿，经一次带 revision 的 `Update` 提交；树移动经 `Reparent`/`Reorder` 命令；revision 冲突显示通知并保留草稿，用户重新加载后才丢弃；Original 视图的 speaker 列表支持改名与确认后合并；列表读取与处理启动在后台执行 | 工作区切换与缺失音频恢复；scanner issue 在 zh-CN 下仍显示英文原因 |
+| Detail | 内容平面内右侧不透明面板：identity、audio source、层级、document status、revision、processing provenance、最近错误、结果统计与缺失的 provenance 项、transcript | 单文档的 Agent 变更来源（mutation journal 尚无按文档查询） |
 | Models | catalog 分组、下载、暂停、继续、取消和进度，安装状态来自 `InstallationService` | license/source/checksum、probe 记录、失败原因与重新 probe 的展示；服务已由 `ModelAvailability` 与 `ModelManager::reprobe` 提供 |
-| Settings | 外观（主题、材质）、locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径；即时保存项经 `update_if_equal` 在后台逐项提交，Assistant 连接区为草稿并以 typed patch 保存（新建连接为一次 `patch_if_equal`）；revision 冲突后从 repository 重新加载再重试 | 文档工作区路径、能力联动说明和完整校验反馈 |
+| Settings | 外观（主题、材质）、locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径与管理（profile 列表、改名、确认后合并与删除，路径变化时重建服务并同步处理参数）；即时保存项经 `update_if_equal` 在后台逐项提交，Assistant 连接区为草稿并以 typed patch 保存（新建连接为一次 `patch_if_equal`）；revision 冲突后从 repository 重新加载再重试 | 文档工作区路径、能力联动说明和完整校验反馈 |
 
 当前 GPUI 上的测试基线：
 
 - L1：i18n key、颜色字面量、渲染路径文件探测，以及 `controller.rs` 中文件探测与线程创建的源码扫描；对比度、`effective_material` 与 token 纯函数；
 - L2：路由结构与交互测试（`crates/ui/tests/routes.rs`、`crates/ui/src/lib.rs`），其中阻塞的 fake repository/model manager 断言文件 IO 不占用 UI 线程；
-- L3：四个 route 与打开的下拉、对话框在四种外观下的 24 张基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN），以及 release 构建的资源探测。
+- L3：四个 route、打开的下拉与对话框、Detail 与 issue、编辑与冲突、speaker 列表与 Speaker Library 在四种外观下的 40 张基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN），以及 release 构建的资源探测。
 
 UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。音频处理与 Assistant 共用 `main.rs` 创建的应用级 JobRuntime，受同一并发上限约束；Assistant 任务状态由按请求标记的 `JobEvent` 投影，阶段与工具进度经 `AgentProgress` 回调补充细节。通用 session 不属于当前范围。
 
@@ -154,8 +154,6 @@ UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独�
 以下缺陷按"复现 → 测试红线 → 修复 → 转绿"处理，测试写在 controller/state 层。
 
 - //TODO - 处理任务在后台启动完成前点击取消不生效，任务启动后继续运行。验证：L2 测试在阻塞的启动调用期间点击取消，启动返回后任务进入 cancelled 且没有结果写回。
-
-Speaker 合并目前在 UI 固定为 `speaker-1 → speaker-0`，随 U5 的通用 speaker 校正移除。
 
 ## Documents
 
@@ -175,7 +173,7 @@ root document
 - 编辑标题、标签、总结、正文或状态时携带当前 revision；冲突不得覆盖磁盘内容。
 - processing/results 只读，语义字段可编辑。
 
-Detail 作为右侧不透明面板，以 hairline 与内容区分隔；展示 identity、audio source、hierarchy、document status、revision、processing provenance、结果统计和 Markdown。关闭面板不得取消处理或下载任务。
+Detail 作为右侧不透明面板，以 hairline 与内容区分隔；展示 identity、audio source、hierarchy、document status、revision、processing provenance 与结果统计；Markdown 正文在内容平面的 Summary/Original/编辑模式中阅读与修改，Detail 不重复显示。关闭面板不得取消处理或下载任务。
 
 ## Assistant
 
@@ -241,9 +239,7 @@ UI locale 与 transcription language 独立。backend 不支持的设备或 stag
 U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移、U3 token 与外壳、U4 玻璃原语与页面迁移已完成，当前状态见上文。
 
 1. **U5 产品功能**
-   - scanner issue、revision 和完整文档状态接入 Documents/Detail。persistence 扫描器改用 `application::DocumentIssueKind` 生成可读 issue（当前为 Debug 文本），并报告文档根下非隐藏的普通文件（当前静默跳过）。验证：L2 测试以无效外部文件与 revision 变化驱动显示。
-   - 全部树和文档写回切换到 revision-aware document service，并补齐冲突 UI。验证：L2 测试在外部修改后写回，得到冲突提示且磁盘内容不变。
-   - 通用文档编辑、speaker 校正和 Speaker Library 管理，移除固定 speaker 合并。验证：L2 编辑与校正测试回读 revision 递增、processing 字段不变。
+   - scanner issue 按 `DocumentIssueKind` 本地化，`DocumentIssue` 携带类型。验证：zh-CN 下 L2 测试对无效目录与根目录普通文件显示中文原因。
    - 可选择的文档工作区与音频缺失恢复。验证：L2 测试切换工作区，并对缺失音频给出恢复入口。
    - 完成 Assistant 三项页面验收（见 Assistant 节）。
    - Models 的 license、来源、probe 与失败诊断。验证：L2 测试以 fake manager 的失败 probe 显示原因与重试。
