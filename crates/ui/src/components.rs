@@ -1,6 +1,6 @@
 use crate::{
     controller::RootView,
-    controls::{Button, Separator, TreeStep},
+    controls::{Button, Separator, TreeShift, TreeStep},
     i18n,
     state::ContentMode,
     theme::{self, Tokens},
@@ -98,9 +98,8 @@ pub(crate) fn setting_control_row(
 pub(crate) fn mode_button(
     label: impl Into<SharedString>,
     mode: ContentMode,
-    active: ContentMode,
     cx: &mut Context<RootView>,
-) -> impl IntoElement {
+) -> Button {
     let label = label.into();
     let name = match mode {
         ContentMode::Summary => "summary",
@@ -110,7 +109,6 @@ pub(crate) fn mode_button(
     Button::new(format!("content-mode-{name}"), label)
         .debug_selector(move || format!("content-mode-{name}"))
         .compact()
-        .selected(mode == active)
         .on_click(cx.listener(move |this, _, _, cx| this.set_content_mode(mode, cx)))
 }
 
@@ -194,6 +192,59 @@ pub(crate) fn tree_move(
     }
 }
 
+/// The tree command an Option-arrow move of a document asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TreeShiftMove {
+    /// Place it before or after its sibling `target`.
+    Reorder { target: ProjectId, before: bool },
+    /// Make it the last child of `parent` (a root for `None`).
+    Reparent { parent: Option<ProjectId> },
+}
+
+/// What `shift` asks of document `id` in the tree of `projects`. `None`
+/// where there is nothing to move past (a first or last sibling, a first
+/// sibling to move into, a root to move out of). Depth, cycle and audio
+/// rules are the tree commands' to enforce.
+pub(crate) fn tree_shift(
+    projects: &[DocumentState],
+    id: &ProjectId,
+    shift: TreeShift,
+) -> Option<TreeShiftMove> {
+    let document = projects.iter().find(|project| project.id() == id)?;
+    let parent = document.hierarchy.parent_id.as_ref();
+    let mut siblings: Vec<_> = projects
+        .iter()
+        .filter(|project| project.hierarchy.parent_id.as_ref() == parent)
+        .collect();
+    siblings.sort_by_key(|project| project.hierarchy.sibling_order);
+    let index = siblings.iter().position(|project| project.id() == id)?;
+    let before = index
+        .checked_sub(1)
+        .map(|index| siblings[index].id().clone());
+    let after = siblings.get(index + 1).map(|project| project.id().clone());
+    match shift {
+        TreeShift::Up => before.map(|target| TreeShiftMove::Reorder {
+            target,
+            before: true,
+        }),
+        TreeShift::Down => after.map(|target| TreeShiftMove::Reorder {
+            target,
+            before: false,
+        }),
+        TreeShift::In => before.map(|parent| TreeShiftMove::Reparent {
+            parent: Some(parent),
+        }),
+        TreeShift::Out => {
+            let parent = projects
+                .iter()
+                .find(|project| Some(project.id()) == parent)?;
+            Some(TreeShiftMove::Reparent {
+                parent: parent.hierarchy.parent_id.clone(),
+            })
+        }
+    }
+}
+
 pub(crate) fn status_label(locale: i18n::Locale, status: ProjectStatus) -> &'static str {
     i18n::status(locale, status)
 }
@@ -252,8 +303,8 @@ pub(crate) fn backend_ids(descriptors: &[application::BackendDescriptor]) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::{tree_move, utc_time, TreeMove};
-    use crate::controls::TreeStep;
+    use super::{tree_move, tree_shift, utc_time, TreeMove, TreeShiftMove};
+    use crate::controls::{TreeShift, TreeStep};
     use domain::{DocumentState, ProjectId};
     use std::collections::BTreeSet;
 
@@ -359,6 +410,62 @@ mod tests {
             step(&[], "b", TreeStep::Collapse),
             None,
             "a root leaf has no parent"
+        );
+    }
+
+    #[test]
+    fn option_up_and_down_pass_the_sibling_before_or_after() {
+        let projects = projects();
+        let shift = |from: &str, shift| tree_shift(&projects, &ProjectId::new(from), shift);
+        let reorder = |target: &str, before| {
+            Some(TreeShiftMove::Reorder {
+                target: ProjectId::new(target),
+                before,
+            })
+        };
+        assert_eq!(shift("a2", TreeShift::Up), reorder("a1", true));
+        assert_eq!(shift("a1", TreeShift::Down), reorder("a2", false));
+        assert_eq!(shift("b", TreeShift::Up), reorder("a", true));
+        assert_eq!(shift("a", TreeShift::Down), reorder("b", false));
+        assert_eq!(shift("a1", TreeShift::Up), None, "the first sibling");
+        assert_eq!(shift("a2", TreeShift::Down), None, "the last sibling");
+        assert_eq!(shift("a2x", TreeShift::Up), None, "an only child");
+        assert_eq!(shift("missing", TreeShift::Up), None);
+    }
+
+    #[test]
+    fn option_right_enters_the_sibling_before_and_left_leaves_the_parent() {
+        let projects = projects();
+        let shift = |from: &str, shift| tree_shift(&projects, &ProjectId::new(from), shift);
+        let under = |parent: Option<&str>| {
+            Some(TreeShiftMove::Reparent {
+                parent: parent.map(ProjectId::new),
+            })
+        };
+        assert_eq!(shift("a2", TreeShift::In), under(Some("a1")));
+        assert_eq!(
+            shift("b", TreeShift::In),
+            under(Some("a")),
+            "the commands refuse what would pass the third level"
+        );
+        assert_eq!(shift("a1", TreeShift::In), None, "no sibling before it");
+        assert_eq!(shift("a2x", TreeShift::Out), under(Some("a")));
+        assert_eq!(shift("a1", TreeShift::Out), under(None));
+        assert_eq!(shift("b", TreeShift::Out), None, "a root has no parent");
+    }
+
+    #[test]
+    fn siblings_follow_their_order_not_the_listing() {
+        let mut projects = projects();
+        // `a2` listed first but ordered last among the roots' children.
+        projects.swap(1, 2);
+        let shift = |from: &str, shift| tree_shift(&projects, &ProjectId::new(from), shift);
+        assert_eq!(
+            shift("a1", TreeShift::Down),
+            Some(TreeShiftMove::Reorder {
+                target: ProjectId::new("a2"),
+                before: false
+            })
         );
     }
 

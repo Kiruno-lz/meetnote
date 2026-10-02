@@ -1,7 +1,7 @@
 use crate::{
     components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
-    controls::{tree, Button, Scrollbar, Tree, TreeItem},
+    controls::{tree, Button, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
     speakers::{document_speakers, DocumentSpeaker},
     state::{self, ContentMode},
@@ -32,7 +32,8 @@ pub(crate) fn render(
 /// The three-level project tree the sidebar shows on the Meetings route:
 /// click selects, the handle drags, dropping onto a row reparents and
 /// between rows reorders. The tree is one tab stop; the arrow keys move the
-/// selection and expand or collapse the selected row.
+/// selection and expand or collapse the selected row, and Option with the
+/// arrows moves the selected row as dragging does.
 pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
     let scroll = root.scroll.project_tree.clone();
@@ -46,9 +47,12 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
         &root.tree_focus,
     )
     .debug_selector(|| "project-tree".into())
+    .description(tr(root.ui.locale, "project_tree_shortcuts"))
     .has_items(!rows.is_empty())
     .has_selection(has_selection)
+    .reveal_selection(std::mem::take(&mut root.reveal_tree_selection))
     .on_step(cx.listener(|this, step, window, cx| this.step_project_tree(*step, window, cx)))
+    .on_shift(cx.listener(|this, shift, _, cx| this.shift_project(*shift, cx)))
     .size_full()
     .overflow_y_scroll()
     .track_scroll(&scroll)
@@ -402,23 +406,26 @@ fn main_panel(
             );
         // Summary and Edit always; the speaker-labelled original once
         // processed.
-        let mut controls = div().flex_shrink_0().flex().items_center().gap_2().child(
-            crate::components::mode_button(tr(locale, "summary"), ContentMode::Summary, mode, cx),
-        );
+        let mut controls = RadioGroup::new("content-mode", tr(locale, "content_mode"))
+            .debug_selector(|| "content-mode-group".into())
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap_2()
+            .option(
+                mode == ContentMode::Summary,
+                crate::components::mode_button(tr(locale, "summary"), ContentMode::Summary, cx),
+            );
         if ready {
-            controls = controls.child(crate::components::mode_button(
-                tr(locale, "original"),
-                ContentMode::Original,
-                mode,
-                cx,
-            ));
+            controls = controls.option(
+                mode == ContentMode::Original,
+                crate::components::mode_button(tr(locale, "original"), ContentMode::Original, cx),
+            );
         }
-        controls = controls.child(crate::components::mode_button(
-            tr(locale, "edit"),
-            ContentMode::Edit,
-            mode,
-            cx,
-        ));
+        controls = controls.option(
+            mode == ContentMode::Edit,
+            crate::components::mode_button(tr(locale, "edit"), ContentMode::Edit, cx),
+        );
         panel = panel.child(controls);
         // The scrollbar stays outside the fade.
         panel = panel.child(

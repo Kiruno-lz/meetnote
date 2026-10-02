@@ -17,8 +17,9 @@
 //!   a secret mode that masks the value and keeps it off the clipboard.
 //! - `TextArea`: a multi-line text field on gpui-base's `TextareaState`.
 //! - `NavList` and `NavEntry`: the sidebar's route list and its entries.
-//! - `Tree` and `TreeItem`: a tree that is one tab stop and moves among its
-//!   items with the arrow keys.
+//! - `Tree` and `TreeItem`: a tree that is one tab stop, moves among its
+//!   items with the arrow keys and moves the selected item with Option and
+//!   the arrows.
 //! - `Region`: a labelled group that holds focus.
 //! - `Separator` and `Scrollbar`: a hairline divider and a scroll area's
 //!   scrollbar; neither is focusable, so neither takes a label.
@@ -34,6 +35,7 @@ mod collapsible;
 mod dialog;
 mod nav;
 mod progress;
+mod radio_group;
 mod region;
 mod scrollbar;
 mod select;
@@ -48,6 +50,7 @@ pub(crate) use collapsible::Collapsible;
 pub(crate) use dialog::ConfirmDialog;
 pub(crate) use nav::{NavEntry, NavList};
 pub(crate) use progress::ProgressBar;
+pub(crate) use radio_group::RadioGroup;
 pub(crate) use region::Region;
 pub(crate) use scrollbar::{follow_tokens, Scrollbar};
 pub(crate) use select::{Dropdown, DropdownEvent, SelectOption};
@@ -56,7 +59,7 @@ pub(crate) use text_area::TextArea;
 #[cfg(test)]
 pub(crate) use text_field::FieldInput;
 pub(crate) use text_field::{TextField, TextFieldEvent};
-pub(crate) use tree::{Tree, TreeItem, TreeStep};
+pub(crate) use tree::{Tree, TreeItem, TreeShift, TreeStep};
 
 use crate::theme::Tokens;
 use gpui::{
@@ -325,7 +328,7 @@ mod tests {
     ];
 
     /// The constructors a chain may start from to call `INTERACTIVE`.
-    const WRAPPER_ROOTS: [&str; 8] = [
+    const WRAPPER_ROOTS: [&str; 9] = [
         "Button::new(",
         "Collapsible::new(",
         "NavEntry::new(",
@@ -333,6 +336,7 @@ mod tests {
         "Tree::new(",
         "TreeItem::new(",
         "Region::new(",
+        "RadioGroup::new(",
         "DragStrip::titlebar(",
     ];
 
@@ -524,6 +528,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn radio_choices_are_only_created_by_labelled_groups() {
+        let found = SOURCES
+            .iter()
+            .filter(|(path, _)| renders(path))
+            .flat_map(|(path, source)| {
+                source
+                    .match_indices(".selected(")
+                    .filter_map(move |(dot, _)| {
+                        let start = chain_start(source, dot);
+                        let root = source[start..].trim_start();
+                        (!root.starts_with("TreeItem::new(") && !root.starts_with("NavEntry::new("))
+                            .then(|| format!("{path}:{}", source[..dot].lines().count()))
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            found.is_empty(),
+            "radio choices must be options of a labelled RadioGroup: {found:#?}"
+        );
+    }
+
     /// The constructors of the wrappers. Separators and scrollbars are
     /// neither focusable nor named on their own, so they have none.
     const CONSTRUCTORS: [&str; 2] = ["pub(crate) fn new(", "pub(crate) fn secret("];
@@ -564,7 +590,7 @@ mod tests {
         // Button, Collapsible, ConfirmDialog, Dropdown, NavEntry, NavList,
         // ProgressBar, Region, TextArea, TextField's plain and secret
         // constructors, Tree and TreeItem.
-        assert_eq!(constructors, 13, "a wrapper constructor was added or lost");
+        assert_eq!(constructors, 14, "a wrapper constructor was added or lost");
         assert!(
             unnamed.is_empty(),
             "constructors without a name: {unnamed:#?}"

@@ -4,10 +4,10 @@ use crate::{
         AssistantUiError, AssistantUiService, ConnectionProbeKind,
     },
     audio::AudioCheck,
-    components::{ProjectDrag, TreeMove},
+    components::{ProjectDrag, TreeMove, TreeShiftMove},
     controls::{
         self, ConfirmDialog, Dropdown, DropdownEvent, SelectOption, TextField, TextFieldEvent,
-        TreeStep,
+        TreeShift, TreeStep,
     },
     editor::DocumentEditor,
     i18n, pages,
@@ -527,6 +527,9 @@ pub(crate) struct RootView {
     pub(crate) nav_focus: [FocusHandle; 4],
     /// The project tree, one tab stop whose arrow keys move the selection.
     pub(crate) tree_focus: FocusHandle,
+    /// Scrolls the tree's selection into view on the next render, after a
+    /// keyboard move has put the selected row somewhere else.
+    pub(crate) reveal_tree_selection: bool,
     /// The Detail panel, and the button that opens it, which focus returns
     /// to when Detail closes from inside.
     pub(crate) detail_focus: FocusHandle,
@@ -552,6 +555,10 @@ pub(crate) struct RootView {
     pub(crate) speaker_rows: Option<NameRows<(ProjectId, u64, i18n::Locale)>>,
     /// The rename and merge controls of the Speaker Library profiles.
     pub(crate) profile_rows: Option<NameRows<(u64, i18n::Locale)>>,
+    /// Focus destination when the last profile is deleted.
+    pub(crate) speaker_library_focus: FocusHandle,
+    /// A confirmed deletion returns focus after the refreshed rows exist.
+    profile_removal_focus: Option<ProfileRemovalFocus>,
     /// The document whose speaker correction is in flight.
     pub(crate) speaker_command: Option<ProjectId>,
     /// The speaker merge or profile change waiting for confirmation.
@@ -583,6 +590,16 @@ pub(crate) struct DocumentsRootSwitch {
     pub(crate) status: Option<(String, bool)>,
 }
 
+/// Where a tree move came from, which decides what follows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TreeMoveFocus {
+    /// A drop: the tree stays as it is.
+    Pointer,
+    /// An Option-arrow move: `open`, the new parent, opens so the moved row
+    /// shows, and the tree reveals it.
+    Keyboard { open: Option<ProjectId> },
+}
+
 /// A document write refused because the document changed after the UI read
 /// it; nothing was written. Reloading reads the document again and discards
 /// its draft.
@@ -605,6 +622,13 @@ pub(crate) struct ScrollAreas {
     pub(crate) detail: ScrollHandle,
     pub(crate) models: ScrollHandle,
     pub(crate) settings: ScrollHandle,
+}
+
+/// Returns focus after a profile deletion unless the user has moved it.
+struct ProfileRemovalFocus {
+    removed_id: String,
+    next_id: Option<String>,
+    previous: Option<FocusHandle>,
 }
 
 /// Asked when the Speaker Library moves to a path without a library while
@@ -695,6 +719,7 @@ impl RootView {
             dialog_return: None,
             nav_focus: std::array::from_fn(|_| cx.focus_handle()),
             tree_focus: cx.focus_handle(),
+            reveal_tree_selection: false,
             detail_focus: cx.focus_handle(),
             detail_trigger: cx.focus_handle(),
             review_focus: cx.focus_handle(),
@@ -706,6 +731,8 @@ impl RootView {
             speaker_library_path,
             speaker_rows: None,
             profile_rows: None,
+            speaker_library_focus: cx.focus_handle(),
+            profile_removal_focus: None,
             speaker_command: None,
             speaker_confirmation: None,
             audio: AudioCheck::default(),
@@ -2071,6 +2098,7 @@ impl RootView {
     /// changes.
     fn ensure_profile_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ui.route != Route::Settings {
+            self.profile_removal_focus = None;
             return;
         }
         let locale = self.ui.locale;
@@ -2099,6 +2127,33 @@ impl RootView {
             window,
             cx,
         ));
+        let removed = self.profile_removal_focus.as_ref().is_some_and(|request| {
+            self.speaker_profiles.loaded
+                && self.speaker_profiles.read_error.is_none()
+                && self.speaker_profiles.find(&request.removed_id).is_none()
+        });
+        if removed {
+            let request = self.profile_removal_focus.take().unwrap();
+            // A user may have moved on while the library worker ran.
+            if window.focused(cx) == request.previous {
+                let destination = request
+                    .next_id
+                    .as_deref()
+                    .and_then(|id| self.profile_rows.as_ref()?.row(id))
+                    .map(|row| gpui::Focusable::focus_handle(row.name.read(cx), cx));
+                let destination = destination.unwrap_or_else(|| {
+                    self.scroll
+                        .settings
+                        .scroll_to_top_of_item(pages::settings::SPEAKER_LIBRARY_SECTION);
+                    self.speaker_library_focus.clone()
+                });
+                window.defer(cx, move |window, cx| {
+                    if window.focused(cx) == request.previous {
+                        destination.focus(window, cx);
+                    }
+                });
+            }
+        }
     }
 
     /// Sets the typed name as `speaker_id`'s label, or clears it when the
@@ -2317,6 +2372,18 @@ impl RootView {
             }
             SpeakerConfirmation::DeleteProfile { profile_id, name } => {
                 if confirmed {
+                    let next_id = self
+                        .speaker_profiles
+                        .profiles
+                        .iter()
+                        .position(|profile| profile.id == profile_id)
+                        .and_then(|index| self.speaker_profiles.profiles.get(index + 1))
+                        .map(|profile| profile.id.clone());
+                    self.profile_removal_focus = Some(ProfileRemovalFocus {
+                        removed_id: profile_id.clone(),
+                        next_id,
+                        previous: self.dialog_return.clone(),
+                    });
                     let done = i18n::message(locale, "speaker_profile_deleted", &name);
                     self.run_speaker_library_call(
                         move |library| match library.delete(&profile_id)? {
@@ -2402,6 +2469,9 @@ impl RootView {
                     .await;
             this.update(cx, |this, cx| {
                 this.speaker_profiles.busy = false;
+                if result.is_err() {
+                    this.profile_removal_focus = None;
+                }
                 this.speaker_profiles.status = Some(match result {
                     Ok(()) => (done, false),
                     Err(error) => (
@@ -2661,25 +2731,35 @@ impl RootView {
         new_parent_id: ProjectId,
         cx: &mut Context<Self>,
     ) {
+        self.run_tree_command(
+            self.reparent_command(drag, Some(new_parent_id)),
+            "hierarchy_updated",
+            "move_failed",
+            TreeMoveFocus::Pointer,
+            cx,
+        );
+    }
+
+    /// A `Reparent` of `drag` that makes it the last child of
+    /// `new_parent_id` (a root for `None`).
+    fn reparent_command(
+        &self,
+        drag: ProjectDrag,
+        new_parent_id: Option<ProjectId>,
+    ) -> DocumentCommand {
         let sibling_order = self
             .projects
             .iter()
             .filter(|project| {
-                project.hierarchy.parent_id.as_ref() == Some(&new_parent_id)
-                    && project.id() != &drag.project_id
+                project.hierarchy.parent_id == new_parent_id && project.id() != &drag.project_id
             })
             .count() as u32;
-        self.run_tree_command(
-            DocumentCommand::Reparent {
-                document_id: drag.project_id,
-                expected_revision: drag.revision,
-                new_parent_id: Some(new_parent_id),
-                sibling_order,
-            },
-            "hierarchy_updated",
-            "move_failed",
-            cx,
-        );
+        DocumentCommand::Reparent {
+            document_id: drag.project_id,
+            expected_revision: drag.revision,
+            new_parent_id,
+            sibling_order,
+        }
     }
 
     /// Drops the dragged row before or after its sibling `target_id`: a
@@ -2692,24 +2772,67 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         self.run_tree_command(
-            DocumentCommand::Reorder {
-                document_id: drag.project_id,
-                expected_revision: drag.revision,
-                target_id,
-                before,
-            },
+            Self::reorder_command(drag, target_id, before),
             "order_updated",
             "reorder_failed",
+            TreeMoveFocus::Pointer,
             cx,
         );
     }
 
-    /// Runs a tree command on a worker and shows the tree it returns.
+    fn reorder_command(drag: ProjectDrag, target_id: ProjectId, before: bool) -> DocumentCommand {
+        DocumentCommand::Reorder {
+            document_id: drag.project_id,
+            expected_revision: drag.revision,
+            target_id,
+            before,
+        }
+    }
+
+    /// An Option-arrow move of the selected row: the same revision-checked
+    /// `Reorder` or `Reparent` a drop runs, against the revision the tree
+    /// shows. A row moved into its sibling opens that sibling, and the tree
+    /// scrolls the row into view where it lands.
+    pub(crate) fn shift_project(&mut self, shift: TreeShift, cx: &mut Context<Self>) {
+        let Some(document) = self
+            .ui
+            .selected_project
+            .as_ref()
+            .and_then(|id| self.projects.iter().find(|project| project.id() == id))
+        else {
+            return;
+        };
+        let drag = ProjectDrag {
+            project_id: document.id().clone(),
+            revision: document.revision(),
+        };
+        match crate::components::tree_shift(&self.projects, &drag.project_id, shift) {
+            Some(TreeShiftMove::Reorder { target, before }) => self.run_tree_command(
+                Self::reorder_command(drag, target, before),
+                "order_updated",
+                "reorder_failed",
+                TreeMoveFocus::Keyboard { open: None },
+                cx,
+            ),
+            Some(TreeShiftMove::Reparent { parent }) => self.run_tree_command(
+                self.reparent_command(drag, parent.clone()),
+                "hierarchy_updated",
+                "move_failed",
+                TreeMoveFocus::Keyboard { open: parent },
+                cx,
+            ),
+            None => {}
+        }
+    }
+
+    /// Runs a tree command on a worker and shows the tree it returns; after
+    /// a keyboard move, `focus` opens the new parent and reveals the row.
     fn run_tree_command(
         &mut self,
         command: DocumentCommand,
         success_key: &'static str,
         failure_key: &'static str,
+        focus: TreeMoveFocus,
         cx: &mut Context<Self>,
     ) {
         let generation = self.begin_projects_reload();
@@ -2745,6 +2868,10 @@ impl RootView {
                             cx,
                         );
                         this.ui.notice = i18n::text(this.ui.locale, success_key).into();
+                        if let TreeMoveFocus::Keyboard { open } = focus {
+                            this.ui.expanded_projects.extend(open);
+                            this.reveal_tree_selection = true;
+                        }
                     }
                     Ok(_) => this.reload_projects(cx),
                     Err(error) => this.document_write_failed(error, failure_key, cx),

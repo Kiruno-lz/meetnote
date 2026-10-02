@@ -83,7 +83,7 @@ impl Button {
     /// One of a group of exclusive choices: filled as primary while
     /// `selected`, secondary otherwise, and a radio button checked while
     /// selected for assistive technology.
-    pub(crate) fn selected(mut self, selected: bool) -> Self {
+    pub(super) fn selected(mut self, selected: bool) -> Self {
         self.variant = if selected {
             Variant::Primary
         } else {

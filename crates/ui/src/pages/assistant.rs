@@ -4,7 +4,7 @@ use crate::{
         AssistantTaskState, AssistantUiError, PendingReviewState,
     },
     controller::RootView,
-    controls::{Button, Region, Scrollbar},
+    controls::{Button, RadioGroup, Region, Scrollbar},
     i18n::{text as tr, Locale},
     theme::{self, BlurLevel, Tokens},
 };
@@ -182,28 +182,28 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(tr(root.ui.locale, "assistant")),
         )
-        .child(div().flex().flex_wrap().gap_2().children([
-            scene_button(AgentScene::Ask, root.assistant.scene, root.ui.locale, cx),
-            scene_button(
-                AgentScene::Organize,
-                root.assistant.scene,
-                root.ui.locale,
-                cx,
-            ),
-            scene_button(
-                AgentScene::Partition,
-                root.assistant.scene,
-                root.ui.locale,
-                cx,
-            ),
-            scene_button(
-                AgentScene::Extract,
-                root.assistant.scene,
-                root.ui.locale,
-                cx,
-            ),
-            scene_button(AgentScene::Move, root.assistant.scene, root.ui.locale, cx),
-        ]))
+        .child(
+            RadioGroup::new("assistant-scene", tr(root.ui.locale, "assistant_scene"))
+                .debug_selector(|| "assistant-scene-group".into())
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .options(
+                    [
+                        AgentScene::Ask,
+                        AgentScene::Organize,
+                        AgentScene::Partition,
+                        AgentScene::Extract,
+                        AgentScene::Move,
+                    ]
+                    .map(|scene| {
+                        (
+                            scene == root.assistant.scene,
+                            scene_button(scene, root.ui.locale, cx),
+                        )
+                    }),
+                ),
+        )
         .child(
             div()
                 .rounded(tokens.radius.md)
@@ -215,21 +215,22 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .flex_col()
                 .gap_2()
                 .child(
-                    div()
+                    RadioGroup::new("assistant-scope", tr(root.ui.locale, "assistant_scope"))
+                        .debug_selector(|| "assistant-scope-group".into())
                         .flex()
                         .gap_2()
-                        .child(scope_button(
-                            AssistantScopeMode::CurrentDocument,
-                            root.assistant.scope_mode,
-                            root.ui.locale,
-                            cx,
-                        ))
-                        .child(scope_button(
-                            AssistantScopeMode::AllVisibleDocuments,
-                            root.assistant.scope_mode,
-                            root.ui.locale,
-                            cx,
-                        )),
+                        .options(
+                            [
+                                AssistantScopeMode::CurrentDocument,
+                                AssistantScopeMode::AllVisibleDocuments,
+                            ]
+                            .map(|scope| {
+                                (
+                                    scope == root.assistant.scope_mode,
+                                    scope_button(scope, root.ui.locale, cx),
+                                )
+                            }),
+                        ),
                 )
                 .child(info_line(
                     tr(root.ui.locale, "assistant_authorized_document"),
@@ -315,12 +316,7 @@ fn input_bar_height(tokens: &Tokens) -> Pixels {
     tokens.control_height.lg + tokens.spacing.xs + STATUS_HEIGHT + tokens.spacing.sm * 2. + px(2.)
 }
 
-fn scope_button(
-    scope: AssistantScopeMode,
-    selected: AssistantScopeMode,
-    locale: Locale,
-    cx: &mut Context<RootView>,
-) -> gpui::AnyElement {
+fn scope_button(scope: AssistantScopeMode, locale: Locale, cx: &mut Context<RootView>) -> Button {
     let label = match scope {
         AssistantScopeMode::CurrentDocument => tr(locale, "assistant_current_document"),
         AssistantScopeMode::AllVisibleDocuments => tr(locale, "assistant_all_visible_documents"),
@@ -332,25 +328,16 @@ fn scope_button(
     Button::new(format!("assistant-scope-{label}"), label)
         .debug_selector(move || format!("assistant-scope-{name}"))
         .compact()
-        .selected(scope == selected)
         .on_click(cx.listener(move |root, _, _, cx| root.select_assistant_scope(scope, cx)))
-        .into_any_element()
 }
 
-fn scene_button(
-    scene: AgentScene,
-    selected: AgentScene,
-    locale: Locale,
-    cx: &mut Context<RootView>,
-) -> gpui::AnyElement {
+fn scene_button(scene: AgentScene, locale: Locale, cx: &mut Context<RootView>) -> Button {
     Button::new(
         format!("assistant-scene-{}", scene.skill_id()),
         tr(locale, scene_key(scene)),
     )
     .debug_selector(move || format!("assistant-scene-{}", scene.skill_id()))
-    .selected(scene == selected)
     .on_click(cx.listener(move |root, _, _, cx| root.select_assistant_scene(scene, cx)))
-    .into_any_element()
 }
 
 fn scene_key(scene: AgentScene) -> &'static str {

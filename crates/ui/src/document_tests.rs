@@ -651,6 +651,159 @@ fn tree_moves_are_revision_checked_commands(cx: &mut TestAppContext) {
     });
 }
 
+/// Presses `keys` while the tree holds focus and waits until the moved
+/// document `id` reaches `revision` in the tree, then until the tree has
+/// drawn it.
+fn shift_row(cx: &mut VisualTestContext, view: &View, keys: &str, id: &str, revision: u64) {
+    cx.simulate_keystrokes(keys);
+    let id = ProjectId::new(id);
+    wait_for(cx, view, |root| {
+        root.projects
+            .iter()
+            .any(|project| project.id() == &id && project.revision() == revision)
+    });
+    cx.run_until_parked();
+}
+
+/// Row `id` is selected, the tree holds focus and its ring is on the row.
+#[track_caller]
+fn tree_focus_on(cx: &mut VisualTestContext, view: &View, id: &str) {
+    let focus = view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.selected_project.as_ref().map(ProjectId::as_str),
+            Some(id),
+            "the moved row stays selected"
+        );
+        root.tree_focus.clone()
+    });
+    assert!(
+        cx.update(|window, _| focus.is_focused(window)),
+        "the tree keeps focus"
+    );
+    let row = rendered(cx, leak(format!("project-row-{id}")));
+    assert!(
+        within(rendered(cx, "focus-ring"), row),
+        "the ring is on the moved row"
+    );
+}
+
+fn parent_of(root: &DocumentsRoot, id: &str) -> (Option<String>, u8, u32) {
+    let hierarchy = root.read(id).state.hierarchy;
+    (
+        hierarchy.parent_id.map(|parent| parent.to_string()),
+        hierarchy.depth,
+        hierarchy.sibling_order,
+    )
+}
+
+#[gpui::test]
+fn option_arrows_move_the_selected_row_through_the_tree_commands(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    tree_fixture(&root);
+    let [rec, a, b, other] = revisions(&root);
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "b");
+
+    // Option-Up: `b` before `a`; only the reordered siblings are written.
+    shift_row(cx, &view, "alt-up", "b", b + 1);
+    assert_eq!(revisions(&root), [rec, a + 1, b + 1, other]);
+    assert_eq!(
+        [root.read("b"), root.read("a")].map(|record| record.state.hierarchy.sibling_order),
+        [0, 1]
+    );
+    assert!(
+        rendered(cx, "project-row-b").bottom() <= rendered(cx, "project-row-a").top(),
+        "the tree shows the new order"
+    );
+    tree_focus_on(cx, &view, "b");
+    let order_updated = i18n::text(i18n::Locale::ZhCn, "order_updated");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        order_updated
+    );
+
+    // Option-Down: back after `a`.
+    shift_row(cx, &view, "alt-down", "b", b + 2);
+    assert_eq!(revisions(&root), [rec, a + 2, b + 2, other]);
+    tree_focus_on(cx, &view, "b");
+
+    // Option-Right: into `a`, which opens so the row stays in view; only
+    // `b` is written.
+    shift_row(cx, &view, "alt-right", "b", b + 3);
+    assert_eq!(revisions(&root), [rec, a + 2, b + 3, other]);
+    assert_eq!(parent_of(&root, "b"), (Some("a".into()), 2, 0));
+    assert!(view.read_with(cx, |root, _| root
+        .ui
+        .expanded_projects
+        .contains(&ProjectId::new("a"))));
+    tree_focus_on(cx, &view, "b");
+    let hierarchy_updated = i18n::text(i18n::Locale::ZhCn, "hierarchy_updated");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        hierarchy_updated
+    );
+
+    // Option-Left: out of `a`, to the end of `rec`'s children.
+    shift_row(cx, &view, "alt-left", "b", b + 4);
+    assert_eq!(revisions(&root), [rec, a + 2, b + 4, other]);
+    assert_eq!(parent_of(&root, "b"), (Some("rec".into()), 1, 1));
+    tree_focus_on(cx, &view, "b");
+
+    // Nothing to move past: Option-Down on the last sibling writes nothing.
+    cx.simulate_keystrokes("alt-down");
+    cx.run_until_parked();
+    assert_eq!(revisions(&root), [rec, a + 2, b + 4, other]);
+    assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
+}
+
+#[gpui::test]
+fn option_arrows_are_refused_past_the_third_level_and_on_a_stale_revision(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    tree_fixture(&root);
+    let b = root.read("b").state;
+    let b1 = b.semantic_child(ProjectId::new("b1"), "B1", 1_000, 1_500, Vec::new());
+    root.put(b1, "# B1\n");
+    let before = revisions(&root);
+    let b1_revision = root.revision("b1");
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "b");
+
+    // Into `a` would put `b1` on a fourth level: refused like a drop.
+    cx.simulate_keystrokes("alt-right");
+    let refusal = i18n::message(
+        i18n::Locale::ZhCn,
+        "move_failed",
+        &application::DocumentCommandError::Tree(domain::ProjectTreeError::MaximumDepth)
+            .to_string(),
+    );
+    wait_for(cx, &view, |root| root.ui.notice == refusal);
+    assert_eq!(revisions(&root), before, "the refused move wrote nothing");
+    assert_eq!(root.revision("b1"), b1_revision);
+    assert_eq!(parent_of(&root, "b"), (Some("rec".into()), 1, 1));
+    cx.run_until_parked();
+    tree_focus_on(cx, &view, "b");
+
+    // Another writer changes `b` after the tree was read: the move is
+    // refused, the conflict notice opens and nothing is written.
+    let mut external = root.read("b").state;
+    external.content.title = "B (edited)".into();
+    root.external_save(external);
+    let written = revisions(&root);
+    cx.simulate_keystrokes("alt-up");
+    wait_for(cx, &view, |root| root.document_conflict.is_some());
+    let conflict = view.read_with(cx, |root, _| root.document_conflict.clone().unwrap());
+    assert_eq!(conflict.document_id.as_str(), "b");
+    assert_eq!(revisions(&root), written, "the refused move wrote nothing");
+    rendered(cx, "document-conflict");
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|project| project.title() == "B (edited)")
+    });
+    cx.run_until_parked();
+    tree_focus_on(cx, &view, "b");
+}
+
 #[gpui::test]
 fn every_editor_control_carries_its_label_in_the_current_locale(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();

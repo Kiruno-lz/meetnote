@@ -496,6 +496,161 @@ fn deleting_a_profile_asks_first_and_cancel_keeps_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn deleting_a_profile_moves_focus_to_the_next_name(cx: &mut TestAppContext) {
+    let library = Library::new(three_profiles());
+    let documents = DocumentsRoot::new();
+    let (view, cx, _) = open_with_library(cx, &library.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha", true);
+    let field = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("alpha")
+            .unwrap()
+            .name
+            .clone()
+    });
+    cx.update(|window, cx| gpui::Focusable::focus_handle(field.read(cx), cx).focus(window, cx));
+    click_selector(cx, "delete-speaker-profile-alpha");
+    click_selector(cx, "dialog-confirm");
+    wait_rendered(cx, "speaker-profile-alpha", false);
+    let next = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("alpha-2")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert!(
+        cx.update(|window, cx| gpui::Focusable::focus_handle(next.read(cx), cx).is_focused(window)),
+        "the next surviving profile name receives focus"
+    );
+}
+
+#[gpui::test]
+fn deleting_the_only_profile_moves_focus_to_the_library_title(cx: &mut TestAppContext) {
+    let library = Library::new(vec![profile("alpha", "Alpha", [1.0, 0.0], 1)]);
+    let documents = DocumentsRoot::new();
+    let (view, cx, _) = open_with_library(cx, &library.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha", true);
+    let field = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("alpha")
+            .unwrap()
+            .name
+            .clone()
+    });
+    let removed_focus = cx.update(|window, cx| {
+        let focus = gpui::Focusable::focus_handle(field.read(cx), cx);
+        focus.focus(window, cx);
+        focus
+    });
+    click_selector(cx, "delete-speaker-profile-alpha");
+    click_selector(cx, "dialog-confirm");
+    wait_rendered(cx, "speaker-profile-alpha", false);
+    let focused = cx.update(|window, cx| window.focused(cx));
+    assert!(
+        focused.is_some(),
+        "the empty library keeps a focus destination"
+    );
+    assert_ne!(
+        focused,
+        Some(removed_focus),
+        "focus cannot remain on the removed profile"
+    );
+    let title = view.read_with(cx, |root, _| root.speaker_library_focus.clone());
+    assert_eq!(
+        focused,
+        Some(title),
+        "the Speaker Library title receives focus"
+    );
+    rendered(cx, "speaker-library-title");
+}
+
+/// Holds the real library's replacement until the test permits deletion.
+struct GatedLibrary {
+    inner: JsonSpeakerProfileStore,
+    gate: crate::tests::Gate,
+}
+
+impl application::SpeakerProfileStore for GatedLibrary {
+    fn load(&self) -> Result<SpeakerLibraryDocument, application::SpeakerLibraryError> {
+        self.inner.load()
+    }
+
+    fn replace(
+        &self,
+        value: &SpeakerLibraryDocument,
+    ) -> Result<(), application::SpeakerLibraryError> {
+        self.gate.pass();
+        self.inner.replace(value)
+    }
+}
+
+#[gpui::test]
+fn deleting_a_profile_preserves_focus_moved_while_the_worker_is_pending(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let library = Library::new(three_profiles());
+    let documents = DocumentsRoot::new();
+    let (view, cx, _) = open_with_library(cx, &library.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha", true);
+    let gate = crate::tests::Gate::default();
+    view.update(cx, |root, _| {
+        root.services.speaker_library =
+            application::SpeakerLibraryService::new(Arc::new(GatedLibrary {
+                inner: JsonSpeakerProfileStore::new(library.path()),
+                gate: gate.clone(),
+            }));
+    });
+    let field = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("alpha")
+            .unwrap()
+            .name
+            .clone()
+    });
+    let original_focus = cx.update(|window, cx| {
+        let focus = gpui::Focusable::focus_handle(field.read(cx), cx);
+        focus.focus(window, cx);
+        focus
+    });
+    gate.arm();
+    click_selector(cx, "delete-speaker-profile-alpha");
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    assert_eq!(
+        library.load().profiles.len(),
+        3,
+        "the deletion is still blocked"
+    );
+    // From the first name, Shift-Tab reaches the stable directory control
+    // before the profile rows; this is a real key event while the worker waits.
+    cx.simulate_keystrokes("shift-tab");
+    let moved_focus = cx.update(|window, cx| window.focused(cx));
+    let held = gate.counts().1;
+    gate.release();
+    wait_rendered(cx, "speaker-profile-alpha", false);
+    assert_eq!(held, 1, "focus moved before the deletion was released");
+    assert!(moved_focus.is_some());
+    assert_ne!(
+        moved_focus,
+        Some(original_focus),
+        "Shift-Tab moved focus away"
+    );
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        moved_focus,
+        "the asynchronous deletion must keep the user's new focus"
+    );
+}
+
+#[gpui::test]
 fn merging_profiles_moves_samples_and_shows_refusals(cx: &mut TestAppContext) {
     let library = Library::new(three_profiles());
     let documents = DocumentsRoot::new();

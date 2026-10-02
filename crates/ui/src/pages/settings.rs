@@ -4,7 +4,7 @@ use crate::{
         setting_control_row, settings_section, SETTING_CONTROL_WIDTH, SETTING_LABEL_WIDTH,
     },
     controller::{settings_error_text, RootView},
-    controls::{Button, Dropdown, Scrollbar, TextField},
+    controls::{Button, Dropdown, RadioGroup, Region, Scrollbar, Separator, TextField},
     i18n::text as tr,
     pages::meetings::marked_control,
     speakers::profile_summary,
@@ -434,7 +434,24 @@ fn speaker_library_section(
     div()
         .flex_shrink_0()
         .debug_selector(|| "speaker-library-section".into())
-        .child(settings_section(tr(locale, "speaker_library"), rows))
+        .child(
+            div()
+                .pb_4()
+                .flex_shrink_0()
+                .child(
+                    Region::new(
+                        "speaker-library-title",
+                        tr(locale, "speaker_library"),
+                        &root.speaker_library_focus,
+                    )
+                    .debug_selector(|| "speaker-library-title".into())
+                    .mb_1()
+                    .text_lg()
+                    .child(tr(locale, "speaker_library")),
+                )
+                .children(rows)
+                .child(div().mt_4().child(Separator::horizontal())),
+        )
         .into_any_element()
 }
 
@@ -457,11 +474,14 @@ fn assistant_settings_section(
         .map(|profile| {
             let id = profile.id.clone();
             let selected = active == Some(id.as_str());
-            Button::new(format!("assistant-profile-{id}"), profile.name.clone())
-                .compact()
-                .selected(selected)
-                .on_click(cx.listener(move |root, _, _, cx| root.edit_assistant_profile(&id, cx)))
-                .into_any_element()
+            (
+                selected,
+                Button::new(format!("assistant-profile-{id}"), profile.name.clone())
+                    .compact()
+                    .on_click(
+                        cx.listener(move |root, _, _, cx| root.edit_assistant_profile(&id, cx)),
+                    ),
+            )
         })
         .collect::<Vec<_>>();
     let probe = probe_outcome(root, tokens, cx);
@@ -476,6 +496,7 @@ fn assistant_settings_section(
             setting_control_row(
                 tr(locale, "assistant_enabled"),
                 choice_buttons(
+                    tr(locale, "assistant_enabled"),
                     [
                         ("assistant-enabled", tr(locale, "enabled"), true),
                         ("assistant-disabled", tr(locale, "disabled"), false),
@@ -493,7 +514,14 @@ fn assistant_settings_section(
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .children(profiles)
+                    .child(
+                        RadioGroup::new("assistant-profiles", tr(locale, "assistant_profiles"))
+                            .debug_selector(|| "assistant-profiles-group".into())
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .options(profiles),
+                    )
                     .child(
                         Button::new("assistant-new-profile", tr(locale, "assistant_new_profile"))
                             .secondary()
@@ -829,26 +857,23 @@ fn protocol_buttons(
         .flex()
         .flex_wrap()
         .gap_2()
-        .children([
-            protocol_button(
-                LlmProtocol::OpenAiChatCompletions,
-                "Chat Completions",
-                selected,
-                cx,
-            ),
-            protocol_button(
-                LlmProtocol::AnthropicMessages,
-                "Anthropic Messages",
-                selected,
-                cx,
-            ),
-            protocol_button(
-                LlmProtocol::OpenAiResponses,
-                "OpenAI Responses",
-                selected,
-                cx,
-            ),
-        ])
+        .child(
+            RadioGroup::new("assistant-protocol", tr(locale, "assistant_protocol"))
+                .debug_selector(|| "assistant-protocol-group".into())
+                .flex()
+                .flex_wrap()
+                .gap_2()
+                .options(
+                    [
+                        (LlmProtocol::OpenAiChatCompletions, "Chat Completions"),
+                        (LlmProtocol::AnthropicMessages, "Anthropic Messages"),
+                        (LlmProtocol::OpenAiResponses, "OpenAI Responses"),
+                    ]
+                    .map(|(protocol, label)| {
+                        (protocol == selected, protocol_button(protocol, label, cx))
+                    }),
+                ),
+        )
         .child(
             div()
                 .text_xs()
@@ -861,42 +886,36 @@ fn protocol_buttons(
 fn protocol_button(
     protocol: LlmProtocol,
     label: &'static str,
-    selected: LlmProtocol,
     cx: &mut Context<RootView>,
-) -> gpui::AnyElement {
+) -> Button {
     Button::new(format!("assistant-protocol-{label}"), label)
         .compact()
-        .selected(protocol == selected)
         .on_click(cx.listener(move |root, _, _, cx| root.set_assistant_protocol(protocol, cx)))
-        .into_any_element()
 }
 
 fn auth_buttons(
     selected: AssistantAuthMode,
-    _locale: crate::i18n::Locale,
+    locale: crate::i18n::Locale,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    div()
+    RadioGroup::new("assistant-auth", tr(locale, "assistant_auth_mode"))
+        .debug_selector(|| "assistant-auth-group".into())
         .flex()
         .gap_2()
-        .children([
-            auth_button(AssistantAuthMode::Bearer, "Bearer", selected, cx),
-            auth_button(AssistantAuthMode::XApiKey, "x-api-key", selected, cx),
-        ])
+        .options(
+            [
+                (AssistantAuthMode::Bearer, "Bearer"),
+                (AssistantAuthMode::XApiKey, "x-api-key"),
+            ]
+            .map(|(auth, label)| (auth == selected, auth_button(auth, label, cx))),
+        )
         .into_any_element()
 }
 
-fn auth_button(
-    auth: AssistantAuthMode,
-    label: &'static str,
-    selected: AssistantAuthMode,
-    cx: &mut Context<RootView>,
-) -> gpui::AnyElement {
+fn auth_button(auth: AssistantAuthMode, label: &'static str, cx: &mut Context<RootView>) -> Button {
     Button::new(format!("assistant-auth-{label}"), label)
         .compact()
-        .selected(auth == selected)
         .on_click(cx.listener(move |root, _, _, cx| root.set_assistant_auth_mode(auth, cx)))
-        .into_any_element()
 }
 
 fn write_mode_buttons(
@@ -904,25 +923,30 @@ fn write_mode_buttons(
     locale: crate::i18n::Locale,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    div()
+    RadioGroup::new("assistant-write-mode", tr(locale, "assistant_write_mode"))
+        .debug_selector(|| "assistant-write-mode-group".into())
         .flex()
         .gap_2()
-        .children([
-            write_mode_button(
-                AgentWriteMode::Automatic,
-                tr(locale, "assistant_automatic"),
-                "settings-write-mode-automatic",
-                selected,
-                cx,
-            ),
-            write_mode_button(
-                AgentWriteMode::ConfirmEach,
-                tr(locale, "assistant_confirm_each"),
-                "settings-write-mode-confirm-each",
-                selected,
-                cx,
-            ),
-        ])
+        .options(
+            [
+                (
+                    AgentWriteMode::Automatic,
+                    tr(locale, "assistant_automatic"),
+                    "settings-write-mode-automatic",
+                ),
+                (
+                    AgentWriteMode::ConfirmEach,
+                    tr(locale, "assistant_confirm_each"),
+                    "settings-write-mode-confirm-each",
+                ),
+            ]
+            .map(|(mode, label, selector)| {
+                (
+                    mode == selected,
+                    write_mode_button(mode, label, selector, cx),
+                )
+            }),
+        )
         .into_any_element()
 }
 
@@ -930,18 +954,16 @@ fn write_mode_button(
     mode: AgentWriteMode,
     label: &'static str,
     selector: &'static str,
-    selected: AgentWriteMode,
     cx: &mut Context<RootView>,
-) -> gpui::AnyElement {
+) -> Button {
     Button::new(format!("assistant-write-{label}"), label)
         .debug_selector(move || selector.into())
         .compact()
-        .selected(mode == selected)
         .on_click(cx.listener(move |root, _, _, cx| root.set_assistant_write_mode(mode, cx)))
-        .into_any_element()
 }
 
 fn choice_buttons<F>(
+    label: &'static str,
     choices: [(&'static str, &'static str, bool); 2],
     selected: bool,
     cx: &mut Context<RootView>,
@@ -950,16 +972,17 @@ fn choice_buttons<F>(
 where
     F: Fn(&mut RootView, bool, &mut Context<RootView>) + Clone + 'static,
 {
-    div()
+    RadioGroup::new("assistant-enabled-group", label)
         .flex()
         .gap_2()
-        .children(choices.map(|(id, label, value)| {
+        .options(choices.map(|(id, label, value)| {
             let action = action.clone();
-            Button::new(id, label)
-                .compact()
-                .selected(value == selected)
-                .on_click(cx.listener(move |root, _, _, cx| action(root, value, cx)))
-                .into_any_element()
+            (
+                value == selected,
+                Button::new(id, label)
+                    .compact()
+                    .on_click(cx.listener(move |root, _, _, cx| action(root, value, cx))),
+            )
         }))
         .into_any_element()
 }

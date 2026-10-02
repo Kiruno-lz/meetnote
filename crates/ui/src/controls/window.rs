@@ -24,11 +24,13 @@ const SELECT_CONTEXT: &str = "Select";
 /// the area's edge fade leaves it legible.
 const REVEAL_MARGIN: Pixels = px(24.);
 
-/// Installs gpui-base's key bindings (inputs, selects, dialogs) and the
-/// window's own: Tab moves focus (inputs bind Tab themselves, closer to the
-/// focus), and Space opens a select or chooses in its menu like Enter.
+/// Installs gpui-base's key bindings (inputs, selects, dialogs), the tree's
+/// moves and the window's own: Tab moves focus (inputs bind Tab themselves,
+/// closer to the focus), and Space opens a select or chooses in its menu
+/// like Enter.
 pub(crate) fn init(cx: &mut App) {
     gpui_base::init(cx);
+    super::tree::init(cx);
     cx.bind_keys([
         KeyBinding::new("tab", FocusNext, Some(KEY_CONTEXT)),
         KeyBinding::new("shift-tab", FocusPrevious, Some(KEY_CONTEXT)),
