@@ -379,14 +379,18 @@ mod screenshots {
     /// Drives the scheduler until the startup installation probe and project
     /// list, which load on worker threads, have reached the view.
     pub fn wait_for_startup(cx: &mut VisualTestAppContext, window: &MainWindow) {
-        for _ in 0..1_000 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
             cx.run_until_parked();
             if cx.read(|cx| window.startup_loaded(cx)) {
                 return;
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the startup loads did not finish"
+            );
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        panic!("the startup loads did not finish");
     }
 
     /// Decodes a baseline through GPUI's image loader, which yields BGRA.

@@ -101,11 +101,12 @@ fn undo_both(
     assert!(view.read_with(cx, |root, _| root
         .assistant
         .is_mutation_undo_in_flight("write-1")));
+    let task = view.read_with(cx, |root, _| root.assistant.task.clone());
     click_selector(cx, "assistant-submit");
-    assert!(
-        !another_run_started(cx, assistant, 1),
-        "no run starts while an undo is in flight"
-    );
+    assert_no_new_run(cx, view, assistant, 1, &task);
+    assert!(view.read_with(cx, |root, _| root
+        .assistant
+        .is_mutation_undo_in_flight("write-1")));
     gate.release();
     wait_for(cx, view, |root| {
         root.assistant.is_mutation_undone("write-1")
@@ -123,20 +124,30 @@ fn undo_both(
     );
 }
 
-/// Waits a bounded time for the service to receive more than `runs` runs.
-fn another_run_started(
+/// A run changes controller state before it queues a worker. Check that
+/// state as well as calls already received, so a queued worker cannot make
+/// a negative assertion pass simply because it has not run yet.
+#[track_caller]
+fn assert_no_new_run(
     cx: &mut VisualTestContext,
+    view: &View,
     assistant: &FakeAssistantUiService,
     runs: usize,
-) -> bool {
-    for _ in 0..100 {
-        cx.run_until_parked();
-        if assistant.run_request_ids.lock().unwrap().len() > runs {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    false
+    task: &AssistantTaskState,
+) {
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(&root.assistant.task, task, "no replacement run is queued");
+        assert!(
+            root.assistant_busy(),
+            "the existing operation stays in flight"
+        );
+    });
+    assert_eq!(
+        assistant.run_request_ids.lock().unwrap().len(),
+        runs,
+        "no replacement run reaches the service"
+    );
 }
 
 /// Everything the page shows of the Assistant, to compare before and after
@@ -248,11 +259,9 @@ fn a_cancelled_run_keeps_the_receipts_of_the_writes_it_applied(cx: &mut TestAppC
     wait_for(cx, &view, |root| {
         root.assistant.task == AssistantTaskState::Cancelled
     });
+    let task = view.read_with(cx, |root, _| root.assistant.task.clone());
     click_selector(cx, "assistant-submit");
-    assert!(
-        !another_run_started(cx, &assistant, 1),
-        "no run starts before the cancelled run's receipts arrive"
-    );
+    assert_no_new_run(cx, &view, &assistant, 1, &task);
 
     run_gate.release();
     wait_for(cx, &view, |root| root.assistant.result.is_some());
@@ -364,10 +373,11 @@ fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut Te
     click_selector(cx, "assistant-confirm");
     wait_for(cx, &view, |_| gate.counts().0 == 1);
     assert!(shown(cx, "assistant-review-accepting".into()));
+    let task = view.read_with(cx, |root, _| root.assistant.task.clone());
     click_selector(cx, "assistant-confirm");
     click_selector(cx, "assistant-reject");
     click_selector(cx, "assistant-submit");
-    assert!(!another_run_started(cx, &assistant, 1));
+    assert_no_new_run(cx, &view, &assistant, 1, &task);
     assert_eq!(assistant.grants_for("confirm").len(), 1);
     assert!(assistant.grants_for("reject").is_empty());
     gate.release();
@@ -453,8 +463,9 @@ fn turning_automatic_write_back_off_explains_confirm_each(cx: &mut TestAppContex
         "the change waits for Save"
     );
     click_selector(cx, "assistant-save-settings");
-    wait_for(cx, &view, |_| {
+    wait_for(cx, &view, |root| {
         settings.snapshot().unwrap().assistant.write_mode == contracts::AgentWriteMode::ConfirmEach
+            && root.saved_write_mode() == contracts::AgentWriteMode::ConfirmEach
     });
     assert!(shown(cx, "settings-write-mode-notice-confirm-each".into()));
     assert!(!shown(cx, "settings-write-mode-unsaved".into()));

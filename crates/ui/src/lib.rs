@@ -608,7 +608,7 @@ mod tests {
             state.armed = false;
             changed.notify_all();
             let (state, left) = changed
-                .wait_timeout_while(state, std::time::Duration::from_secs(5), |state| {
+                .wait_timeout_while(state, std::time::Duration::from_secs(20), |state| {
                     state.holding > 0
                 })
                 .unwrap();
@@ -622,8 +622,8 @@ mod tests {
         }
 
         /// Waits while armed. The wait is bounded, so a call made on the UI
-        /// thread stalls the test briefly and then fails it instead of
-        /// hanging it.
+        /// thread or never released fails explicitly instead of silently
+        /// completing the fake service call.
         pub(crate) fn pass(&self) {
             let (lock, released) = &*self.0;
             let mut state = lock.lock().unwrap();
@@ -632,15 +632,47 @@ mod tests {
             }
             state.entered += 1;
             state.holding += 1;
-            let (mut state, _) = released
-                .wait_timeout_while(state, std::time::Duration::from_secs(2), |state| {
+            let (mut state, timeout) = released
+                .wait_timeout_while(state, std::time::Duration::from_secs(20), |state| {
                     state.armed
                 })
                 .unwrap();
             state.holding -= 1;
             // `release` waits for the held calls to leave.
             released.notify_all();
+            drop(state);
+            assert!(!timeout.timed_out(), "an armed gate was never released");
         }
+    }
+
+    #[test]
+    fn an_armed_gate_does_not_release_a_slow_call_without_permission() {
+        let gate = Gate::default();
+        gate.arm();
+        let worker_gate = gate.clone();
+        let (passed, completion) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker_gate.pass();
+            passed.send(()).unwrap();
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while gate.counts() != (1, 1) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the worker did not enter the armed gate"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        // The old fake silently released calls after two seconds. A slow
+        // test must retain control of its service until it calls release.
+        let early = completion.recv_timeout(std::time::Duration::from_millis(2_100));
+        gate.release();
+        worker.join().unwrap();
+        assert!(
+            early.is_err(),
+            "the gate released a call without permission"
+        );
+        completion.recv().unwrap();
     }
 
     /// Documents in memory whose `snapshot`, which `list_projects` reads,
@@ -1460,14 +1492,33 @@ mod tests {
         view: &gpui::Entity<controller::RootView>,
         done: impl Fn(&controller::RootView) -> bool,
     ) {
-        for _ in 0..500 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
             cx.run_until_parked();
             if view.read_with(cx, |root, _| done(root)) {
                 return;
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the UI state did not settle within 20 seconds"
+            );
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        panic!("assistant state did not settle");
+    }
+
+    #[gpui::test]
+    fn wait_for_accepts_worker_completion_after_the_old_poll_budget(cx: &mut TestAppContext) {
+        let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_finished = finished.clone();
+        let worker = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            worker_finished.store(true, std::sync::atomic::Ordering::Release);
+        });
+        wait_for(cx, &view, |_| {
+            finished.load(std::sync::atomic::Ordering::Acquire)
+        });
+        worker.join().unwrap();
     }
 
     pub(crate) fn empty_result() -> AssistantRunResult {
@@ -1723,17 +1774,28 @@ mod tests {
 
     #[gpui::test]
     fn pending_expiry_is_driven_by_a_timer(cx: &mut TestAppContext) {
-        let expires_at_ms = crate::assistant_ui::now_ms() + 60_000;
-        let (view, cx) = start_pending_run(cx, 1, expires_at_ms);
+        let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
+        // Schedule an ordinary one-minute review against a fixed clock.
+        // Worker startup or wall-clock pauses cannot shorten its lifetime.
+        view.update(cx, |root, cx| {
+            root.assistant.pending = Some(PendingReviewState::Awaiting(pending_review(
+                "timer", 61_000,
+            )));
+            root.assistant.task = AssistantTaskState::AwaitingConfirmation;
+            root.schedule_pending_expiry_at(1_000, cx);
+        });
+        cx.run_until_parked();
 
         cx.executor()
-            .advance_clock(std::time::Duration::from_secs(59));
+            .advance_clock(std::time::Duration::from_millis(59_999));
+        cx.run_until_parked();
         assert!(view.read_with(cx, |root, _| matches!(
             root.assistant.pending,
             Some(PendingReviewState::Awaiting(_))
         )));
         cx.executor()
-            .advance_clock(std::time::Duration::from_secs(2));
+            .advance_clock(std::time::Duration::from_millis(1));
+        cx.run_until_parked();
         assert_eq!(
             view.read_with(cx, |root, _| root.assistant.pending.clone()),
             Some(PendingReviewState::Expired)
@@ -1806,8 +1868,9 @@ mod tests {
         let (view, cx) = open_desktop_with(cx, assistant, settings.clone());
         rename_connection(cx, &view, "Renamed");
         click_save_assistant_settings(cx, &view);
-        wait_for(cx, &view, |_| {
+        wait_for(cx, &view, |root| {
             settings.snapshot().unwrap().assistant.connections[0].name == "Renamed"
+                && root.saved_assistant().connections[0].name == "Renamed"
         });
 
         let saved = settings.snapshot().unwrap().assistant.connections[0].clone();
@@ -2121,8 +2184,10 @@ mod tests {
         );
 
         confirm(cx, false, "深色");
-        wait_for(cx, &view, |_| {
+        let saved_notice = i18n::text(i18n::Locale::ZhCn, "settings_saved");
+        wait_for(cx, &view, |root| {
             appearance(&settings).theme == settings::ThemePreference::Dark
+                && root.ui.notice == saved_notice
         });
         cx.update(|_, cx| {
             assert_eq!(
@@ -2527,18 +2592,6 @@ mod tests {
         cx.run_until_parked();
     }
 
-    /// Waits a bounded time for the service to receive a run.
-    fn run_started(cx: &mut gpui::VisualTestContext, assistant: &FakeAssistantUiService) -> bool {
-        for _ in 0..200 {
-            cx.run_until_parked();
-            if !assistant.run_request_ids.lock().unwrap().is_empty() {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
-        }
-        false
-    }
-
     #[gpui::test]
     fn the_prompt_pastes_undoes_and_redoes(cx: &mut TestAppContext) {
         let (view, cx) = open_desktop(cx, Arc::new(FakeAssistantUiService::default()));
@@ -2663,8 +2716,9 @@ mod tests {
             assert_eq!(field_value(cx, field), *text);
         }
         click_save_assistant_settings(cx, &view);
-        wait_for(cx, &view, |_| {
+        wait_for(cx, &view, |root| {
             settings.snapshot().unwrap().assistant.connections[0].name == "Typed name"
+                && root.saved_assistant().connections[0].name == "Typed name"
         });
 
         let saved = settings.snapshot().unwrap().assistant.connections[0].clone();
@@ -2682,7 +2736,9 @@ mod tests {
         click_selector(cx, "assistant-input");
         cx.simulate_input("organize");
         cx.simulate_keystrokes("enter");
-        assert!(run_started(cx, &assistant), "Enter starts a run");
+        wait_for(cx, &view, |_| {
+            !assistant.run_request_ids.lock().unwrap().is_empty()
+        });
     }
 
     #[gpui::test]
@@ -2694,7 +2750,9 @@ mod tests {
         click_selector(cx, "assistant-input");
         cx.simulate_input("organize");
         click_selector(cx, "assistant-submit");
-        assert!(run_started(cx, &assistant), "the send button starts a run");
+        wait_for(cx, &view, |_| {
+            !assistant.run_request_ids.lock().unwrap().is_empty()
+        });
     }
 
     #[gpui::test]

@@ -109,14 +109,18 @@ fn choose(cx: &mut VisualTestContext, selector: &'static str, index: usize) {
 /// `rendered` is false.
 #[track_caller]
 fn wait_rendered(cx: &mut VisualTestContext, selector: &'static str, rendered: bool) {
-    for _ in 0..500 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
         cx.run_until_parked();
         if cx.debug_bounds(selector).is_some() == rendered {
             return;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "`{selector}` rendered: expected {rendered}"
+        );
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
-    panic!("`{selector}` rendered: expected {rendered}");
 }
 
 fn speaker_of(state: &DocumentState, transcript_segment_id: &str) -> (String, Option<String>) {

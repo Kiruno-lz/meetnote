@@ -3417,9 +3417,13 @@ impl RootView {
     /// Replaces the expiry timer with one for the awaiting review, if any, so
     /// expiry does not depend on a re-render.
     fn schedule_pending_expiry(&mut self, cx: &mut Context<Self>) {
+        self.schedule_pending_expiry_at(now_ms(), cx);
+    }
+
+    pub(crate) fn schedule_pending_expiry_at(&mut self, now: u64, cx: &mut Context<Self>) {
         self.pending_expiry =
             self.assistant
-                .pending_expiry_delay(now_ms())
+                .pending_expiry_delay(now)
                 .map(|(confirmation_id, delay)| {
                     cx.spawn(async move |this, cx| {
                         cx.background_executor().timer(delay).await;

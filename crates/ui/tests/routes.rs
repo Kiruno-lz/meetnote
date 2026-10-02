@@ -52,19 +52,27 @@ fn open_window(cx: &mut TestAppContext) -> (MainWindow, &mut VisualTestContext) 
         support::open_main_window(cx)
     });
     let cx = VisualTestContext::from_window(window.window(), cx).into_mut();
-    for _ in 0..500 {
-        cx.run_until_parked();
-        if cx.update(|_, cx| window.startup_loaded(cx)) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
-    assert!(
-        cx.update(|_, cx| window.startup_loaded(cx)),
-        "the startup loads did not finish"
-    );
+    wait_for(cx, |cx| cx.update(|_, cx| window.startup_loaded(cx)));
     assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Assistant);
     (window, cx)
+}
+
+/// Worker completion is bounded by elapsed time, not the number of frames
+/// the GPUI executor happened to render on this machine.
+#[track_caller]
+fn wait_for(cx: &mut VisualTestContext, done: impl Fn(&mut VisualTestContext) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        cx.run_until_parked();
+        if done(cx) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the route state did not settle"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
 
 /// Clicks the sidebar entry of `route`.
@@ -909,13 +917,7 @@ fn ctrl_tab_leaves_a_text_area_that_takes_tab(cx: &mut TestAppContext) {
     let (_window, cx, _) = open_route(cx, Route::Meetings);
     let edit = visible(cx, "content-mode-edit");
     cx.simulate_click(edit.center(), Modifiers::none());
-    for _ in 0..500 {
-        cx.run_until_parked();
-        if cx.debug_bounds("document-editor").is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
+    wait_for(cx, |cx| cx.debug_bounds("document-editor").is_some());
     let stops = [SIDEBAR_STOPS.as_slice(), &["select-document-status"]].concat();
     tab_to(cx, "select-document-status", &stops);
     // The summary is four rows tall and the body twelve; scrolling to
