@@ -81,7 +81,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
   - 跟随系统浅色/深色；Settings 提供"跟随系统/浅色/深色"与"毛玻璃/不透明"，保存在 AppSettings 的 `appearance` 字段（`#[serde(default)]`），不经 Settings capability 暴露。
   - 主题切换后重新应用窗口背景，因为 gpui 会移除原有 `NSVisualEffectView`。
   - motion token 遵循 `cx.reduce_motion()`。
-  - //TODO - 读取 `NSWorkspace.accessibilityDisplayShouldReduceTransparency`，为真时强制不透明。验证：纯函数 `effective_material(preference, reduce_transparency)` 的 L1 测试覆盖四种组合。
+  - 启动时读取 `NSWorkspace.accessibilityDisplayShouldReduceTransparency`，为真时强制不透明；`effective_material(preference, reduce_transparency)` 的 L1 测试覆盖四种组合。
 - Zeron（MIT）的 theme、frost、edge_fade、motion 代码可以移植，需在文件头保留版权与许可声明，并登记到仓库根 `THIRD_PARTY_NOTICES.md`。zui 的 `NOTICE` 按 Apache-2.0 §4(d) 一并收录。不复制 Zeron 标识、第三方品牌标识和许可未知的音频。
 - 字体默认 `.SystemUIFont`（SF/PingFang）；Geist（OFL）只作可选拉丁字体；引入前以 L3 截取选用 Geist 时的中英混排文本并通过视觉清单，确认中文回退到 PingFang，并在 `THIRD_PARTY_NOTICES.md` 附 OFL 文本。
 
@@ -104,7 +104,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
   - i18n key 源码扫描；
   - 颜色字面量扫描：`crates/ui/src` 除 `theme/` 外不得出现 `rgb(`/`rgba(`/`hsla(`，测试用 `include_str!` 读取源码，初始红线为 61 处；
   - 渲染函数中无 `std::fs`/`Path::is_file` 的源码扫描；
-  - 下拉、进度条、对话框与文本输入只经 `controls/` 包装构造的源码扫描。
+  - 下拉、进度条、对话框与文本输入只经 `controls/` 包装构造，以及 radio 选择只由带 label 的 `RadioGroup` 创建的源码扫描。
 - **L2**：`TestAppContext` + fake service 的 GPUI 交互测试。覆盖点击、键盘、焦点、异步完成与 `debug_bounds` 结构断言；涉及 `runtime::spawn_blocking` 真实线程的测试调用 `cx.executor().allow_parking()`。
 - **L3**：`VisualTestAppContext::capture_screenshot`（`Window::render_to_image`，Metal 离屏）。
   - 以固定窗口尺寸 1180×760、固定 locale 与 fixture 工作区渲染每个 route，覆盖深/浅 × 玻璃/不透明。
@@ -133,17 +133,17 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 
 | 区域 | 已实现 | 当前缺口 |
 |---|---|---|
-| Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 MeetNote 窗口根；frosted 浮层与 edge fade 原语；全部控件为带 label 的 gpui-base 包装；每个可聚焦控件只在键盘聚焦时显示焦点环；Tab 顺序为侧栏四个入口、导入音频、页面，Tab 到达滚动区内的控件时自动滚入视野；侧栏是带 label 的 tab list，上下键切换；项目树是一个 Tab 停靠点，方向键选择、展开与进入父子；对话框关闭后焦点回到打开者，关闭 Detail 回到"打开详情"，切换 route 后停在对应侧栏入口；选择型按钮为 radio 角色 | 见下文键盘与无障碍的 `//TODO`；Accessibility Inspector 手工检查 |
+| Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 MeetNote 窗口根；frosted 浮层与 edge fade 原语；全部控件为带 label 的 gpui-base 包装；每个可聚焦控件只在键盘聚焦时显示焦点环；Tab 顺序为侧栏四个入口、导入音频、页面，Tab 到达滚动区内的控件时自动滚入视野；侧栏是带 label 的 tab list，上下键切换；项目树是一个 Tab 停靠点，方向键选择、展开与进入父子，Option-↑/↓ 调整同级顺序、Option-→ 移入上一兄弟、Option-← 移到上一层末尾，经同一带 revision 的 `Reparent`/`Reorder` 写回；对话框关闭后焦点回到打开者，关闭 Detail 回到"打开详情"，切换 route 后停在对应侧栏入口；选择型按钮为 radio 角色，由带 label 的 `RadioGroup` 包裹 | Accessibility Inspector 手工检查 |
 | Assistant | 内容平面底部的 frosted 输入条（Enter 发送）、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染；任务状态由共享 JobRuntime 的 `JobEvent` 按请求投影；pending 过期后队列推进到下一项 | — |
 | Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original/编辑、处理与取消；内容平面顶部列出 scanner issue（路径与原因）；标题、标签、状态、摘要与正文按文档保存草稿，经一次带 revision 的 `Update` 提交；树移动经 `Reparent`/`Reorder` 命令；revision 冲突显示通知并保留草稿，用户重新加载后才丢弃；Original 视图的 speaker 列表支持改名与确认后合并；scanner issue 按 `DocumentIssueKind` 本地化；选中文档的音频在后台检查，缺失或 checksum 不符时在树、标题栏与 Detail 标记并禁止处理，经文件选择按 revision 重新关联；列表读取与处理启动在后台执行，启动完成前的取消在启动返回后生效 | — |
 | Detail | 内容平面内右侧不透明面板：identity、audio source、层级、document status、revision、processing provenance、最近错误、结果统计与缺失的 provenance 项、transcript | 单文档的 Agent 变更来源（mutation journal 尚无按文档查询） |
 | Models | catalog 分组、下载、暂停、继续、取消和进度，安装状态来自 `InstallationService`；卡片显示 license、来源与短 checksum，展开后显示完整 checksum、逐 backend 与逐文件 probe 结果；probe 结果、类型与 UTC 时间；本地化的失败原因与不可读记录；`ready` 且缺失/部分安装的模型可下载或重试，已安装模型可重新 probe | — |
-| Settings | 外观（主题、材质）、文档工作区（后台切换并按 revision 保存；切换失败保持原目录，保存失败则切回；切换后重新订阅并清理旧目录的草稿、选择与 Assistant 待确认项）、locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径与管理（profile 列表、改名、确认后合并与删除，路径变化时重建服务并同步处理参数）；即时保存项经 `update_if_equal` 在后台逐项提交，Assistant 连接区为草稿并以 typed patch 保存（新建连接为一次 `patch_if_equal`）；revision 冲突后从 repository 重新加载再重试 | 能力联动说明和完整校验反馈 |
+| Settings | 外观（主题、材质）、文档工作区（后台切换并按 revision 保存；切换失败保持原目录，保存失败则切回；切换后重新订阅并清理旧目录的草稿、选择与 Assistant 待确认项）、locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径与管理（profile 列表、改名、确认后合并与删除；删除后焦点移到下一 profile 名称，没有下一项时移到声纹库标题，异步写入期间用户已移动的焦点保持不变；路径变化时重建服务并同步处理参数）；即时保存项经 `update_if_equal` 在后台逐项提交，Assistant 连接区为草稿并以 typed patch 保存（新建连接为一次 `patch_if_equal`）；revision 冲突后从 repository 重新加载再重试 | 能力联动说明和完整校验反馈 |
 
 当前 GPUI 上的测试基线：
 
 - L1：i18n key、颜色字面量、渲染路径文件探测，以及 `controller.rs` 中文件探测与线程创建的源码扫描；对比度、`effective_material` 与 token 纯函数；
-- L2：路由结构与交互测试（`crates/ui/tests/routes.rs`、`crates/ui/src/lib.rs`），其中阻塞的 fake repository/model manager 断言文件 IO 不占用 UI 线程；
+- L2：路由结构与交互测试（`crates/ui/tests/routes.rs`、`crates/ui/src/lib.rs`、`crates/ui/src/document_tests.rs`、`crates/ui/src/speaker_tests.rs`），其中阻塞的 fake repository/model manager 断言文件 IO 不占用 UI 线程；树快捷键覆盖 revision、层级拒绝与焦点，Speaker Library 删除覆盖下一项、空库与异步焦点保持；真实 worker 等待使用 20 s deadline，挂起的 fake 调用必须显式放行，pending timer 用固定时间验证过期边界；
 - L3：四个 route、键盘焦点态、打开的下拉与对话框、Detail 与 issue、编辑与冲突、speaker 列表与 Speaker Library、缺失音频与工作区设置、Assistant 部分结果与 review 队列在四种外观下的 60 张基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN），以及 release 构建的资源探测。
 
 UI 只允许一个前台音频处理任务；下载任务由 `ModelManager` 独立持续。音频处理与 Assistant 共用 `main.rs` 创建的应用级 JobRuntime，受同一并发上限约束；Assistant 任务状态由按请求标记的 `JobEvent` 投影，阶段与工具进度经 `AgentProgress` 回调补充细节。通用 session 不属于当前范围。
@@ -235,11 +235,6 @@ UI locale 与 transcription language 独立。backend 不支持的设备或 stag
 
 U0 基线、U1 缺陷修复与测试基线、U2 依赖迁移、U3 token 与外壳、U4 玻璃原语与页面迁移、U5 产品功能已完成，当前状态见上文。
 
-键盘与无障碍的剩余缺口：
-
-- //TODO - 树的拖动 reparent 与前后 reorder 没有键盘等价操作。验证：L2 测试在树获得焦点时用快捷键把选中文档移入上一兄弟或调整顺序，经同一 `Reparent`/`Reorder` 命令写回，未触及文档 revision 不变。
-- //TODO - radio 按钮组（场景、scope、内容模式、协议、认证、写回策略）没有带 label 的组容器。验证：L1 扫描确认每组 radio 由带 label 的组包装创建。
-- //TODO - 删除 Speaker Library profile 后，打开对话框的按钮随行消失，焦点无处归还。验证：L2 测试删除后焦点落在列表的下一项或 Speaker Library 标题。
 - 发布前在 macOS 27 用 Accessibility Inspector 逐 route 检查 tab list、tree、combo box、radio、group、password input 的角色、label 与状态，以及焦点环与检查器焦点一致。
 
 UI 完成标准：完整产品流程不需要 CLI 或手工编辑 JSON；外部文件变化、版本冲突、模型失败和任务取消都有明确且可恢复的反馈；每个 route 在四种外观组合下通过视觉清单。
