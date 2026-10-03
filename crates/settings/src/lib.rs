@@ -822,11 +822,14 @@ impl JsonSettingsRepository {
         })?;
         let settings: AppSettings = serde_json::from_str(&content)?;
         settings.validate()?;
+        validate_settings_file_permissions(&settings, &self.path)?;
+        validate_credential_file_references(&settings, &self.path)?;
         Ok(settings)
     }
 
     fn save_unlocked(&self, settings: &AppSettings) -> Result<(), SettingsError> {
         settings.validate()?;
+        validate_credential_file_references(settings, &self.path)?;
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| SettingsError::Write {
                 path: parent.display().to_string(),
@@ -907,6 +910,10 @@ impl SettingsRepository for JsonSettingsRepository {
         }
         self.save_unlocked(settings)
     }
+
+    fn open_credential_file(&self, reference: &str) -> Result<File, SettingsError> {
+        open_credential(reference, &self.path)
+    }
 }
 
 fn unique_temporary_path(path: &Path) -> PathBuf {
@@ -920,6 +927,207 @@ fn unique_temporary_path(path: &Path) -> PathBuf {
         std::process::id(),
         counter
     ))
+}
+
+fn validate_credential_file_references(
+    settings: &AppSettings,
+    settings_path: &Path,
+) -> Result<(), SettingsError> {
+    for connection in &settings.assistant.connections {
+        if let Some(reference) = connection.api_key_file.as_deref() {
+            // A reference may be saved before its file is provisioned; any
+            // other failure to open it safely is an invalid setting.
+            if let Err(error) = open_credential(reference, settings_path) {
+                if !matches!(&error, SettingsError::Read { source, .. }
+                    if source.kind() == std::io::ErrorKind::NotFound)
+                {
+                    return Err(error);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The single rule for `apiKeyFile`: a relative path under `credentials/`
+/// next to the settings file that names an owner-only regular file, with no
+/// symlink at any component below the settings directory. The checks run on
+/// the opened handle, which is returned so callers read exactly the verified
+/// file.
+fn open_credential(reference: &str, settings_path: &Path) -> Result<File, SettingsError> {
+    let path = Path::new(reference);
+    if reference.contains('\0')
+        || path.is_absolute()
+        || path.file_name().is_none()
+        || path == settings_path
+        || !matches!(
+            path.components().next(),
+            Some(std::path::Component::Normal(name)) if name == OsStr::new("credentials")
+        )
+    {
+        return Err(SettingsError::UnsafeCredentialFile);
+    }
+    // `components()` drops interior `.`, so anything but a name here is `..`
+    // or a root and would leave the settings directory.
+    let names = path
+        .components()
+        .map(|component| match component {
+            std::path::Component::Normal(name) => Ok(name),
+            _ => Err(SettingsError::UnsafeCredentialFile),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let directory = match settings_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    let resolved = directory.join(path);
+    let file = open_credential_components(directory, &names, &resolved)?;
+    let metadata = file.metadata().map_err(|source| SettingsError::Read {
+        path: resolved.display().to_string(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(SettingsError::UnsafeCredentialFile);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(SettingsError::UnsafeCredentialFile);
+        }
+    }
+    Ok(file)
+}
+
+/// Walk `names` below `directory` one descriptor at a time, so no component
+/// can be redirected between the check and the open.
+#[cfg(unix)]
+fn open_credential_components(
+    directory: &Path,
+    names: &[&OsStr],
+    resolved: &Path,
+) -> Result<File, SettingsError> {
+    use std::os::fd::{AsFd, OwnedFd};
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let component_error = |source: std::io::Error| match source.raw_os_error() {
+        // O_NOFOLLOW reports a symlink as ELOOP (EMLINK on FreeBSD); a file or
+        // symlink where a directory is required is ENOTDIR.
+        Some(libc::ELOOP | libc::EMLINK | libc::ENOTDIR) => SettingsError::UnsafeCredentialFile,
+        _ => SettingsError::Read {
+            path: resolved.display().to_string(),
+            source,
+        },
+    };
+    let Some((file_name, parents)) = names.split_last() else {
+        return Err(SettingsError::UnsafeCredentialFile);
+    };
+    // The settings directory is the configured root; only what lies below it
+    // is constrained.
+    let mut parent: OwnedFd = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY)
+        .open(directory)
+        .map_err(|source| SettingsError::Read {
+            path: directory.display().to_string(),
+            source,
+        })?
+        .into();
+    for name in parents {
+        parent = open_at(
+            parent.as_fd(),
+            name,
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+        .map_err(component_error)?;
+    }
+    // O_NONBLOCK keeps a FIFO or device from blocking the open, and O_NOCTTY
+    // keeps a terminal from becoming the controlling one; neither affects
+    // reading the regular file that is the only kind accepted afterwards.
+    open_at(
+        parent.as_fd(),
+        file_name,
+        libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC,
+    )
+    .map(File::from)
+    .map_err(component_error)
+}
+
+#[cfg(unix)]
+fn open_at(
+    parent: std::os::fd::BorrowedFd<'_>,
+    name: &OsStr,
+    flags: libc::c_int,
+) -> std::io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let name = std::ffi::CString::new(name.as_bytes())?;
+    loop {
+        // SAFETY: `parent` is a live descriptor and `name` a NUL-terminated
+        // string; both outlive the call, which retains neither.
+        let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+        if fd >= 0 {
+            // SAFETY: `openat` just returned this descriptor and nothing else
+            // owns it.
+            return Ok(unsafe { OwnedFd::from_raw_fd(fd) });
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::Interrupted {
+            return Err(error);
+        }
+    }
+}
+
+/// Best effort without descriptor-relative opens: every component is checked
+/// by path before the open, so a component swapped in between is not caught.
+#[cfg(not(unix))]
+fn open_credential_components(
+    directory: &Path,
+    names: &[&OsStr],
+    resolved: &Path,
+) -> Result<File, SettingsError> {
+    let read_error = |source| SettingsError::Read {
+        path: resolved.display().to_string(),
+        source,
+    };
+    let mut current = directory.to_path_buf();
+    for (index, name) in names.iter().enumerate() {
+        current.push(name);
+        let metadata = fs::symlink_metadata(&current).map_err(read_error)?;
+        let is_file_name = index + 1 == names.len();
+        if metadata.file_type().is_symlink()
+            || (is_file_name && !metadata.is_file())
+            || (!is_file_name && !metadata.is_dir())
+        {
+            return Err(SettingsError::UnsafeCredentialFile);
+        }
+    }
+    File::open(&current).map_err(read_error)
+}
+
+fn validate_settings_file_permissions(
+    settings: &AppSettings,
+    settings_path: &Path,
+) -> Result<(), SettingsError> {
+    let contains_secret = settings
+        .assistant
+        .connections
+        .iter()
+        .any(|connection| connection.api_key.is_some() || connection.api_key_file.is_some());
+    if !contains_secret {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    if let Ok(metadata) = fs::metadata(settings_path) {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(SettingsError::Invalid(
+                "settings file containing credentials must be owner-only".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -1792,6 +2000,154 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn opened_credential_is_verified_on_the_handle_and_never_follows_symlinks() {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-settings-credential-handle-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let settings_dir = root.join("settings");
+        let key = settings_dir.join("credentials/nested/key");
+        fs::create_dir_all(key.parent().unwrap()).unwrap();
+        fs::write(&key, "first-key\n").unwrap();
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
+        let service = SettingsService::open(Arc::new(JsonSettingsRepository::open(
+            settings_dir.join("settings.json"),
+        )))
+        .unwrap();
+
+        // The returned handle is the verified file: replacing the path after
+        // the check cannot change what the caller reads.
+        let mut opened = service
+            .open_credential_file("credentials/nested/key")
+            .unwrap();
+        fs::remove_file(&key).unwrap();
+        fs::write(&key, "swapped-key\n").unwrap();
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut content = String::new();
+        opened.read_to_string(&mut content).unwrap();
+        assert_eq!(content.trim(), "first-key");
+
+        // No component below the settings directory may be a symlink, even
+        // when it leads to an owner-only regular file.
+        let outside = root.join("outside");
+        fs::create_dir_all(outside.join("nested")).unwrap();
+        fs::write(outside.join("nested/key"), "outside-key").unwrap();
+        fs::set_permissions(
+            outside.join("nested/key"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        fs::remove_dir_all(settings_dir.join("credentials")).unwrap();
+        std::os::unix::fs::symlink(&outside, settings_dir.join("credentials")).unwrap();
+        assert!(matches!(
+            service.open_credential_file("credentials/nested/key"),
+            Err(SettingsError::UnsafeCredentialFile)
+        ));
+        fs::remove_file(settings_dir.join("credentials")).unwrap();
+        fs::create_dir_all(settings_dir.join("credentials")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.join("nested"),
+            settings_dir.join("credentials/nested"),
+        )
+        .unwrap();
+        assert!(matches!(
+            service.open_credential_file("credentials/nested/key"),
+            Err(SettingsError::UnsafeCredentialFile)
+        ));
+
+        // A FIFO is rejected without blocking on open.
+        let fifo = settings_dir.join("credentials/fifo");
+        assert!(std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success());
+        fs::set_permissions(&fifo, fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(matches!(
+            service.open_credential_file("credentials/fifo"),
+            Err(SettingsError::UnsafeCredentialFile)
+        ));
+
+        // A missing file is an I/O read failure, not an unsafe reference.
+        assert!(matches!(
+            service.open_credential_file("credentials/missing"),
+            Err(SettingsError::Read { .. })
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn credential_file_resolves_only_owner_only_files_under_the_settings_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-settings-credential-file-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let credentials = root.join("settings/credentials");
+        fs::create_dir_all(&credentials).unwrap();
+        let service = SettingsService::open(Arc::new(JsonSettingsRepository::open(
+            root.join("settings/settings.json"),
+        )))
+        .unwrap();
+        let rejects = |reference: &str| {
+            matches!(
+                service.open_credential_file(reference),
+                Err(SettingsError::UnsafeCredentialFile)
+            )
+        };
+        let read = |reference: &str| {
+            let mut content = String::new();
+            std::io::Read::read_to_string(
+                &mut service.open_credential_file(reference).unwrap(),
+                &mut content,
+            )
+            .unwrap();
+            content
+        };
+
+        // A missing file is a read failure for the caller to report.
+        assert!(matches!(
+            service.open_credential_file("credentials/key"),
+            Err(SettingsError::Read { source, .. })
+                if source.kind() == std::io::ErrorKind::NotFound
+        ));
+        fs::write(credentials.join("key"), "secret").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(credentials.join("key"), fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+        assert_eq!(read("credentials/key"), "secret");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::write(credentials.join("shared"), "secret").unwrap();
+            fs::set_permissions(
+                credentials.join("shared"),
+                fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+            assert!(rejects("credentials/shared"));
+            std::os::unix::fs::symlink(credentials.join("key"), credentials.join("link")).unwrap();
+            assert!(rejects("credentials/link"));
+        }
+        assert!(rejects(&credentials.join("key").display().to_string()));
+        assert!(rejects("credentials/../settings.json"));
+        assert!(rejects("secrets/key"));
+        assert!(matches!(
+            SettingsService::open(Arc::new(TestRepository::new(AppSettings::default())))
+                .unwrap()
+                .open_credential_file("credentials/key"),
+            Err(SettingsError::Invalid(_))
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn patch_field_ownership_matches_read_projection_and_binds_credentials_to_targets() {
         let route = AssistantConnectionProfile {
