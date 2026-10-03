@@ -23,7 +23,22 @@ Workspace Host 负责工作区关联、文档读写、结构校验、资产定�
 
 索引、embedding index 和搜索缓存可以使用适合查询的本地存储，但只能承载可重建派生状态，不改变文件所有权。派生状态损坏、过期或被删除时，Workspace 必须仍能读取项目资产，并能通过扫描和索引任务恢复查询能力。
 
-当前导入流程主要保存音频外部路径，尚未保证音频与项目目录一起迁移，也不能阻止外部程序删除该路径指向的文件。//TODO - 为源音频增加明确的 asset manifest、checksum 和托管/外部引用状态；用移动、缺失、恢复和重建测试验证“不可删除资产”的生命周期语义。
+### 资产生命周期：唯一进度与任务记录
+
+**部分基础已实现，资产托管未完成**。WorkspaceService::import_audio 保存外部路径；DocumentState.source 有 audio_path/audio_asset_id；处理记录写入 input_audio_checksum。处理 checksum 只描述一次输入，不是资产 manifest，也不证明搬移、缺失检测或恢复已实现。
+
+| 能力 | 当前状态 |
+|---|---|
+| 外部路径导入、文档引用、处理输入 checksum | 已有代码 |
+| 资产 manifest、稳定资产 ID 与路径解耦、managed/external 状态 | 未形成完整生命周期实现 |
+| 托管复制、checksum 校验、随工作区迁移 | 待实现 |
+| 缺失/checksum 诊断、按 revision 重新关联 | UI 已实现；托管资产迁移与从资产重建待实现 |
+| 文档事务附件保留、私有 trash | 已有基础；不等于源音频生命周期完成 |
+
+- //TODO - 定义最小资产 manifest，区分托管/外部引用、稳定 ID、checksum 与可用状态；不引入第二份项目事实库。
+- //TODO - 实现导入托管/外部引用的明确策略，复制校验与失败恢复；外部引用缺失如实报告，不能承诺阻止外部程序删除。
+- //TODO - 自动测试源文件移动/删除、checksum 不匹配、工作区迁移、重定位与恢复/重建；验证文档来源仍一致且不静默覆盖资产。
+- //TODO - 补独立资产生命周期验收后才能标为完成。该工作归 Workspace 分支，document-state 和其他计划只引用本节，不重复列任务。
 
 ## 索引与搜索
 
@@ -37,9 +52,9 @@ Workspace Host 负责工作区关联、文档读写、结构校验、资产定�
 
 ## 窄操作边界与插件端口
 
-Workspace 提供读取、创建、patch、列表、关系更新、语义子文档创建和搜索等明确操作。`workspace.read_document/create_document/patch_document/search` 是逻辑能力名；当前内部命令继续复用，不新增同义接口。索引构建和 embedding provider 也通过明确的 Workspace capability 暴露，而不是让插件直接打开文件目录。
+Workspace 提供读取、创建、patch、列表、关系更新、语义子文档创建和搜索等明确操作。当前 `WorkspaceCapabilityPort` 承载文档工具、范围、分页快照、事务、固定错误和 512 KiB 单次 result 上限；超限返回 `CONTEXT_LIMIT_EXCEEDED`，大型 transcript 使用 segment page，不静默截断。`workspace.read_document/create_document/patch_document/search` 是逻辑能力名，内部命令继续复用，不新增同义接口。索引构建和 embedding provider 也通过明确的 Workspace capability 暴露，而不是让插件直接打开文件目录。
 
-文档授权、typed arguments、schema/revision、音频来源、segment 范围、三层树和写策略由服务执行；业务实现不能留在通用 Agent Host。自动写入与逐次确认只是不同提交策略，都不能绕过校验。确认时重新核对源版本；undo 也不能覆盖后续修改。
+文档授权、typed arguments、schema/revision、音频来源、segment 范围、三层树和写策略由服务执行；业务实现不能留在通用 Agent Host。自动写入与逐次确认只是不同提交策略，都不能绕过校验。确认时重新核对源版本；undo 也不能覆盖后续修改。撤销创建会将文档包移动到 Workspace 私有 trash，保留附件和恢复机会，不直接删除用户资产。trash 只提供由 Workspace/persistence owner 调用的显式 list/restore/purge，不做后台静默清理；当前不向 Agent 暴露任意 trash 路径。
 
 UI、内置 Agent、外部工具 adapter 和插件端口经过同一读写服务。音频结果有专用受控写入入口；语义 patch 不可覆盖 processing/results。插件只能获得 manifest 声明且由 Workspace 授予的 capability port，例如文档读取、受限 patch、搜索、索引构建或事件订阅；port 不提供任意文件系统访问，也不提供删除不可删除资产的操作。最初使用工作区/文档范围与读写能力即可，不建设复杂权限语言。
 
@@ -49,16 +64,19 @@ UI、内置 Agent、外部工具 adapter 和插件端口经过同一读写服务
 
 编辑器和同步工具修改文件是正常输入。watcher 触发重新读取与校验；无效 JSON、关系或来源需返回路径和原因，不能静默修复成另一套事实。
 
-revision 只能保护遵守版本协议的客户端。直接编辑 Markdown 不一定递增 JSON revision，故提交前还需检测所读文件内容是否变化；不能把 watcher 通知或实例内锁当作跨进程互斥。目标是受管理写入具备冲突与恢复保证，外部编辑经过扫描暴露冲突；不能承诺任意同步软件参与同一个原子事务。
+revision 只能保护遵守版本协议的客户端。直接编辑 Markdown 不一定递增 JSON revision，故提交前还需检测所读文件内容是否变化。受管理写入使用工作区级 OS advisory repository lock 进行跨进程串行化；该锁不把任意外部同步软件纳入同一个原子事务，外部编辑仍通过 Markdown hash/扫描暴露冲突。
 
 外部修改不能保证经过 Agent tool 审计。记录观测到的变化即可，不伪造 actor、撤销链或音频 processing provenance。备份/迁移应说明外部音频引用和历史数据的范围。
 
 ## 当前恢复能力与缺口
 
-文档包已有逐文件原子保存；多文档 Agent mutation 所需的 batch、journal、pending、幂等与 undo 仍需收敛进 Workspace 写入协议。仍需验证跨进程恢复与附件保留，不能直接宣称所有文件写入已具备事务性。
+文档包已有逐文件原子保存；工作树已有 WorkspaceCapabilityPort 与 batch、journal、pending、幂等、undo。repository lock、跨进程 open/recovery、真实子进程故障恢复、trash restore/purge、普通附件、嵌套目录和 symlink 不跟随均已有回归证据；ExternalAgent update/semantic write 还会校验 read projection 提供的 Markdown hash。
 
-//TODO - 统一 Workspace 写入路径：桌面编辑、CLI、Agent 和音频结果写入共用提交与冲突协议；用两个 repository/进程和不递增 revision 的外部 Markdown 编辑验证不会丢失更新。
+已有 child-process 锁与恢复测试；metadata 扫描限制单包 16 MiB、校验 schema 版本并支持提前停止，不等于完整 state/Markdown 读取有界。不能把任意外部编辑器纳入事务，也不能据此标记所有写入口已完成。
 
-//TODO - 验证 journal 恢复所有权与普通附件保留：在提交各阶段中断，重新打开工作区并检查文档、附件及 undo；确认恢复不会回滚另一个仍在运行的事务。
+- //TODO - 在 repository 持锁提交中重验 source Markdown hash；当前 DocumentService 预验与 repository revision 检查之间仍存在内容变化窗口，补屏障式冲突测试。
+- //TODO - 普通 save/save_versioned 共用 CAS 与双文件恢复；不能仅增加锁后接受旧内容，JSON/Markdown 替换间失败须可恢复。
+- //TODO - 保留加载/解析错误，不将现有包加载失败当作不存在覆盖；补无效外部文件、跨进程写入、确认与 undo 冲突测试。
+- //TODO - 完整 state/Markdown 读取加入过程资源上限，metadata 扫描限制不等于全量读取有界。
 
-以上验收在[架构对齐计划](../plan/architecture-alignment.md)安排，不在本次文档工作中实现。
+上述是 Workspace 待实现项，不是 Agent Host 的额外功能；影响 Host 必测任务时，以具体服务依赖报告阻塞。

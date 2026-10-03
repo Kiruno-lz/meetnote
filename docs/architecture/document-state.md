@@ -24,12 +24,10 @@ models/
 
 - `document.md`：面向用户和 Agent 的正文。
 - `state.json`：身份、音频来源、层级、工作流状态、当前处理记录和当前处理结果。
-- `assets/` 源音频。也可以暂时以外部引用表达，记录其 checksum 和缺失状态。
+- `assets/`：源音频托管的目标位置；当前 source 使用 audio_path/audio_asset_id，目录图不表示托管机制已实现。
 - `indexes/` 只保存可重建的全文、embedding、解析和搜索缓存。
 - `settings`、模型缓存和 Speaker Library 是独立运行资产，不是项目树事实；Speaker Library 本身是不可删除资产，不能被当作索引缓存清理。
-- 当前音频导入仍可保存源文件路径，不复制音频；要满足不可删除资产的完整生命周期，需要补齐音频托管、checksum 和丢失恢复。
-
-//TODO - 为源音频增加明确的 asset manifest、checksum 和托管/外部引用状态；用移动、缺失、恢复和重建测试验证不可删除资产的生命周期语义。
+资产托管、校验与移动/缺失/恢复的进度及 TODO 仅记录在 [Workspace Host](workspace-host.md)，本文只定义文档状态，不重复维护实施清单。
 
 项目资产文件是唯一事实来源。列表、查询视图和项目树通过扫描重建，文件变化通过 watcher 触发刷新；索引只提供查询加速，删除或损坏后必须能从资产重建。文件生命周期、外部编辑与历史保留见[Workspace Host](workspace-host.md)。
 
@@ -137,7 +135,7 @@ MeetNote 写入关系时必须拒绝：
 
 扫描外部修改时检查目录 ID、schema、重复 ID、父节点、循环、来源、声明深度和三层上限。无效文档保留为可定位 issue，不得静默生成另一棵树。
 
-拖动到目标内部表示 reparent；拖动到目标前后表示同级 reorder。关系写回必须更新文档 JSON，而不是只修改 UI 内存。多文档事务、严格时间范围包含关系和结构化内部链接仍需补齐；Agent mutation 已有事务与范围校验，但尚不能代表所有写入路径，见[Workspace 恢复边界](workspace-host.md)。
+拖动到目标内部表示 reparent；拖动到目标前后表示同级 reorder。关系写回必须更新文档 JSON，而不是只修改 UI 内存。Agent mutation 已有多文档 batch、严格时间范围/树范围校验、journal、幂等和 undo；非 Agent 的其他直接编辑入口仍需继续收敛到同一提交边界，见[Workspace 恢复边界](workspace-host.md)。
 
 ## 子项目分割标准
 
