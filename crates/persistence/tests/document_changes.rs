@@ -2,6 +2,7 @@
 //! pushes committed changes straight into the stream.
 
 use application::{DocumentChange, DocumentChanges, DocumentService};
+use fs2::FileExt;
 use futures::{FutureExt, StreamExt};
 use persistence::FileDocumentRepository;
 use std::fs;
@@ -52,6 +53,32 @@ fn a_file_created_in_the_workspace_arrives_as_an_async_change() {
         next_within(&mut changes, Duration::from_secs(5)),
         Some(DocumentChange::Changed)
     );
+    drop(changes);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_change_arrives_only_after_the_writer_releases_the_repository_lock() {
+    let root = temp_root("locked");
+    let mut changes = subscribe(&root);
+    // Another writer's transaction holds the cross-process repository lock.
+    fs::create_dir_all(root.join(".agent-mutations")).unwrap();
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(root.join(".agent-mutations/repository.lock"))
+        .unwrap();
+    lock.lock_exclusive().unwrap();
+
+    fs::write(root.join("external-note.md"), "# External\n").unwrap();
+    let during = next_within(&mut changes, Duration::from_millis(200));
+    FileExt::unlock(&lock).unwrap();
+    let after = next_within(&mut changes, Duration::from_secs(5));
+
+    assert_eq!(during, None);
+    assert_eq!(after, Some(DocumentChange::Changed));
     drop(changes);
     fs::remove_dir_all(root).unwrap();
 }

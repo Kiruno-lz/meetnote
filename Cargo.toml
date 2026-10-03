@@ -38,6 +38,7 @@ ureq = "2.12"
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 notify = "8"
+fs2 = "0.4"
 ndarray = "0.17"
 
 # GPUI is still pre-1.0. zui and its gpui-component fork are bumped together,
