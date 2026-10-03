@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "fixtureType": "assistant-semantic-cross-scope",
+  "independentModelEvidence": false,
+  "provenance": {
+    "kind": "deterministic_fixture",
+    "description": "Evaluator-authored scope and writeback contract; gold is not a model prediction"
+  },
+  "documents": [
+    {
+      "documentId": "doc-alpha",
+      "blocks": [
+        {
+          "blockId": "doc-alpha:block-1",
+          "segments": [
+            {"segmentId": "alpha-1", "text": "release planning"},
+            {"segmentId": "alpha-2", "text": "release owner"}
+          ]
+        },
+        {
+          "blockId": "doc-alpha:block-2",
+          "segments": [
+            {"segmentId": "alpha-3", "text": "budget decision"},
+            {"segmentId": "alpha-4", "text": "budget action"}
+          ]
+        }
+      ]
+    },
+    {
+      "documentId": "doc-beta",
+      "blocks": [
+        {
+          "blockId": "doc-beta:block-1",
+          "segments": [
+            {"segmentId": "beta-1", "text": "migration risk"},
+            {"segmentId": "beta-2", "text": "rollback rehearsal"}
+          ]
+        },
+        {
+          "blockId": "doc-beta:block-2",
+          "segments": [
+            {"segmentId": "beta-3", "text": "unrelated note"},
+            {"segmentId": "beta-4", "text": "unrelated follow-up"}
+          ]
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "caseId": "cross-block-partition",
+      "family": "partition",
+      "inputDocumentIds": ["doc-alpha"],
+      "inputBlockIds": ["doc-alpha:block-1", "doc-alpha:block-2"],
+      "gold": {
+        "mode": "partition",
+        "children": [
+          {
+            "childId": "alpha-plan",
+            "spans": [{"documentId": "doc-alpha", "blockId": "doc-alpha:block-1", "segmentIds": ["alpha-1", "alpha-2"]}],
+            "evidenceSegmentIds": ["alpha-1"]
+          },
+          {
+            "childId": "alpha-budget",
+            "spans": [{"documentId": "doc-alpha", "blockId": "doc-alpha:block-2", "segmentIds": ["alpha-3", "alpha-4"]}],
+            "evidenceSegmentIds": ["alpha-3"]
+          }
+        ],
+        "uncoveredSpans": []
+      },
+      "negativeCases": [
+        {"errorCode": "DUPLICATE_SEGMENT", "description": "repeat alpha-2 in the second child"},
+        {"errorCode": "OMITTED_SEGMENT", "description": "remove alpha-4 from all children"}
+      ]
+    },
+    {
+      "caseId": "cross-document-extract",
+      "family": "extract",
+      "inputDocumentIds": ["doc-alpha", "doc-beta"],
+      "inputBlockIds": ["doc-alpha:block-2", "doc-beta:block-1", "doc-beta:block-2"],
+      "gold": {
+        "mode": "extract",
+        "children": [
+          {
+            "childId": "budget-and-risk",
+            "spans": [
+              {"documentId": "doc-alpha", "blockId": "doc-alpha:block-2", "segmentIds": ["alpha-3", "alpha-4"]},
+              {"documentId": "doc-beta", "blockId": "doc-beta:block-1", "segmentIds": ["beta-1", "beta-2"]}
+            ],
+            "evidenceSegmentIds": ["alpha-3", "beta-1"]
+          }
+        ],
+        "uncoveredSpans": [
+          {"documentId": "doc-beta", "blockId": "doc-beta:block-2", "segmentIds": ["beta-3", "beta-4"]}
+        ]
+      },
+      "negativeCases": [
+        {"errorCode": "DUPLICATE_SEGMENT", "description": "repeat beta-1 in the uncovered span"},
+        {"errorCode": "OMITTED_SEGMENT", "description": "omit beta-4 from the complement"}
+      ]
+    },
+    {
+      "caseId": "single-topic-none",
+      "family": "none",
+      "inputDocumentIds": ["doc-beta"],
+      "inputBlockIds": ["doc-beta:block-2"],
+      "gold": {"mode": "none", "children": [], "uncoveredSpans": []},
+      "semanticRationale": {
+        "topicSupport": "insufficient",
+        "instructionIndependent": true,
+        "evidenceSegmentIds": ["beta-3", "beta-4"],
+        "reason": "The supplied segments contain no supported target-topic boundary; the keep-whole directive is not the decision evidence."
+      },
+      "negativeCases": [
+        {"errorCode": "DUPLICATE_SEGMENT", "description": "none mode must not contain a child"},
+        {"errorCode": "OMITTED_SEGMENT", "description": "none mode does not report an artificial complement"}
+      ]
+    },
+    {
+      "caseId": "cross-block-second-pass",
+      "family": "nested",
+      "inputDocumentIds": ["doc-alpha"],
+      "inputBlockIds": ["doc-alpha:block-1", "doc-alpha:block-2"],
+      "gold": {
+        "mode": "partition",
+        "children": [
+          {
+            "childId": "alpha-all",
+            "spans": [
+              {"documentId": "doc-alpha", "blockId": "doc-alpha:block-1", "segmentIds": ["alpha-1", "alpha-2"]},
+              {"documentId": "doc-alpha", "blockId": "doc-alpha:block-2", "segmentIds": ["alpha-3", "alpha-4"]}
+            ],
+            "evidenceSegmentIds": ["alpha-1", "alpha-3"]
+          }
+        ],
+        "uncoveredSpans": [],
+        "secondPass": {
+          "parentChildId": "alpha-all",
+          "mode": "partition",
+          "children": [
+            {
+              "childId": "alpha-context",
+              "spans": [{"documentId": "doc-alpha", "blockId": "doc-alpha:block-1", "segmentIds": ["alpha-1", "alpha-2"]}],
+              "evidenceSegmentIds": ["alpha-1"]
+            },
+            {
+              "childId": "alpha-decision",
+              "spans": [{"documentId": "doc-alpha", "blockId": "doc-alpha:block-2", "segmentIds": ["alpha-3", "alpha-4"]}],
+              "evidenceSegmentIds": ["alpha-3"]
+            }
+          ],
+          "uncoveredSpans": []
+        }
+      },
+      "negativeCases": [
+        {"errorCode": "DUPLICATE_SEGMENT", "description": "repeat alpha-3 in a nested child"},
+        {"errorCode": "OMITTED_SEGMENT", "description": "drop alpha-4 during the second pass"}
+      ]
+    }
+  ]
+}
