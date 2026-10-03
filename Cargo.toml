@@ -80,3 +80,15 @@ refineable = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c60
 scheduler = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
 sum_tree = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
 util_macros = { git = "https://github.com/Kiruno-lz/zui", rev = "5d54d27579d87c6027e7699a2b9fcfffcb125b6b" }
+
+[profile.dev]
+# macOS defaults dev builds to unpacked debuginfo: DWARF stays in loose
+# target/debug/deps/*.rcgu.o files, and every incremental rebuild writes a new
+# set without removing the superseded one. Packed keeps the same workspace
+# debuginfo in one .dSYM per binary.
+split-debuginfo = "packed"
+
+# Dependencies are not debugged at the variable level. Panic locations do not
+# come from DWARF, so test failures still report file:line.
+[profile.dev.package."*"]
+debug = false
