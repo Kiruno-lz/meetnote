@@ -1,20 +1,26 @@
 use application::{
-    DocumentChange, DocumentIssue, DocumentMutationBatch, DocumentMutationCommit,
+    DocumentChange, DocumentIssue, DocumentMetadata, DocumentMutationBatch, DocumentMutationCommit,
     DocumentMutationRevision, DocumentMutationStoreError, DocumentRepository, DocumentSnapshot,
 };
 use contracts::{AgentMutationProvenance, DocumentRecord};
-use domain::{DocumentId, DocumentState};
+use domain::{
+    AudioSource, DocumentContent, DocumentHierarchy, DocumentId, DocumentIdentity, DocumentSchema,
+    DocumentState, DocumentStatus,
+};
 use fs2::FileExt;
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub const DOCUMENT_MARKDOWN_FILENAME: &str = "document.md";
 pub const DOCUMENT_STATE_FILENAME: &str = "state.json";
+/// Bound one metadata input file without constructing a complete document.
+pub const MAX_DOCUMENT_PACKAGE_FILE_BYTES: usize = 16 * 1024 * 1024;
 const AGENT_MUTATION_DIRECTORY: &str = ".agent-mutations";
 const AGENT_MUTATION_JOURNAL_VERSION: u32 = 1;
 
@@ -81,6 +87,55 @@ impl DocumentPackage {
         Ok(package)
     }
 
+    pub fn load_metadata(
+        directory: impl AsRef<Path>,
+    ) -> Result<DocumentMetadata, DocumentPackageError> {
+        let directory = directory.as_ref().to_path_buf();
+        if !directory.is_dir() {
+            return Err(DocumentPackageError::NotDirectory(directory));
+        }
+        let state_path = directory.join(DOCUMENT_STATE_FILENAME);
+        let file = File::open(&state_path).map_err(|source| DocumentPackageError::Read {
+            path: state_path.clone(),
+            source,
+        })?;
+        if file
+            .metadata()
+            .map_err(|source| DocumentPackageError::Read {
+                path: state_path.clone(),
+                source,
+            })?
+            .len()
+            > MAX_DOCUMENT_PACKAGE_FILE_BYTES as u64
+        {
+            return Err(DocumentPackageError::TooLarge {
+                path: state_path,
+                max_bytes: MAX_DOCUMENT_PACKAGE_FILE_BYTES,
+            });
+        }
+        let wire: MetadataState =
+            serde_json::from_reader(BufReader::new(file)).map_err(|source| {
+                DocumentPackageError::InvalidState {
+                    path: state_path.clone(),
+                    source,
+                }
+            })?;
+        let metadata = wire
+            .into_metadata()
+            .map_err(|error| DocumentPackageError::InvalidStateValue { error })?;
+        let directory_name = directory
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| DocumentPackageError::InvalidDirectory(directory.clone()))?;
+        if directory_name != metadata.document_id.as_str() {
+            return Err(DocumentPackageError::DirectoryIdMismatch {
+                directory,
+                document_id: metadata.document_id,
+            });
+        }
+        Ok(metadata)
+    }
+
     pub fn directory(&self) -> &Path {
         &self.directory
     }
@@ -129,6 +184,45 @@ impl DocumentPackage {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct MetadataState {
+    schema: DocumentSchema,
+    identity: DocumentIdentity,
+    source: AudioSource,
+    hierarchy: DocumentHierarchy,
+    document_status: DocumentStatus,
+    content: DocumentContent,
+}
+
+impl MetadataState {
+    fn into_metadata(self) -> Result<DocumentMetadata, domain::DocumentStateError> {
+        let identity = self.identity;
+        let schema = self.schema;
+        let source = self.source;
+        let hierarchy = self.hierarchy;
+        let document_status = self.document_status;
+        let content = self.content;
+        if schema.schema_version != domain::DOCUMENT_STATE_SCHEMA_VERSION {
+            return Err(domain::DocumentStateError::UnsupportedSchema {
+                actual: schema.schema_version,
+                expected: domain::DOCUMENT_STATE_SCHEMA_VERSION,
+            });
+        }
+        Ok(DocumentMetadata {
+            document_id: identity.id,
+            revision: schema.revision,
+            title: content.title,
+            tags: content.tags,
+            summary: content.summary,
+            document_status: document_status.value,
+            parent_id: hierarchy.parent_id,
+            depth: hierarchy.depth,
+            sibling_order: hierarchy.sibling_order,
+            audio_asset_id: source.audio_asset_id,
+        })
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DocumentPackageError {
     #[error("document package directory does not exist: {0}")]
@@ -165,6 +259,8 @@ pub enum DocumentPackageError {
         directory: PathBuf,
         document_id: DocumentId,
     },
+    #[error("document package file {path} exceeds the {max_bytes} byte limit")]
+    TooLarge { path: PathBuf, max_bytes: usize },
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), DocumentPackageError> {
@@ -271,6 +367,48 @@ impl DocumentScanner {
         packages.sort_by_key(|package| package.state.hierarchy.sibling_order);
         errors.extend(validate_relations(&packages));
         Ok(DocumentScan { packages, errors })
+    }
+
+    pub fn scan_metadata(
+        &self,
+        visitor: &mut dyn FnMut(DocumentMetadata) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        if !self.root.exists() {
+            return Ok(());
+        }
+        if !self.root.is_dir() {
+            return Err(DocumentScannerError::RootNotDirectory(self.root.clone()).to_string());
+        }
+        for entry in fs::read_dir(&self.root).map_err(|source| {
+            DocumentScannerError::ReadRoot {
+                path: self.root.clone(),
+                source,
+            }
+            .to_string()
+        })? {
+            let entry = entry.map_err(|source| {
+                DocumentScannerError::ReadRoot {
+                    path: self.root.clone(),
+                    source,
+                }
+                .to_string()
+            })?;
+            let path = entry.path();
+            if !path.is_dir()
+                || entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with('.'))
+            {
+                continue;
+            }
+            let metadata =
+                DocumentPackage::load_metadata(&path).map_err(|error| error.to_string())?;
+            if !visitor(metadata)? {
+                break;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -402,6 +540,22 @@ impl DocumentRepository for InMemoryDocumentRepository {
                 .collect(),
             issues: Vec::new(),
         })
+    }
+
+    fn scan_metadata(
+        &self,
+        visitor: &mut dyn FnMut(DocumentMetadata) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        let documents = self
+            .documents
+            .read()
+            .map_err(|_| "document repository lock poisoned".to_string())?;
+        for document in documents.values() {
+            if !visitor(DocumentMetadata::from(document))? {
+                break;
+            }
+        }
+        Ok(())
     }
 
     fn get(&self, document_id: &DocumentId) -> Result<Option<DocumentState>, String> {
@@ -1499,6 +1653,18 @@ impl DocumentRepository for FileDocumentRepository {
             .read()
             .map_err(|_| "mutation lock poisoned".to_string())?;
         self.snapshot_unlocked()
+    }
+
+    fn scan_metadata(
+        &self,
+        visitor: &mut dyn FnMut(DocumentMetadata) -> Result<bool, String>,
+    ) -> Result<(), String> {
+        let _repository_lock = self.acquire_repository_lock()?;
+        let _guard = self
+            .transaction_lock
+            .read()
+            .map_err(|_| "mutation lock poisoned".to_string())?;
+        self.scanner.scan_metadata(visitor)
     }
 
     fn get(&self, document_id: &DocumentId) -> Result<Option<DocumentState>, String> {
@@ -3814,6 +3980,102 @@ mod tests {
         );
         assert_eq!(recovered.revision(), 0);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_scan_reads_one_bounded_projection_and_stops_without_snapshot() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-metadata-scan-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        for id in ["first", "second", "third"] {
+            repository
+                .save(
+                    DocumentState::new(DocumentId::new(id), format!("{id} title"), "recording.m4a"),
+                    None,
+                )
+                .unwrap();
+        }
+
+        let mut visited = Vec::new();
+        repository
+            .scan_metadata(&mut |metadata| {
+                visited.push(metadata);
+                Ok(false)
+            })
+            .unwrap();
+
+        assert_eq!(visited.len(), 1);
+        assert!(visited[0].title.ends_with("title"));
+        assert!(visited[0].audio_asset_id.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_scan_rejects_a_future_schema_with_its_actual_version() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-metadata-schema-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        let document = DocumentState::new(DocumentId::new("document"), "Title", "audio.wav");
+        repository.save(document.clone(), None).unwrap();
+        let mut future = document;
+        future.schema.schema_version = domain::DOCUMENT_STATE_SCHEMA_VERSION + 1;
+        let directory = root.join("document");
+        fs::write(
+            directory.join(DOCUMENT_STATE_FILENAME),
+            serde_json::to_vec(&future).unwrap(),
+        )
+        .unwrap();
+        let error = DocumentPackage::load_metadata(&directory).unwrap_err();
+        assert!(
+            matches!(&error, DocumentPackageError::InvalidStateValue {
+            error: domain::DocumentStateError::UnsupportedSchema { actual, expected }
+        } if *actual == domain::DOCUMENT_STATE_SCHEMA_VERSION + 1 && *expected == domain::DOCUMENT_STATE_SCHEMA_VERSION),
+            "{error:?}"
+        );
+        let mut visited = false;
+        assert!(repository
+            .scan_metadata(&mut |_| {
+                visited = true;
+                Ok(true)
+            })
+            .is_err());
+        assert!(!visited);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn metadata_scan_reports_missing_fields_as_invalid_json_state() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-metadata-fields-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let directory = root.join("document");
+        fs::create_dir_all(&directory).unwrap();
+        let mut state = serde_json::to_value(DocumentState::new(
+            DocumentId::new("document"),
+            "Title",
+            "audio.wav",
+        ))
+        .unwrap();
+        state.as_object_mut().unwrap().remove("content");
+        fs::write(
+            directory.join(DOCUMENT_STATE_FILENAME),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        let error = DocumentPackage::load_metadata(&directory).unwrap_err();
+        assert!(
+            matches!(error, DocumentPackageError::InvalidState { .. }),
+            "{error:?}"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn unique_suffix() -> u128 {
