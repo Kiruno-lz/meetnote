@@ -138,7 +138,7 @@ pub enum DocumentPackageError {
         #[source]
         source: serde_json::Error,
     },
-    #[error("invalid document state: {error:?}")]
+    #[error("invalid document state: {error}")]
     InvalidStateValue { error: domain::DocumentStateError },
     #[error("cannot serialize document state: {source}")]
     SerializeState {
@@ -153,7 +153,7 @@ pub enum DocumentPackageError {
     },
     #[error("document package path is not a directory: {0}")]
     InvalidDirectory(PathBuf),
-    #[error("document directory {directory} contains state for {document_id:?}")]
+    #[error("document directory {directory} contains state for {document_id}")]
     DirectoryIdMismatch {
         directory: PathBuf,
         document_id: DocumentId,
@@ -197,35 +197,9 @@ impl DocumentScan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DocumentScanError {
-    InvalidPackage {
-        path: PathBuf,
-        message: String,
-    },
-    DuplicateDocumentId {
-        document_id: DocumentId,
-        path: PathBuf,
-    },
-    MissingParent {
-        document_id: DocumentId,
-        parent_id: DocumentId,
-    },
-    Cycle {
-        document_id: DocumentId,
-    },
-    MaximumDepth {
-        document_id: DocumentId,
-    },
-    CrossAudioAsset {
-        document_id: DocumentId,
-    },
-    DepthMismatch {
-        document_id: DocumentId,
-        declared: u8,
-        actual: u8,
-    },
-}
+/// Why a root entry did not become a tree document; the variants live in
+/// `application` so issue messages and paths are built in one place.
+pub use application::DocumentIssueKind as DocumentScanError;
 
 #[derive(Debug, Clone)]
 pub struct DocumentScanner {
@@ -269,6 +243,7 @@ impl DocumentScanner {
         for entry in entries {
             let path = entry.path();
             if !path.is_dir() {
+                errors.extend(DocumentScanError::unexpected_root_entry(&path));
                 continue;
             }
             match DocumentPackage::load(&path) {
@@ -522,6 +497,26 @@ impl DocumentWatcher {
     }
 }
 
+/// Watches `root` and pushes each change into the returned stream from the
+/// notify callback itself. A watcher error ends the stream.
+fn subscribe_document_changes(root: &Path) -> Result<application::DocumentChanges, String> {
+    let (sender, changes) = futures::channel::mpsc::unbounded();
+    let mut watcher = RecommendedWatcher::new(
+        move |result: Result<Event, notify::Error>| match result {
+            Ok(_) => {
+                let _ = sender.unbounded_send(DocumentChange::Changed);
+            }
+            Err(_) => sender.close_channel(),
+        },
+        Config::default(),
+    )
+    .map_err(|error| error.to_string())?;
+    watcher
+        .watch(root, RecursiveMode::Recursive)
+        .map_err(|error| error.to_string())?;
+    Ok(application::DocumentChanges::new(changes, watcher))
+}
+
 impl DocumentRepository for FileDocumentRepository {
     fn snapshot(&self) -> Result<DocumentSnapshot, String> {
         let scan = self.scanner.scan().map_err(|error| error.to_string())?;
@@ -529,10 +524,7 @@ impl DocumentRepository for FileDocumentRepository {
         let issues = scan
             .errors
             .into_iter()
-            .map(|error| DocumentIssue {
-                path: issue_path(self.root(), &error),
-                message: format!("{error:?}"),
-            })
+            .map(|error| DocumentIssue::from_kind(self.root(), &error))
             .collect();
         Ok(DocumentSnapshot { documents, issues })
     }
@@ -577,6 +569,10 @@ impl DocumentRepository for FileDocumentRepository {
         Ok(receiver)
     }
 
+    fn subscribe_changes(&self) -> Result<application::DocumentChanges, String> {
+        subscribe_document_changes(self.root())
+    }
+
     fn save(&self, mut document: DocumentState, markdown: Option<String>) -> Result<(), String> {
         let directory = self.root().join(document.id().as_str());
         let existing = DocumentPackage::load(&directory).ok();
@@ -599,20 +595,6 @@ fn now_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
-}
-
-fn issue_path(root: &Path, error: &DocumentScanError) -> String {
-    match error {
-        DocumentScanError::InvalidPackage { path, .. }
-        | DocumentScanError::DuplicateDocumentId { path, .. } => path.display().to_string(),
-        DocumentScanError::MissingParent { document_id, .. }
-        | DocumentScanError::Cycle { document_id }
-        | DocumentScanError::MaximumDepth { document_id }
-        | DocumentScanError::CrossAudioAsset { document_id }
-        | DocumentScanError::DepthMismatch { document_id, .. } => {
-            root.join(document_id.as_str()).display().to_string()
-        }
-    }
 }
 
 #[cfg(test)]

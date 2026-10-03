@@ -58,17 +58,28 @@ pub mod download {
         }
 
         pub fn resume(&self) {
-            self.paused.store(false, Ordering::Release);
-            self.wait_condvar.notify_all();
+            self.set_and_wake(&self.paused, false);
         }
 
         pub fn cancel(&self) {
-            self.cancelled.store(true, Ordering::Release);
-            self.wait_condvar.notify_all();
+            self.set_and_wake(&self.cancelled, true);
         }
 
+        /// Sequentially consistent, so `ModelManager::cancel` can rely on a
+        /// worker started after it looked seeing the cancellation.
         pub fn is_cancelled(&self) -> bool {
-            self.cancelled.load(Ordering::Acquire)
+            self.cancelled.load(Ordering::SeqCst)
+        }
+
+        /// Changes `flag` under `wait_lock`: a paused worker holds that lock
+        /// from its flag check until it waits, so it cannot miss the wake-up.
+        fn set_and_wake(&self, flag: &AtomicBool, value: bool) {
+            let _guard = self
+                .wait_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            flag.store(value, Ordering::SeqCst);
+            self.wait_condvar.notify_all();
         }
 
         pub(crate) fn checkpoint(&self) -> Result<(), DownloadError> {
@@ -387,12 +398,51 @@ pub mod download {
             assert_eq!(fs::read(&destination).unwrap(), payload);
             fs::remove_dir_all(root).unwrap();
         }
+
+        #[test]
+        fn cancel_wakes_a_paused_worker_between_its_flag_check_and_its_wait() {
+            let control = DownloadControl::default();
+            control.pause();
+            // Stands in for a paused worker inside `checkpoint` that has seen
+            // the flags but not started waiting: it holds `wait_lock`.
+            let checked = control.wait_lock.lock().unwrap();
+            assert!(!control.is_cancelled());
+            let (returned, cancel_returned) = std::sync::mpsc::channel();
+            let canceller = control.clone();
+            std::thread::spawn(move || {
+                canceller.cancel();
+                let _ = returned.send(());
+            });
+
+            // A wake-up sent now reaches no waiter and is lost.
+            assert!(
+                cancel_returned
+                    .recv_timeout(std::time::Duration::from_millis(50))
+                    .is_err(),
+                "cancel signalled before the worker waited"
+            );
+            let (_guard, waited) = control
+                .wait_condvar
+                .wait_timeout_while(checked, std::time::Duration::from_secs(5), |_| {
+                    !control.is_cancelled()
+                })
+                .unwrap();
+            assert!(!waited.timed_out(), "the cancel wake-up was lost");
+            cancel_returned
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
     }
 }
 
 pub mod manager;
+pub mod probe;
 
-pub use manager::{BackendProbe, ModelManager};
+pub use manager::{BackendProbe, ModelManager, ReprobeFinished, ReprobeTask};
+pub use probe::{
+    ArtifactChecksum, BackendCheck, BackendProbeResult, ChecksumResult, ModelFailure,
+    ModelFailureRecord, ModelOperation, ProbeOutcome, ProbeRecord, ProbeRecordError,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -443,11 +493,22 @@ pub enum ModelInstallState {
     Installed,
 }
 
+/// A catalog entry with what is known about its local install. `model`
+/// carries the catalog `license`, `source` and `sha256`.
 #[derive(Debug, Clone)]
 pub struct ModelAvailability {
     pub model: ModelCatalogEntry,
     pub install_state: ModelInstallState,
     pub artifact_paths: Vec<std::path::PathBuf>,
+    /// The last artifact probe, read from `ModelCatalogEntry::probe_record_path`.
+    /// It describes the files as they were at `probed_at_ms`.
+    pub probe: Option<ProbeRecord>,
+    /// Why the last download or re-probe failed; a later successful one
+    /// clears it.
+    pub failure: Option<ModelFailureRecord>,
+    /// Set when the record file exists but cannot be read; `probe` and
+    /// `failure` are then empty.
+    pub record_error: Option<ProbeRecordError>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -579,21 +640,49 @@ impl ModelCatalogEntry {
             .collect()
     }
 
+    /// The probe record file, beside the install directory so the directory
+    /// holds only artifacts.
+    pub fn probe_record_path(&self, model_root: impl AsRef<Path>) -> std::path::PathBuf {
+        model_root
+            .as_ref()
+            .join(&self.task)
+            .join(format!("{}.probe.json", self.id))
+    }
+
+    /// Whether the declared artifacts are present; loads nothing.
+    pub(crate) fn install_state(&self, model_root: impl AsRef<Path>) -> ModelInstallState {
+        install_state_of(&self.artifact_paths(model_root))
+    }
+
+    /// Reads the artifact files' presence and the probe record.
     pub fn availability(&self, model_root: impl AsRef<Path>) -> ModelAvailability {
+        let model_root = model_root.as_ref();
         let artifact_paths = self.artifact_paths(model_root);
-        let present = artifact_paths.iter().filter(|path| path.is_file()).count();
-        let install_state = if present == 0 {
-            ModelInstallState::Missing
-        } else if present == artifact_paths.len() {
-            ModelInstallState::Installed
-        } else {
-            ModelInstallState::Partial
-        };
+        let install_state = install_state_of(&artifact_paths);
+        let (record, record_error) =
+            match probe::read_record(&self.probe_record_path(model_root), &self.id) {
+                Ok(record) => (record, None),
+                Err(error) => (probe::ModelRecord::default(), Some(error)),
+            };
         ModelAvailability {
             model: self.clone(),
             install_state,
             artifact_paths,
+            probe: record.probe,
+            failure: record.failure,
+            record_error,
         }
+    }
+}
+
+fn install_state_of(artifact_paths: &[std::path::PathBuf]) -> ModelInstallState {
+    let present = artifact_paths.iter().filter(|path| path.is_file()).count();
+    if present == 0 {
+        ModelInstallState::Missing
+    } else if present == artifact_paths.len() {
+        ModelInstallState::Installed
+    } else {
+        ModelInstallState::Partial
     }
 }
 

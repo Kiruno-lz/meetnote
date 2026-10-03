@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 contracts = { path = "../contracts" }
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 bzip2.workspace = true

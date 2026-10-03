@@ -1,6 +1,14 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
+mod speaker_correction;
+mod statistics;
+
+pub use speaker_correction::{SpeakerCorrection, SpeakerCorrectionError, UNASSIGNED_SPEAKER_ID};
+pub use statistics::{
+    count_words, document_result_statistics, DocumentResultStatistics, ProvenanceGap,
+};
+
 pub const DOCUMENT_STATE_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
@@ -17,6 +25,12 @@ impl ProjectId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl std::fmt::Display for ProjectId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -508,6 +522,19 @@ pub enum DocumentStateError {
     UnsupportedSchema { actual: u32, expected: u32 },
 }
 
+impl std::fmt::Display for DocumentStateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedSchema { actual, expected } => write!(
+                f,
+                "unsupported document schema version {actual}, expected {expected}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for DocumentStateError {}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectTreeError {
     ProjectNotFound,
@@ -516,6 +543,20 @@ pub enum ProjectTreeError {
     MaximumDepth,
     CrossAudioAsset,
 }
+
+impl std::fmt::Display for ProjectTreeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::ProjectNotFound => "the document does not exist",
+            Self::ParentNotFound => "the parent or sibling target does not exist",
+            Self::Cycle => "the move would place a document under itself",
+            Self::MaximumDepth => "the move would exceed the three-level tree limit",
+            Self::CrossAudioAsset => "the move would cross audio sources or sibling groups",
+        })
+    }
+}
+
+impl std::error::Error for ProjectTreeError {}
 
 pub fn reparent_project(
     projects: &mut [DocumentState],
@@ -726,7 +767,7 @@ pub fn align_transcript_and_speakers(
                 transcript_segment_id: segment.id.clone(),
                 speaker_id: speaker
                     .map(|candidate| candidate.speaker_id.clone())
-                    .unwrap_or_else(|| "unknown".to_string()),
+                    .unwrap_or_else(|| UNASSIGNED_SPEAKER_ID.to_string()),
                 speaker_profile_id: speaker
                     .and_then(|candidate| candidate.speaker_profile_id.clone()),
                 speaker_label: speaker.and_then(|candidate| candidate.speaker_label.clone()),
@@ -881,6 +922,31 @@ mod tests {
         assert_eq!(project.merge_speaker("speaker-1", "speaker-0"), 1);
         assert_eq!(project.results.diarization[0].speaker_id, "speaker-0");
         assert_eq!(project.results.speaker_segments[0].text, "keep this text");
+    }
+
+    #[test]
+    fn identifiers_and_tree_errors_display_as_plain_text() {
+        assert_eq!(ProjectId::new("doc-1").to_string(), "doc-1");
+        assert_eq!(
+            DocumentStateError::UnsupportedSchema {
+                actual: 3,
+                expected: 2
+            }
+            .to_string(),
+            "unsupported document schema version 3, expected 2"
+        );
+        for error in [
+            ProjectTreeError::ProjectNotFound,
+            ProjectTreeError::ParentNotFound,
+            ProjectTreeError::Cycle,
+            ProjectTreeError::MaximumDepth,
+            ProjectTreeError::CrossAudioAsset,
+        ] {
+            let message = error.to_string();
+            assert!(!message.is_empty());
+            assert!(!message.contains(['{', '}', '(', '"']), "{message}");
+            assert_ne!(message, format!("{error:?}"));
+        }
     }
 
     #[test]

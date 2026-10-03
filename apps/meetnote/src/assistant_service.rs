@@ -8,22 +8,24 @@ use contracts::{
     AgentToolError, AgentToolResult,
 };
 use domain::DocumentId;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use llm::{
     AuthMode, ConnectionConfig, Credential, LiteLlmProvider, LlmProtocol as ProviderProtocol,
     LlmProvider,
 };
-use runtime::{JobRuntime, Progress};
+use runtime::{JobEvent, JobRuntime, Progress};
 use settings::{
     AppSettings, AssistantAuthMode, AssistantConnectionProfile, AssistantSettings, LlmProtocol,
-    SettingsError, SettingsService,
+    SettingsError, SettingsGrant, SettingsPatch, SettingsService,
 };
 use std::io::Read;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use ui::assistant_ui::{
-    AssistantDocumentChange, AssistantFieldDiff, AssistantMutationSummary, AssistantPendingReview,
-    AssistantProgress, AssistantProgressHandler, AssistantRangePreview, AssistantRunDiagnostics,
-    AssistantRunRequest, AssistantRunResult, AssistantTreeChange, AssistantUiError,
-    AssistantUiService, AssistantUsage, ConnectionDiagnostic, ConnectionProbeKind,
+    AssistantDocumentChange, AssistantFieldDiff, AssistantJobEvent, AssistantMutationSummary,
+    AssistantPendingReview, AssistantProgress, AssistantProgressHandler, AssistantRangePreview,
+    AssistantRunDiagnostics, AssistantRunRequest, AssistantRunResult, AssistantSettingsSave,
+    AssistantTreeChange, AssistantUiError, AssistantUiService, AssistantUsage,
+    ConnectionDiagnostic, ConnectionProbeKind,
 };
 
 #[derive(Clone)]
@@ -31,21 +33,116 @@ pub struct DesktopAssistantService {
     settings: SettingsService,
     documents: DocumentService,
     jobs: Arc<JobRuntime>,
+    job_events: Arc<Mutex<Vec<UnboundedSender<AssistantJobEvent>>>>,
 }
 
 impl DesktopAssistantService {
+    #[cfg(test)]
     pub fn new(settings: SettingsService, documents: DocumentService) -> Self {
+        Self::with_job_runtime(settings, documents, Arc::new(JobRuntime::default()))
+    }
+
+    /// Runs Assistant jobs on the application's shared `jobs`, so they count
+    /// against the same worker limit as audio processing.
+    pub fn with_job_runtime(
+        settings: SettingsService,
+        documents: DocumentService,
+        jobs: Arc<JobRuntime>,
+    ) -> Self {
         Self {
             settings,
             documents,
-            jobs: Arc::new(JobRuntime::default()),
+            jobs,
+            job_events: Arc::default(),
         }
+    }
+
+    /// Republishes what the job has emitted so far, tagged with the run it
+    /// belongs to (`None` for probes). The service makes every state change
+    /// of its jobs on the calling thread, so publishing after each change
+    /// keeps a job's events in order without a forwarding thread.
+    fn publish_job_events(
+        &self,
+        events: &mut UnboundedReceiver<JobEvent>,
+        request_id: Option<&str>,
+    ) {
+        let mut subscribers = self
+            .job_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while let Ok(event) = events.try_recv() {
+            let event = AssistantJobEvent {
+                request_id: request_id.map(str::to_string),
+                event,
+            };
+            subscribers.retain(|sender| sender.unbounded_send(event.clone()).is_ok());
+        }
+    }
+
+    fn gateway(
+        &self,
+        document_ids: &[String],
+        write_mode: contracts::AgentWriteMode,
+    ) -> Result<WorkspaceCapabilityPort, AssistantUiError> {
+        if document_ids.is_empty() || document_ids.iter().any(|id| id.trim().is_empty()) {
+            return Err(ui_error(AgentToolError::new(
+                AgentErrorCode::DocumentAccessDenied,
+                "Assistant requires an explicit non-empty document grant",
+                false,
+            )));
+        }
+        Ok(WorkspaceCapabilityPort::new(
+            self.documents.clone(),
+            WorkspaceAccessPolicy::documents(
+                document_ids
+                    .iter()
+                    .cloned()
+                    .map(DocumentId::new)
+                    .collect::<Vec<_>>(),
+            ),
+        )
+        .with_actor(AgentActor::Assistant)
+        .with_write_mode(write_mode))
     }
 
     fn settings_snapshot(&self) -> Result<AppSettings, AssistantUiError> {
         self.settings
             .snapshot()
             .map_err(|error| settings_ui_error(error.to_string()))
+    }
+
+    fn configured_profile(
+        &self,
+        connection_id: &str,
+    ) -> Result<(AssistantSettings, AssistantConnectionProfile), AssistantUiError> {
+        let assistant = self.settings_snapshot()?.assistant;
+        if !assistant.enabled {
+            return Err(AssistantUiError {
+                code: "ASSISTANT_DISABLED".into(),
+                message: "Assistant is disabled in Settings".into(),
+                retryable: false,
+            });
+        }
+        if assistant.active_connection_id.as_deref() != Some(connection_id) {
+            return Err(ui_error(AgentToolError::new(
+                AgentErrorCode::ConnectionNotConfigured,
+                "requested connection is not the active Assistant connection",
+                false,
+            )));
+        }
+        let profile = assistant
+            .connections
+            .iter()
+            .find(|profile| profile.id == connection_id)
+            .cloned()
+            .ok_or_else(|| {
+                ui_error(AgentToolError::new(
+                    AgentErrorCode::ConnectionNotConfigured,
+                    "active Assistant connection was not found",
+                    false,
+                ))
+            })?;
+        Ok((assistant, profile))
     }
 
     fn provider(
@@ -121,6 +218,305 @@ impl DesktopAssistantService {
         };
         self.provider(&profile).map(Some)
     }
+
+    fn verify_source_revisions(
+        &self,
+        request: &AssistantRunRequest,
+    ) -> Result<Vec<String>, AssistantUiError> {
+        let mut ids = Vec::with_capacity(request.authorized_documents.len());
+        for document in &request.authorized_documents {
+            let id = DocumentId::new(document.document_id.clone());
+            let current = self
+                .documents
+                .get(&id)
+                .map_err(|message| {
+                    ui_error(AgentToolError::new(
+                        AgentErrorCode::WriteTransactionFailed,
+                        message,
+                        false,
+                    ))
+                })?
+                .ok_or_else(|| {
+                    let mut error = AgentToolError::new(
+                        AgentErrorCode::DocumentNotFound,
+                        "authorized document no longer exists",
+                        true,
+                    );
+                    error.document_id = Some(document.document_id.clone());
+                    ui_error(error)
+                })?;
+            if current.revision() != document.revision {
+                let mut error = AgentToolError::new(
+                    AgentErrorCode::DocumentRevisionConflict,
+                    "authorized document changed before the Assistant task started",
+                    true,
+                );
+                error.document_id = Some(document.document_id.clone());
+                error.expected_revision = Some(document.revision);
+                error.actual_revision = Some(current.revision());
+                return Err(ui_error(error));
+            }
+            ids.push(document.document_id.clone());
+        }
+        Ok(ids)
+    }
+
+    fn run_inner(
+        &self,
+        request: AssistantRunRequest,
+        cancellation: AgentCancellation,
+        progress_handler: AssistantProgressHandler,
+    ) -> Result<AssistantRunResult, AssistantUiError> {
+        let document_ids = self.verify_source_revisions(&request)?;
+        let (assistant, profile) = self.configured_profile(&request.connection_id)?;
+        let (provider, secret) = self.provider(&profile)?;
+        let gateway = self.gateway(&document_ids, assistant.write_mode)?;
+        let runtime = AgentRuntime::new(
+            Arc::new(provider),
+            gateway,
+            AgentRuntimeConfig {
+                max_tool_rounds: request.max_tool_rounds.min(assistant.max_tool_rounds),
+                max_validation_retries: request
+                    .max_validation_retries
+                    .min(assistant.max_validation_retries),
+                max_output_tokens: Some(profile.max_output_tokens),
+                context_window_tokens: profile.context_window_tokens,
+            },
+        );
+        let result = runtime.run_with_progress(
+            &AgentTask {
+                task_id: request.request_id,
+                scene: request.scene,
+                skill: request.skill,
+                prompt: request.prompt,
+                authorized_document_ids: document_ids,
+                projection: request.projection,
+            },
+            &cancellation,
+            |progress| progress_handler(map_progress(progress)),
+        );
+        map_run_result(result).map_err(|error| redact_ui_error(error, secret.as_deref()))
+    }
+}
+
+impl AssistantUiService for DesktopAssistantService {
+    /// A new profile and its credential commit in the same typed patch, with
+    /// one compare-and-swap.
+    fn save_assistant_settings(
+        &self,
+        expected_revision: String,
+        save: AssistantSettingsSave,
+    ) -> Result<AppSettings, AssistantUiError> {
+        let patch = SettingsPatch {
+            new_connection: save.new_connection,
+            ..save.patch
+        };
+        self.settings
+            .patch_if_equal(&expected_revision, patch, SettingsGrant::full())
+            .map_err(|error| AssistantUiError::from_settings(&error))
+    }
+
+    fn probe_connection(
+        &self,
+        profile: AssistantConnectionProfile,
+        kind: ConnectionProbeKind,
+        cancellation: AgentCancellation,
+    ) -> Result<ConnectionDiagnostic, AssistantUiError> {
+        let (provider, secret) = self.provider(&profile)?;
+        let (job, mut events) = self.jobs.create_job();
+        job.started();
+        self.publish_job_events(&mut events, None);
+        cancellation.link_job(&job.cancellation_token());
+        let secret_for_job = secret.clone();
+        let profile_for_job = profile.clone();
+        let result: Result<ConnectionDiagnostic, AssistantUiError> =
+            futures::executor::block_on(job.spawn_blocking(move || {
+                let descriptor = provider.descriptor();
+                let result = match kind {
+                    ConnectionProbeKind::Readiness => {
+                        provider.readiness(cancellation.llm()).map_err(|error| {
+                            redact_ui_error(
+                                ui_error(agent_error_from_llm(error)),
+                                secret_for_job.as_deref(),
+                            )
+                        })?;
+                        ConnectionDiagnostic {
+                            kind,
+                            ready: true,
+                            local: descriptor.local,
+                            models: None,
+                            text: None,
+                            client_tools: None,
+                            requested_model: profile_for_job.model.clone(),
+                            resolved_model: None,
+                            context_window_tokens: profile_for_job.context_window_tokens,
+                            message: "LiteLLM readiness endpoint is reachable".into(),
+                        }
+                    }
+                    ConnectionProbeKind::Model => {
+                        let probe = provider.probe(cancellation.llm()).map_err(|error| {
+                            redact_ui_error(
+                                ui_error(agent_error_from_llm(error)),
+                                secret_for_job.as_deref(),
+                            )
+                        })?;
+                        ConnectionDiagnostic {
+                            kind,
+                            ready: probe.ready,
+                            local: descriptor.local,
+                            models: probe.models,
+                            text: Some(probe.capabilities.text),
+                            client_tools: Some(probe.capabilities.client_tools),
+                            requested_model: probe.requested_model,
+                            resolved_model: probe.resolved_model,
+                            context_window_tokens: probe.context_window_tokens,
+                            message: "Text and client-tool capability probe completed".into(),
+                        }
+                    }
+                };
+                Ok(result)
+            }));
+        match &result {
+            Ok(_) => job.completed(),
+            Err(error) if error.code == "TASK_CANCELLED" => job.cancel(),
+            Err(error) => job.failed(error.to_string()),
+        }
+        self.publish_job_events(&mut events, None);
+        result
+    }
+
+    fn run(
+        &self,
+        request: AssistantRunRequest,
+        cancellation: AgentCancellation,
+    ) -> Result<AssistantRunResult, AssistantUiError> {
+        self.run_with_progress(request, cancellation, Arc::new(|_| {}))
+    }
+
+    fn run_with_progress(
+        &self,
+        request: AssistantRunRequest,
+        cancellation: AgentCancellation,
+        progress_handler: AssistantProgressHandler,
+    ) -> Result<AssistantRunResult, AssistantUiError> {
+        let request_id = request.request_id.clone();
+        let (job, mut events) = self.jobs.create_job();
+        job.started();
+        cancellation.link_job(&job.cancellation_token());
+        job.report(Progress {
+            completed: 0,
+            total: None,
+        });
+        self.publish_job_events(&mut events, Some(&request_id));
+        let service = self.clone();
+        let job_for_worker = job.clone();
+        let result = futures::executor::block_on(job.spawn_blocking(move || {
+            if job_for_worker.is_cancelled() {
+                return Err(AssistantUiError {
+                    code: "TASK_CANCELLED".into(),
+                    message: "Assistant task was cancelled before execution".into(),
+                    retryable: true,
+                });
+            }
+            service.run_inner(request, cancellation, progress_handler)
+        }));
+        match &result {
+            Ok(_) => {
+                job.report(Progress {
+                    completed: 1,
+                    total: Some(1),
+                });
+                job.completed();
+            }
+            Err(error) if error.code == "TASK_CANCELLED" => job.cancel(),
+            Err(error) => job.failed(error.to_string()),
+        }
+        self.publish_job_events(&mut events, Some(&request_id));
+        result
+    }
+
+    fn confirm(
+        &self,
+        confirmation_id: String,
+        authorized_document_ids: Vec<String>,
+    ) -> Result<AssistantRunResult, AssistantUiError> {
+        let assistant = self.settings_snapshot()?.assistant;
+        let response = self
+            .gateway(&authorized_document_ids, assistant.write_mode)?
+            .confirm(&confirmation_id, &format!("confirm:{confirmation_id}"));
+        map_tool_response(response)
+    }
+
+    fn reject(
+        &self,
+        confirmation_id: String,
+        authorized_document_ids: Vec<String>,
+    ) -> Result<(), AssistantUiError> {
+        let assistant = self.settings_snapshot()?.assistant;
+        let response = self
+            .gateway(&authorized_document_ids, assistant.write_mode)?
+            .reject(&confirmation_id, &format!("reject:{confirmation_id}"));
+        match response.error.as_ref() {
+            Some(error) if error.code == AgentErrorCode::WritePolicyRejected => Ok(()),
+            Some(error) => Err(ui_error(error.clone())),
+            None if response.ok => Ok(()),
+            None => Err(AssistantUiError::unavailable(
+                "reject returned neither a result nor an error",
+            )),
+        }
+    }
+
+    fn undo(
+        &self,
+        undo_token: String,
+        authorized_document_ids: Vec<String>,
+    ) -> Result<AssistantMutationSummary, AssistantUiError> {
+        let assistant = self.settings_snapshot()?.assistant;
+        let response = self
+            .gateway(&authorized_document_ids, assistant.write_mode)?
+            .undo(&undo_token, &format!("undo:{undo_token}"));
+        if let Some(AgentToolResult::Mutation(receipt)) = response.result.as_ref() {
+            if response.ok {
+                return Ok(map_mutation(receipt.clone()));
+            }
+        }
+        Err(ui_error(response.error.clone().unwrap_or_else(|| {
+            AgentToolError::new(
+                AgentErrorCode::WriteTransactionFailed,
+                "undo returned an unexpected response",
+                false,
+            )
+        })))
+    }
+
+    /// The `JobEvent`s of every Assistant job from now on, each job's in the
+    /// order it emitted them, tagged with the run it belongs to.
+    fn job_events(&self) -> UnboundedReceiver<AssistantJobEvent> {
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        self.job_events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(sender);
+        receiver
+    }
+}
+
+fn map_progress(progress: &AgentProgress) -> AssistantProgress {
+    let stage = match progress.stage {
+        AgentProgressStage::AssemblingContext => "assembling_context",
+        AgentProgressStage::RequestingModel => "requesting_model",
+        AgentProgressStage::ExecutingTool => "executing_tool",
+        AgentProgressStage::Completed => "completed",
+        AgentProgressStage::Failed => "failed",
+        AgentProgressStage::Cancelled => "cancelled",
+    };
+    AssistantProgress {
+        stage: stage.into(),
+        round: progress.round,
+        tool_name: progress.tool_name.clone(),
+        completed: progress.completed,
+        total: progress.total,
+    }
 }
 
 fn connection_config(profile: &AssistantConnectionProfile) -> ConnectionConfig {
@@ -140,6 +536,145 @@ fn connection_config(profile: &AssistantConnectionProfile) -> ConnectionConfig {
         timeout_ms: profile.timeout_ms,
         context_window_tokens: profile.context_window_tokens,
         max_output_tokens: profile.max_output_tokens,
+    }
+}
+
+fn map_run_result(result: AgentRunResult) -> Result<AssistantRunResult, AssistantUiError> {
+    if let Some(error) = result.error.as_ref() {
+        if result.mutation.is_some() || !result.mutations.is_empty() || result.pending.is_some() {
+            let warning = ui_error(error.clone());
+            let mut partial = map_run_result_without_error(result);
+            partial.warning = Some(warning.clone());
+            partial.warnings.push(warning);
+            return Ok(partial);
+        }
+        return Err(ui_error(error.clone()));
+    }
+    Ok(map_run_result_without_error(result))
+}
+
+fn map_run_result_without_error(result: AgentRunResult) -> AssistantRunResult {
+    let requested_model = result.diagnostics.requested_model.clone();
+    let resolved_model = result.diagnostics.resolved_model.clone();
+    let pending = result.pending.map(map_pending);
+    let diagnostics = AssistantRunDiagnostics {
+        path: match result.diagnostics.path {
+            application::AgentRunPath::ShortDocument => "short_document",
+        }
+        .into(),
+        tool_rounds: result.diagnostics.tool_rounds,
+        validation_retries: result.diagnostics.validation_retries,
+        input_segments: result.diagnostics.input_segments,
+        input_bytes: result.diagnostics.input_bytes,
+        elapsed_ms: result.diagnostics.elapsed_ms,
+    };
+    AssistantRunResult {
+        answer: result.answer.map(|answer| answer.text),
+        warning: None,
+        warnings: Vec::new(),
+        evidence_segment_ids: result.evidence_segment_ids,
+        usage: result.usage.map(|usage| AssistantUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            total_tokens: usage.total_tokens,
+            cost_microusd: usage.cost_microusd,
+        }),
+        requested_model,
+        resolved_model,
+        mutation: result.mutation.map(map_mutation),
+        mutations: result.mutations.into_iter().map(map_mutation).collect(),
+        pending: pending.clone(),
+        pending_reviews: pending.into_iter().collect(),
+        diagnostics: Some(diagnostics),
+    }
+}
+
+fn map_tool_response(
+    response: contracts::CapabilityResponse,
+) -> Result<AssistantRunResult, AssistantUiError> {
+    if let Some(error) = response.error.as_ref() {
+        return Err(ui_error(error.clone()));
+    }
+    match response.result.as_ref() {
+        Some(AgentToolResult::Mutation(receipt)) => Ok(AssistantRunResult {
+            answer: None,
+            warning: None,
+            warnings: Vec::new(),
+            evidence_segment_ids: Vec::new(),
+            usage: None,
+            requested_model: None,
+            resolved_model: None,
+            mutation: Some(map_mutation(receipt.clone())),
+            mutations: vec![map_mutation(receipt.clone())],
+            pending: None,
+            pending_reviews: Vec::new(),
+            diagnostics: None,
+        }),
+        _ => Err(AssistantUiError::unavailable(
+            "confirmation returned an unexpected response",
+        )),
+    }
+}
+
+fn map_mutation(receipt: AgentMutationReceipt) -> AssistantMutationSummary {
+    AssistantMutationSummary {
+        mutation_id: receipt.mutation_id,
+        affected_documents: receipt
+            .affected_documents
+            .into_iter()
+            .map(map_revision)
+            .collect(),
+        undo_token: receipt.undo_token,
+        uncovered_segment_ids: receipt.uncovered_segment_ids,
+    }
+}
+
+fn map_revision(revision: AgentDocumentRevision) -> AssistantDocumentChange {
+    AssistantDocumentChange {
+        document_id: revision.document_id,
+        previous_revision: revision.previous_revision,
+        revision: revision.revision,
+        deleted: revision.deleted,
+    }
+}
+
+fn map_pending(pending: AgentPendingMutation) -> AssistantPendingReview {
+    AssistantPendingReview {
+        confirmation_id: pending.confirmation_id,
+        expires_at_ms: pending.expires_at_ms,
+        affected_document_ids: pending.affected_document_ids,
+        field_diffs: pending
+            .field_diffs
+            .into_iter()
+            .map(|diff| AssistantFieldDiff {
+                document_id: diff.document_id,
+                field: diff.field,
+                before: diff.before,
+                after: diff.after,
+            })
+            .collect(),
+        tree_changes: pending
+            .tree_changes
+            .into_iter()
+            .map(|change| AssistantTreeChange {
+                document_id: change.document_id,
+                previous_parent_id: change.previous_parent_id,
+                new_parent_id: change.new_parent_id,
+                previous_sibling_order: change.previous_sibling_order,
+                new_sibling_order: change.new_sibling_order,
+            })
+            .collect(),
+        ranges: pending
+            .ranges
+            .into_iter()
+            .map(|range| AssistantRangePreview {
+                document_id: range.document_id,
+                start_segment_id: range.start_segment_id,
+                end_segment_id: range.end_segment_id,
+                evidence_segment_ids: range.evidence_segment_ids,
+            })
+            .collect(),
+        uncovered_segment_ids: pending.uncovered_segment_ids,
     }
 }
 
@@ -184,8 +719,12 @@ mod tests {
     };
     use domain::DocumentState;
     use persistence::InMemoryDocumentRepository;
-    use settings::{SettingsError, SettingsRepository};
+    use settings::{
+        AssistantConnectionPatch, CredentialUpdate, SettingsError, SettingsGrant, SettingsPatch,
+        SettingsRepository,
+    };
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
     struct MemorySettingsRepository(Mutex<AppSettings>);
@@ -227,6 +766,205 @@ mod tests {
             DesktopAssistantService::new(settings, DocumentService::new(documents.clone())),
             documents,
         )
+    }
+
+    /// The settings form's save for a new `profile()` with its direct key.
+    fn new_connection_save(credential: CredentialUpdate) -> AssistantSettingsSave {
+        AssistantSettingsSave {
+            patch: SettingsPatch {
+                active_connection_id: Some(Some("local".into())),
+                connection: Some(AssistantConnectionPatch {
+                    id: "local".into(),
+                    credential: Some(credential),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            new_connection: Some(AssistantConnectionProfile {
+                api_key: None,
+                ..profile()
+            }),
+        }
+    }
+
+    fn save(
+        service: &DesktopAssistantService,
+        save: AssistantSettingsSave,
+    ) -> Result<AppSettings, AssistantUiError> {
+        service.save_assistant_settings(service.settings.revision().unwrap(), save)
+    }
+
+    fn rename(name: &str) -> AssistantSettingsSave {
+        AssistantSettingsSave {
+            patch: SettingsPatch {
+                connection: Some(AssistantConnectionPatch {
+                    id: "local".into(),
+                    name: Some(name.into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            new_connection: None,
+        }
+    }
+
+    #[test]
+    fn saves_profile_metadata_and_api_key_in_settings() {
+        let (service, _) = service();
+        let saved = save(
+            &service,
+            new_connection_save(CredentialUpdate::Direct("private-token".into())),
+        )
+        .unwrap();
+
+        let expected = AssistantSettings {
+            active_connection_id: Some("local".into()),
+            connections: vec![profile()],
+            ..Default::default()
+        };
+        assert_eq!(saved.assistant, expected);
+        assert_eq!(service.settings_snapshot().unwrap().assistant, expected);
+    }
+
+    #[test]
+    fn a_new_connection_credential_follows_the_typed_patch_rules() {
+        let (service, _) = service();
+        let error = save(
+            &service,
+            new_connection_save(CredentialUpdate::File("/etc/meetnote-key".into())),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "ASSISTANT_SETTINGS_INVALID");
+        assert!(!error.retryable);
+        assert!(service
+            .settings_snapshot()
+            .unwrap()
+            .assistant
+            .connections
+            .is_empty());
+    }
+
+    /// Counts the writes Settings sends to its repository.
+    #[derive(Default)]
+    struct CountingSettingsRepository {
+        settings: Mutex<AppSettings>,
+        saves: AtomicUsize,
+        conditional_saves: AtomicUsize,
+    }
+
+    impl SettingsRepository for CountingSettingsRepository {
+        fn load(&self) -> Result<AppSettings, SettingsError> {
+            Ok(self.settings.lock().unwrap().clone())
+        }
+
+        fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
+            self.saves.fetch_add(1, Ordering::SeqCst);
+            *self.settings.lock().unwrap() = settings.clone();
+            Ok(())
+        }
+
+        fn save_if_equal(
+            &self,
+            expected: &AppSettings,
+            settings: &AppSettings,
+        ) -> Result<(), SettingsError> {
+            self.conditional_saves.fetch_add(1, Ordering::SeqCst);
+            let mut current = self.settings.lock().unwrap();
+            if &*current != expected {
+                return Err(SettingsError::RevisionConflict);
+            }
+            *current = settings.clone();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_new_connection_is_created_by_one_revision_checked_patch() {
+        let repository = Arc::new(CountingSettingsRepository::default());
+        let service = DesktopAssistantService::new(
+            SettingsService::open(repository.clone()).unwrap(),
+            DocumentService::new(Arc::new(InMemoryDocumentRepository::default())),
+        );
+        let request = new_connection_save(CredentialUpdate::Direct("private-token".into()));
+        // The same save as one `patch_if_equal` on an identical service.
+        let reference = memory_settings();
+        let expected = reference
+            .patch_if_equal(
+                &reference.revision().unwrap(),
+                SettingsPatch {
+                    new_connection: request.new_connection.clone(),
+                    ..request.patch.clone()
+                },
+                SettingsGrant::full(),
+            )
+            .unwrap();
+
+        let stale = service
+            .save_assistant_settings("stale".into(), request.clone())
+            .unwrap_err();
+        assert_eq!(stale.code, "SETTINGS_REVISION_CONFLICT");
+        assert_eq!(repository.conditional_saves.load(Ordering::SeqCst), 0);
+
+        let saved = save(&service, request).unwrap();
+        assert_eq!(saved, expected);
+        assert_eq!(repository.load().unwrap(), expected);
+        assert_eq!(repository.conditional_saves.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.saves.load(Ordering::SeqCst), 0);
+    }
+
+    /// Desktop service whose active connection `local` stores `private-token`.
+    fn service_with_stored_key() -> DesktopAssistantService {
+        let (service, _) = service();
+        let mut settings = service.settings_snapshot().unwrap();
+        settings.assistant.active_connection_id = Some("local".into());
+        settings.assistant.connections = vec![profile()];
+        service.settings.update(settings).unwrap();
+        service
+    }
+
+    #[test]
+    fn an_unchanged_credential_keeps_the_stored_key() {
+        let service = service_with_stored_key();
+        save(&service, rename("Renamed")).unwrap();
+
+        let saved = &service.settings_snapshot().unwrap().assistant.connections[0];
+        assert_eq!(saved.name, "Renamed");
+        assert_eq!(saved.api_key.as_deref(), Some("private-token"));
+    }
+
+    #[test]
+    fn a_stale_revision_is_a_retryable_conflict_that_keeps_the_external_change() {
+        let service = service_with_stored_key();
+        let loaded_revision = service.settings.revision().unwrap();
+        service
+            .settings
+            .patch_if_equal(
+                &loaded_revision,
+                SettingsPatch {
+                    write_mode: Some(contracts::AgentWriteMode::ConfirmEach),
+                    ..Default::default()
+                },
+                SettingsGrant::full(),
+            )
+            .unwrap();
+        let error = service
+            .save_assistant_settings(loaded_revision, rename("Renamed"))
+            .unwrap_err();
+
+        assert_eq!(error.code, "SETTINGS_REVISION_CONFLICT");
+        assert!(error.retryable);
+        let persisted = service.settings_snapshot().unwrap().assistant;
+        assert_eq!(persisted.write_mode, contracts::AgentWriteMode::ConfirmEach);
+        assert_eq!(persisted.connections[0].name, "Local LiteLLM");
+
+        let saved = save(&service, rename("Renamed")).unwrap().assistant;
+        assert_eq!(saved.write_mode, contracts::AgentWriteMode::ConfirmEach);
+        assert_eq!(saved.connections[0].name, "Renamed");
+        assert_eq!(
+            saved.connections[0].api_key.as_deref(),
+            Some("private-token")
+        );
     }
 
     #[test]
@@ -296,6 +1034,301 @@ mod tests {
         assert_eq!(error.code, "ASSISTANT_SETTINGS_INVALID");
         assert!(!error.message.contains("file-token"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn run_rejects_a_stale_ui_document_before_contacting_the_provider() {
+        let (service, documents) = service();
+        save(
+            &service,
+            new_connection_save(CredentialUpdate::Direct("private-token".into())),
+        )
+        .unwrap();
+        documents
+            .save(
+                DocumentState::new(DocumentId::new("doc"), "Document", "audio.wav"),
+                Some("# Document\n".into()),
+            )
+            .unwrap();
+        let error = service
+            .run(
+                AssistantRunRequest {
+                    request_id: "request".into(),
+                    scene: contracts::AgentScene::Ask,
+                    skill: contracts::AgentSkillSelector::for_scene(contracts::AgentScene::Ask),
+                    prompt: "question".into(),
+                    authorized_documents: vec![ui::assistant_ui::AssistantDocumentContext {
+                        document_id: "doc".into(),
+                        title: "Document".into(),
+                        revision: 99,
+                    }],
+                    projection: contracts::DocumentProjection::Metadata,
+                    write_mode: contracts::AgentWriteMode::Automatic,
+                    connection_id: "local".into(),
+                    max_tool_rounds: 8,
+                    max_validation_retries: 3,
+                },
+                AgentCancellation::new(),
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "DOCUMENT_REVISION_CONFLICT");
+    }
+
+    #[test]
+    fn maps_every_pending_preview_field_for_the_confirmation_ui() {
+        let pending = map_pending(AgentPendingMutation {
+            confirmation_id: "confirmation".into(),
+            expires_at_ms: 10,
+            affected_document_ids: vec!["doc".into()],
+            field_diffs: vec![AgentFieldDiff {
+                document_id: "doc".into(),
+                field: "title".into(),
+                before: Some("Before".into()),
+                after: Some("After".into()),
+            }],
+            tree_changes: vec![AgentTreeChange {
+                document_id: "doc".into(),
+                previous_parent_id: None,
+                new_parent_id: Some("parent".into()),
+                previous_sibling_order: Some(0),
+                new_sibling_order: Some(1),
+            }],
+            ranges: vec![AgentRangePreview {
+                document_id: Some("child".into()),
+                start_segment_id: "s1".into(),
+                end_segment_id: "s2".into(),
+                evidence_segment_ids: vec!["s1".into()],
+            }],
+            uncovered_segment_ids: vec!["s3".into()],
+        });
+        assert_eq!(pending.field_diffs.len(), 1);
+        assert_eq!(pending.tree_changes.len(), 1);
+        assert_eq!(pending.ranges.len(), 1);
+        assert_eq!(pending.uncovered_segment_ids, vec!["s3"]);
+    }
+
+    #[test]
+    fn maps_committed_partial_results_to_a_warning_terminal_state() {
+        let receipt = AgentMutationReceipt {
+            mutation_id: "mutation-partial".into(),
+            affected_documents: vec![],
+            undo_token: "undo-partial".into(),
+            provenance: AgentMutationProvenance {
+                actor: contracts::AgentActor::Assistant,
+                mutation_id: "mutation-partial".into(),
+                skill: None,
+                connection_id: Some("local".into()),
+                protocol: Some("openaiResponses".into()),
+                requested_model: Some("fixture".into()),
+                resolved_model: Some("fixture".into()),
+                source_revisions: vec![],
+                applied_at_ms: 1,
+            },
+            uncovered_segment_ids: vec!["gap-1".into()],
+        };
+        let result = map_run_result(AgentRunResult {
+            answer: None,
+            evidence_segment_ids: vec!["s1".into()],
+            mutation: Some(receipt.clone()),
+            mutations: vec![receipt],
+            pending: None,
+            results: vec![],
+            usage: Some(AgentUsage {
+                input_tokens: 2,
+                output_tokens: 3,
+                total_tokens: 5,
+                cost_microusd: None,
+            }),
+            diagnostics: AgentRunDiagnostics {
+                path: application::AgentRunPath::ShortDocument,
+                tool_rounds: 2,
+                validation_retries: 1,
+                input_segments: 1,
+                input_bytes: 12,
+                elapsed_ms: 9,
+                requested_model: Some("fixture".into()),
+                resolved_model: Some("fixture".into()),
+            },
+            progress: vec![],
+            error: Some(AgentToolError::new(
+                AgentErrorCode::DocumentRevisionConflict,
+                "document changed after the committed mutation",
+                true,
+            )),
+        })
+        .unwrap();
+        assert_eq!(
+            result.warning.as_ref().unwrap().code,
+            "DOCUMENT_REVISION_CONFLICT"
+        );
+        assert_eq!(result.mutations.len(), 1);
+        assert_eq!(result.usage.unwrap().total_tokens, 5);
+        assert_eq!(result.diagnostics.unwrap().tool_rounds, 2);
+    }
+
+    fn memory_settings() -> SettingsService {
+        SettingsService::open(Arc::new(MemorySettingsRepository(Mutex::new(
+            AppSettings::default(),
+        ))))
+        .unwrap()
+    }
+
+    /// An Ask run over one document at revision 1.
+    fn ask_request() -> AssistantRunRequest {
+        AssistantRunRequest {
+            request_id: "request".into(),
+            scene: contracts::AgentScene::Ask,
+            skill: contracts::AgentSkillSelector::for_scene(contracts::AgentScene::Ask),
+            prompt: "question".into(),
+            authorized_documents: vec![ui::assistant_ui::AssistantDocumentContext {
+                document_id: "doc".into(),
+                title: "Document".into(),
+                revision: 1,
+            }],
+            projection: contracts::DocumentProjection::Metadata,
+            write_mode: contracts::AgentWriteMode::Automatic,
+            connection_id: "local".into(),
+            max_tool_rounds: 8,
+            max_validation_retries: 3,
+        }
+    }
+
+    /// Holds the Assistant worker inside `get` until released; logs when.
+    struct GatedRepository {
+        log: Arc<Mutex<Vec<&'static str>>>,
+        entered: Mutex<std::sync::mpsc::Sender<()>>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+
+    impl DocumentRepository for GatedRepository {
+        fn snapshot(&self) -> Result<application::DocumentSnapshot, String> {
+            Ok(application::DocumentSnapshot {
+                documents: Vec::new(),
+                issues: Vec::new(),
+            })
+        }
+
+        fn get(&self, _: &DocumentId) -> Result<Option<DocumentState>, String> {
+            self.log.lock().unwrap().push("assistant:start");
+            let _ = self.entered.lock().unwrap().send(());
+            // Bounded, so a broken gate cannot hang the test.
+            let _ = self
+                .release
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(5));
+            self.log.lock().unwrap().push("assistant:end");
+            Ok(None)
+        }
+
+        fn read(&self, _: &DocumentId) -> Result<Option<contracts::DocumentRecord>, String> {
+            Ok(None)
+        }
+
+        fn watch(&self) -> Result<std::sync::mpsc::Receiver<application::DocumentChange>, String> {
+            Err("not used".into())
+        }
+
+        fn save(&self, _: DocumentState, _: Option<String>) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn assistant_and_audio_jobs_share_one_worker_limit() {
+        let jobs = Arc::new(JobRuntime::with_max_concurrency(1));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (entered, assistant_entered) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let assistant = DesktopAssistantService::with_job_runtime(
+            memory_settings(),
+            DocumentService::new(Arc::new(GatedRepository {
+                log: log.clone(),
+                entered: Mutex::new(entered),
+                release: Mutex::new(released),
+            })),
+            jobs.clone(),
+        );
+        let processing = application::ProcessingService::new_with_providers(
+            Arc::new(asr::AsrBackendManager::new(
+                asr::AsrBackendRegistry::default(),
+            )),
+            Arc::new(diarization::DiarizationBackendManager::new(
+                diarization::DiarizationBackendRegistry::default(),
+            )),
+        )
+        .with_job_runtime(jobs);
+
+        let run =
+            std::thread::spawn(move || assistant.run(ask_request(), AgentCancellation::new()));
+        assistant_entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the Assistant job did not start");
+        let contexts = processing.contexts();
+        let audio_log = log.clone();
+        let (audio_entered, audio_started) = std::sync::mpsc::channel();
+        // An audio backend runs its model work on a job worker like this.
+        let audio = std::thread::spawn(move || {
+            futures::executor::block_on(contexts.asr_context.spawn_blocking(move || {
+                audio_log.lock().unwrap().push("audio:start");
+                let _ = audio_entered.send(());
+                audio_log.lock().unwrap().push("audio:end");
+            }))
+        });
+        // With separate limits the audio worker starts while the Assistant
+        // worker is still held.
+        let started_early = audio_started
+            .recv_timeout(std::time::Duration::from_millis(300))
+            .is_ok();
+        release.send(()).unwrap();
+        let error = run.join().unwrap().unwrap_err();
+        audio.join().unwrap();
+
+        assert!(!started_early);
+        assert_eq!(error.code, "DOCUMENT_NOT_FOUND");
+        assert_eq!(
+            *log.lock().unwrap(),
+            [
+                "assistant:start",
+                "assistant:end",
+                "audio:start",
+                "audio:end"
+            ]
+        );
+    }
+
+    #[test]
+    fn publishes_the_job_events_of_each_assistant_run() {
+        let (service, _) = service();
+        let mut events = service.job_events();
+
+        let error = service
+            .run(ask_request(), AgentCancellation::new())
+            .unwrap_err();
+
+        let mut received = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            assert_eq!(
+                event.request_id.as_deref(),
+                Some(ask_request().request_id.as_str()),
+                "each event names its run"
+            );
+            received.push(event.event);
+        }
+        assert_eq!(error.code, "DOCUMENT_NOT_FOUND");
+        match received.as_slice() {
+            [JobEvent::Started { job_id }, JobEvent::Progress {
+                job_id: progress_job,
+                progress:
+                    Progress {
+                        completed: 0,
+                        total: None,
+                    },
+            }, JobEvent::Failed {
+                job_id: failed_job, ..
+            }] if progress_job == job_id && failed_job == job_id => {}
+            other => panic!("unexpected job events: {other:?}"),
+        }
     }
 
     fn unique_suffix() -> u128 {

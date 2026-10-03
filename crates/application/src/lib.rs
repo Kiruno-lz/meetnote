@@ -16,8 +16,12 @@ use std::sync::Arc;
 mod agent_host;
 mod assistant_runtime;
 mod assistant_skills;
+mod audio_source;
 mod capabilities;
 mod document_commands;
+mod document_issues;
+mod documents_root;
+mod installation;
 mod long_audio;
 mod speaker_identity;
 mod workspace;
@@ -34,12 +38,21 @@ pub use assistant_runtime::{
     HostAgentScene, WorkspaceAgentScene,
 };
 pub use assistant_skills::BundledAgentSkill;
+pub use audio_source::{AudioSourceError, AudioStatus};
 pub use capabilities::{
     AudioCapabilityPort, CapabilityDescriptor, CapabilityOperation, SettingsCapabilityPort,
     SettingsPatchArguments, SettingsReadArguments, SettingsSection,
 };
 pub use contracts::BackendDescriptor;
 pub use document_commands::{DocumentCommandError, DocumentCommandService};
+pub use document_issues::DocumentIssueKind;
+pub use documents_root::{
+    validate_documents_root, DocumentRepositoryFactory, DocumentsRoot, DocumentsRootError,
+    ReservedLocation,
+};
+pub use installation::{
+    InstallationProbe, InstallationQuery, InstallationService, InstallationState,
+};
 pub use long_audio::{
     run_windowed_pipeline, AsrWindowSession, DiarizationWindowSession, LongAudioConfig,
 };
@@ -79,6 +92,23 @@ pub fn migrate_file(source: &Path, destination: &Path) -> Result<(), String> {
         return Err(error.to_string());
     }
     Ok(())
+}
+
+/// Which Speaker Library files exist before the library path changes; the
+/// desktop offers migration only when the source exists and the destination
+/// does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeakerLibraryPresence {
+    pub source_exists: bool,
+    pub destination_exists: bool,
+}
+
+/// Probes the file system; call it off the UI thread.
+pub fn speaker_library_presence(source: &Path, destination: &Path) -> SpeakerLibraryPresence {
+    SpeakerLibraryPresence {
+        source_exists: source.is_file(),
+        destination_exists: destination.is_file(),
+    }
 }
 
 pub trait AsrBackend: Send + Sync {
@@ -169,7 +199,11 @@ pub trait DiarizationBackendProvider: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentIssue {
     pub path: String,
+    /// The English sentence; clients that localize read `kind` instead.
     pub message: String,
+    /// Why the path is an issue, when the issue was built from a kind
+    /// ([`DocumentIssue::from_kind`]).
+    pub kind: Option<DocumentIssueKind>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -217,6 +251,71 @@ pub enum DocumentChange {
     Changed,
 }
 
+/// Document changes the repository's watcher pushes into the stream as they
+/// happen. Dropping the stream stops the watcher. A stream obtained through
+/// [`DocumentService::subscribe_changes`] also ends, and stops its watcher,
+/// when the service switches to another documents root.
+pub struct DocumentChanges {
+    changes: futures::channel::mpsc::UnboundedReceiver<DocumentChange>,
+    watcher: Option<Box<dyn std::any::Any + Send>>,
+    ended: Option<futures::channel::oneshot::Receiver<()>>,
+}
+
+impl DocumentChanges {
+    /// `watcher` keeps the change source alive and is dropped with the stream.
+    pub fn new(
+        changes: futures::channel::mpsc::UnboundedReceiver<DocumentChange>,
+        watcher: impl Send + 'static,
+    ) -> Self {
+        Self {
+            changes,
+            watcher: Some(Box::new(watcher)),
+            ended: None,
+        }
+    }
+
+    /// Ends the stream once `ended` receives `()`. A dropped sender (the
+    /// service is gone, so no switch can follow) leaves the stream running.
+    fn ending_on(mut self, ended: futures::channel::oneshot::Receiver<()>) -> Self {
+        self.ended = Some(ended);
+        self
+    }
+
+    fn finish(&mut self) {
+        self.ended = None;
+        self.changes.close();
+        self.watcher = None;
+    }
+}
+
+impl futures::Stream for DocumentChanges {
+    type Item = DocumentChange;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<DocumentChange>> {
+        let this = self.get_mut();
+        // No watcher: the stream was ended by a documents-root switch.
+        if this.watcher.is_none() {
+            return std::task::Poll::Ready(None);
+        }
+        if let Some(ended) = this.ended.as_mut() {
+            match futures::FutureExt::poll_unpin(ended, cx) {
+                std::task::Poll::Ready(Ok(())) => {
+                    this.finish();
+                    return std::task::Poll::Ready(None);
+                }
+                std::task::Poll::Ready(Err(futures::channel::oneshot::Canceled)) => {
+                    this.ended = None;
+                }
+                std::task::Poll::Pending => {}
+            }
+        }
+        futures::StreamExt::poll_next_unpin(&mut this.changes, cx)
+    }
+}
+
 pub trait DocumentRepository: Send + Sync {
     fn snapshot(&self) -> Result<DocumentSnapshot, String>;
 
@@ -241,6 +340,12 @@ pub trait DocumentRepository: Send + Sync {
     ) -> Result<Option<domain::DocumentState>, String>;
     fn read(&self, document_id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String>;
     fn watch(&self) -> Result<Receiver<DocumentChange>, String>;
+
+    /// Changes pushed by the watcher itself, without a forwarding thread.
+    fn subscribe_changes(&self) -> Result<DocumentChanges, String> {
+        Err("document repository does not publish change subscriptions".into())
+    }
+
     fn save(&self, document: domain::DocumentState, markdown: Option<String>)
         -> Result<(), String>;
 
@@ -380,25 +485,99 @@ pub enum DocumentMutationStoreError {
     Transaction(String),
 }
 
+/// Reads and writes the documents of the current documents root. Every clone
+/// shares one repository: after a documents-root switch (see
+/// [`WorkspaceService::switch_documents_root`]) every clone reads and writes
+/// the new root, and each change feed of the old root ends so its callers
+/// resubscribe. A call already in progress finishes on the repository it
+/// started with.
 #[derive(Clone)]
 pub struct DocumentService {
-    repository: Arc<dyn DocumentRepository>,
+    shared: Arc<SharedDocumentRepository>,
+}
+
+struct SharedDocumentRepository {
+    repository: std::sync::RwLock<Arc<dyn DocumentRepository>>,
+    /// Change feeds of the current repository; replacing it ends them.
+    feeds: std::sync::Mutex<Vec<ChangeFeed>>,
+}
+
+enum ChangeFeed {
+    Stream(futures::channel::oneshot::Sender<()>),
+    Channel(Arc<std::sync::Mutex<Option<std::sync::mpsc::Sender<DocumentChange>>>>),
+}
+
+impl ChangeFeed {
+    fn is_closed(&self) -> bool {
+        match self {
+            Self::Stream(ended) => ended.is_canceled(),
+            Self::Channel(sender) => lock(sender).is_none(),
+        }
+    }
+
+    /// Signals the stream to end; dropping the channel's only sender
+    /// disconnects its receiver.
+    fn end(self) {
+        match self {
+            Self::Stream(ended) => {
+                let _ = ended.send(());
+            }
+            Self::Channel(sender) => {
+                lock(&sender).take();
+            }
+        }
+    }
+}
+
+fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl DocumentService {
     pub fn new(repository: Arc<dyn DocumentRepository>) -> Self {
-        Self { repository }
+        Self {
+            shared: Arc::new(SharedDocumentRepository {
+                repository: std::sync::RwLock::new(repository),
+                feeds: std::sync::Mutex::new(Vec::new()),
+            }),
+        }
+    }
+
+    /// The repository of the current documents root. Each operation takes it
+    /// once so that it runs against a single root.
+    fn current(&self) -> Arc<dyn DocumentRepository> {
+        self.shared
+            .repository
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Makes every clone use `repository` and ends every change feed of the
+    /// previous one.
+    pub(crate) fn replace_repository(&self, repository: Arc<dyn DocumentRepository>) {
+        let mut feeds = lock(&self.shared.feeds);
+        *self
+            .shared
+            .repository
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = repository;
+        for feed in feeds.drain(..) {
+            feed.end();
+        }
     }
 
     pub fn snapshot(&self) -> Result<DocumentSnapshot, String> {
-        self.repository.snapshot()
+        self.current().snapshot()
     }
 
     pub fn scan_metadata(
         &self,
         visitor: &mut dyn FnMut(DocumentMetadata) -> Result<bool, String>,
     ) -> Result<(), String> {
-        self.repository.scan_metadata(visitor)
+        self.current().scan_metadata(visitor)
     }
 
     pub fn list(&self) -> Result<Vec<domain::DocumentState>, String> {
@@ -409,20 +588,55 @@ impl DocumentService {
         &self,
         document_id: &domain::DocumentId,
     ) -> Result<Option<domain::DocumentState>, String> {
-        self.repository.get(document_id)
+        self.current().get(document_id)
     }
 
     pub fn read(&self, document_id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String> {
-        self.repository.read(document_id)
+        self.current().read(document_id)
     }
 
+    /// Changes of the current documents root. The receiver disconnects when
+    /// the service switches to another root; call `watch` again then.
     pub fn watch(&self) -> Result<Receiver<DocumentChange>, String> {
-        self.repository.watch()
+        let mut feeds = lock(&self.shared.feeds);
+        let changes = self.current().watch()?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let sender = Arc::new(std::sync::Mutex::new(Some(sender)));
+        let forward = sender.clone();
+        std::thread::Builder::new()
+            .name("meetnote-document-watch".into())
+            .spawn(move || {
+                while let Ok(change) = changes.recv() {
+                    let sent = lock(&forward)
+                        .as_ref()
+                        .is_some_and(|sender| sender.send(change).is_ok());
+                    if !sent {
+                        break;
+                    }
+                }
+                lock(&forward).take();
+            })
+            .map_err(|error| error.to_string())?;
+        feeds.retain(|feed| !feed.is_closed());
+        feeds.push(ChangeFeed::Channel(sender));
+        Ok(receiver)
+    }
+
+    /// Changes of the current documents root as a stream. The stream ends
+    /// when the service switches to another root; subscribe again then.
+    pub fn subscribe_changes(&self) -> Result<DocumentChanges, String> {
+        let mut feeds = lock(&self.shared.feeds);
+        let changes = self.current().subscribe_changes()?;
+        let (ended, on_end) = futures::channel::oneshot::channel();
+        feeds.retain(|feed| !feed.is_closed());
+        feeds.push(ChangeFeed::Stream(ended));
+        Ok(changes.ending_on(on_end))
     }
 
     pub fn save(&self, document: domain::DocumentState) -> Result<domain::DocumentState, String> {
-        let document = self.prepare(document)?;
-        self.repository.save(document.clone(), None)?;
+        let repository = self.current();
+        let document = prepare(repository.as_ref(), document)?;
+        repository.save(document.clone(), None)?;
         Ok(document)
     }
 
@@ -431,9 +645,9 @@ impl DocumentService {
         document: domain::DocumentState,
         markdown: impl Into<String>,
     ) -> Result<domain::DocumentState, String> {
-        let document = self.prepare(document)?;
-        self.repository
-            .save(document.clone(), Some(markdown.into()))?;
+        let repository = self.current();
+        let document = prepare(repository.as_ref(), document)?;
+        repository.save(document.clone(), Some(markdown.into()))?;
         Ok(document)
     }
 
@@ -443,7 +657,8 @@ impl DocumentService {
         expected_revision: u64,
         markdown: impl Into<String>,
     ) -> Result<DocumentRecord, String> {
-        let current = self
+        let repository = self.current();
+        let current = repository
             .read(document.id())?
             .ok_or_else(|| "document does not exist".to_string())?;
         if current.state.revision() != expected_revision {
@@ -455,9 +670,9 @@ impl DocumentService {
         }
         document.schema.revision = expected_revision.saturating_add(1);
         document.schema.updated_at_ms = now_ms();
-        self.repository
-            .save(document.clone(), Some(markdown.into()))?;
-        self.read(document.id())?
+        repository.save(document.clone(), Some(markdown.into()))?;
+        repository
+            .read(document.id())?
             .ok_or_else(|| "document disappeared after save".to_string())
     }
 
@@ -465,42 +680,21 @@ impl DocumentService {
         &self,
         batch: DocumentMutationBatch,
     ) -> Result<DocumentMutationCommit, DocumentMutationStoreError> {
-        if let Some(commit) = self
-            .repository
-            .find_agent_mutation(&batch.mutation_id, &batch.fingerprint)?
+        let repository = self.current();
+        if let Some(commit) =
+            repository.find_agent_mutation(&batch.mutation_id, &batch.fingerprint)?
         {
             return Ok(commit);
         }
-        self.validate_agent_mutation_sources(&batch)?;
-        self.repository.commit_agent_mutation(batch)
+        validate_agent_mutation_sources(repository.as_ref(), &batch)?;
+        repository.commit_agent_mutation(batch)
     }
 
     pub fn validate_agent_mutation_sources(
         &self,
         batch: &DocumentMutationBatch,
     ) -> Result<(), DocumentMutationStoreError> {
-        for write in &batch.writes {
-            let Some(expected) = write.source_markdown_sha256.as_deref() else {
-                continue;
-            };
-            let document_id = write.record.state.id();
-            let current = self
-                .repository
-                .read(document_id)
-                .map_err(DocumentMutationStoreError::Transaction)?
-                .ok_or_else(|| DocumentMutationStoreError::NotFound {
-                    document_id: document_id.as_str().into(),
-                })?;
-            let actual = markdown_sha256(&current.markdown);
-            if actual != expected {
-                return Err(DocumentMutationStoreError::ContentConflict {
-                    document_id: document_id.as_str().into(),
-                    expected: expected.into(),
-                    actual,
-                });
-            }
-        }
-        Ok(())
+        validate_agent_mutation_sources(self.current().as_ref(), batch)
     }
 
     pub fn find_agent_mutation(
@@ -508,36 +702,35 @@ impl DocumentService {
         mutation_id: &str,
         fingerprint: &str,
     ) -> Result<Option<DocumentMutationCommit>, DocumentMutationStoreError> {
-        self.repository
-            .find_agent_mutation(mutation_id, fingerprint)
+        self.current().find_agent_mutation(mutation_id, fingerprint)
     }
 
     pub fn undo_agent_mutation(
         &self,
         undo_token: &str,
     ) -> Result<DocumentMutationCommit, DocumentMutationStoreError> {
-        self.repository.undo_agent_mutation(undo_token)
+        self.current().undo_agent_mutation(undo_token)
     }
 
     pub fn agent_mutation_document_ids(
         &self,
         undo_token: &str,
     ) -> Result<Vec<String>, DocumentMutationStoreError> {
-        self.repository.agent_mutation_document_ids(undo_token)
+        self.current().agent_mutation_document_ids(undo_token)
     }
 
     pub fn save_pending_agent_mutation(
         &self,
         pending: PendingDocumentMutation,
     ) -> Result<(), DocumentMutationStoreError> {
-        self.repository.save_pending_agent_mutation(pending)
+        self.current().save_pending_agent_mutation(pending)
     }
 
     pub fn take_pending_agent_mutation(
         &self,
         confirmation_id: &str,
     ) -> Result<Option<PendingDocumentMutation>, DocumentMutationStoreError> {
-        self.repository.take_pending_agent_mutation(confirmation_id)
+        self.current().take_pending_agent_mutation(confirmation_id)
     }
 
     pub fn find_pending_agent_mutation(
@@ -545,20 +738,47 @@ impl DocumentService {
         mutation_id: &str,
         fingerprint: &str,
     ) -> Result<Option<PendingDocumentMutation>, DocumentMutationStoreError> {
-        self.repository
+        self.current()
             .find_pending_agent_mutation(mutation_id, fingerprint)
     }
+}
 
-    fn prepare(
-        &self,
-        mut document: domain::DocumentState,
-    ) -> Result<domain::DocumentState, String> {
-        if let Some(current) = self.read(document.id())? {
-            document.schema.revision = current.state.revision().saturating_add(1);
+fn validate_agent_mutation_sources(
+    repository: &dyn DocumentRepository,
+    batch: &DocumentMutationBatch,
+) -> Result<(), DocumentMutationStoreError> {
+    for write in &batch.writes {
+        let Some(expected) = write.source_markdown_sha256.as_deref() else {
+            continue;
+        };
+        let document_id = write.record.state.id();
+        let current = repository
+            .read(document_id)
+            .map_err(DocumentMutationStoreError::Transaction)?
+            .ok_or_else(|| DocumentMutationStoreError::NotFound {
+                document_id: document_id.as_str().into(),
+            })?;
+        let actual = markdown_sha256(&current.markdown);
+        if actual != expected {
+            return Err(DocumentMutationStoreError::ContentConflict {
+                document_id: document_id.as_str().into(),
+                expected: expected.into(),
+                actual,
+            });
         }
-        document.schema.updated_at_ms = now_ms();
-        Ok(document)
     }
+    Ok(())
+}
+
+fn prepare(
+    repository: &dyn DocumentRepository,
+    mut document: domain::DocumentState,
+) -> Result<domain::DocumentState, String> {
+    if let Some(current) = repository.read(document.id())? {
+        document.schema.revision = current.state.revision().saturating_add(1);
+    }
+    document.schema.updated_at_ms = now_ms();
+    Ok(document)
 }
 
 fn now_ms() -> u64 {
@@ -833,6 +1053,44 @@ mod tests {
         assert_eq!(
             std::fs::read(&source).unwrap(),
             std::fs::read(&destination).unwrap()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn speaker_library_presence_reports_each_file() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-library-presence-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let source = root.join("old/library.json");
+        let destination = root.join("new/library.json");
+        let presence = |source_exists, destination_exists| SpeakerLibraryPresence {
+            source_exists,
+            destination_exists,
+        };
+
+        assert_eq!(
+            speaker_library_presence(&source, &destination),
+            presence(false, false)
+        );
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, b"{}").unwrap();
+        // A directory at the destination is not a library file.
+        std::fs::create_dir_all(&destination).unwrap();
+        assert_eq!(
+            speaker_library_presence(&source, &destination),
+            presence(true, false)
+        );
+        std::fs::remove_dir(&destination).unwrap();
+        std::fs::write(&destination, b"{}").unwrap();
+        assert_eq!(
+            speaker_library_presence(&source, &destination),
+            presence(true, true)
         );
         std::fs::remove_dir_all(root).unwrap();
     }

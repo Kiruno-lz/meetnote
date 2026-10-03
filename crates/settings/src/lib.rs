@@ -19,6 +19,10 @@ fn default_speaker_library_path() -> String {
     "data/speakers/library.json".into()
 }
 
+fn default_documents_root() -> String {
+    "data/documents".into()
+}
+
 fn default_max_tool_rounds() -> u32 {
     8
 }
@@ -278,6 +282,37 @@ impl AssistantSettings {
     }
 }
 
+/// Light or dark: follow the system appearance or pin one.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ThemePreference {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// The window chrome material. Glass is used only while the system does not
+/// ask to reduce transparency.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialPreference {
+    #[default]
+    Glass,
+    Opaque,
+}
+
+/// Desktop appearance. It belongs to the desktop UI alone and is not part of
+/// the Settings capability projection.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AppearanceSettings {
+    #[serde(default)]
+    pub theme: ThemePreference,
+    #[serde(default)]
+    pub material: MaterialPreference,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
@@ -293,10 +328,17 @@ pub struct AppSettings {
     pub expected_speakers: Option<u32>,
     #[serde(default = "default_speaker_library_path")]
     pub speaker_library_path: String,
+    /// The directory holding the document packages. A desktop Workspace
+    /// setting: it is not part of the Settings capability projection, and the
+    /// desktop saves it only after the workspace switched to it.
+    #[serde(default = "default_documents_root")]
+    pub documents_root: String,
     #[serde(default)]
     pub diarization_stages: DiarizationStageConfiguration,
     #[serde(default)]
     pub assistant: AssistantSettings,
+    #[serde(default)]
+    pub appearance: AppearanceSettings,
 }
 
 impl Default for AppSettings {
@@ -312,8 +354,10 @@ impl Default for AppSettings {
             language: None,
             expected_speakers: None,
             speaker_library_path: default_speaker_library_path(),
+            documents_root: default_documents_root(),
             diarization_stages: DiarizationStageConfiguration::default(),
             assistant: AssistantSettings::default(),
+            appearance: AppearanceSettings::default(),
         }
     }
 }
@@ -360,6 +404,11 @@ impl AppSettings {
         if self.speaker_library_path.trim().is_empty() {
             return Err(SettingsError::Invalid(
                 "speaker library path must not be empty".into(),
+            ));
+        }
+        if self.documents_root.trim().is_empty() {
+            return Err(SettingsError::Invalid(
+                "documents root must not be empty".into(),
             ));
         }
         if let Some(model) = &self.diarization_stages.segmentation_model {
@@ -425,6 +474,12 @@ pub struct SettingsPatch {
     pub max_tool_rounds: Option<u32>,
     pub max_validation_retries: Option<u32>,
     pub connection: Option<AssistantConnectionPatch>,
+    /// A profile added before `connection` is applied, which sets its
+    /// credential under the edit rules; the profile carries none itself.
+    /// Desktop Settings only: absent from the wire contract, so capability
+    /// callers cannot create connections.
+    #[serde(skip)]
+    pub new_connection: Option<AssistantConnectionProfile>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -784,6 +839,21 @@ impl SettingsService {
             .map(|settings| settings.clone())
     }
 
+    /// Re-read the repository and adopt it as the snapshot, so a caller whose
+    /// write conflicted with another writer sees that value and can retry
+    /// against its revision. A file that does not load or validate leaves the
+    /// snapshot unchanged and returns the error.
+    pub fn reload(&self) -> Result<AppSettings, SettingsError> {
+        let mut current = self
+            .current
+            .write()
+            .map_err(|_| SettingsError::LockPoisoned)?;
+        let settings = self.repository.load()?;
+        settings.validate()?;
+        *current = settings.clone();
+        Ok(settings)
+    }
+
     pub fn revision(&self) -> Result<String, SettingsError> {
         Ok(Self::revision_of(&self.snapshot()?))
     }
@@ -993,6 +1063,38 @@ fn apply_patch(
     }
     if let Some(value) = patch.max_validation_retries {
         settings.assistant.max_validation_retries = value;
+    }
+    if let Some(profile) = patch.new_connection {
+        // A new profile is read back through both sections, so it needs both
+        // grants. Its credential arrives only as `connection.credential`.
+        if !grant.write_connections {
+            return Err(SettingsError::FieldNotGranted {
+                field: "assistant.connections".into(),
+            });
+        }
+        if !grant.write_connection_targets {
+            return Err(SettingsError::FieldNotGranted {
+                field: "assistant.connectionTargets".into(),
+            });
+        }
+        if profile.api_key.is_some() || profile.api_key_file.is_some() {
+            return Err(SettingsError::Invalid(
+                "a new assistant connection sets its credential through connection.credential"
+                    .into(),
+            ));
+        }
+        if settings
+            .assistant
+            .connections
+            .iter()
+            .any(|connection| connection.id == profile.id)
+        {
+            return Err(SettingsError::Invalid(format!(
+                "assistant connection id is duplicated: {}",
+                profile.id
+            )));
+        }
+        settings.assistant.connections.push(profile);
     }
 
     let Some(connection_patch) = patch.connection else {
@@ -1707,5 +1809,413 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
+    }
+
+    #[test]
+    fn settings_without_appearance_load_the_default_appearance() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{
+                "schemaVersion": "meetnote.settings.v1",
+                "asrBackendId": null,
+                "asrModel": null,
+                "diarizationBackendId": null,
+                "diarizationModel": null,
+                "computeDevice": "Auto",
+                "language": null,
+                "expectedSpeakers": null
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            settings.appearance,
+            AppearanceSettings {
+                theme: ThemePreference::System,
+                material: MaterialPreference::Glass,
+            }
+        );
+        assert_eq!(AppSettings::default().appearance, settings.appearance);
+    }
+
+    #[test]
+    fn appearance_round_trips_with_camel_case_values() {
+        let settings = AppSettings {
+            appearance: AppearanceSettings {
+                theme: ThemePreference::Light,
+                material: MaterialPreference::Opaque,
+            },
+            ..AppSettings::default()
+        };
+
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(
+            value["appearance"],
+            serde_json::json!({"theme": "light", "material": "opaque"})
+        );
+        let partial: AppearanceSettings =
+            serde_json::from_value(serde_json::json!({"theme": "dark"})).unwrap();
+        assert_eq!(partial.material, MaterialPreference::Glass);
+        assert_eq!(
+            serde_json::from_value::<AppSettings>(value).unwrap(),
+            settings
+        );
+    }
+
+    #[test]
+    fn settings_without_a_documents_root_load_the_default_root() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{
+                "schemaVersion": "meetnote.settings.v1",
+                "asrBackendId": null,
+                "asrModel": null,
+                "diarizationBackendId": null,
+                "diarizationModel": null,
+                "computeDevice": "Auto",
+                "language": null,
+                "expectedSpeakers": null
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.documents_root, "data/documents");
+        assert_eq!(AppSettings::default().documents_root, "data/documents");
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn documents_root_round_trips_as_camel_case() {
+        let settings = AppSettings {
+            documents_root: "/Users/me/Notes/meetnote".into(),
+            ..AppSettings::default()
+        };
+
+        let value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(value["documentsRoot"], "/Users/me/Notes/meetnote");
+        assert!(value.get("documents_root").is_none());
+        assert_eq!(
+            serde_json::from_value::<AppSettings>(value).unwrap(),
+            settings
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_documents_root() {
+        for root in ["", "   "] {
+            let settings = AppSettings {
+                documents_root: root.into(),
+                ..AppSettings::default()
+            };
+            assert!(matches!(
+                settings.validate(),
+                Err(SettingsError::Invalid(message)) if message.contains("documents root")
+            ));
+        }
+    }
+
+    /// `settings.json` in a directory of its own, which the test removes.
+    fn settings_file(label: &str) -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-settings-{label}-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("settings.json");
+        (root, path)
+    }
+
+    #[test]
+    fn reload_adopts_an_external_change_so_the_retry_succeeds() {
+        let (root, path) = settings_file("reload");
+        let service = SettingsService::open(Arc::new(JsonSettingsRepository::open(&path))).unwrap();
+        let other = SettingsService::open(Arc::new(JsonSettingsRepository::open(&path))).unwrap();
+        let mut external = other.snapshot().unwrap();
+        external.ui_locale = "en-US".into();
+        other.update(external.clone()).unwrap();
+        let retry = |expected: &AppSettings| {
+            let mut next = expected.clone();
+            next.language = Some("en".into());
+            service.update_if_equal(expected, next)
+        };
+
+        // The snapshot cannot see the other writer, so retrying against it
+        // conflicts every time.
+        let stale = service.snapshot().unwrap();
+        assert!(matches!(
+            retry(&stale),
+            Err(SettingsError::RevisionConflict)
+        ));
+        assert_eq!(service.snapshot().unwrap(), stale);
+
+        let reloaded = service.reload().unwrap();
+        assert_eq!(reloaded, external);
+        assert_eq!(service.snapshot().unwrap(), external);
+        assert_eq!(
+            service.revision().unwrap(),
+            SettingsService::revision_of(&external)
+        );
+        let saved = retry(&reloaded).unwrap();
+        assert_eq!(saved.ui_locale, "en-US");
+        assert_eq!(saved.language.as_deref(), Some("en"));
+        assert_eq!(JsonSettingsRepository::open(&path).load().unwrap(), saved);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reload_of_an_invalid_file_keeps_the_snapshot_and_returns_the_error() {
+        let (root, path) = settings_file("reload-invalid");
+        let service = SettingsService::open(Arc::new(JsonSettingsRepository::open(&path))).unwrap();
+        let mut loaded = service.snapshot().unwrap();
+        loaded.ui_locale = "en-US".into();
+        service.update(loaded.clone()).unwrap();
+
+        fs::write(&path, "{ not json").unwrap();
+        let unparsable = service.reload();
+        assert!(
+            matches!(unparsable, Err(SettingsError::Parse(_))),
+            "{unparsable:?}"
+        );
+        assert_eq!(service.snapshot().unwrap(), loaded);
+
+        let mut invalid = serde_json::to_value(&loaded).unwrap();
+        invalid["expectedSpeakers"] = serde_json::json!(0);
+        fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
+        let rejected = service.reload();
+        assert!(
+            matches!(&rejected, Err(SettingsError::Invalid(message)) if message.contains("expected speakers")),
+            "{rejected:?}"
+        );
+        assert_eq!(service.snapshot().unwrap(), loaded);
+        fs::remove_dir_all(root).unwrap();
+
+        // Settings validates what any repository returns before adopting it.
+        let repository = Arc::new(TestRepository::new(AppSettings::default()));
+        let service = SettingsService::open(repository.clone()).unwrap();
+        *repository.0.lock().unwrap() = AppSettings {
+            expected_speakers: Some(0),
+            ..AppSettings::default()
+        };
+        assert!(matches!(service.reload(), Err(SettingsError::Invalid(_))));
+        assert_eq!(service.snapshot().unwrap(), AppSettings::default());
+    }
+
+    /// Creates connection `created`, with `credential` when it is given.
+    fn creation(credential: Option<CredentialUpdate>) -> SettingsPatch {
+        SettingsPatch {
+            new_connection: Some(AssistantConnectionProfile {
+                id: "created".into(),
+                name: "Created".into(),
+                protocol: LlmProtocol::OpenAiResponses,
+                base_url: "https://example.com/gateway".into(),
+                model: "model".into(),
+                auth_mode: AssistantAuthMode::Bearer,
+                api_key: None,
+                api_key_file: None,
+                context_window_tokens: Some(8_192),
+                timeout_ms: 2_000,
+                max_output_tokens: 512,
+            }),
+            connection: credential.map(|credential| AssistantConnectionPatch {
+                id: "created".into(),
+                credential: Some(credential),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn creating_a_connection_with_a_stale_revision_writes_nothing() {
+        let repository = Arc::new(TestRepository::new(AppSettings::default()));
+        let service = SettingsService::open(repository.clone()).unwrap();
+        let loaded_revision = service.revision().unwrap();
+        service
+            .patch_if_equal(
+                &loaded_revision,
+                SettingsPatch {
+                    write_mode: Some(AgentWriteMode::ConfirmEach),
+                    ..Default::default()
+                },
+                SettingsGrant::full(),
+            )
+            .unwrap();
+        let before = repository.load().unwrap();
+
+        let result = service.patch_if_equal(
+            &loaded_revision,
+            creation(Some(CredentialUpdate::Direct("created-secret".into()))),
+            SettingsGrant::full(),
+        );
+        assert!(
+            matches!(result, Err(SettingsError::RevisionConflict)),
+            "{result:?}"
+        );
+        assert_eq!(repository.load().unwrap(), before);
+        assert_eq!(service.snapshot().unwrap(), before);
+    }
+
+    #[test]
+    fn creating_a_connection_persists_the_profile_and_its_credential() {
+        for (credential, api_key, api_key_file) in [
+            (
+                Some(CredentialUpdate::Direct("created-secret".into())),
+                Some("created-secret"),
+                None,
+            ),
+            (
+                Some(CredentialUpdate::File("credentials/created".into())),
+                None,
+                Some("credentials/created"),
+            ),
+            (None, None, None),
+        ] {
+            let repository = Arc::new(TestRepository::new(AppSettings::default()));
+            let service = SettingsService::open(repository.clone()).unwrap();
+            let saved = service
+                .patch_if_equal(
+                    &service.revision().unwrap(),
+                    SettingsPatch {
+                        active_connection_id: Some(Some("created".into())),
+                        ..creation(credential)
+                    },
+                    SettingsGrant::full(),
+                )
+                .unwrap();
+
+            let persisted = repository.load().unwrap();
+            assert_eq!(persisted, saved);
+            assert_eq!(service.snapshot().unwrap(), saved);
+            assert_eq!(persisted.assistant.connections.len(), 1);
+            let created = persisted.assistant.active_connection().unwrap();
+            assert_eq!(created.id, "created");
+            assert_eq!(created.name, "Created");
+            assert_eq!(created.base_url, "https://example.com/gateway");
+            assert_eq!(created.api_key.as_deref(), api_key);
+            assert_eq!(created.api_key_file.as_deref(), api_key_file);
+        }
+    }
+
+    #[test]
+    fn a_new_connection_credential_breaks_a_rule_with_the_edit_error() {
+        let service = SettingsService::open(Arc::new(TestRepository::new(AppSettings {
+            assistant: AssistantSettings {
+                connections: vec![AssistantConnectionProfile {
+                    id: "route".into(),
+                    name: "Route".into(),
+                    protocol: LlmProtocol::OpenAiResponses,
+                    base_url: "https://example.com/gateway".into(),
+                    model: "model".into(),
+                    auth_mode: AssistantAuthMode::Bearer,
+                    api_key: None,
+                    api_key_file: None,
+                    context_window_tokens: None,
+                    timeout_ms: 2_000,
+                    max_output_tokens: 512,
+                }],
+                ..AssistantSettings::default()
+            },
+            ..AppSettings::default()
+        })))
+        .unwrap();
+        let before = service.snapshot().unwrap();
+        let revision = service.revision().unwrap();
+
+        for credential in [
+            CredentialUpdate::Direct("[redacted]".into()),
+            CredentialUpdate::Direct("  ".into()),
+            CredentialUpdate::File("[redacted]".into()),
+            CredentialUpdate::File("/etc/meetnote-key".into()),
+            CredentialUpdate::File("credentials/../../etc/passwd".into()),
+            CredentialUpdate::File("secrets/key".into()),
+        ] {
+            let edited = service
+                .patch_if_equal(
+                    &revision,
+                    SettingsPatch {
+                        connection: Some(AssistantConnectionPatch {
+                            id: "route".into(),
+                            credential: Some(credential.clone()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    SettingsGrant::full(),
+                )
+                .unwrap_err();
+            let created = service
+                .patch_if_equal(
+                    &revision,
+                    creation(Some(credential.clone())),
+                    SettingsGrant::full(),
+                )
+                .unwrap_err();
+
+            assert_eq!(
+                std::mem::discriminant(&created),
+                std::mem::discriminant(&edited),
+                "{credential:?}: {created:?} / {edited:?}"
+            );
+            assert_eq!(created.to_string(), edited.to_string());
+            assert_eq!(service.snapshot().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn creating_a_connection_needs_the_grant_of_every_section_it_writes() {
+        let service =
+            SettingsService::open(Arc::new(TestRepository::new(AppSettings::default()))).unwrap();
+        let create = |patch: SettingsPatch, grant: SettingsGrant| {
+            service.patch_if_equal(&service.revision().unwrap(), patch, grant)
+        };
+        let before = service.snapshot().unwrap();
+        for (grant, field) in [
+            (
+                SettingsGrant::assistant_connection_targets().with_credentials(),
+                "assistant.connections",
+            ),
+            (
+                SettingsGrant::assistant_connections().with_credentials(),
+                "assistant.connectionTargets",
+            ),
+            (
+                SettingsGrant::assistant_connections().with_connection_targets(),
+                "assistant.credentials",
+            ),
+        ] {
+            let result = create(
+                creation(Some(CredentialUpdate::Direct("created-secret".into()))),
+                grant,
+            );
+            assert!(
+                matches!(&result, Err(SettingsError::FieldNotGranted { field: denied }) if denied == field),
+                "{result:?}"
+            );
+            assert_eq!(service.snapshot().unwrap(), before);
+        }
+
+        // Without a credential, connections and targets are enough.
+        create(
+            creation(None),
+            SettingsGrant::assistant_connections().with_connection_targets(),
+        )
+        .unwrap();
+        let created = service.snapshot().unwrap();
+        let duplicate = create(creation(None), SettingsGrant::full());
+        assert!(
+            matches!(&duplicate, Err(SettingsError::Invalid(message)) if message.contains("duplicated")),
+            "{duplicate:?}"
+        );
+
+        // A profile cannot carry a credential past the credential rules.
+        let mut inline = creation(None);
+        let profile = inline.new_connection.as_mut().unwrap();
+        profile.id = "inline".into();
+        profile.api_key = Some("inline-secret".into());
+        let inline = create(inline, SettingsGrant::full());
+        assert!(
+            matches!(&inline, Err(SettingsError::Invalid(message)) if message.contains("connection.credential")),
+            "{inline:?}"
+        );
+        assert_eq!(service.snapshot().unwrap(), created);
     }
 }

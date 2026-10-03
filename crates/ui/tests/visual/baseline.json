@@ -1,0 +1,10 @@
+{
+  "gpui": "5d54d27579d87c6027e7699a2b9fcfffcb125b6b",
+  "gpui_component": "5086ff4fb162ae97ca9d806876e7c6694ac3a81f",
+  "scale_factor": 2.0,
+  "window": { "width": 1180, "height": 760 },
+  "locale": "zh-CN",
+  "routes": ["assistant", "meetings", "models", "settings"],
+  "overlays": ["settings-select", "settings-dialog", "meetings-detail", "meetings-edit", "meetings-speakers", "settings-speakers", "meetings-audio", "settings-workspace", "assistant-review", "meetings-focus", "settings-focus"],
+  "appearances": ["dark-glass", "dark-opaque", "light-glass", "light-opaque"]
+}

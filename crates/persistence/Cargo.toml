@@ -7,6 +7,7 @@ edition.workspace = true
 application = { path = "../application" }
 contracts = { path = "../contracts" }
 domain = { path = "../domain" }
+futures.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 notify.workspace = true
