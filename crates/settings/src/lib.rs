@@ -1,15 +1,19 @@
 use contracts::{AgentWriteMode, ComputeDevice, DiarizationStageConfiguration, ModelRef};
+use fs2::FileExt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fmt;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use url::Url;
 
 const SETTINGS_SCHEMA_VERSION: &str = "meetnote.settings.v1";
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn default_ui_locale() -> String {
     "zh-CN".into()
@@ -776,10 +780,39 @@ impl JsonSettingsRepository {
     pub fn path(&self) -> &Path {
         &self.path
     }
-}
 
-impl SettingsRepository for JsonSettingsRepository {
-    fn load(&self) -> Result<AppSettings, SettingsError> {
+    fn lock_path(&self) -> PathBuf {
+        let mut path = self.path.as_os_str().to_os_string();
+        path.push(".lock");
+        PathBuf::from(path)
+    }
+
+    fn lock(&self) -> Result<File, SettingsError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|source| SettingsError::Write {
+                path: parent.display().to_string(),
+                source,
+            })?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(self.lock_path())
+            .map_err(|source| SettingsError::Write {
+                path: self.lock_path().display().to_string(),
+                source,
+            })?;
+        file.lock_exclusive()
+            .map_err(|source| SettingsError::Write {
+                path: self.lock_path().display().to_string(),
+                source,
+            })?;
+        Ok(file)
+    }
+
+    fn load_unlocked(&self) -> Result<AppSettings, SettingsError> {
         if !self.path.is_file() {
             return Ok(AppSettings::default());
         }
@@ -792,7 +825,7 @@ impl SettingsRepository for JsonSettingsRepository {
         Ok(settings)
     }
 
-    fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
+    fn save_unlocked(&self, settings: &AppSettings) -> Result<(), SettingsError> {
         settings.validate()?;
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| SettingsError::Write {
@@ -801,16 +834,92 @@ impl SettingsRepository for JsonSettingsRepository {
             })?;
         }
         let content = serde_json::to_vec_pretty(settings)?;
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, content).map_err(|source| SettingsError::Write {
-            path: temporary.display().to_string(),
-            source,
-        })?;
-        fs::rename(&temporary, &self.path).map_err(|source| SettingsError::Write {
-            path: self.path.display().to_string(),
-            source,
-        })
+        let temporary = unique_temporary_path(&self.path);
+        let write_result = (|| {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)
+                .map_err(|source| SettingsError::Write {
+                    path: temporary.display().to_string(),
+                    source,
+                })?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(fs::Permissions::from_mode(0o600))
+                    .map_err(|source| SettingsError::Write {
+                        path: temporary.display().to_string(),
+                        source,
+                    })?;
+            }
+            file.write_all(&content)
+                .map_err(|source| SettingsError::Write {
+                    path: temporary.display().to_string(),
+                    source,
+                })?;
+            file.sync_all().map_err(|source| SettingsError::Write {
+                path: temporary.display().to_string(),
+                source,
+            })?;
+            drop(file);
+            fs::rename(&temporary, &self.path).map_err(|source| SettingsError::Write {
+                path: self.path.display().to_string(),
+                source,
+            })?;
+            if let Some(parent) = self.path.parent() {
+                File::open(parent)
+                    .and_then(|directory| directory.sync_all())
+                    .map_err(|source| SettingsError::Write {
+                        path: parent.display().to_string(),
+                        source,
+                    })?;
+            }
+            Ok(())
+        })();
+        if write_result.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        write_result
     }
+}
+
+impl SettingsRepository for JsonSettingsRepository {
+    fn load(&self) -> Result<AppSettings, SettingsError> {
+        let _lock = self.lock()?;
+        self.load_unlocked()
+    }
+
+    fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
+        let _lock = self.lock()?;
+        self.save_unlocked(settings)
+    }
+
+    fn save_if_equal(
+        &self,
+        expected: &AppSettings,
+        settings: &AppSettings,
+    ) -> Result<(), SettingsError> {
+        let _lock = self.lock()?;
+        let current = self.load_unlocked()?;
+        if &current != expected {
+            return Err(SettingsError::RevisionConflict);
+        }
+        self.save_unlocked(settings)
+    }
+}
+
+fn unique_temporary_path(path: &Path) -> PathBuf {
+    let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("settings");
+    path.with_file_name(format!(
+        ".{file_name}.{}.{}.tmp",
+        std::process::id(),
+        counter
+    ))
 }
 
 #[derive(Clone)]
@@ -964,12 +1073,13 @@ impl SettingsService {
     }
 
     pub fn update(&self, settings: AppSettings) -> Result<AppSettings, SettingsError> {
-        settings.validate()?;
-        self.repository.save(&settings)?;
-        *self
+        let mut current = self
             .current
             .write()
-            .map_err(|_| SettingsError::LockPoisoned)? = settings.clone();
+            .map_err(|_| SettingsError::LockPoisoned)?;
+        settings.validate()?;
+        self.repository.save_if_equal(&current, &settings)?;
+        *current = settings.clone();
         Ok(settings)
     }
 
@@ -1489,6 +1599,37 @@ mod tests {
     }
 
     #[test]
+    fn services_reject_a_stale_disk_version_before_overwriting_it() {
+        let path = std::env::temp_dir().join(format!(
+            "meetnote-settings-concurrency-{}-{}.json",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let first = SettingsService::open(Arc::new(JsonSettingsRepository::open(&path))).unwrap();
+        let second = SettingsService::open(Arc::new(JsonSettingsRepository::open(&path))).unwrap();
+
+        let mut changed = first.snapshot().unwrap();
+        changed.ui_locale = "en-US".into();
+        first.update(changed.clone()).unwrap();
+
+        let mut stale = second.snapshot().unwrap();
+        stale.ui_locale = "ja-JP".into();
+        assert!(matches!(
+            second.update(stale),
+            Err(SettingsError::RevisionConflict)
+        ));
+        assert_eq!(
+            JsonSettingsRepository::open(&path)
+                .load()
+                .unwrap()
+                .ui_locale,
+            "en-US"
+        );
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(format!("{}.lock", path.display()));
+    }
+
+    #[test]
     fn patch_rejects_a_stale_snapshot_after_a_concurrent_commit() {
         let mut service =
             SettingsService::open(Arc::new(TestRepository::new(AppSettings::default()))).unwrap();
@@ -1650,6 +1791,7 @@ mod tests {
         assert!(!debug.contains("do-not-log"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn patch_field_ownership_matches_read_projection_and_binds_credentials_to_targets() {
         let route = AssistantConnectionProfile {
