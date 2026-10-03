@@ -857,11 +857,18 @@ pub async fn run_pipeline(
         &diarization_request.model,
         &diarization_request.stage_configuration,
     );
-    let asr_future = asr_backend.transcribe(asr_request, asr_context);
-    let diarization_future = diarization_backend.diarize(diarization_request, diarization_context);
-    let (asr, diarization) = futures::join!(asr_future, diarization_future);
-    let asr = asr.map_err(|error| annotate_backend_error(error, "ASR", &asr_backend_id))?;
-    let mut diarization = diarization
+    // Keep short-audio model calls ordered, including when ASR yields. The
+    // windowed pipeline retains its separate scheduling policy.
+    let asr = asr_backend
+        .transcribe(asr_request, asr_context)
+        .await
+        .map_err(|error| {
+            diarization_context.cancel();
+            annotate_backend_error(error, "ASR", &asr_backend_id)
+        })?;
+    let mut diarization = diarization_backend
+        .diarize(diarization_request, diarization_context)
+        .await
         .map_err(|error| annotate_backend_error(error, "diarization", &diarization_backend_id))?;
     if let Some(path) = speaker_library_path.as_deref() {
         let library = SpeakerLibraryService::new(Arc::new(JsonSpeakerProfileStore::new(path)));
@@ -1179,6 +1186,121 @@ mod tests {
         assert_eq!(
             error.message,
             "diarization backend `failing-diarization` failed: model load failure"
+        );
+    }
+
+    struct OrderedAsr {
+        finished: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl AsrBackend for OrderedAsr {
+        fn descriptor(&self) -> BackendDescriptor {
+            FakeAsr.descriptor()
+        }
+        fn probe(&self, model: &ModelRef) -> Result<(), BackendError> {
+            FakeAsr.probe(model)
+        }
+        fn transcribe(&self, request: AsrRequest, context: JobContext) -> BackendFuture<AsrResult> {
+            let finished = self.finished.clone();
+            Box::pin(async move {
+                let mut yielded = false;
+                futures::future::poll_fn(|cx| {
+                    if yielded {
+                        std::task::Poll::Ready(())
+                    } else {
+                        yielded = true;
+                        cx.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+                let result = FakeAsr.transcribe(request, context).await;
+                finished.store(true, std::sync::atomic::Ordering::SeqCst);
+                result
+            })
+        }
+    }
+
+    struct OrderedDiarization {
+        finished: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl DiarizationBackend for OrderedDiarization {
+        fn descriptor(&self) -> BackendDescriptor {
+            FakeDiarization.descriptor()
+        }
+        fn probe(&self, model: &ModelRef) -> Result<(), BackendError> {
+            FakeDiarization.probe(model)
+        }
+        fn diarize(
+            &self,
+            request: DiarizationRequest,
+            context: JobContext,
+        ) -> BackendFuture<DiarizationResult> {
+            let finished = self.finished.clone();
+            let calls = self.calls.clone();
+            Box::pin(async move {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                assert!(
+                    finished.load(std::sync::atomic::Ordering::SeqCst),
+                    "diarization started while ASR was still pending"
+                );
+                FakeDiarization.diarize(request, context).await
+            })
+        }
+    }
+
+    #[test]
+    fn short_pipeline_orders_native_calls_even_when_asr_yields() {
+        let runtime = JobRuntime::default();
+        let (asr_context, _) = runtime.create_job();
+        let (diarization_context, _) = runtime.create_job();
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (asr_request, diarization_request) = pipeline_requests();
+        let result = futures::executor::block_on(run_pipeline(
+            &OrderedAsr {
+                finished: finished.clone(),
+            },
+            &OrderedDiarization {
+                finished,
+                calls: calls.clone(),
+            },
+            asr_request,
+            diarization_request,
+            asr_context,
+            diarization_context,
+        ))
+        .unwrap();
+        assert_eq!(result.aligned.len(), 1);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn short_pipeline_cancels_the_unstarted_stage_after_asr_failure() {
+        let runtime = JobRuntime::default();
+        let (asr_context, _) = runtime.create_job();
+        let (diarization_context, _) = runtime.create_job();
+        let diarization_job = diarization_context.job_id();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (asr_request, diarization_request) = pipeline_requests();
+        let result = futures::executor::block_on(run_pipeline(
+            &FailingAsr,
+            &OrderedDiarization {
+                finished: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                calls: calls.clone(),
+            },
+            asr_request,
+            diarization_request,
+            asr_context,
+            diarization_context,
+        ));
+        assert!(result.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            runtime.snapshot(diarization_job).unwrap().state,
+            runtime::JobState::Cancelled
         );
     }
 
