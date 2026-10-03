@@ -824,6 +824,17 @@ pub struct AudioWindowing {
     pub source_samples: u64,
 }
 
+/// Preserve the backend's stable error code while making the pipeline stage
+/// visible to CLI and external capability consumers.
+pub(crate) fn annotate_backend_error(
+    mut error: BackendError,
+    stage: &str,
+    backend_id: &str,
+) -> BackendError {
+    error.message = format!("{stage} backend `{backend_id}` failed: {}", error.message);
+    error
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DiarizationStageProvenance {
     pub segmentation: Option<ModelRef>,
@@ -840,6 +851,8 @@ pub async fn run_pipeline(
     diarization_context: JobContext,
 ) -> Result<PipelineResult, BackendError> {
     let speaker_library_path = diarization_request.speaker_library_path.clone();
+    let asr_backend_id = asr_backend.descriptor().id;
+    let diarization_backend_id = diarization_backend.descriptor().id;
     let diarization_stage_provenance = diarization_backend.stage_provenance_with_configuration(
         &diarization_request.model,
         &diarization_request.stage_configuration,
@@ -847,17 +860,20 @@ pub async fn run_pipeline(
     let asr_future = asr_backend.transcribe(asr_request, asr_context);
     let diarization_future = diarization_backend.diarize(diarization_request, diarization_context);
     let (asr, diarization) = futures::join!(asr_future, diarization_future);
-    let asr = asr?;
-    let mut diarization = diarization?;
+    let asr = asr.map_err(|error| annotate_backend_error(error, "ASR", &asr_backend_id))?;
+    let mut diarization = diarization
+        .map_err(|error| annotate_backend_error(error, "diarization", &diarization_backend_id))?;
     if let Some(path) = speaker_library_path.as_deref() {
         let library = SpeakerLibraryService::new(Arc::new(JsonSpeakerProfileStore::new(path)));
         let resolver = ClusterIdentityResolver::new(IdentityResolverConfig::default());
-        apply_identity_matches(&mut diarization, &library, &resolver).map_err(|error| {
-            BackendError {
+        apply_identity_matches(&mut diarization, &library, &resolver)
+            .map_err(|error| BackendError {
                 code: contracts::BackendErrorCode::PersistenceFailed,
                 message: error.to_string(),
-            }
-        })?;
+            })
+            .map_err(|error| {
+                annotate_backend_error(error, "diarization", &diarization_backend_id)
+            })?;
     }
     let aligned = align_transcript_and_speakers(&asr.segments, &diarization.segments);
 
@@ -911,7 +927,10 @@ pub fn diarization_descriptor_with_stages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
+    use contracts::{
+        AsrRequest, BackendErrorCode, ComputeDevice, DiarizationRequest,
+        DiarizationStageConfiguration, ModelRef,
+    };
     use domain::{DiarizationSegment, TranscriptSegment};
     use runtime::JobRuntime;
 
@@ -996,6 +1015,82 @@ mod tests {
         }
     }
 
+    struct FailingAsr;
+
+    impl AsrBackend for FailingAsr {
+        fn descriptor(&self) -> BackendDescriptor {
+            asr_descriptor("failing-asr", &["offline"])
+        }
+
+        fn probe(&self, _model: &ModelRef) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        fn transcribe(
+            &self,
+            _request: AsrRequest,
+            _context: JobContext,
+        ) -> BackendFuture<AsrResult> {
+            Box::pin(async {
+                Err(BackendError {
+                    code: BackendErrorCode::InferenceFailed,
+                    message: "generic backend failure".into(),
+                })
+            })
+        }
+    }
+
+    struct FailingDiarization;
+
+    impl DiarizationBackend for FailingDiarization {
+        fn descriptor(&self) -> BackendDescriptor {
+            diarization_descriptor("failing-diarization", &["offline"])
+        }
+
+        fn probe(&self, _model: &ModelRef) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        fn diarize(
+            &self,
+            _request: DiarizationRequest,
+            _context: JobContext,
+        ) -> BackendFuture<DiarizationResult> {
+            Box::pin(async {
+                Err(BackendError {
+                    code: BackendErrorCode::ModelLoadFailed,
+                    message: "model load failure".into(),
+                })
+            })
+        }
+    }
+
+    fn pipeline_requests() -> (AsrRequest, DiarizationRequest) {
+        let model = ModelRef {
+            backend_id: "fake".into(),
+            model_id: "fake".into(),
+            revision: None,
+            artifact_path: "fixture-model".into(),
+            artifacts: Vec::new(),
+        };
+        (
+            AsrRequest {
+                audio_path: "fixture.wav".into(),
+                model: model.clone(),
+                language: Some("zh".into()),
+                device: ComputeDevice::Cpu,
+            },
+            DiarizationRequest {
+                audio_path: "fixture.wav".into(),
+                model,
+                expected_speakers: Some(1),
+                device: ComputeDevice::Cpu,
+                speaker_library_path: None,
+                stage_configuration: DiarizationStageConfiguration::default(),
+            },
+        )
+    }
+
     #[test]
     fn fake_backends_cover_the_first_pipeline() {
         let runtime = JobRuntime::default();
@@ -1031,6 +1126,60 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.aligned[0].speaker_id, "speaker-1");
+    }
+
+    #[test]
+    fn pipeline_errors_identify_the_failing_asr_stage_without_changing_code() {
+        let runtime = JobRuntime::default();
+        let (asr_context, _) = runtime.create_job();
+        let (diarization_context, _) = runtime.create_job();
+        let (asr_request, diarization_request) = pipeline_requests();
+
+        let result = futures::executor::block_on(run_pipeline(
+            &FailingAsr,
+            &FakeDiarization,
+            asr_request,
+            diarization_request,
+            asr_context,
+            diarization_context,
+        ));
+        let error = match result {
+            Ok(_) => panic!("expected ASR failure"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, BackendErrorCode::InferenceFailed);
+        assert_eq!(
+            error.message,
+            "ASR backend `failing-asr` failed: generic backend failure"
+        );
+    }
+
+    #[test]
+    fn pipeline_errors_identify_the_failing_diarization_stage_without_changing_code() {
+        let runtime = JobRuntime::default();
+        let (asr_context, _) = runtime.create_job();
+        let (diarization_context, _) = runtime.create_job();
+        let (asr_request, diarization_request) = pipeline_requests();
+
+        let result = futures::executor::block_on(run_pipeline(
+            &FakeAsr,
+            &FailingDiarization,
+            asr_request,
+            diarization_request,
+            asr_context,
+            diarization_context,
+        ));
+        let error = match result {
+            Ok(_) => panic!("expected diarization failure"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, BackendErrorCode::ModelLoadFailed);
+        assert_eq!(
+            error.message,
+            "diarization backend `failing-diarization` failed: model load failure"
+        );
     }
 
     #[test]

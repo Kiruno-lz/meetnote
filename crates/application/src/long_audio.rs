@@ -1,6 +1,7 @@
 use crate::{
-    align_transcript_and_speakers, apply_identity_matches, AudioWindowing, ClusterIdentityResolver,
-    IdentityResolverConfig, JsonSpeakerProfileStore, PipelineResult, SpeakerLibraryService,
+    align_transcript_and_speakers, annotate_backend_error, apply_identity_matches, AudioWindowing,
+    ClusterIdentityResolver, IdentityResolverConfig, JsonSpeakerProfileStore, PipelineResult,
+    SpeakerLibraryService,
 };
 use audio::{
     AudioChunkReader, AudioWindow, AudioWindowPlan, ProcessingWindowPlanner, TARGET_SAMPLE_RATE_HZ,
@@ -87,13 +88,18 @@ fn run_windowed_pipeline_sync(
     config: LongAudioConfig,
 ) -> Result<PipelineResult, BackendError> {
     let speaker_library_path = diarization_request.speaker_library_path.clone();
+    let asr_backend_id = asr_backend.descriptor().id;
+    let diarization_backend_id = diarization_backend.descriptor().id;
     let stage_provenance = diarization_backend.stage_provenance_with_configuration(
         &diarization_request.model,
         &diarization_request.stage_configuration,
     );
-    let mut asr_session = asr_backend.create_window_session(asr_request.clone())?;
-    let mut diarization_session =
-        diarization_backend.create_window_session(diarization_request.clone())?;
+    let mut asr_session = asr_backend
+        .create_window_session(asr_request.clone())
+        .map_err(|error| annotate_backend_error(error, "ASR", &asr_backend_id))?;
+    let mut diarization_session = diarization_backend
+        .create_window_session(diarization_request.clone())
+        .map_err(|error| annotate_backend_error(error, "diarization", &diarization_backend_id))?;
     let mut reader = AudioChunkReader::open(&asr_request.audio_path, config.decode_chunk_samples)
         .map_err(audio_error)?;
     let estimated_total = reader.source_info().estimated_output_samples;
@@ -152,8 +158,10 @@ fn run_windowed_pipeline_sync(
         })();
         drop(asr_sender);
         drop(diarization_sender);
-        let asr = join_worker(asr_worker, "ASR");
-        let diarization = join_worker(diarization_worker, "diarization");
+        let asr = join_worker(asr_worker, "ASR")
+            .map_err(|error| annotate_backend_error(error, "ASR", &asr_backend_id));
+        let diarization = join_worker(diarization_worker, "diarization")
+            .map_err(|error| annotate_backend_error(error, "diarization", &diarization_backend_id));
         (asr, diarization, decode_result)
     });
 
@@ -165,7 +173,8 @@ fn run_windowed_pipeline_sync(
     let asr = asr?;
     let mut diarization = diarization?;
     let windowing = decode_result?;
-    apply_speaker_identity(&mut diarization, speaker_library_path.as_deref())?;
+    apply_speaker_identity(&mut diarization, speaker_library_path.as_deref())
+        .map_err(|error| annotate_backend_error(error, "diarization", &diarization_backend_id))?;
     let aligned = align_transcript_and_speakers(&asr.segments, &diarization.segments);
     Ok(PipelineResult {
         asr,
