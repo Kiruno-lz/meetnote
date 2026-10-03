@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "verification": {
+    "hashAlgorithm": "sha256",
+    "requireDeclaredBytes": true,
+    "requireLicenseSnapshot": true,
+    "missingLocalStatus": "pending_external_source",
+    "allowedLicenseStatus": "allowed"
+  },
+  "datasets": [
+    {
+      "id": "qmsum",
+      "version": "83d7768c1f2b4dfeb091385d3dc7e239b8e5bb7e",
+      "homepage": "https://github.com/Yale-LILY/QMSum",
+      "license": "MIT",
+      "licenseStatus": "allowed",
+      "scope": "Human-annotated meeting transcripts, topic spans, and query summaries; text only.",
+      "splits": {
+        "train": "qmsum/train.jsonl",
+        "validation": "qmsum/val.jsonl",
+        "test": "qmsum/test.jsonl"
+      },
+      "baseline": {
+        "evaluator": "scripts/assistant-eval/evaluate.py",
+        "required": ["no-split", "equal-length"],
+        "comparison": "candidate must improve boundaryF1 and reduce Pk and WindowDiff"
+      },
+      "files": [
+        {
+          "kind": "annotation",
+          "relativePath": "qmsum/train.jsonl",
+          "url": "https://raw.githubusercontent.com/Yale-LILY/QMSum/83d7768c1f2b4dfeb091385d3dc7e239b8e5bb7e/data/ALL/jsonl/train.jsonl",
+          "bytes": 11940700,
+          "sha256": "55964a968e4b4c1c9da2434678f213f3b70c0c3d3cf609f5cd4ecd44cc8d2427"
+        },
+        {
+          "kind": "annotation",
+          "relativePath": "qmsum/val.jsonl",
+          "url": "https://raw.githubusercontent.com/Yale-LILY/QMSum/83d7768c1f2b4dfeb091385d3dc7e239b8e5bb7e/data/ALL/jsonl/val.jsonl",
+          "bytes": 2714748,
+          "sha256": "fc7444e241bdbe6997c01720d07f1a58b7357284acb73f909766e5a4700db49f"
+        },
+        {
+          "kind": "annotation",
+          "relativePath": "qmsum/test.jsonl",
+          "url": "https://raw.githubusercontent.com/Yale-LILY/QMSum/83d7768c1f2b4dfeb091385d3dc7e239b8e5bb7e/data/ALL/jsonl/test.jsonl",
+          "bytes": 2746108,
+          "sha256": "6bcd428211260ad2efae3af76cbaf6a7f5ae4bb5e1e59c45a4b8e89539cb9208"
+        },
+        {
+          "kind": "license",
+          "relativePath": "qmsum/LICENSE",
+          "url": "https://raw.githubusercontent.com/Yale-LILY/QMSum/83d7768c1f2b4dfeb091385d3dc7e239b8e5bb7e/LICENSE",
+          "bytes": 1066,
+          "sha256": "8308d90c6321345cbd4adc8b479ddbece28ddbdca44f3f0b9bf033c3999a4a80"
+        }
+      ]
+    },
+    {
+      "id": "ami",
+      "version": "manual-annotations-1.6.2-archive-release-1.7",
+      "homepage": "https://groups.inf.ed.ac.uk/ami/download/",
+      "license": "CC-BY-4.0",
+      "licenseStatus": "allowed",
+      "scope": "Manual XML annotations only; no AMI audio or video.",
+      "splits": {
+        "annotation": "ami/ami_public_manual_1.6.2.zip",
+        "evaluation": "all-converted-manual-annotations"
+      },
+      "baseline": {
+        "evaluator": "scripts/assistant-eval/evaluate.py",
+        "required": ["no-split", "equal-length"],
+        "comparison": "candidate must improve boundaryF1 and reduce Pk and WindowDiff"
+      },
+      "files": [
+        {
+          "kind": "annotation",
+          "relativePath": "ami/ami_public_manual_1.6.2.zip",
+          "url": "https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip",
+          "bytes": 22887865,
+          "sha256": "b56e5babb2496b8795deeeda7e71178d7fbc9963f94276cf2a3f4b56ebbc9f9d"
+        },
+        {
+          "kind": "license",
+          "relativePath": "ami/LICENSE.html",
+          "url": "https://groups.inf.ed.ac.uk/ami/corpus/license.shtml",
+          "bytes": 30267,
+          "sha256": "2b5328846c1db44dad89e473ae74a7497ff2a637efaceb83a2d45148eb5db5a6"
+        }
+      ]
+    }
+  ],
+  "excludedDatasets": [
+    {
+      "id": "superdialseg",
+      "enabled": false,
+      "homepage": "https://github.com/Coldog2333/SuperDialseg",
+      "licenseStatus": "unverified-upstream-licenses",
+      "reason": "The repository license covers code but does not establish a single redistribution license for every upstream derived dataset. It is excluded until each selected data artifact has a documented compatible license and checksum."
+    }
+  ]
+}
