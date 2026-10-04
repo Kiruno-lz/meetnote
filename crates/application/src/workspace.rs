@@ -1,7 +1,8 @@
+use crate::documents_root::{same_location, validate_documents_root};
 use crate::{
     run_pipeline, run_windowed_pipeline, AsrBackend, AsrBackendProvider, BackendFuture,
-    DiarizationBackend, DiarizationBackendProvider, DocumentService, LongAudioConfig,
-    PipelineResult,
+    DiarizationBackend, DiarizationBackendProvider, DocumentService, DocumentsRoot,
+    DocumentsRootError, LongAudioConfig, PipelineResult,
 };
 use contracts::{
     AsrRequest, ComputeDevice, DiarizationRequest, DiarizationStageConfiguration, ModelRef,
@@ -12,12 +13,13 @@ use domain::{
     ProjectId, RuntimeProvenance, SpeakerTaggedSegment,
 };
 use futures::channel::mpsc::UnboundedReceiver;
-use runtime::{JobContext, JobEvent, JobRuntime};
+use runtime::{JobContext, JobEvent, JobId, JobRuntime, JobRuntimeError, JobSnapshot, JobState};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{BufReader, Read};
-use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct ProcessingRequest {
@@ -78,6 +80,13 @@ impl ProcessingService {
         self
     }
 
+    /// Runs this service's jobs on `runtime`, so they share its worker limit
+    /// with every other user of that runtime.
+    pub fn with_job_runtime(mut self, runtime: Arc<JobRuntime>) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     pub fn probe(&self, request: &ProcessingRequest) -> Result<(), contracts::BackendError> {
         self.asr_provider
             .backend(&request.asr_model.backend_id)?
@@ -111,6 +120,26 @@ impl ProcessingService {
             asr_events,
             diarization_events,
         }
+    }
+
+    pub fn job_snapshot(&self, job_id: JobId) -> Result<JobSnapshot, JobRuntimeError> {
+        self.runtime.snapshot(job_id)
+    }
+
+    pub fn remove_job(&self, job_id: JobId) -> Result<JobSnapshot, JobRuntimeError> {
+        self.runtime.remove(job_id)
+    }
+
+    /// Jobs of this service's runtime that are queued or running, including
+    /// those of other services sharing the runtime.
+    pub fn active_job_ids(&self) -> Result<Vec<JobId>, JobRuntimeError> {
+        Ok(self
+            .runtime
+            .list()?
+            .into_iter()
+            .filter(|job| matches!(job.state, JobState::Queued | JobState::Running))
+            .map(|job| job.job_id)
+            .collect())
     }
 
     pub fn process(
@@ -244,6 +273,43 @@ pub struct WorkspaceService {
     processing: ProcessingService,
     documents: DocumentService,
     options: Arc<RwLock<ProcessingOptions>>,
+    /// Shared by every clone. Processing starts hold it for reading, a root
+    /// switch for writing, so a job cannot start in the middle of a switch.
+    documents_root: Arc<RwLock<Option<DocumentsRoot>>>,
+    /// Jobs of processing futures that have not finished or been dropped.
+    /// A cancelled job is no longer active in the runtime while its future
+    /// still saves the outcome, so a root switch checks these as well.
+    processing_in_flight: Arc<Mutex<BTreeSet<JobId>>>,
+}
+
+/// Registers a processing future's jobs until the future ends or is dropped.
+struct InFlightProcessing {
+    jobs: Arc<Mutex<BTreeSet<JobId>>>,
+    ids: [JobId; 2],
+}
+
+impl InFlightProcessing {
+    fn register(jobs: &Arc<Mutex<BTreeSet<JobId>>>, ids: [JobId; 2]) -> Self {
+        jobs.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(ids);
+        Self {
+            jobs: jobs.clone(),
+            ids,
+        }
+    }
+}
+
+impl Drop for InFlightProcessing {
+    fn drop(&mut self) {
+        let mut jobs = self
+            .jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for id in &self.ids {
+            jobs.remove(id);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +341,17 @@ pub struct ProjectProcessingJob {
     pub diarization_events: UnboundedReceiver<JobEvent>,
 }
 
+impl ProjectProcessingJob {
+    pub fn job_ids(&self) -> (JobId, JobId) {
+        (self.asr_context.job_id(), self.diarization_context.job_id())
+    }
+
+    pub fn cancel(&self) {
+        self.asr_context.cancel();
+        self.diarization_context.cancel();
+    }
+}
+
 impl WorkspaceService {
     pub fn new(processing: ProcessingService, documents: DocumentService) -> Self {
         Self::with_options(processing, documents, ProcessingOptions::default())
@@ -289,7 +366,93 @@ impl WorkspaceService {
             processing,
             documents,
             options: Arc::new(RwLock::new(options)),
+            documents_root: Arc::new(RwLock::new(None)),
+            processing_in_flight: Arc::default(),
         }
+    }
+
+    /// Lets this workspace switch documents roots; `root.root()` must be the
+    /// root its `DocumentService` was opened on.
+    pub fn with_documents_root(self, root: DocumentsRoot) -> Self {
+        *self
+            .documents_root
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(root);
+        self
+    }
+
+    /// The documents root every clone currently reads and writes, if this
+    /// workspace was given one.
+    pub fn documents_root(&self) -> Option<PathBuf> {
+        self.documents_root
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .map(|root| root.root.clone())
+    }
+
+    /// Opens `root` (creating the directory if needed) and makes every clone
+    /// of this workspace and of its `DocumentService` read and write it.
+    ///
+    /// The root is checked by [`crate::validate_documents_root`] against the
+    /// Speaker Library of the current [`ProcessingOptions`] and the model
+    /// directory. While any job of the shared job runtime (processing or
+    /// Assistant) is queued or running, or a processing future of this
+    /// workspace has not ended, the switch fails with
+    /// [`DocumentsRootError::WorkspaceBusy`] and changes nothing. A call
+    /// already running on another thread against [`Self::documents`]
+    /// finishes on the old root. After a switch, every change feed of the old root
+    /// ([`Self::watch_documents`], [`Self::subscribe_document_changes`]) ends;
+    /// callers subscribe again. Switching to the current root changes
+    /// nothing. The caller saves the new root in the settings (with its
+    /// revision check) once this returns `Ok`; blocking, call it off the UI
+    /// thread.
+    pub fn switch_documents_root(&self, root: impl AsRef<Path>) -> Result<(), DocumentsRootError> {
+        let root = root.as_ref();
+        let speaker_library = self
+            .options
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .speaker_library_path
+            .clone()
+            .map(PathBuf::from);
+        let mut current = self
+            .documents_root
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let current = current.as_mut().ok_or(DocumentsRootError::Unsupported)?;
+        validate_documents_root(root, speaker_library.as_deref(), &current.model_directory)?;
+        if same_location(root, &current.root) {
+            return Ok(());
+        }
+        let mut job_ids: BTreeSet<JobId> = self
+            .processing
+            .active_job_ids()
+            .map_err(|error| DocumentsRootError::Jobs(error.to_string()))?
+            .into_iter()
+            .collect();
+        job_ids.extend(
+            self.processing_in_flight
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter(),
+        );
+        if !job_ids.is_empty() {
+            return Err(DocumentsRootError::WorkspaceBusy {
+                job_ids: job_ids.into_iter().collect(),
+            });
+        }
+        fs::create_dir_all(root).map_err(|error| DocumentsRootError::Create {
+            path: root.to_path_buf(),
+            message: error.to_string(),
+        })?;
+        let repository = (current.factory)(root).map_err(|message| DocumentsRootError::Open {
+            path: root.to_path_buf(),
+            message,
+        })?;
+        self.documents.replace_repository(repository);
+        current.root = root.to_path_buf();
+        Ok(())
     }
 
     pub fn set_processing_options(&self, options: ProcessingOptions) -> Result<(), String> {
@@ -300,6 +463,21 @@ impl WorkspaceService {
         Ok(())
     }
 
+    pub fn documents(&self) -> DocumentService {
+        self.documents.clone()
+    }
+
+    /// Revision-checked update, tree move and speaker correction commands on
+    /// this workspace's documents; a stale revision fails with
+    /// [`crate::DocumentCommandError::RevisionConflict`].
+    pub fn document_commands(&self) -> crate::DocumentCommandService {
+        crate::DocumentCommandService::new(self.documents.clone())
+    }
+
+    pub fn processing(&self) -> ProcessingService {
+        self.processing.clone()
+    }
+
     pub fn list_projects(&self) -> Result<Vec<DocumentState>, String> {
         self.documents.list()
     }
@@ -308,10 +486,19 @@ impl WorkspaceService {
         self.documents.snapshot()
     }
 
+    /// Changes of the current documents root; the receiver disconnects after
+    /// a documents-root switch.
     pub fn watch_documents(
         &self,
     ) -> Result<std::sync::mpsc::Receiver<crate::DocumentChange>, String> {
         self.documents.watch()
+    }
+
+    /// Document-directory changes as an async stream the watcher feeds
+    /// directly; dropping it stops watching. It ends after a documents-root
+    /// switch; subscribe again for the new root.
+    pub fn subscribe_document_changes(&self) -> Result<crate::DocumentChanges, String> {
+        self.documents.subscribe_changes()
     }
 
     pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<DocumentState, String> {
@@ -339,6 +526,9 @@ impl WorkspaceService {
         self.documents.get(project_id)
     }
 
+    /// Deprecated: rewrites every document without revision checks. Use
+    /// [`Self::document_commands`] and
+    /// [`crate::DocumentCommandService::reparent_document`].
     pub fn reparent_project(
         &self,
         project_id: &ProjectId,
@@ -354,6 +544,9 @@ impl WorkspaceService {
         Ok(projects)
     }
 
+    /// Deprecated: rewrites every document without revision checks. Use
+    /// [`Self::document_commands`] and
+    /// [`crate::DocumentCommandService::reorder_document`].
     pub fn reorder_project(
         &self,
         project_id: &ProjectId,
@@ -399,6 +592,9 @@ impl WorkspaceService {
         Ok(child)
     }
 
+    /// Deprecated: overwrites without a revision check. Use
+    /// [`Self::document_commands`] and
+    /// [`crate::DocumentCommandService::update_document`].
     pub fn update_summary(
         &self,
         project_id: &ProjectId,
@@ -413,6 +609,9 @@ impl WorkspaceService {
         Ok(project)
     }
 
+    /// Deprecated: no revision check, accepts unknown speaker ids and
+    /// replaces an edited body. Use [`Self::document_commands`] and
+    /// [`crate::DocumentCommandService::merge_speaker`].
     pub fn merge_speaker(
         &self,
         project_id: &ProjectId,
@@ -458,9 +657,25 @@ impl WorkspaceService {
         diarization_model: ModelRef,
         speaker_library_path: Option<String>,
     ) -> Result<ProjectProcessingJob, contracts::BackendError> {
-        let mut project = self
+        let request = self.processing_request(
+            &project_id,
+            asr_model,
+            diarization_model,
+            speaker_library_path,
+        )?;
+        self.start_project_processing_with_request(project_id, request)
+    }
+
+    pub fn processing_request(
+        &self,
+        project_id: &ProjectId,
+        asr_model: ModelRef,
+        diarization_model: ModelRef,
+        speaker_library_path: Option<String>,
+    ) -> Result<ProcessingRequest, contracts::BackendError> {
+        let project = self
             .documents
-            .get(&project_id)
+            .get(project_id)
             .map_err(persistence_error)?
             .ok_or_else(|| persistence_error("project does not exist"))?;
         let options = self
@@ -468,7 +683,7 @@ impl WorkspaceService {
             .read()
             .map_err(|_| persistence_error("processing options lock poisoned"))?
             .clone();
-        let request = ProcessingRequest {
+        Ok(ProcessingRequest {
             audio_path: project.audio_path().to_string(),
             asr_model,
             diarization_model,
@@ -477,7 +692,25 @@ impl WorkspaceService {
             device: options.device,
             speaker_library_path: speaker_library_path.or(options.speaker_library_path),
             stage_configuration: options.diarization_stages,
-        };
+        })
+    }
+
+    pub fn start_project_processing_with_request(
+        &self,
+        project_id: ProjectId,
+        request: ProcessingRequest,
+    ) -> Result<ProjectProcessingJob, contracts::BackendError> {
+        // Until the jobs are running, a documents-root switch waits; after
+        // that it sees them and refuses.
+        let _no_switch = self
+            .documents_root
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut project = self
+            .documents
+            .get(&project_id)
+            .map_err(persistence_error)?
+            .ok_or_else(|| persistence_error("project does not exist"))?;
         self.processing.probe(&request).inspect_err(|error| {
             project.set_processing_error(error.message.clone());
             let _ = self.documents.save(project.clone());
@@ -492,7 +725,17 @@ impl WorkspaceService {
         let diarization_status_context = contexts.diarization_context.clone();
         let workspace = self.clone();
         let request_for_record = request.clone();
+        let in_flight = InFlightProcessing::register(
+            &self.processing_in_flight,
+            [
+                contexts.asr_context.job_id(),
+                contexts.diarization_context.job_id(),
+            ],
+        );
         let future = Box::pin(async move {
+            // Dropped with the future: when it ends, is dropped unpolled or
+            // is dropped mid-way.
+            let _in_flight = in_flight;
             let result = workspace
                 .processing
                 .process(request, asr_context, diarization_context)
@@ -549,6 +792,15 @@ impl WorkspaceService {
             asr_events: contexts.asr_events,
             diarization_events: contexts.diarization_events,
         })
+    }
+
+    pub fn discard_processing_job(&self, job: &ProjectProcessingJob) {
+        self.discard_processing_job_ids(job.job_ids());
+    }
+
+    pub fn discard_processing_job_ids(&self, (asr_job, diarization_job): (JobId, JobId)) {
+        let _ = self.processing.remove_job(asr_job);
+        let _ = self.processing.remove_job(diarization_job);
     }
 
     pub fn process_project(
@@ -676,18 +928,24 @@ fn model_provenance(model: &ModelRef) -> ModelProvenance {
 }
 
 fn file_sha256(path: &str) -> Option<String> {
-    let file = fs::File::open(path).ok()?;
+    read_file_sha256(Path::new(path)).ok()
+}
+
+/// The lowercase hex SHA-256 of the file at `path`, as recorded in
+/// `processing.latest.input_audio_checksum`.
+pub(crate) fn read_file_sha256(path: &Path) -> std::io::Result<String> {
+    let file = fs::File::open(path)?;
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
-        let read = reader.read(&mut buffer).ok()?;
+        let read = reader.read(&mut buffer)?;
         if read == 0 {
             break;
         }
         hasher.update(&buffer[..read]);
     }
-    Some(format!("{:x}", hasher.finalize()))
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn artifact_sha256(path: &str) -> Option<String> {
@@ -782,7 +1040,7 @@ mod tests {
     use super::*;
     use crate::{
         asr_descriptor, diarization_descriptor, DocumentRepository, DocumentService,
-        DocumentSnapshot,
+        DocumentSnapshot, ReservedLocation,
     };
     use contracts::{
         AsrResult, BackendDescriptor, BackendError, DiarizationResult, DocumentRecord,
@@ -991,5 +1249,749 @@ mod tests {
         assert_eq!(processing.runtime.windowing, None);
         assert_eq!(repository.get(project.id()).unwrap(), Some(result.clone()));
         std::fs::remove_file(audio_path).unwrap();
+    }
+
+    #[test]
+    fn processing_job_keeps_the_settings_snapshot_from_start() {
+        let repository = Arc::new(MemoryRepository::default());
+        let workspace = WorkspaceService::with_options(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(repository),
+            ProcessingOptions {
+                language: Some("zh".into()),
+                expected_speakers: Some(2),
+                device: ComputeDevice::Cpu,
+                speaker_library_path: None,
+                diarization_stages: DiarizationStageConfiguration::default(),
+            },
+        );
+        let audio_path = write_test_wav();
+        let project = workspace
+            .import_audio(audio_path.display().to_string())
+            .unwrap();
+        let asr_model = ModelRef {
+            backend_id: "fake-asr".into(),
+            model_id: "fixture".into(),
+            revision: None,
+            artifact_path: "fixture-model".into(),
+            artifacts: Vec::new(),
+        };
+        let diarization_model = ModelRef {
+            backend_id: "fake-diarization".into(),
+            model_id: "fixture".into(),
+            revision: None,
+            artifact_path: "fixture-model".into(),
+            artifacts: Vec::new(),
+        };
+        let job = workspace
+            .start_project_processing(project.id().clone(), asr_model, diarization_model)
+            .unwrap();
+        workspace
+            .set_processing_options(ProcessingOptions {
+                language: Some("en".into()),
+                expected_speakers: Some(4),
+                device: ComputeDevice::Cpu,
+                speaker_library_path: None,
+                diarization_stages: DiarizationStageConfiguration::default(),
+            })
+            .unwrap();
+        let result = futures::executor::block_on(job.future).unwrap();
+        let processing = result.processing.latest.as_ref().unwrap();
+        assert_eq!(processing.runtime.language.as_deref(), Some("zh"));
+        assert_eq!(processing.runtime.expected_speakers, Some(2));
+        std::fs::remove_file(audio_path).unwrap();
+    }
+
+    #[test]
+    fn document_commands_write_the_workspace_documents_with_revisions() {
+        let repository = Arc::new(MemoryRepository::default());
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(repository.clone()),
+        );
+        let project = workspace.import_audio("meeting.wav").unwrap();
+        let commands = workspace.document_commands();
+
+        let updated = commands
+            .update_document(
+                project.id(),
+                project.revision(),
+                contracts::DocumentPatch {
+                    title: Some("Renamed".into()),
+                    ..contracts::DocumentPatch::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.state.revision(), project.revision() + 1);
+        assert_eq!(
+            workspace.project(project.id()).unwrap().unwrap().title(),
+            "Renamed"
+        );
+        assert!(matches!(
+            commands.update_document(
+                project.id(),
+                project.revision(),
+                contracts::DocumentPatch::default()
+            ),
+            Err(crate::DocumentCommandError::RevisionConflict { .. })
+        ));
+    }
+
+    #[test]
+    fn processing_jobs_run_on_the_given_job_runtime() {
+        let runtime = Arc::new(JobRuntime::with_max_concurrency(1));
+        let processing = ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization))
+            .with_job_runtime(runtime.clone());
+
+        let contexts = processing.contexts();
+
+        let jobs: Vec<_> = runtime
+            .list()
+            .unwrap()
+            .into_iter()
+            .map(|job| job.job_id)
+            .collect();
+        assert_eq!(
+            jobs,
+            vec![
+                contexts.asr_context.job_id(),
+                contexts.diarization_context.job_id()
+            ]
+        );
+    }
+
+    /// Hands out one prepared change stream.
+    #[derive(Default)]
+    struct ChangingRepository {
+        changes: std::sync::Mutex<Option<crate::DocumentChanges>>,
+    }
+
+    impl DocumentRepository for ChangingRepository {
+        fn snapshot(&self) -> Result<DocumentSnapshot, String> {
+            Ok(DocumentSnapshot {
+                documents: Vec::new(),
+                issues: Vec::new(),
+            })
+        }
+
+        fn save(&self, _: DocumentState, _: Option<String>) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn get(&self, _: &ProjectId) -> Result<Option<DocumentState>, String> {
+            Ok(None)
+        }
+
+        fn read(&self, _: &ProjectId) -> Result<Option<DocumentRecord>, String> {
+            Ok(None)
+        }
+
+        fn watch(&self) -> Result<std::sync::mpsc::Receiver<crate::DocumentChange>, String> {
+            Err("not used".into())
+        }
+
+        fn subscribe_changes(&self) -> Result<crate::DocumentChanges, String> {
+            self.changes
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| "already subscribed".to_string())
+        }
+    }
+
+    struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+
+    impl Drop for DropFlag {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn document_changes_stream_from_the_repository_and_stop_its_watcher_on_drop() {
+        use futures::StreamExt;
+        let (sender, receiver) = futures::channel::mpsc::unbounded();
+        let watcher_dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let repository = ChangingRepository {
+            changes: std::sync::Mutex::new(Some(crate::DocumentChanges::new(
+                receiver,
+                DropFlag(watcher_dropped.clone()),
+            ))),
+        };
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(Arc::new(repository)),
+        );
+
+        let mut changes = workspace.subscribe_document_changes().unwrap();
+        sender
+            .unbounded_send(crate::DocumentChange::Changed)
+            .unwrap();
+        drop(sender);
+
+        assert_eq!(
+            futures::executor::block_on(changes.next()),
+            Some(crate::DocumentChange::Changed)
+        );
+        assert_eq!(futures::executor::block_on(changes.next()), None);
+        assert!(!watcher_dropped.load(std::sync::atomic::Ordering::SeqCst));
+        drop(changes);
+        assert!(watcher_dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn a_repository_without_change_subscriptions_reports_an_error() {
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(Arc::new(MemoryRepository::default())),
+        );
+
+        assert!(workspace.subscribe_document_changes().is_err());
+    }
+
+    /// Hands out one in-memory repository per documents root.
+    #[derive(Clone, Default)]
+    struct RootRepositories {
+        roots: Arc<std::sync::Mutex<BTreeMap<PathBuf, Arc<MemoryRepository>>>>,
+    }
+
+    impl RootRepositories {
+        fn repository(&self, root: &Path) -> Arc<MemoryRepository> {
+            self.roots
+                .lock()
+                .unwrap()
+                .entry(root.to_path_buf())
+                .or_default()
+                .clone()
+        }
+
+        fn opened(&self, root: &Path) -> bool {
+            self.roots.lock().unwrap().contains_key(root)
+        }
+
+        fn ids(&self, root: &Path) -> Vec<String> {
+            self.repository(root)
+                .projects
+                .read()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect()
+        }
+
+        fn documents_root(&self, root: &Path, model_directory: &Path) -> DocumentsRoot {
+            let roots = self.clone();
+            DocumentsRoot::new(root, model_directory, move |root: &Path| {
+                Ok(roots.repository(root) as Arc<dyn DocumentRepository>)
+            })
+        }
+    }
+
+    fn temp_directory(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "meetnote-workspace-{label}-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    /// A workspace at `<base>/old` with a shared job runtime, the model
+    /// directory `<base>/models` and the Speaker Library
+    /// `<base>/speakers/library.json`.
+    struct RootFixture {
+        base: PathBuf,
+        old_root: PathBuf,
+        models: PathBuf,
+        speaker_library: PathBuf,
+        roots: RootRepositories,
+        jobs: Arc<JobRuntime>,
+        workspace: WorkspaceService,
+    }
+
+    impl RootFixture {
+        fn new(label: &str) -> Self {
+            Self::with_repository(label, None)
+        }
+
+        fn with_repository(label: &str, old: Option<Arc<dyn DocumentRepository>>) -> Self {
+            let base = temp_directory(label);
+            let old_root = base.join("old");
+            let models = base.join("models");
+            let speaker_library = base.join("speakers/library.json");
+            fs::create_dir_all(&old_root).unwrap();
+            fs::create_dir_all(models.join("asr")).unwrap();
+            fs::create_dir_all(speaker_library.parent().unwrap()).unwrap();
+            fs::write(
+                &speaker_library,
+                serde_json::to_vec(&contracts::SpeakerLibraryDocument::default()).unwrap(),
+            )
+            .unwrap();
+            let roots = RootRepositories::default();
+            let old = old.unwrap_or_else(|| roots.repository(&old_root));
+            let jobs = Arc::new(JobRuntime::default());
+            let workspace = WorkspaceService::with_options(
+                ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization))
+                    .with_job_runtime(jobs.clone()),
+                DocumentService::new(old),
+                ProcessingOptions {
+                    speaker_library_path: Some(speaker_library.display().to_string()),
+                    ..ProcessingOptions::default()
+                },
+            )
+            .with_documents_root(roots.documents_root(&old_root, &models));
+            Self {
+                base,
+                old_root,
+                models,
+                speaker_library,
+                roots,
+                jobs,
+                workspace,
+            }
+        }
+    }
+
+    impl Drop for RootFixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.base);
+        }
+    }
+
+    fn fixture_models() -> (ModelRef, ModelRef) {
+        let model = |backend_id: &str| ModelRef {
+            backend_id: backend_id.into(),
+            model_id: "fixture".into(),
+            revision: None,
+            artifact_path: "fixture-model".into(),
+            artifacts: Vec::new(),
+        };
+        (model("fake-asr"), model("fake-diarization"))
+    }
+
+    #[test]
+    fn switching_the_documents_root_moves_every_clone_to_the_new_root() {
+        let fixture = RootFixture::new("switch");
+        let old = fixture.workspace.import_audio("old.wav").unwrap();
+        let clone = fixture.workspace.clone();
+        // Held the way the Assistant holds its document service.
+        let documents = fixture.workspace.documents();
+        let new_root = fixture.base.join("new/documents");
+
+        fixture.workspace.switch_documents_root(&new_root).unwrap();
+
+        assert!(new_root.is_dir());
+        assert_eq!(clone.documents_root(), Some(new_root.clone()));
+        assert!(clone.list_projects().unwrap().is_empty());
+        assert_eq!(documents.get(old.id()).unwrap(), None);
+        let imported = clone.import_audio("new.wav").unwrap();
+        documents
+            .save(DocumentState::new(
+                ProjectId::new("assistant-write"),
+                "Assistant",
+                "a.wav",
+            ))
+            .unwrap();
+        assert_eq!(
+            fixture.roots.ids(&fixture.old_root),
+            [old.id().as_str().to_string()]
+        );
+        let mut expected = vec![
+            imported.id().as_str().to_string(),
+            "assistant-write".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(fixture.roots.ids(&new_root), expected);
+
+        // Switching back opens the old root again.
+        fixture
+            .workspace
+            .switch_documents_root(&fixture.old_root)
+            .unwrap();
+        assert_eq!(documents.list().unwrap(), vec![old]);
+    }
+
+    /// Change feeds whose senders the test holds, so that only a switch can
+    /// end them.
+    #[derive(Default)]
+    struct FeedRepository {
+        watchers: std::sync::Mutex<Vec<std::sync::mpsc::Sender<crate::DocumentChange>>>,
+        streams:
+            std::sync::Mutex<Vec<futures::channel::mpsc::UnboundedSender<crate::DocumentChange>>>,
+    }
+
+    impl FeedRepository {
+        fn change(&self) {
+            for sender in self.watchers.lock().unwrap().iter() {
+                let _ = sender.send(crate::DocumentChange::Changed);
+            }
+            for sender in self.streams.lock().unwrap().iter() {
+                let _ = sender.unbounded_send(crate::DocumentChange::Changed);
+            }
+        }
+    }
+
+    impl DocumentRepository for FeedRepository {
+        fn snapshot(&self) -> Result<DocumentSnapshot, String> {
+            Ok(DocumentSnapshot {
+                documents: Vec::new(),
+                issues: Vec::new(),
+            })
+        }
+
+        fn save(&self, _: DocumentState, _: Option<String>) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn get(&self, _: &ProjectId) -> Result<Option<DocumentState>, String> {
+            Ok(None)
+        }
+
+        fn read(&self, _: &ProjectId) -> Result<Option<DocumentRecord>, String> {
+            Ok(None)
+        }
+
+        fn watch(&self) -> Result<std::sync::mpsc::Receiver<crate::DocumentChange>, String> {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.watchers.lock().unwrap().push(sender);
+            Ok(receiver)
+        }
+
+        fn subscribe_changes(&self) -> Result<crate::DocumentChanges, String> {
+            let (sender, receiver) = futures::channel::mpsc::unbounded();
+            self.streams.lock().unwrap().push(sender);
+            Ok(crate::DocumentChanges::new(receiver, ()))
+        }
+    }
+
+    #[test]
+    fn a_documents_root_switch_ends_the_change_feeds_of_the_old_root() {
+        use futures::{FutureExt, StreamExt};
+        use std::sync::mpsc::RecvTimeoutError;
+        use std::time::Duration;
+        let old = Arc::new(FeedRepository::default());
+        let fixture = RootFixture::with_repository("feeds", Some(old.clone()));
+        let new = Arc::new(FeedRepository::default());
+        let opened = new.clone();
+        let workspace = fixture
+            .workspace
+            .clone()
+            .with_documents_root(DocumentsRoot::new(
+                &fixture.old_root,
+                &fixture.models,
+                move |_: &Path| Ok(opened.clone() as Arc<dyn DocumentRepository>),
+            ));
+        let watched = workspace.watch_documents().unwrap();
+        let mut stream = workspace.subscribe_document_changes().unwrap();
+        old.change();
+        assert_eq!(
+            watched.recv_timeout(Duration::from_secs(5)),
+            Ok(crate::DocumentChange::Changed)
+        );
+        assert_eq!(
+            stream.next().now_or_never(),
+            Some(Some(crate::DocumentChange::Changed))
+        );
+
+        // The current root, spelled differently: nothing changes.
+        workspace
+            .switch_documents_root(fixture.old_root.join("../old/."))
+            .unwrap();
+        old.change();
+        assert_eq!(
+            watched.recv_timeout(Duration::from_secs(5)),
+            Ok(crate::DocumentChange::Changed)
+        );
+        assert_eq!(
+            stream.next().now_or_never(),
+            Some(Some(crate::DocumentChange::Changed))
+        );
+        assert_eq!(stream.next().now_or_never(), None);
+
+        workspace
+            .switch_documents_root(fixture.base.join("new"))
+            .unwrap();
+
+        assert_eq!(
+            watched.recv_timeout(Duration::from_secs(5)),
+            Err(RecvTimeoutError::Disconnected)
+        );
+        assert_eq!(stream.next().now_or_never(), Some(None));
+        let mut resubscribed = workspace.subscribe_document_changes().unwrap();
+        new.change();
+        assert_eq!(
+            resubscribed.next().now_or_never(),
+            Some(Some(crate::DocumentChange::Changed))
+        );
+    }
+
+    #[test]
+    fn a_change_stream_outlives_the_document_service_it_came_from() {
+        use futures::{FutureExt, StreamExt};
+        let repository = Arc::new(FeedRepository::default());
+        let mut stream = DocumentService::new(repository.clone())
+            .subscribe_changes()
+            .unwrap();
+
+        repository.change();
+
+        assert_eq!(
+            stream.next().now_or_never(),
+            Some(Some(crate::DocumentChange::Changed))
+        );
+        assert_eq!(stream.next().now_or_never(), None);
+    }
+
+    #[test]
+    fn switching_while_a_job_is_queued_or_running_is_refused_as_busy() {
+        let fixture = RootFixture::new("busy");
+        let project = fixture.workspace.import_audio("kept.wav").unwrap();
+        // An Assistant run on the shared runtime.
+        let (running, _running_events) = fixture.jobs.create_job();
+        running.started();
+        let (queued, _queued_events) = fixture.jobs.create_job();
+        let target = fixture.base.join("busy-target");
+
+        assert_eq!(
+            fixture.workspace.switch_documents_root(&target),
+            Err(DocumentsRootError::WorkspaceBusy {
+                job_ids: vec![running.job_id(), queued.job_id()]
+            })
+        );
+        running.completed();
+        assert_eq!(
+            fixture.workspace.switch_documents_root(&target),
+            Err(DocumentsRootError::WorkspaceBusy {
+                job_ids: vec![queued.job_id()]
+            })
+        );
+        assert!(!target.exists());
+        assert!(!fixture.roots.opened(&target));
+        assert_eq!(
+            fixture.workspace.documents_root(),
+            Some(fixture.old_root.clone())
+        );
+        assert_eq!(fixture.workspace.list_projects().unwrap(), vec![project]);
+
+        queued.failed("stopped");
+        fixture.workspace.switch_documents_root(&target).unwrap();
+        assert_eq!(fixture.workspace.documents_root(), Some(target));
+    }
+
+    /// Tries to switch the documents root whenever processing results are
+    /// saved, recording each outcome.
+    struct SwitchOnResultSave {
+        inner: MemoryRepository,
+        workspace: std::sync::OnceLock<WorkspaceService>,
+        target: PathBuf,
+        attempts: std::sync::Mutex<Vec<Result<(), DocumentsRootError>>>,
+    }
+
+    impl DocumentRepository for SwitchOnResultSave {
+        fn snapshot(&self) -> Result<DocumentSnapshot, String> {
+            self.inner.snapshot()
+        }
+
+        fn save(&self, project: DocumentState, markdown: Option<String>) -> Result<(), String> {
+            if project.processing.latest.is_some() {
+                if let Some(workspace) = self.workspace.get() {
+                    let attempt = workspace.switch_documents_root(&self.target);
+                    self.attempts.lock().unwrap().push(attempt);
+                }
+            }
+            self.inner.save(project, markdown)
+        }
+
+        fn get(&self, id: &ProjectId) -> Result<Option<DocumentState>, String> {
+            self.inner.get(id)
+        }
+
+        fn read(&self, id: &ProjectId) -> Result<Option<DocumentRecord>, String> {
+            self.inner.read(id)
+        }
+
+        fn watch(&self) -> Result<std::sync::mpsc::Receiver<crate::DocumentChange>, String> {
+            self.inner.watch()
+        }
+    }
+
+    #[test]
+    fn a_processing_job_keeps_the_workspace_busy_until_its_results_are_saved() {
+        let base = temp_directory("result-save");
+        let repository = Arc::new(SwitchOnResultSave {
+            inner: MemoryRepository::default(),
+            workspace: std::sync::OnceLock::new(),
+            target: base.join("new"),
+            attempts: std::sync::Mutex::new(Vec::new()),
+        });
+        let fixture = RootFixture::with_repository("result-save-root", Some(repository.clone()));
+        assert!(repository.workspace.set(fixture.workspace.clone()).is_ok());
+        let audio_path = write_test_wav();
+        let project = fixture
+            .workspace
+            .import_audio(audio_path.display().to_string())
+            .unwrap();
+        let (asr_model, diarization_model) = fixture_models();
+        let job = fixture
+            .workspace
+            .start_project_processing(project.id().clone(), asr_model, diarization_model)
+            .unwrap();
+        let (asr_job, diarization_job) = job.job_ids();
+        assert_eq!(
+            fixture.workspace.switch_documents_root(base.join("new")),
+            Err(DocumentsRootError::WorkspaceBusy {
+                job_ids: vec![asr_job, diarization_job]
+            })
+        );
+
+        let processed = futures::executor::block_on(job.future).unwrap();
+
+        let attempts = repository.attempts.lock().unwrap().clone();
+        assert!(
+            matches!(
+                attempts.as_slice(),
+                [Err(DocumentsRootError::WorkspaceBusy { .. })]
+            ),
+            "a switch during the result save must be refused: {attempts:?}"
+        );
+        assert_eq!(
+            fixture.workspace.documents_root(),
+            Some(fixture.old_root.clone())
+        );
+        assert_eq!(repository.inner.get(project.id()).unwrap(), Some(processed));
+        fixture
+            .workspace
+            .switch_documents_root(base.join("new"))
+            .unwrap();
+        fs::remove_file(audio_path).unwrap();
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn a_cancelled_processing_job_keeps_the_workspace_busy_until_its_future_ends() {
+        let fixture = RootFixture::new("cancelled");
+        let audio_path = write_test_wav();
+        let project = fixture
+            .workspace
+            .import_audio(audio_path.display().to_string())
+            .unwrap();
+        let (asr_model, diarization_model) = fixture_models();
+        let job = fixture
+            .workspace
+            .start_project_processing(project.id().clone(), asr_model, diarization_model)
+            .unwrap();
+        job.cancel();
+        let target = fixture.base.join("after-cancel");
+
+        assert!(matches!(
+            fixture.workspace.switch_documents_root(&target),
+            Err(DocumentsRootError::WorkspaceBusy { .. })
+        ));
+        // The future still writes the outcome into the root it started in.
+        let _ = futures::executor::block_on(job.future);
+        let written = fixture.roots.repository(&fixture.old_root);
+        assert!(written.get(project.id()).unwrap().unwrap().revision() > project.revision());
+        fixture.workspace.switch_documents_root(&target).unwrap();
+
+        // A cancelled job dropped before it ran does not keep it busy.
+        let imported = fixture
+            .workspace
+            .import_audio(audio_path.display().to_string())
+            .unwrap();
+        let (asr_model, diarization_model) = fixture_models();
+        let dropped = fixture
+            .workspace
+            .start_project_processing(imported.id().clone(), asr_model, diarization_model)
+            .unwrap();
+        dropped.cancel();
+        drop(dropped);
+        fixture
+            .workspace
+            .switch_documents_root(&fixture.old_root)
+            .unwrap();
+        fs::remove_file(audio_path).unwrap();
+    }
+
+    #[test]
+    fn invalid_documents_roots_are_rejected_without_changing_the_workspace() {
+        let fixture = RootFixture::new("invalid");
+        let project = fixture.workspace.import_audio("kept.wav").unwrap();
+        let file = fixture.base.join("notes.txt");
+        fs::write(&file, b"not a directory").unwrap();
+        let speakers = fixture.speaker_library.parent().unwrap().to_path_buf();
+        let reserved = |path: &Path, location: ReservedLocation| {
+            matches!(
+                fixture.workspace.switch_documents_root(path),
+                Err(DocumentsRootError::Reserved { location: actual, .. }) if actual == location
+            )
+        };
+
+        assert_eq!(
+            fixture.workspace.switch_documents_root(""),
+            Err(DocumentsRootError::Empty)
+        );
+        assert_eq!(
+            fixture.workspace.switch_documents_root("   "),
+            Err(DocumentsRootError::Empty)
+        );
+        assert_eq!(
+            fixture.workspace.switch_documents_root(&file),
+            Err(DocumentsRootError::NotADirectory { path: file.clone() })
+        );
+        assert!(reserved(
+            &fixture.speaker_library,
+            ReservedLocation::SpeakerLibrary
+        ));
+        assert!(reserved(&speakers, ReservedLocation::SpeakerLibrary));
+        assert!(reserved(&fixture.base, ReservedLocation::SpeakerLibrary));
+        assert!(reserved(&fixture.models, ReservedLocation::ModelDirectory));
+        assert!(reserved(
+            &fixture.models.join("asr/whisper"),
+            ReservedLocation::ModelDirectory
+        ));
+        assert!(reserved(
+            &fixture.base.join("old/../models/."),
+            ReservedLocation::ModelDirectory
+        ));
+        assert!(matches!(
+            fixture
+                .workspace
+                .switch_documents_root(file.join("documents")),
+            Err(DocumentsRootError::Create { .. })
+        ));
+
+        let failing = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(Arc::new(MemoryRepository::default())),
+        )
+        .with_documents_root(DocumentsRoot::new(
+            &fixture.old_root,
+            &fixture.models,
+            |_: &Path| Err("volume is offline".into()),
+        ));
+        let elsewhere = fixture.base.join("elsewhere");
+        assert_eq!(
+            failing.switch_documents_root(&elsewhere),
+            Err(DocumentsRootError::Open {
+                path: elsewhere,
+                message: "volume is offline".into()
+            })
+        );
+        let unsupported = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(Arc::new(MemoryRepository::default())),
+        );
+        assert_eq!(
+            unsupported.switch_documents_root(&fixture.base.join("any")),
+            Err(DocumentsRootError::Unsupported)
+        );
+
+        assert_eq!(
+            fixture.workspace.documents_root(),
+            Some(fixture.old_root.clone())
+        );
+        assert_eq!(fixture.workspace.list_projects().unwrap(), vec![project]);
     }
 }

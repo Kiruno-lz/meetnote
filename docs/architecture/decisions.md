@@ -26,15 +26,17 @@
 22. UI locale 与 ASR transcription language 是独立设置。
 23. GPUI、模型清单和第三方推理依赖必须锁定；模型 revision、checksum、来源与 license 必须可追溯。
 24. MeetNote 的基础框架由 Workspace Host、Audio Host、Agent Host 和 GPUI UI 组成；现有 crate 按职责归入这四个层次，不要求新增同名 crate。
-25. Agent Host 管理通用会话与 backend；语义场景由 profile/Skill 组合，文档与音频工具分别归 Workspace 和 Audio。
-26. LLM 协议 adapter 不是通用 Agent backend；Built-in、Codex、Claude Code 的能力与会话协议分别验证。
+25. Agent Host 以 Capability API 为核心，只保留薄规范化层与 Built-in 最小 Tool Loop；Codex/Claude Code 自行管理 Session、Context、Loop。具体操作归 Workspace、Audio、Settings，语义策略归 Skill/可选场景插件。
+26. LLM 协议 adapter 只服务模型连接，不实现外部 Agent Runtime；三种模型协议与外部 Agent 工具桥接分别验证，不建设跨 backend session 管理。
 27. GPUI UI 只负责四个基础层的交互、状态投影和任务反馈，不承载 Workspace、Audio 或 Agent 的领域实现。
 28. Extension 是可选的注册与执行机制，不改变四个基础层的职责；先验证内置 Rust 服务，再考虑 manifest 和 Wasm Component。
 29. 生命周期撤销注册不撤销已提交副作用；事务/undo/会话历史与可丢弃缓存分开管理。
 30. Workspace 的源文件音频、Markdown、项目 JSON 和 Speaker Library 是不可删除资产；全文索引、embedding index、解析状态和搜索缓存只能作为可重建派生状态存在。
 31. 插件通过 Workspace Host 的版本化 capability port 访问开放能力；port 执行 Workspace 的范围、revision、结构和资产保护，不提供任意文件系统删除权限。
+32. Assistant connection profile 直接在 `settings.json` 保存 `apiKey`，或保存包含 API key 的 `apiKeyFile` 路径；当前项目不建设操作系统 credential store、secret broker 或 credential 生命周期管理。计算费用、账户额度、计算配额和 billing budget 不属于当前项目职责；运行时只保留防止无限循环、超出协议上下文和结果失控所必需的硬上限。
+33. 桌面 GPUI 使用 `zeronsh/zui` 与配套 `zeronsh/gpui-component` 的固定 rev 对，不跟随上游 zed；zui 缺少的上游 zed 修复经 `[patch]` 由同 rev 的 `Kiruno-lz/zui` 分支 cherry-pick 携带，不在该分支做 MeetNote 自有改动。理由是窗口级 blur 只需修正材质，而 in-window backdrop blur 与 edge fade 需要渲染器支持，zui 已提供。zui 独有 API 只在 UI 主题模块的玻璃原语中调用，并保留不透明回退；不启用引入 GPL crate 的 feature。窗口玻璃只承载 chrome 与浮层，阅读和编辑内容使用不透明平面。
 
-详细理由见[Agent Host](agent-host.md)、[Workspace Host](workspace-host.md)和[Extension](extension-system.md)。
+详细理由见[Agent Host](agent-host.md)、[Workspace Host](workspace-host.md)、[Extension](extension-system.md)和 [GPUI UI 计划](../plan/ui-plan.md)。
 
 ## 禁止偏离
 

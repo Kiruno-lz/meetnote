@@ -15,15 +15,15 @@ Workspace Host、Audio Host、Agent Host 和 GPUI UI 是 MeetNote 的四个基�
       ┌─────────────┼─────────────┐
       ▼             ▼             ▼
 Workspace Host  Audio Host   Agent Host
-文档、文件、     解码、模型、   session、input、
-结构校验、恢复   provider、处理  event、backend
+文档、文件、     解码、模型、   capability 绑定、
+结构校验、恢复   provider、处理  薄适配、最小 loop
       │             │             │
       └─────── 显式 capability ───┘
 
 应用入口和 CLI 负责装配四个基础层。
 ```
 
-Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事实、处理编排、模型资源和音频 provider；Agent Host 维护通用 Agent 会话及 backend 连接；GPUI UI 负责交互和状态投影。Agent 通过显式 capability 调用 Workspace 或 Audio，不把这两个 Host 的领域逻辑复制到 Agent Host。
+Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事实、处理编排、模型资源和音频 provider；Agent Host 提供 capability 绑定、薄适配与 Built-in 最小 Tool Loop；GPUI UI 负责交互和状态投影。Agent 通过显式 capability 调用 Workspace 或 Audio，不把这两个 Host 的领域逻辑复制到 Agent Host。
 
 四个基础层是责任边界，不是必须拆出的 crate 或进程。核心 Workspace、Audio、Agent 可以内置 Rust 实现；GPUI UI 只做客户端和状态投影。Extension lifecycle 是可选的注册和执行机制，不改变四层归属。
 
@@ -53,7 +53,7 @@ Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事
 | crate / 代码区域 | 职责 |
 |---|---|
 | `crates/llm` | LLM provider 描述和协议适配边界 |
-| Agent application、Agent contracts、Skill resources | session runtime、工具调用、Skill/profile、context 和 Agent 事件；当前仍处于设计和待实现阶段 |
+| Agent application、Agent contracts | 能力绑定、薄适配、Built-in 最小 Tool Loop；工作树已有实现，职责收敛见 Assistant 计划 |
 | Workspace / Audio capabilities | Agent 可调用的显式服务；不把文档或音频领域逻辑复制进 Host |
 
 ### GPUI UI 与应用入口
@@ -88,7 +88,7 @@ Agent Host + profile/Skill -> Workspace/Audio capability -> 同一服务校验
 
 - [Workspace Host](workspace-host.md)：文件、外部编辑、窄操作与恢复。
 - [Audio Host 与模型后端](audio-host.md)：音频处理、provider、backend 和模型生命周期。
-- [Agent Host](agent-host.md)：通用运行时与文档场景分离。
+- [Agent Host](agent-host.md)：Capability API、最小 Tool Loop 与外部 Agent 边界。
 - [GPUI UI 计划](../plan/ui-plan.md)：四个基础层之上的交互客户端和状态投影。
 - [Extension](extension-system.md)：逻辑契约先于执行载体。
 - [文档状态](document-state.md)与[架构决策](decisions.md)。

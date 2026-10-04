@@ -1,0 +1,938 @@
+//! L2: the structure of every route in the desktop window. Each test opens
+//! the window as `run` does on the shared fixture (`support`), reaches the
+//! route through its sidebar entry, and checks by `debug_selector` that the
+//! glass sidebar holds the entries, the opaque content plane beside it holds
+//! only the route's page with its primary content, and that no other route's
+//! page is rendered. GPUI's test platform keeps the tests deterministic.
+//!
+//! A `debug_selector` on a scrollable element marks its scroll content,
+//! which may extend below the window; such content is only required to start
+//! inside its container.
+
+mod support;
+
+use gpui::{Bounds, Modifiers, Pixels, TestAppContext, VisualTestContext};
+use support::{DOCUMENT_IDS, WINDOW_HEIGHT, WINDOW_WIDTH};
+use ui::test_support::{MainWindow, Overlay, Route};
+
+/// The page root of every route; each route renders only its own.
+const ROUTE_PAGES: [(Route, &str); 4] = [
+    (Route::Assistant, "assistant-page"),
+    (Route::Meetings, "meetings-page"),
+    (Route::Models, "models-page"),
+    (Route::Settings, "settings-page"),
+];
+
+fn nav_selector(route: Route) -> &'static str {
+    match route {
+        Route::Assistant => "nav-Assistant",
+        Route::Meetings => "nav-Meetings",
+        Route::Models => "nav-Models",
+        Route::Settings => "nav-Settings",
+    }
+}
+
+/// Rendered inside the sidebar entry of the current route only.
+fn active_selector(route: Route) -> &'static str {
+    match route {
+        Route::Assistant => "nav-Assistant-active",
+        Route::Meetings => "nav-Meetings-active",
+        Route::Models => "nav-Models-active",
+        Route::Settings => "nav-Settings-active",
+    }
+}
+
+/// Opens the fixture window on its start route, Assistant, once the startup
+/// installation probe and project list have reached the view.
+fn open_window(cx: &mut TestAppContext) -> (MainWindow, &mut VisualTestContext) {
+    // The startup loads complete on worker threads.
+    cx.executor().allow_parking();
+    let window = cx.update(|cx| {
+        support::init(cx);
+        support::open_main_window(cx)
+    });
+    let cx = VisualTestContext::from_window(window.window(), cx).into_mut();
+    wait_for(cx, |cx| cx.update(|_, cx| window.startup_loaded(cx)));
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Assistant);
+    (window, cx)
+}
+
+/// Worker completion is bounded by elapsed time, not the number of frames
+/// the GPUI executor happened to render on this machine.
+#[track_caller]
+fn wait_for(cx: &mut VisualTestContext, done: impl Fn(&mut VisualTestContext) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        cx.run_until_parked();
+        if done(cx) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the route state did not settle"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Clicks the sidebar entry of `route`.
+fn click_entry(cx: &mut VisualTestContext, window: &MainWindow, route: Route) {
+    let entry = visible(cx, nav_selector(route));
+    cx.simulate_click(entry.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), route);
+}
+
+/// Opens the fixture window and clicks through to `route`, by way of a
+/// different route so every test exercises a real switch. Returns the
+/// bounds of the route's page.
+fn open_route(
+    cx: &mut TestAppContext,
+    route: Route,
+) -> (MainWindow, &mut VisualTestContext, Bounds<Pixels>) {
+    let (window, cx) = open_window(cx);
+    let detour = if route == Route::Models {
+        Route::Settings
+    } else {
+        Route::Models
+    };
+    for step in [detour, route] {
+        click_entry(cx, &window, step);
+    }
+    let page = page_in_content_plane(cx, route);
+    (window, cx, page)
+}
+
+fn window_bounds() -> Bounds<Pixels> {
+    Bounds::from_corners(
+        gpui::point(gpui::px(0.), gpui::px(0.)),
+        gpui::point(gpui::px(WINDOW_WIDTH), gpui::px(WINDOW_HEIGHT)),
+    )
+}
+
+/// The bounds of `selector`, which must be non-empty.
+#[track_caller]
+fn rendered(cx: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
+    let bounds = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("`{selector}` is not rendered"));
+    assert!(
+        bounds.size.width > gpui::px(0.) && bounds.size.height > gpui::px(0.),
+        "`{selector}` is empty: {bounds:?}"
+    );
+    bounds
+}
+
+/// The bounds of `selector`, which must be non-empty and inside the window.
+#[track_caller]
+fn visible(cx: &mut VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
+    let bounds = rendered(cx, selector);
+    assert!(
+        within(bounds, window_bounds()),
+        "`{selector}` leaves the window: {bounds:?}"
+    );
+    bounds
+}
+
+/// Scroll content `selector`, which must start inside `container` and keep
+/// to its width.
+#[track_caller]
+fn scroll_content(
+    cx: &mut VisualTestContext,
+    selector: &'static str,
+    container: Bounds<Pixels>,
+) -> Bounds<Pixels> {
+    let bounds = rendered(cx, selector);
+    assert!(
+        bounds.left() >= container.left()
+            && bounds.right() <= container.right()
+            && bounds.top() >= container.top()
+            && bounds.top() < container.bottom(),
+        "`{selector}` does not start inside its container: {bounds:?} in {container:?}"
+    );
+    bounds
+}
+
+/// Whether `inner` lies in `outer`, edges included.
+fn within(inner: Bounds<Pixels>, outer: Bounds<Pixels>) -> bool {
+    inner.left() >= outer.left()
+        && inner.top() >= outer.top()
+        && inner.right() <= outer.right()
+        && inner.bottom() <= outer.bottom()
+}
+
+fn leak(selector: String) -> &'static str {
+    Box::leak(selector.into_boxed_str())
+}
+
+/// The sidebar holds every route entry, the content plane lies to its
+/// right, and `route`'s page, the only page rendered, lies in the plane.
+#[track_caller]
+fn page_in_content_plane(cx: &mut VisualTestContext, route: Route) -> Bounds<Pixels> {
+    let sidebar = visible(cx, "sidebar");
+    let navigation = visible(cx, "nav");
+    assert!(
+        within(navigation, sidebar),
+        "the entries are in the sidebar"
+    );
+    for (other, _) in ROUTE_PAGES {
+        let entry = visible(cx, nav_selector(other));
+        assert!(
+            within(entry, navigation),
+            "`{}` is outside the navigation",
+            nav_selector(other)
+        );
+    }
+    let import = visible(cx, "import-audio");
+    assert!(
+        within(import, sidebar) && navigation.bottom() <= import.top(),
+        "import audio sits in the sidebar below the entries"
+    );
+    let plane = visible(cx, "content-plane");
+    assert!(
+        sidebar.right() <= plane.left(),
+        "the content plane lies right of the sidebar"
+    );
+    let mut page = None;
+    for (other, selector) in ROUTE_PAGES {
+        if other == route {
+            let bounds = visible(cx, selector);
+            assert!(
+                within(bounds, plane),
+                "the {route:?} page lies in the content plane: {bounds:?} in {plane:?}"
+            );
+            page = Some(bounds);
+        } else {
+            assert!(
+                cx.debug_bounds(selector).is_none(),
+                "{route:?} still renders the {other:?} page"
+            );
+        }
+    }
+    page.expect("every route has a page")
+}
+
+#[gpui::test]
+fn the_assistant_route_floats_the_input_bar_over_the_results(cx: &mut TestAppContext) {
+    let (_window, cx, page) = open_route(cx, Route::Assistant);
+    let body = visible(cx, "assistant-body");
+    let results = scroll_content(cx, "assistant-results", body);
+    let bar = visible(cx, "assistant-input-bar");
+    let prompt = visible(cx, "assistant-input");
+    let send = visible(cx, "assistant-submit");
+    assert!(within(body, page) && within(bar, body));
+    assert!(
+        within(prompt, bar) && within(send, bar),
+        "the prompt and the send button are in the bar"
+    );
+    assert!(
+        prompt.right() <= send.left(),
+        "send sits right of the prompt"
+    );
+    // The results fill the body, bar included, so they scroll under it; the
+    // bar floats above the body's bottom edge.
+    assert!(
+        results.top() < bar.top() && results.bottom() >= bar.bottom(),
+        "the results run under the bar: {results:?} and {bar:?}"
+    );
+    assert!(
+        bar.bottom() < body.bottom() && body.bottom() == page.bottom(),
+        "the bar floats above the bottom of the page: {bar:?} in {body:?}"
+    );
+}
+
+#[gpui::test]
+fn the_meetings_route_shows_the_tree_content_and_process_button(cx: &mut TestAppContext) {
+    let (_window, cx, page) = open_route(cx, Route::Meetings);
+    let sidebar = visible(cx, "sidebar");
+    let tree = scroll_content(cx, "project-tree", sidebar);
+    let content = scroll_content(cx, "meeting-content", page);
+    let process = visible(cx, "process-project");
+    assert!(within(process, page));
+    assert!(
+        tree.right() <= content.left(),
+        "the tree sits left of the content"
+    );
+
+    let [root, child, second_root] =
+        DOCUMENT_IDS.map(|id| visible(cx, leak(format!("project-row-{id}"))));
+    assert!(
+        root.bottom() <= child.top() && child.bottom() <= second_root.top(),
+        "the child row sits between its parent and the next root"
+    );
+    assert!(
+        child.left() > root.left() && second_root.left() == root.left(),
+        "only the child row is indented"
+    );
+}
+
+#[gpui::test]
+fn the_models_route_shows_the_catalog_and_aligned_status_chips(cx: &mut TestAppContext) {
+    let (_window, cx, page) = open_route(cx, Route::Models);
+    let catalog = support::catalog().models;
+    let first_family = catalog
+        .iter()
+        .map(|model| model.model_family.clone())
+        .min()
+        .expect("the catalog lists models");
+    let list = scroll_content(cx, "models-scroll", page);
+    let toggle = visible(cx, leak(format!("model-family-{first_family}")));
+    assert!(
+        within(toggle, list) && within(toggle, page),
+        "the first family toggle is inside the model list"
+    );
+
+    // Every family starts expanded, so every model row has a status chip;
+    // the chips form one column whatever the model id's length.
+    let chips = catalog
+        .iter()
+        .map(|model| rendered(cx, leak(format!("model-status-{}", model.id))))
+        .collect::<Vec<_>>();
+    assert!(chips.len() >= 3, "the fixture catalog lists several models");
+    for chip in &chips {
+        assert_eq!(
+            (chip.left(), chip.size.width),
+            (chips[0].left(), chips[0].size.width),
+            "status chips share one column: {chips:?}"
+        );
+    }
+}
+
+/// The fixture's records load through the installation service: the
+/// installed model shows its passing probe and offers a re-probe, the
+/// failed one its failure and a retry, and neither record is unreadable.
+#[gpui::test]
+fn the_models_route_shows_the_fixture_probe_record_and_failure(cx: &mut TestAppContext) {
+    let (_window, cx, page) = open_route(cx, Route::Models);
+    let [passing, failing] = ["paraformer-zh", "speakrs-community-1-cpu"];
+    for (selector, shown) in [
+        (format!("model-probe-{passing}"), true),
+        (format!("model-reprobe-{passing}"), true),
+        (format!("model-failure-{passing}"), false),
+        (format!("model-record-error-{passing}"), false),
+        (format!("model-probe-{failing}"), true),
+        (format!("model-failure-{failing}"), true),
+        (format!("model-retry-{failing}"), true),
+        (format!("model-download-{failing}"), false),
+        (format!("model-record-error-{failing}"), false),
+    ] {
+        let selector = leak(selector);
+        if shown {
+            assert!(
+                within(visible(cx, selector), page),
+                "{selector} is on the page"
+            );
+        } else {
+            assert!(
+                cx.debug_bounds(selector).is_none(),
+                "{selector} is not shown"
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn the_settings_route_shows_the_form_and_language_select(cx: &mut TestAppContext) {
+    let (_window, cx, page) = open_route(cx, Route::Settings);
+    let form = scroll_content(cx, "settings-scroll", page);
+    let language = visible(cx, "select-language");
+    assert!(
+        within(language, form) && within(language, page),
+        "the language select is inside the settings form"
+    );
+}
+
+#[gpui::test]
+fn settings_controls_start_at_one_left_edge(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Settings);
+    // Labels of different widths in three sections; the controls after them
+    // must still start at the same x.
+    let controls = [
+        "select-theme",
+        "select-material",
+        "select-language",
+        "select-asr-backend",
+        "select-asr-model",
+        "select-transcription-language",
+    ]
+    .map(|selector| (selector, rendered(cx, selector)));
+    let (first, left) = (controls[0].0, controls[0].1.left());
+    for (selector, bounds) in controls {
+        assert_eq!(
+            bounds.left(),
+            left,
+            "`{selector}` starts at {:?}, `{first}` at {left:?}",
+            bounds.left()
+        );
+    }
+}
+
+#[gpui::test]
+fn every_sidebar_entry_opens_its_route_and_only_it_is_active(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    for route in [
+        Route::Assistant,
+        Route::Models,
+        Route::Settings,
+        Route::Meetings,
+        Route::Assistant,
+    ] {
+        click_entry(cx, &window, route);
+        for (other, _) in ROUTE_PAGES {
+            let active = cx.debug_bounds(active_selector(other));
+            if other == route {
+                let entry = visible(cx, nav_selector(other));
+                let marker = active.unwrap_or_else(|| panic!("{route:?} is not marked active"));
+                assert!(within(marker, entry), "the active marker is in its entry");
+            } else {
+                assert!(
+                    active.is_none(),
+                    "{other:?} is marked active on the {route:?} route"
+                );
+            }
+        }
+    }
+}
+
+#[gpui::test]
+fn the_project_tree_is_in_the_sidebar_on_meetings_only(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    for route in [
+        Route::Meetings,
+        Route::Models,
+        Route::Settings,
+        Route::Assistant,
+    ] {
+        click_entry(cx, &window, route);
+        let tree = cx.debug_bounds("project-tree");
+        if route == Route::Meetings {
+            let sidebar = visible(cx, "sidebar");
+            let tree = scroll_content(cx, "project-tree", sidebar);
+            assert!(
+                visible(cx, "import-audio").bottom() <= tree.top(),
+                "the tree sits below the entries and import button"
+            );
+            for id in DOCUMENT_IDS {
+                let row = visible(cx, leak(format!("project-row-{id}")));
+                assert!(within(row, sidebar), "`{id}` is in the sidebar");
+            }
+        } else {
+            assert!(tree.is_none(), "the {route:?} route renders the tree");
+        }
+    }
+}
+
+#[gpui::test]
+fn the_window_is_titled_and_both_columns_start_with_a_drag_strip(cx: &mut TestAppContext) {
+    let (_window, cx) = open_window(cx);
+    assert_eq!(cx.window_title().as_deref(), Some("MeetNote"));
+
+    let sidebar = visible(cx, "sidebar");
+    let plane = visible(cx, "content-plane");
+    let sidebar_strip = visible(cx, "titlebar-drag-sidebar");
+    let content_strip = visible(cx, "titlebar-drag-content");
+    for strip in [sidebar_strip, content_strip] {
+        assert_eq!(strip.top(), gpui::px(0.), "the strip starts at the top");
+        assert_eq!(strip.size.height, sidebar_strip.size.height);
+    }
+    assert!(
+        within(sidebar_strip, sidebar) && sidebar_strip.size.width == sidebar.size.width,
+        "the sidebar strip spans the sidebar"
+    );
+    assert!(
+        content_strip.left() >= sidebar.right() && content_strip.bottom() <= plane.top(),
+        "the content strip lies above the content plane"
+    );
+    assert!(
+        sidebar_strip.bottom() <= visible(cx, "nav").top(),
+        "the entries start below the strip and the traffic lights"
+    );
+}
+
+#[gpui::test]
+fn the_settings_overlays_open_inside_the_window_over_the_page(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Settings);
+    let page = visible(cx, "settings-page");
+
+    cx.update(|_, cx| window.open_overlay(Overlay::ThemeSelect, cx));
+    cx.run_until_parked();
+    let trigger = visible(cx, "select-theme");
+    let menu = visible(cx, "select-menu");
+    assert!(
+        menu.top() >= trigger.bottom() && within(menu, page),
+        "the theme menu opens below its trigger on the page: {menu:?}"
+    );
+    for option in 0..3 {
+        let row = visible(cx, leak(format!("select-option-{option}")));
+        assert!(within(row, menu), "option {option} is in the menu");
+    }
+
+    cx.update(|_, cx| window.open_overlay(Overlay::SpeakerLibraryDialog, cx));
+    cx.run_until_parked();
+    let dialog = visible(cx, "confirm-dialog");
+    let plane = visible(cx, "content-plane");
+    assert!(
+        dialog.center().x > plane.left() && dialog.center().x < plane.right(),
+        "the dialog is centered over the window: {dialog:?}"
+    );
+    for button in ["dialog-confirm", "dialog-cancel"] {
+        assert!(
+            within(visible(cx, button), dialog),
+            "`{button}` is in the dialog"
+        );
+    }
+}
+
+// Keyboard and focus. Every focusable control draws its focus ring, marked
+// `focus-ring`, only while it holds keyboard focus; a test tells which
+// control holds it by the smallest listed selector whose bounds contain the
+// ring. A press on a sidebar entry opens its route and leaves focus on the
+// entry, so each traversal starts there.
+
+/// The sidebar's tab stops, before the page's.
+const SIDEBAR_STOPS: [&str; 5] = [
+    "nav-Assistant",
+    "nav-Meetings",
+    "nav-Models",
+    "nav-Settings",
+    "import-audio",
+];
+
+/// The bounds of the focus ring, if a control shows one.
+fn ring(cx: &mut VisualTestContext) -> Option<Bounds<Pixels>> {
+    cx.debug_bounds("focus-ring")
+}
+
+/// The control of `candidates` that shows the focus ring: the smallest
+/// whose bounds contain the ring's.
+fn focused_control(
+    cx: &mut VisualTestContext,
+    candidates: &[&'static str],
+) -> Option<&'static str> {
+    let ring = ring(cx)?;
+    candidates
+        .iter()
+        .filter_map(|selector| Some((*selector, cx.debug_bounds(selector)?)))
+        .filter(|(_, bounds)| within(ring, *bounds))
+        .min_by(|(_, a), (_, b)| {
+            let area = |bounds: &Bounds<Pixels>| {
+                f32::from(bounds.size.width) * f32::from(bounds.size.height)
+            };
+            area(a).total_cmp(&area(b))
+        })
+        .map(|(selector, _)| selector)
+}
+
+/// Presses `key` until focus comes back to the stop the first press reached,
+/// and returns the stops in visiting order: the listed control each one is,
+/// or `None`. Every stop shows its ring inside the window: a stop in a
+/// scrolled list is scrolled into view.
+#[track_caller]
+fn cycle(
+    cx: &mut VisualTestContext,
+    key: &str,
+    candidates: &[&'static str],
+) -> Vec<Option<&'static str>> {
+    cx.simulate_keystrokes(key);
+    let first = focused_control(cx, candidates).expect("the first stop is a listed control");
+    let mut stops = vec![Some(first)];
+    for _ in 0..200 {
+        let bounds = ring(cx).unwrap_or_else(|| panic!("no ring after {stops:?}"));
+        assert!(
+            within(bounds, window_bounds()),
+            "the ring of the stop after {stops:?} leaves the window: {bounds:?}"
+        );
+        cx.simulate_keystrokes(key);
+        let stop = focused_control(cx, candidates);
+        if stop == Some(first) {
+            return stops;
+        }
+        stops.push(stop);
+    }
+    panic!("`{key}` never came back to `{first}`: {stops:?}")
+}
+
+/// `stops` rotated to start at the first sidebar entry.
+fn from_the_first_entry(mut stops: Vec<Option<&'static str>>) -> Vec<Option<&'static str>> {
+    let start = stops
+        .iter()
+        .position(|stop| *stop == Some(SIDEBAR_STOPS[0]))
+        .expect("the traversal reaches the first entry");
+    stops.rotate_left(start);
+    stops
+}
+
+/// Tab visits `expected` in order and nothing else, and Shift-Tab visits it
+/// in reverse.
+#[track_caller]
+fn assert_tab_order(cx: &mut VisualTestContext, expected: &[&'static str]) {
+    let forward = from_the_first_entry(cycle(cx, "tab", expected));
+    assert_eq!(
+        forward,
+        expected.iter().copied().map(Some).collect::<Vec<_>>(),
+        "Tab order"
+    );
+    let mut backward = cycle(cx, "shift-tab", expected);
+    backward.reverse();
+    assert_eq!(from_the_first_entry(backward), forward, "Shift-Tab order");
+}
+
+/// Presses and releases `key`: a keyboard click fires on the release.
+fn press(cx: &mut VisualTestContext, key: &str) {
+    let keystroke = gpui::Keystroke::parse(key).unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    cx.run_until_parked();
+}
+
+/// Presses Tab until `selector` of `candidates` holds keyboard focus.
+#[track_caller]
+fn tab_to(cx: &mut VisualTestContext, selector: &'static str, candidates: &[&'static str]) {
+    for _ in 0..60 {
+        cx.simulate_keystrokes("tab");
+        if focused_control(cx, candidates) == Some(selector) {
+            return;
+        }
+    }
+    panic!("Tab never reached `{selector}`");
+}
+
+#[gpui::test]
+fn tab_traverses_the_assistant_route_in_order(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Assistant);
+    let mut expected = SIDEBAR_STOPS.to_vec();
+    expected.extend([
+        "assistant-scene-ask",
+        "assistant-scene-organize",
+        "assistant-scene-topic-partition",
+        "assistant-scene-topic-extract",
+        "assistant-scene-move",
+        "assistant-scope-current",
+        "assistant-scope-all",
+        "assistant-input",
+        // Cancel is disabled while nothing runs, so it is no stop.
+        "assistant-submit",
+    ]);
+    assert_tab_order(cx, &expected);
+}
+
+#[gpui::test]
+fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Meetings);
+    let mut expected = SIDEBAR_STOPS.to_vec();
+    expected.extend([
+        // The tree is one stop, on its selected row.
+        leak(format!("project-row-{}", DOCUMENT_IDS[0])),
+        "process-project",
+        "open-project-detail",
+        "content-mode-summary",
+        "content-mode-original",
+        "content-mode-edit",
+    ]);
+    assert_tab_order(cx, &expected);
+}
+
+#[gpui::test]
+fn tab_traverses_the_models_route_in_order(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Models);
+    // Families in name order, each header before its cards; each card's
+    // actions in reading order.
+    let mut families = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for model in support::catalog().models {
+        families
+            .entry(model.model_family.clone())
+            .or_default()
+            .push(model.id.clone());
+    }
+    let mut expected = SIDEBAR_STOPS.to_vec();
+    for (family, models) in families {
+        expected.push(leak(format!("model-family-{family}")));
+        for model in models {
+            for action in ["download", "details-toggle", "retry", "reprobe"] {
+                let selector = leak(format!("model-{action}-{model}"));
+                if cx.debug_bounds(selector).is_some() {
+                    expected.push(selector);
+                }
+            }
+        }
+    }
+    assert!(expected.len() > SIDEBAR_STOPS.len() + 6);
+    assert_tab_order(cx, &expected);
+}
+
+#[gpui::test]
+fn tab_traverses_the_settings_route_in_order(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Settings);
+    // The form's selects, choose buttons and Assistant actions in reading
+    // order; its text fields and Speaker Library rows lie between them.
+    let mut listed = SIDEBAR_STOPS.to_vec();
+    listed.extend([
+        "select-theme",
+        "select-material",
+        "choose-documents-root",
+        "select-language",
+        "select-asr-backend",
+        "select-asr-model",
+        "select-transcription-language",
+        "select-diarization-backend",
+        "select-diarization-model",
+        "select-expected-speakers",
+        "choose-speaker-library",
+        "select-compute-device",
+        "assistant-api-key-field",
+        "assistant-api-key-file-field",
+        "settings-write-mode-automatic",
+        "settings-write-mode-confirm-each",
+        "assistant-save-settings",
+        "assistant-readiness",
+        "assistant-model-probe",
+    ]);
+    let forward = from_the_first_entry(cycle(cx, "tab", &listed));
+    assert_eq!(
+        forward.iter().flatten().copied().collect::<Vec<_>>(),
+        listed,
+        "Tab reaches every listed control once, in order"
+    );
+    assert!(
+        forward.len() > listed.len() + 10,
+        "the text fields and profile rows are stops too: {forward:?}"
+    );
+    let mut backward = cycle(cx, "shift-tab", &listed);
+    backward.reverse();
+    assert_eq!(from_the_first_entry(backward), forward, "Shift-Tab order");
+}
+
+#[gpui::test]
+fn the_ring_shows_for_keyboard_focus_only(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Assistant);
+    assert!(ring(cx).is_none(), "a press on an entry shows no ring");
+    cx.simulate_keystrokes("tab");
+    let focused = cx.update(|window, cx| window.focused(cx));
+    assert!(ring(cx).is_some(), "Tab shows the ring");
+    // Pointer input hides the ring; focus stays where it was.
+    cx.simulate_mouse_move(
+        gpui::point(gpui::px(600.), gpui::px(400.)),
+        None,
+        Modifiers::none(),
+    );
+    assert!(ring(cx).is_none(), "the pointer hides the ring");
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focused);
+
+    // A field focused by a press shows no ring, even while typing in it; one
+    // reached with Tab does.
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    cx.simulate_input("a");
+    assert!(
+        ring(cx).is_none(),
+        "typing in a pressed field shows no ring"
+    );
+    cx.simulate_keystrokes("tab shift-tab");
+    assert_eq!(
+        focused_control(cx, &["assistant-input"]),
+        Some("assistant-input")
+    );
+}
+
+#[gpui::test]
+fn enter_and_space_activate_the_focused_control(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    let stops = [
+        SIDEBAR_STOPS.as_slice(),
+        &["open-project-detail", "close-detail"],
+    ]
+    .concat();
+    tab_to(cx, "nav-Meetings", &stops);
+    press(cx, "space");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    assert_eq!(
+        focused_control(cx, &stops),
+        Some("nav-Meetings"),
+        "focus stays on the entry"
+    );
+
+    tab_to(cx, "open-project-detail", &stops);
+    press(cx, "enter");
+    assert!(
+        cx.debug_bounds("detail-panel").is_some(),
+        "Enter opens Detail"
+    );
+    tab_to(cx, "close-detail", &stops);
+    press(cx, "enter");
+    assert!(
+        cx.debug_bounds("detail-panel").is_none(),
+        "Enter closes Detail"
+    );
+    assert_eq!(
+        focused_control(cx, &stops),
+        Some("open-project-detail"),
+        "focus returns to the button that opened Detail"
+    );
+}
+
+#[gpui::test]
+fn a_route_change_leaves_focus_on_the_route_entry(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    click_entry(cx, &window, Route::Models);
+    // The prompt left with its page; Tab goes on from the Models entry.
+    cx.simulate_keystrokes("tab");
+    assert_eq!(focused_control(cx, &SIDEBAR_STOPS), Some("nav-Settings"));
+    cx.simulate_keystrokes("shift-tab shift-tab");
+    assert_eq!(focused_control(cx, &SIDEBAR_STOPS), Some("nav-Meetings"));
+}
+
+#[gpui::test]
+fn up_and_down_move_between_the_sidebar_entries(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    tab_to(cx, "nav-Meetings", &SIDEBAR_STOPS);
+    cx.simulate_keystrokes("down");
+    assert_eq!(focused_control(cx, &SIDEBAR_STOPS), Some("nav-Models"));
+    cx.simulate_keystrokes("up up");
+    assert_eq!(focused_control(cx, &SIDEBAR_STOPS), Some("nav-Assistant"));
+    cx.simulate_keystrokes("up");
+    assert_eq!(
+        focused_control(cx, &SIDEBAR_STOPS),
+        Some("nav-Assistant"),
+        "Up stops at the first entry"
+    );
+    assert_eq!(
+        cx.update(|_, cx| window.route(cx)),
+        Route::Assistant,
+        "moving focus opens no route"
+    );
+}
+
+#[gpui::test]
+fn arrow_keys_move_through_the_project_tree(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    let [weekly, decisions, interview] = DOCUMENT_IDS;
+    let rows = DOCUMENT_IDS.map(|id| leak(format!("project-row-{id}")));
+    let selected = |cx: &mut VisualTestContext| cx.update(|_, cx| window.selected_document(cx));
+    tab_to(cx, rows[0], &rows);
+    let step = |cx: &mut VisualTestContext, key: &str, document: &str, row: &'static str| {
+        cx.simulate_keystrokes(key);
+        assert_eq!(selected(cx).as_deref(), Some(document), "after `{key}`");
+        assert_eq!(
+            focused_control(cx, &rows),
+            Some(row),
+            "the ring after `{key}`"
+        );
+    };
+    step(cx, "down", decisions, rows[1]);
+    step(cx, "down", interview, rows[2]);
+    step(cx, "down", interview, rows[2]);
+    step(cx, "up", decisions, rows[1]);
+    // Left on a child moves to its parent, then collapses the parent.
+    step(cx, "left", weekly, rows[0]);
+    cx.simulate_keystrokes("left");
+    assert!(
+        cx.debug_bounds(rows[1]).is_none(),
+        "Left collapses the parent"
+    );
+    step(cx, "down", interview, rows[2]);
+    step(cx, "up", weekly, rows[0]);
+    // Right expands the parent, then moves to its first child.
+    cx.simulate_keystrokes("right");
+    assert!(
+        cx.debug_bounds(rows[1]).is_some(),
+        "Right expands the parent"
+    );
+    assert_eq!(selected(cx).as_deref(), Some(weekly));
+    step(cx, "right", decisions, rows[1]);
+}
+
+#[gpui::test]
+fn escape_closes_the_select_and_focus_returns_to_its_trigger(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Settings);
+    let stops = [SIDEBAR_STOPS.as_slice(), &["select-theme"]].concat();
+    tab_to(cx, "select-theme", &stops);
+    for open in ["enter", "space"] {
+        cx.simulate_keystrokes(open);
+        assert!(
+            cx.debug_bounds("select-menu").is_some(),
+            "`{open}` opens the menu"
+        );
+        cx.simulate_keystrokes("escape");
+        assert!(
+            cx.debug_bounds("select-menu").is_none(),
+            "Esc closes the menu"
+        );
+        assert_eq!(focused_control(cx, &stops), Some("select-theme"));
+    }
+}
+
+#[gpui::test]
+fn a_dialog_a_select_opened_takes_focus_and_escape_returns_it(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::OriginalSpeakers, cx));
+    cx.run_until_parked();
+    let merge = "merge-speaker-speaker-0";
+    let stops = [SIDEBAR_STOPS.as_slice(), &[merge]].concat();
+    tab_to(cx, merge, &stops);
+    // Choosing the other speaker from the keyboard asks before merging.
+    cx.simulate_keystrokes("enter enter");
+    assert!(cx.debug_bounds("select-menu").is_none());
+    assert!(
+        cx.debug_bounds("confirm-dialog").is_some(),
+        "the merge asks first"
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(
+        cx.debug_bounds("confirm-dialog").is_none(),
+        "Esc cancels the merge"
+    );
+    assert_eq!(
+        focused_control(cx, &stops),
+        Some(merge),
+        "focus returns to the select that opened the dialog"
+    );
+}
+
+#[gpui::test]
+fn a_dialog_a_button_opened_returns_focus_to_it(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Settings);
+    let delete = "delete-speaker-profile-profile-li";
+    let stops = [SIDEBAR_STOPS.as_slice(), &[delete]].concat();
+    tab_to(cx, delete, &stops);
+    press(cx, "enter");
+    assert!(
+        cx.debug_bounds("confirm-dialog").is_some(),
+        "the delete asks first"
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(cx.debug_bounds("confirm-dialog").is_none());
+    assert_eq!(focused_control(cx, &stops), Some(delete));
+}
+
+#[gpui::test]
+fn ctrl_tab_leaves_a_text_area_that_takes_tab(cx: &mut TestAppContext) {
+    let (_window, cx, _) = open_route(cx, Route::Meetings);
+    let edit = visible(cx, "content-mode-edit");
+    cx.simulate_click(edit.center(), Modifiers::none());
+    wait_for(cx, |cx| cx.debug_bounds("document-editor").is_some());
+    let stops = [SIDEBAR_STOPS.as_slice(), &["select-document-status"]].concat();
+    tab_to(cx, "select-document-status", &stops);
+    // The summary is four rows tall and the body twelve; scrolling to
+    // reveal one moves the other, so they are told apart by height.
+    let height = |cx: &mut VisualTestContext| ring(cx).map(|ring| ring.size.height);
+    cx.simulate_keystrokes("tab");
+    let summary = height(cx).expect("Tab reaches the summary");
+    cx.simulate_keystrokes("tab");
+    assert_eq!(height(cx), Some(summary), "Tab indents inside the summary");
+    cx.simulate_keystrokes("ctrl-tab");
+    let body = height(cx).expect("Ctrl-Tab moves on");
+    assert!(
+        body > summary,
+        "Ctrl-Tab reaches the taller body: {summary:?} {body:?}"
+    );
+    cx.simulate_keystrokes("ctrl-shift-tab");
+    assert_eq!(height(cx), Some(summary), "Ctrl-Shift-Tab moves back");
+}

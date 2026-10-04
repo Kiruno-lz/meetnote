@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "generatorVersion": "assistant-synthetic-v1",
+  "seed": 20260907,
+  "languages": ["zh", "en", "mixed"],
+  "structures": ["partition", "extract", "none", "nested"],
+  "scenes": {
+    "meeting": {
+      "speakers": ["facilitator", "engineer", "designer"],
+      "texts": {
+        "zh": [
+          "先确认今天讨论发布计划、预算和风险。",
+          "发布目标仍是月底，负责人会在周五给出候选版本。",
+          "预算方面，托管费用本季度增加了百分之八。",
+          "设计同意削减非必要的动效，但保留无障碍检查。",
+          "因此预算决策是先控制托管成本，再评估动效工作。",
+          "主要风险是迁移窗口太短，回滚演练还没有完成。",
+          "回到发布计划，候选版本必须通过周四的冒烟测试。",
+          "最终行动项是工程负责人周三提交回滚清单。"
+        ],
+        "en": [
+          "We will cover the release plan, budget, and delivery risks.",
+          "The release target remains month end, with a candidate due Friday.",
+          "Hosting cost is eight percent above this quarter's budget.",
+          "Design can remove optional motion while retaining accessibility checks.",
+          "The budget decision is to reduce hosting cost before revisiting motion work.",
+          "The main risk is a short migration window and an incomplete rollback rehearsal.",
+          "Returning to release planning, the candidate must pass Thursday's smoke test.",
+          "The engineering lead owns the rollback checklist due Wednesday."
+        ],
+        "mixed": [
+          "今天的 agenda 是 release plan、预算和 delivery risk。",
+          "Release target 仍是月底，candidate build 周五交付。",
+          "Hosting cost 比本季度 budget 高百分之八。",
+          "Design 同意去掉 optional motion，但保留 accessibility checks。",
+          "预算 decision 是先降 hosting cost，再评估动效工作。",
+          "主要 risk 是 migration window 太短，rollback rehearsal 未完成。",
+          "回到 release plan，candidate 必须通过周四 smoke test。",
+          "Engineering lead 周三前提交 rollback checklist。"
+        ]
+      }
+    },
+    "interview": {
+      "speakers": ["interviewer", "candidate", "observer"],
+      "texts": {
+        "zh": [
+          "访谈将讨论个人背景、系统设计和协作经历。",
+          "候选人过去三年负责离线同步和冲突解决。",
+          "系统设计题需要在弱网络下同步大量本地笔记。",
+          "候选人建议使用版本向量，并明确说明冲突不能静默覆盖。",
+          "权衡结论是优先保证可恢复性，接受稍高的元数据开销。",
+          "协作案例中，需求分歧通过书面决策记录解决。",
+          "回到个人背景，候选人曾主导一次存储格式迁移。",
+          "观察员记录的待核实项是迁移后的故障率数据。"
+        ],
+        "en": [
+          "The interview covers background, system design, and collaboration.",
+          "The candidate owned offline sync and conflict handling for three years.",
+          "The design exercise is to synchronize local notes over unreliable networks.",
+          "The candidate proposes version vectors and rejects silent conflict overwrites.",
+          "The tradeoff favors recoverability despite modest metadata overhead.",
+          "A collaboration dispute was resolved through a written decision record.",
+          "Returning to background, the candidate led a storage format migration.",
+          "The observer flags post-migration failure rates for verification."
+        ],
+        "mixed": [
+          "本次 interview 覆盖 background、system design 和 collaboration。",
+          "候选人三年负责 offline sync 与 conflict handling。",
+          "Design exercise 是在弱网络下同步 local notes。",
+          "候选人建议 version vector，并拒绝 silent overwrite。",
+          "Tradeoff 是优先 recoverability，接受 metadata overhead。",
+          "一次 collaboration dispute 通过 decision record 解决。",
+          "回到 background，候选人主导过 storage migration。",
+          "Observer 标记 migration 后 failure rate 需要核实。"
+        ]
+      }
+    },
+    "daily-log": {
+      "speakers": ["owner", "colleague", "owner"],
+      "texts": {
+        "zh": [
+          "早晨通勤时记录今天要处理站会、编码和采购。",
+          "站会确认搜索故障已缓解，但监控告警仍需调整。",
+          "编码时先复现了缓存键碰撞，再补充回归测试。",
+          "同事建议保留旧索引一天，以便发生问题时回滚。",
+          "最终实现同时写入新旧索引，并记录清理日期。",
+          "傍晚采购了电池和网线，没有购买计划外设备。",
+          "睡前回看站会事项，监控阈值尚未由值班人员确认。",
+          "明早第一件事是跟进告警阈值，而不是删除旧索引。"
+        ],
+        "en": [
+          "During the commute I noted standup, coding, and shopping tasks.",
+          "Standup confirmed the search incident is mitigated, but alert tuning remains.",
+          "Coding began by reproducing a cache-key collision and adding a regression test.",
+          "A colleague suggested retaining the old index for one day as rollback cover.",
+          "The implementation dual-writes indexes and records the cleanup date.",
+          "In the evening I bought batteries and a network cable, with no extra devices.",
+          "Reviewing standup later, the on-call engineer has not confirmed the threshold.",
+          "Tomorrow starts with the alert threshold, not deletion of the old index."
+        ],
+        "mixed": [
+          "通勤时记下 standup、coding 和 shopping 三类事项。",
+          "Standup 确认 search incident 已缓解，但 alert tuning 未完成。",
+          "Coding 先复现 cache-key collision，再增加 regression test。",
+          "同事建议 old index 保留一天作为 rollback cover。",
+          "实现采用 dual-write，并明确 cleanup date。",
+          "傍晚买了 batteries 和 network cable，没有额外设备。",
+          "回看 standup，on-call 尚未确认 alert threshold。",
+          "明早先跟进 alert threshold，不删除 old index。"
+        ]
+      }
+    },
+    "conversation": {
+      "speakers": ["speaker-a", "speaker-b", "speaker-c"],
+      "texts": {
+        "zh": [
+          "大家先聊周末旅行、最近读的书和晚餐安排。",
+          "旅行计划是周六坐早班车去海边，遇雨则改去博物馆。",
+          "最近读的书讨论了城市如何为步行者设计街道。",
+          "另一位说书中的公交案例比道路案例更有说服力。",
+          "两人约好交换书单，但没有承诺具体日期。",
+          "晚餐决定选择车站附近的面馆，并提前确认素食选项。",
+          "话题回到旅行，需要有人在周四查看天气预报。",
+          "最终由小林查看天气，其他人不需要购买车票。"
+        ],
+        "en": [
+          "The conversation starts with weekend travel, recent books, and dinner.",
+          "The travel plan is an early train to the coast, with a museum if it rains.",
+          "A recent book explains how cities can design streets for pedestrians.",
+          "Another reader found its public-transit example more convincing than roads.",
+          "They agree to exchange reading lists without setting a date.",
+          "Dinner will be at the noodle shop near the station after checking vegan options.",
+          "Returning to travel, someone needs to check Thursday's forecast.",
+          "Lin will check the weather; no one else needs to buy tickets."
+        ],
+        "mixed": [
+          "大家先聊 weekend travel、recent books 和 dinner。",
+          "Travel plan 是早班车去海边，下雨则去 museum。",
+          "最近的 book 讨论 pedestrian-friendly street design。",
+          "另一位认为 public-transit example 比道路案例更有说服力。",
+          "两人决定 exchange reading lists，但没有 date。",
+          "Dinner 选车站旁 noodle shop，并确认 vegan options。",
+          "回到 travel，需要有人周四 check forecast。",
+          "Lin 负责 weather check，其他人不需要 buy tickets。"
+        ]
+      }
+    }
+  }
+}

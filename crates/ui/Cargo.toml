@@ -10,14 +10,33 @@ domain = { path = "../domain" }
 futures.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
-gpui-component.workspace = true
+gpui-base.workspace = true
 gpui-component-assets.workspace = true
 models = { path = "../models" }
 runtime = { path = "../runtime" }
 settings = { path = "../settings" }
 
+# Accessibility display flags (reduce transparency / motion). gpui-base
+# already locks these crates; only the features read here are named.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace"] }
+
 [dev-dependencies]
 asr-whisper-rs = { path = "../asr-whisper-rs" }
 diarization-sherpa-onnx = { path = "../diarization-sherpa-onnx" }
 gpui = { workspace = true, features = ["test-support"] }
+# `test-support` adds the Metal `render_to_image` the L3 screenshots use.
+gpui_platform = { workspace = true, features = ["test-support"] }
 persistence = { path = "../persistence" }
+
+# The L3 resource probe reads `MTLDevice.currentAllocatedSize` of the device
+# gpui renders with; gpui already locks this crate.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+metal = "0.33"
+
+# L3 screenshots drive AppKit, which must run on the process main thread;
+# libtest runs every test on a spawned thread. See `tests/visual.rs`.
+[[test]]
+name = "visual"
+path = "tests/visual.rs"
+harness = false

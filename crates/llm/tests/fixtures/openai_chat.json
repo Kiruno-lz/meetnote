@@ -1,0 +1,111 @@
+{
+  "expectedRequest": {
+    "model": "route-test",
+    "messages": [
+      { "role": "system", "content": "Use only granted documents." },
+      { "role": "user", "content": "Read both documents" },
+      {
+        "role": "assistant",
+        "content": "I will read both.",
+        "tool_calls": [
+          {
+            "id": "call-1",
+            "type": "function",
+            "function": {
+              "name": "read_document",
+              "arguments": "{\"documentId\":\"doc-1\"}"
+            }
+          },
+          {
+            "id": "call-2",
+            "type": "function",
+            "function": {
+              "name": "read_document",
+              "arguments": "{\"documentId\":\"doc-2\"}"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call-1",
+        "content": "{\"title\":\"Example\"}"
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call-2",
+        "content": "{\"error\":{\"code\":\"DOCUMENT_NOT_FOUND\"}}"
+      },
+      { "role": "user", "content": "Continue with what is available" }
+    ],
+    "stream": false,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "read_document",
+          "description": "Read one document",
+          "parameters": {
+            "type": "object",
+            "properties": { "documentId": { "type": "string" } },
+            "required": ["documentId"],
+            "additionalProperties": false
+          }
+        }
+      }
+    ],
+    "tool_choice": "auto",
+    "max_tokens": 256
+  },
+  "text": {
+    "model": "resolved-test",
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "message": { "role": "assistant", "content": "Done" }
+      }
+    ],
+    "usage": { "prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14 }
+  },
+  "multiTool": {
+    "model": "resolved-test",
+    "choices": [
+      {
+        "finish_reason": "tool_calls",
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call-a",
+              "type": "function",
+              "function": {
+                "name": "read_document",
+                "arguments": "{\"documentId\":\"doc-a\"}"
+              }
+            },
+            {
+              "id": "call-b",
+              "type": "function",
+              "function": {
+                "name": "read_document",
+                "arguments": "{\"documentId\":\"doc-b\"}"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "usage": { "prompt_tokens": 10, "completion_tokens": 8 }
+  },
+  "truncated": {
+    "model": "resolved-test",
+    "choices": [
+      {
+        "finish_reason": "length",
+        "message": { "role": "assistant", "content": null }
+      }
+    ],
+    "usage": { "prompt_tokens": 10, "completion_tokens": 0 }
+  }
+}

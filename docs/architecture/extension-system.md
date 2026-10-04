@@ -5,11 +5,11 @@
 Extension 定义实现如何参与 MeetNote：提供服务、声明依赖、注册与撤销。执行载体定义代码在哪里运行：内置 Rust、外部进程/MCP/RPC、未来的 Wasm Component，或不执行代码的声明式 Skill/config。插件参与 Workspace 时，必须通过 Workspace Host 提供的 capability port。
 
 当前没有通用 Extension Host、manifest、动态依赖解析或卸载机制；ASR/diarization registry 是内置 provider 注册，不等于插件运行时。
-核心服务不要求成为插件。MoonBit 是 Wasm Component 的候选编写语言。
+核心服务不要求成为插件。当前验收明确要求 MoonBit 真实测试插件，经 Agent Host 桥接访问三类 capability；执行载体只实现该测试所需的最小机制，不据此建设通用动态插件平台。
 
 ## 最小逻辑契约
 
-先在内置 Rust 装配验证下列职责，不立即实现通用框架：
+先在内置 Rust 装配验证下列职责，不立即实现通用框架。当前 WorkspaceCapabilityPort、AudioCapabilityPort 和 SettingsCapabilityPort 是内置消费者/提供者的验证载体：
 
 | 概念 | 约束 |
 |---|---|
@@ -26,13 +26,13 @@ Extension 定义实现如何参与 MeetNote：提供服务、声明依赖、注�
 
 服务注册元数据与模型 catalog 分离：catalog 管理模型资产与校验，不承担扩展依赖图。服务 ID 与版本先由具体契约定义，不建设任意字符串到 `Any` 的全局 service locator。
 
-Workspace port 的初始能力可以包括 `workspace.read_document`、`workspace.create_document`、`workspace.patch_document`、`workspace.search`、`workspace.build_index` 和事件订阅。具体 port 必须复用 Workspace 的 revision、资产保护、结构校验和错误语义；插件不能通过 port 删除源音频、Markdown、项目 JSON 或 Speaker Library，也不能把自己的索引提升为事实来源。
+Workspace port 的初始能力可以包括 `workspace.read_document`、`workspace.patch_document`、`workspace.create_semantic_children`、`workspace.search`、`workspace.build_index` 和事件订阅。根文档创建/音频导入暂留 Workspace 内部命令，具体 port 必须复用 Workspace 的 revision、资产保护、结构校验和错误语义；插件不能通过 port 删除源音频、Markdown、项目 JSON 或 Speaker Library，也不能把自己的索引提升为事实来源。
 
 ## 演进门槛
 
 1. 内置 Rust 服务先实现一个实际消费者与替换 provider 的完整闭环，复用当前 registry 与装配入口。
 2. 确有可选扩展需求后，增加最小 manifest（身份、版本、requires/provides、入口）和生命周期；验证缺依赖、重复注册、部分失败回滚、在途取消与注销。
-3. 只有出现适合隔离执行的真实能力，才做一个小型 Wasm Component 验证；随后定义该能力的 WIT、版本、错误、资源与升级语义。不迁移现有 Rust domain 或整个 Agent。
+3. 先完成已明确要求的 MoonBit 测试插件及最小 Host 桥接，覆盖正常调用与越权/版本/参数红线；若采用 Wasm Component，仅定义该桥接必需的 ABI/WIT。通用组件升级/动态加载仍需独立需求，不迁移 Rust domain 或整个 Agent。
 
 执行载体可以混合存在。音频解码、buffer、GPU/FFI 和模型 session 留在原生高性能层；不将大块音频跨 Wasm ABI 反复复制。外部进程与云端能力由 adapter 管理退出、取消、超时和数据传输。
 

@@ -4,7 +4,7 @@
 
 - [系统架构总览](architecture/overview.md)：Workspace Host、Audio Host、Agent Host、GPUI UI，以及现有 crate 的归属和依赖方向。
 - [Workspace Host](architecture/workspace-host.md)：文件事实、窄操作、外部编辑与恢复。
-- [Agent Host](architecture/agent-host.md)：会话 backend、事件与场景分工。
+- [Agent Host](architecture/agent-host.md)：Capability API、最小 Tool Loop 与场景分工。
 - [Extension](architecture/extension-system.md)：服务注册、依赖、生命周期与执行载体。
 - [模型管理](architecture/model-management.md)：catalog、下载、安装、校验和 probe 生命周期。
 - [文档状态与音频项目模型](architecture/document-state.md)：文档包、音频处理结果、三层项目树和 Agent 协作。
@@ -15,8 +15,9 @@
 
 - [架构对齐计划](plan/architecture-alignment.md)：当前架构进度、职责收敛、保留项和最小实施步骤。
 - [工程实施计划](plan/implementation-plan.md)：当前完成度、生产化缺口和验收顺序。
-- [GPUI UI 计划](plan/ui-plan.md)：现有 UI、目标信息架构和后续工作。
-- [Assistant 构建计划](plan/assistant-plan.md)：文档场景、共享 Workspace 工具、Built-in 模型层与验收。
+- [GPUI UI 计划](plan/ui-plan.md)：现有 UI、zui 技术栈与玻璃视觉系统、已知缺陷和分阶段实施。
+- [Assistant 构建计划](plan/assistant-plan.md)：Workspace、Audio、Settings 的 capability、Host 真实回应、MoonBit 插件与 Codex 经 Host 完成任务。
+- [渐进式 Benchmark 计划](plan/audio-quality-plan.md)：固定测试音频/gold、原子能力到 Agent 的自动门禁与模型比较报告。
 
 ## 研究依据
 

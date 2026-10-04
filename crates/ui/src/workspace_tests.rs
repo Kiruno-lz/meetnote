@@ -1,0 +1,638 @@
+//! L2: the documents root chosen in Settings, and the recovery of a
+//! document's missing source audio, on real document packages in temporary
+//! documents roots (`FileDocumentRepository`) and real `settings.json`
+//! files.
+//!
+//! The platform's folder and file prompts do not exist on the test
+//! platform; the tests call what their callbacks call:
+//! `choose_documents_root` and `relink_audio_path`.
+
+use crate::document_tests::{
+    open_on, processed, rendered, select_row, within, DocumentsRoot, View,
+};
+use crate::tests::{
+    click_selector, desktop_services, empty_result, open_desktop_on, pending_review,
+    temp_directory, wait_for, FakeAssistantUiService,
+};
+use crate::{
+    assistant_ui::{AssistantMutationSummary, AssistantRunResult, PendingReviewState},
+    i18n::{self, Locale},
+    pages::detail,
+    route::Route,
+};
+use application::{
+    AudioSourceError, AudioStatus, DocumentChange, DocumentRepository, DocumentService,
+    DocumentsRootError, ProcessingService, ReservedLocation, WorkspaceService,
+};
+use asr_whisper_rs::WhisperRsBackend;
+use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
+use domain::{DocumentState, ProjectId};
+use gpui::{TestAppContext, VisualTestContext};
+use persistence::FileDocumentRepository;
+use runtime::JobRuntime;
+use settings::{JsonSettingsRepository, SettingsService};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+/// The bytes of a recording and their SHA-256, as processing records it.
+const AUDIO: &[u8] = b"meetnote fixture audio\n";
+const AUDIO_SHA256: &str = "731e82f7248116585d832c2ea8784dc94a8dcfd6529a6babfc94605e8fda9e49";
+/// Another recording.
+const OTHER_AUDIO: &[u8] = b"a different recording\n";
+const OTHER_SHA256: &str = "13c12877ebfb2e7edafd47f9c0b765a656e85a055c2b5cb35c3ff7770e611e93";
+
+/// Two documents roots, a model directory, the jobs the workspace runs on
+/// and settings in a `settings.json` of their own. The workspace starts on
+/// `old` and switches roots as `main`'s does.
+struct Workspace {
+    old: DocumentsRoot,
+    new: DocumentsRoot,
+    models: PathBuf,
+    settings_path: PathBuf,
+    settings: SettingsService,
+    jobs: Arc<JobRuntime>,
+    workspace: WorkspaceService,
+}
+
+impl Workspace {
+    fn new() -> Self {
+        let old = DocumentsRoot::new();
+        let new = DocumentsRoot::new();
+        let models = temp_directory();
+        std::fs::create_dir_all(&models).unwrap();
+        let settings_path = temp_directory().join("settings.json");
+        let settings =
+            SettingsService::open(Arc::new(JsonSettingsRepository::open(&settings_path))).unwrap();
+        let mut value = settings.snapshot().unwrap();
+        value.documents_root = old.path().display().to_string();
+        settings.update(value).unwrap();
+        let jobs = Arc::new(JobRuntime::default());
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(
+                Arc::new(WhisperRsBackend::default()),
+                Arc::new(SherpaOnnxDiarizationBackend::default()),
+            )
+            .with_job_runtime(jobs.clone()),
+            DocumentService::new(Arc::new(old.repository())),
+        )
+        .with_documents_root(application::DocumentsRoot::new(
+            old.path(),
+            &models,
+            |root: &Path| {
+                FileDocumentRepository::open(root)
+                    .map(|repository| Arc::new(repository) as Arc<dyn DocumentRepository>)
+            },
+        ));
+        Self {
+            old,
+            new,
+            models,
+            settings_path,
+            settings,
+            jobs,
+            workspace,
+        }
+    }
+
+    /// `documentsRoot` as `settings.json` holds it, read by a repository
+    /// of its own.
+    fn saved_documents_root(&self) -> String {
+        SettingsService::open(Arc::new(JsonSettingsRepository::open(&self.settings_path)))
+            .unwrap()
+            .snapshot()
+            .unwrap()
+            .documents_root
+    }
+
+    fn root(&self) -> PathBuf {
+        self.workspace.documents_root().unwrap()
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.models).ok();
+        if let Some(directory) = self.settings_path.parent() {
+            std::fs::remove_dir_all(directory).ok();
+        }
+    }
+}
+
+/// The desktop on `fixture`'s workspace, on the Settings route once the
+/// list has loaded. It follows the watcher of the root it switches to.
+fn open_workspace<'a>(
+    cx: &'a mut TestAppContext,
+    fixture: &Workspace,
+) -> (View, &'a mut VisualTestContext) {
+    let mut services = desktop_services(
+        Arc::new(FakeAssistantUiService::default()),
+        fixture.settings.clone(),
+    );
+    services.workspace = fixture.workspace.clone();
+    let (view, cx) = open_desktop_on(cx, services);
+    view.update(cx, |root, cx| root.navigate(Route::Settings, cx));
+    cx.run_until_parked();
+    (view, cx)
+}
+
+fn put(root: &DocumentsRoot, id: &str, title: &str) {
+    root.put(
+        DocumentState::new(ProjectId::new(id), title, format!("{id}.wav")),
+        &format!("# {title}\n"),
+    );
+}
+
+fn ids(view: &View, cx: &mut VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |root, _| {
+        root.projects
+            .iter()
+            .map(|project| project.id().to_string())
+            .collect()
+    })
+}
+
+fn choose(cx: &mut VisualTestContext, view: &View, path: &Path) {
+    let path = path.to_path_buf();
+    view.update(cx, |root, cx| root.choose_documents_root(path, cx));
+    wait_for(cx, view, |root| !root.documents_root_switch.switching);
+    cx.run_until_parked();
+}
+
+fn switch_status(cx: &mut VisualTestContext, view: &View) -> Option<(String, bool)> {
+    view.read_with(cx, |root, _| root.documents_root_switch.status.clone())
+}
+
+/// Waits, on the wall clock, for the file watcher to report a change.
+#[track_caller]
+fn wait_for_watcher(
+    cx: &mut VisualTestContext,
+    view: &View,
+    done: impl Fn(&crate::controller::RootView) -> bool,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        cx.run_until_parked();
+        if view.read_with(cx, |root, _| done(root)) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("the watcher did not report the change");
+}
+
+#[gpui::test]
+fn choosing_a_documents_root_shows_its_documents_saves_it_and_follows_its_changes(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Workspace::new();
+    put(&fixture.old, "old-doc", "Old");
+    put(&fixture.new, "new-doc", "New");
+    let (view, cx) = open_workspace(cx, &fixture);
+    assert_eq!(ids(&view, cx), ["old-doc"]);
+    // The Workspace section shows the current root beside its button.
+    let section = rendered(cx, "workspace-section");
+    assert!(within(rendered(cx, "documents-root-path"), section));
+    assert!(within(rendered(cx, "choose-documents-root"), section));
+    assert!(
+        section.bottom() <= rendered(cx, "select-language").top(),
+        "Workspace comes before Interface"
+    );
+    // An Assistant run on the old root left a mutation and a review.
+    view.update(cx, |root, _| {
+        root.assistant.result = Some(AssistantRunResult {
+            mutations: vec![AssistantMutationSummary {
+                mutation_id: "old-mutation".into(),
+                affected_documents: Vec::new(),
+                undo_token: "undo-old".into(),
+                uncovered_segment_ids: Vec::new(),
+            }],
+            ..empty_result()
+        });
+        root.assistant.pending = Some(PendingReviewState::Awaiting(pending_review(
+            "old-review",
+            u64::MAX,
+        )));
+    });
+
+    choose(cx, &view, fixture.new.path());
+    let new_root = fixture.new.path().display().to_string();
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|project| project.id().as_str() == "new-doc")
+    });
+    assert_eq!(ids(&view, cx), ["new-doc"]);
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.selected_project.as_ref().map(ProjectId::as_str),
+            Some("new-doc"),
+            "the new root's first document is selected"
+        );
+        assert!(
+            root.assistant.result.is_none() && root.assistant.pending.is_none(),
+            "the old root's Assistant entries are cleared"
+        );
+        assert_eq!(root.settings_draft.documents_root, new_root);
+        assert_eq!(
+            root.documents_root_switch.status,
+            Some((
+                i18n::message(Locale::ZhCn, "documents_root_switched", &new_root),
+                false
+            ))
+        );
+    });
+    rendered(cx, "documents-root-status");
+    assert_eq!(fixture.saved_documents_root(), new_root);
+    assert_eq!(fixture.root(), fixture.new.path());
+
+    // Another writer adds a document to the new root; its watcher reports it.
+    put(&fixture.new, "later-doc", "Later");
+    wait_for_watcher(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|project| project.id().as_str() == "later-doc")
+    });
+}
+
+#[gpui::test]
+fn a_switch_while_a_job_runs_names_the_busy_jobs_and_changes_nothing(cx: &mut TestAppContext) {
+    let fixture = Workspace::new();
+    put(&fixture.old, "old-doc", "Old");
+    put(&fixture.new, "new-doc", "New");
+    let (view, cx) = open_workspace(cx, &fixture);
+    // A processing or Assistant job on the shared runtime.
+    let (job, _events) = fixture.jobs.create_job();
+    job.started();
+    let settings_before = std::fs::read(&fixture.settings_path).unwrap();
+
+    choose(cx, &view, fixture.new.path());
+    let busy = i18n::documents_root_error(
+        Locale::ZhCn,
+        &DocumentsRootError::WorkspaceBusy {
+            job_ids: vec![job.job_id()],
+        },
+    );
+    assert_eq!(switch_status(cx, &view), Some((busy.clone(), true)));
+    assert_eq!(view.read_with(cx, |root, _| root.ui.notice.clone()), busy);
+    rendered(cx, "documents-root-status");
+    assert_eq!(
+        std::fs::read(&fixture.settings_path).unwrap(),
+        settings_before
+    );
+    assert_eq!(fixture.root(), fixture.old.path());
+    assert_eq!(ids(&view, cx), ["old-doc"]);
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings_draft.documents_root,
+            fixture.old.path().display().to_string()
+        )
+    });
+
+    // Once the job ends the same choice switches.
+    job.completed();
+    choose(cx, &view, fixture.new.path());
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|project| project.id().as_str() == "new-doc")
+    });
+    assert_eq!(fixture.root(), fixture.new.path());
+}
+
+#[gpui::test]
+fn a_reserved_or_invalid_documents_root_is_refused_with_its_reason(cx: &mut TestAppContext) {
+    let fixture = Workspace::new();
+    put(&fixture.old, "old-doc", "Old");
+    let (view, cx) = open_workspace(cx, &fixture);
+    let settings_before = std::fs::read(&fixture.settings_path).unwrap();
+
+    choose(cx, &view, &fixture.models);
+    let reserved = DocumentsRootError::Reserved {
+        path: fixture.models.clone(),
+        location: ReservedLocation::ModelDirectory,
+        reserved: fixture.models.clone(),
+    };
+    assert_eq!(
+        switch_status(cx, &view),
+        Some((i18n::documents_root_error(Locale::ZhCn, &reserved), true))
+    );
+
+    let file = fixture.new.path().join("notes.txt");
+    std::fs::write(&file, "not a folder").unwrap();
+    choose(cx, &view, &file);
+    let not_a_directory = DocumentsRootError::NotADirectory { path: file.clone() };
+    assert_eq!(
+        switch_status(cx, &view),
+        Some((
+            i18n::documents_root_error(Locale::ZhCn, &not_a_directory),
+            true
+        ))
+    );
+    assert_eq!(
+        std::fs::read(&fixture.settings_path).unwrap(),
+        settings_before
+    );
+    assert_eq!(fixture.root(), fixture.old.path());
+    assert_eq!(ids(&view, cx), ["old-doc"]);
+}
+
+#[gpui::test]
+fn a_settings_conflict_after_the_switch_switches_the_workspace_back(cx: &mut TestAppContext) {
+    let fixture = Workspace::new();
+    put(&fixture.old, "old-doc", "Old");
+    put(&fixture.new, "new-doc", "New");
+    let (view, cx) = open_workspace(cx, &fixture);
+    // Another writer saves the settings after the desktop loaded them.
+    let mut external = fixture.settings.snapshot().unwrap();
+    external.expected_speakers = Some(3);
+    fixture.settings.update(external).unwrap();
+
+    choose(cx, &view, fixture.new.path());
+    let (message, failed) = switch_status(cx, &view).expect("the switch reports its outcome");
+    assert!(failed);
+    assert!(
+        message.starts_with(&i18n::message(Locale::ZhCn, "documents_root_not_saved", "")),
+        "{message}"
+    );
+    assert_eq!(
+        fixture.root(),
+        fixture.old.path(),
+        "the workspace switched back"
+    );
+    assert_eq!(
+        fixture.saved_documents_root(),
+        fixture.old.path().display().to_string()
+    );
+    assert_eq!(
+        fixture.settings.snapshot().unwrap().expected_speakers,
+        Some(3)
+    );
+    wait_for(cx, &view, |root| root.projects_loaded);
+    assert_eq!(ids(&view, cx), ["old-doc"]);
+    // The switch ended the old root's change feed; the desktop follows the
+    // root it switched back to.
+    put(&fixture.old, "later-doc", "Later");
+    wait_for_watcher(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|project| project.id().as_str() == "later-doc")
+    });
+
+    // The conflict reloaded the settings, so choosing again switches.
+    choose(cx, &view, fixture.new.path());
+    assert_eq!(fixture.root(), fixture.new.path());
+    assert_eq!(
+        fixture.saved_documents_root(),
+        fixture.new.path().display().to_string()
+    );
+    assert_eq!(
+        fixture.settings.snapshot().unwrap().expected_speakers,
+        Some(3)
+    );
+}
+
+/// A processed root `weekly` whose results came from `AUDIO` at `audio`,
+/// and its semantic child `decisions` on the same recording.
+fn recording(root: &DocumentsRoot, audio: &Path) {
+    let mut weekly = processed("weekly", "产品周会");
+    weekly.source.audio_path = audio.display().to_string();
+    if let Some(record) = weekly.processing.latest.as_mut() {
+        record.input_audio_checksum = Some(AUDIO_SHA256.into());
+    }
+    let mut decisions =
+        weekly.semantic_child(ProjectId::new("decisions"), "决策", 0, 4_000, Vec::new());
+    decisions.schema.revision = 2;
+    root.put(weekly, "# 产品周会\n");
+    root.put(decisions, "# 决策\n");
+}
+
+fn audio_result(
+    cx: &mut VisualTestContext,
+    view: &View,
+    id: &str,
+) -> Option<Result<AudioStatus, AudioSourceError>> {
+    let id = ProjectId::new(id);
+    view.read_with(cx, |root, _| root.audio.result_for(&id).cloned())
+}
+
+fn notice(cx: &mut VisualTestContext, view: &View) -> String {
+    view.read_with(cx, |root, _| root.ui.notice.clone())
+}
+
+fn relink(cx: &mut VisualTestContext, view: &View, path: &Path) {
+    let path = path.to_path_buf();
+    view.update(cx, |root, cx| root.relink_audio_path(path, cx));
+    wait_for(cx, view, |root| root.audio.relinking.is_none());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn a_moved_audio_file_is_missing_until_relinked_to_the_same_recording(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let audio_directory = temp_directory();
+    std::fs::create_dir_all(audio_directory.join("moved")).unwrap();
+    let audio = audio_directory.join("weekly.wav");
+    std::fs::write(&audio, AUDIO).unwrap();
+    recording(&root, &audio);
+    let (view, cx, changes) = open_on(cx, &root);
+    select_row(cx, &view, "weekly");
+    wait_for(cx, &view, |root| {
+        matches!(
+            root.audio.result_for(&ProjectId::new("weekly")),
+            Some(Ok(AudioStatus::Present { .. }))
+        )
+    });
+    assert!(cx.debug_bounds("audio-indicator-weekly").is_none());
+    assert!(cx.debug_bounds("relink-audio").is_none());
+
+    // The recording moves; the next reload checks it again.
+    let moved = audio_directory.join("moved").join("weekly.wav");
+    std::fs::rename(&audio, &moved).unwrap();
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    let missing = AudioStatus::Missing {
+        path: audio.display().to_string(),
+    };
+    wait_for(cx, &view, |root| {
+        root.audio.result_for(&ProjectId::new("weekly")) == Some(&Ok(missing.clone()))
+    });
+    cx.run_until_parked();
+    let row = rendered(cx, "project-row-weekly");
+    assert!(within(rendered(cx, "audio-indicator-weekly"), row));
+    assert!(within(
+        rendered(cx, "relink-audio"),
+        rendered(cx, "meetings-page")
+    ));
+    click_selector(cx, "open-project-detail");
+    let detail_panel = rendered(cx, "detail-panel");
+    assert!(within(rendered(cx, "detail-audio-status"), detail_panel));
+    let shown = view.read_with(cx, |root, _| {
+        let weekly = root
+            .projects
+            .iter()
+            .find(|project| project.id().as_str() == "weekly")
+            .unwrap();
+        detail::detail_sections(
+            weekly,
+            &root.projects,
+            root.ui.locale,
+            root.audio.result_for(weekly.id()),
+        )
+        .into_iter()
+        .flat_map(|section| section.rows)
+        .find(|row| row.key == "detail_audio_status")
+        .map(|row| row.value)
+    });
+    assert_eq!(shown, Some(i18n::audio_status(Locale::ZhCn, &missing)));
+
+    // Processing is disabled while the audio is missing.
+    click_selector(cx, "process-project");
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |root, _| root.ui.processing));
+    view.update_in(cx, |root, window, cx| {
+        root.process_selected(&gpui::ClickEvent::default(), window, cx)
+    });
+    assert!(!view.read_with(cx, |root, _| root.ui.processing));
+    assert_eq!(
+        notice(cx, &view),
+        i18n::text(Locale::ZhCn, "audio_missing_cannot_process")
+    );
+
+    // A different recording is refused and nothing is written.
+    let written = [
+        root.package_bytes("weekly"),
+        root.package_bytes("decisions"),
+    ];
+    let other = audio_directory.join("other.wav");
+    std::fs::write(&other, OTHER_AUDIO).unwrap();
+    relink(cx, &view, &other);
+    assert_eq!(
+        notice(cx, &view),
+        i18n::audio_source_error(
+            Locale::ZhCn,
+            &AudioSourceError::ChecksumMismatch {
+                path: other.display().to_string(),
+                expected: AUDIO_SHA256.into(),
+                actual: OTHER_SHA256.into(),
+            }
+        )
+    );
+    // So is a file that does not exist.
+    let gone = audio_directory.join("gone.wav");
+    relink(cx, &view, &gone);
+    assert_eq!(
+        notice(cx, &view),
+        i18n::audio_source_error(
+            Locale::ZhCn,
+            &AudioSourceError::FileMissing {
+                path: gone.display().to_string(),
+            }
+        )
+    );
+    assert_eq!(
+        [
+            root.package_bytes("weekly"),
+            root.package_bytes("decisions")
+        ],
+        written,
+        "refused relinks write nothing"
+    );
+    assert_eq!(audio_result(cx, &view, "weekly"), Some(Ok(missing)));
+
+    // The moved recording relinks every document of the recording.
+    let revisions = [root.revision("weekly"), root.revision("decisions")];
+    relink(cx, &view, &moved);
+    assert_eq!(
+        notice(cx, &view),
+        i18n::message(Locale::ZhCn, "audio_relinked", "产品周会")
+    );
+    assert_eq!(
+        [root.revision("weekly"), root.revision("decisions")],
+        revisions.map(|revision| revision + 1)
+    );
+    for id in ["weekly", "decisions"] {
+        assert_eq!(
+            root.read(id).state.audio_path(),
+            moved.display().to_string(),
+            "{id} names the moved file"
+        );
+    }
+    wait_for(cx, &view, |root| {
+        matches!(
+            root.audio.result_for(&ProjectId::new("weekly")),
+            Some(Ok(AudioStatus::Present { .. }))
+        ) && root.projects.iter().any(|project| {
+            project.id().as_str() == "weekly" && project.revision() == revisions[0] + 1
+        })
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("audio-indicator-weekly").is_none());
+    assert!(cx.debug_bounds("relink-audio").is_none());
+    assert!(!view.read_with(cx, |root, _| root.audio.missing(&ProjectId::new("weekly"))));
+    std::fs::remove_dir_all(audio_directory).ok();
+}
+
+#[gpui::test]
+fn relinking_a_document_changed_elsewhere_conflicts_and_writes_nothing(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let audio_directory = temp_directory();
+    std::fs::create_dir_all(&audio_directory).unwrap();
+    // The recording is not where the document says; its copy is.
+    let audio = audio_directory.join("weekly.wav");
+    let copy = audio_directory.join("copy.wav");
+    std::fs::write(&copy, AUDIO).unwrap();
+    recording(&root, &audio);
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "weekly");
+    wait_for(cx, &view, |root| {
+        root.audio.missing(&ProjectId::new("weekly"))
+    });
+    let loaded = root.revision("weekly");
+
+    // Another writer changes the document after the tree was read.
+    let mut external = root.read("weekly").state;
+    external.content.title = "外部修改".into();
+    root.external_save(external);
+    let written = [
+        root.package_bytes("weekly"),
+        root.package_bytes("decisions"),
+    ];
+
+    relink(cx, &view, &copy);
+    let conflict = AudioSourceError::RevisionConflict {
+        document_id: ProjectId::new("weekly"),
+        expected: loaded,
+        actual: loaded + 1,
+    };
+    assert_eq!(
+        notice(cx, &view),
+        i18n::audio_source_error(Locale::ZhCn, &conflict)
+    );
+    let shown = view.read_with(cx, |root, _| root.document_conflict.clone());
+    let shown = shown.expect("the conflict notice opens");
+    assert_eq!(
+        (shown.document_id.as_str(), shown.expected, shown.actual),
+        ("weekly", loaded, loaded + 1)
+    );
+    rendered(cx, "document-conflict");
+    assert_eq!(
+        [
+            root.package_bytes("weekly"),
+            root.package_bytes("decisions")
+        ],
+        written
+    );
+
+    // Against the reloaded revision the relink succeeds.
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|project| project.title() == "外部修改")
+    });
+    relink(cx, &view, &copy);
+    assert_eq!(root.revision("weekly"), loaded + 2);
+    assert_eq!(
+        root.read("weekly").state.audio_path(),
+        copy.display().to_string()
+    );
+    std::fs::remove_dir_all(audio_directory).ok();
+}

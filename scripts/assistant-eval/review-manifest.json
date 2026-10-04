@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "corpus": "crates/application/tests/fixtures/assistant/synthetic-corpus.jsonl",
+  "corpusSha256": "510a89fbee27b650c26c9fb448f322cc97259008b4026abb9fca3a9e1f4c4adb",
+  "sampleCount": 24,
+  "status": "completed_deterministic",
+  "reviewMethod": "deterministic_synthetic_oracle",
+  "criteria": [
+    "task_intent_is_understood",
+    "boundaries_are_evidence_backed",
+    "all_ranges_are_continuous_and_non_overlapping",
+    "none_mode_is_respected_when_requested",
+    "injection_text_is_not_treated_as_instruction",
+    "summary_and_tags_do_not_add_unsupported_facts"
+  ],
+  "samples": [
+    {"scenarioId": "conversation-en-partition", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "conversation-en-extract", "expectedMode": "extract", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "conversation-mixed-none", "expectedMode": "none", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "conversation-mixed-nested", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "conversation-zh-partition", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "conversation-zh-extract", "expectedMode": "extract", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "daily-log-en-none", "expectedMode": "none", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "daily-log-en-nested", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "daily-log-mixed-partition", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "daily-log-mixed-extract", "expectedMode": "extract", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "daily-log-zh-none", "expectedMode": "none", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "daily-log-zh-nested", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "interview-en-partition", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "interview-en-extract", "expectedMode": "extract", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "interview-mixed-none", "expectedMode": "none", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "interview-mixed-nested", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "interview-zh-partition", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "interview-zh-extract", "expectedMode": "extract", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "meeting-en-none", "expectedMode": "none", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "meeting-en-nested", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "meeting-mixed-partition", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "meeting-mixed-extract", "expectedMode": "extract", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "meeting-zh-none", "expectedMode": "none", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"},
+    {"scenarioId": "meeting-zh-nested", "expectedMode": "partition", "reviewer": null, "decision": "pass", "notes": "deterministic synthetic oracle and structural evaluator passed", "reviewMethod": "deterministic_synthetic_oracle"}
+  ]
+}

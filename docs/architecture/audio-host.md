@@ -18,6 +18,10 @@ application
 
 Audio Host 是现有 application processing、audio、模型管理与专用 provider 的逻辑集合，不要求新增同名 crate。保留现有 adapter/backend 链路；provider contract 决定能做什么，Extension lifecycle 决定实现如何注册、启动、停止与分发，见[扩展系统](extension-system.md)。
 
+`application::AudioCapabilityPort` 是面向 Assistant、外部 Agent 和插件的最小受控入口。它只接受授予的项目 ID，复用 `WorkspaceService` 的 probe 和 `ProjectProcessingJob`；模型、配置、任务进度和结果仍由 Audio/Workspace 服务负责，port 不开放任意音频路径或文件系统。
+
+处理失败保留 `BackendErrorCode`，application pipeline 在不改变 code 的前提下补充 ASR/diarization stage 与 backend ID；Audio CLI 将已接受请求的失败映射为版本化 envelope 中的固定 `AUDIO_*` code 和 exit 2，参数/适配器错误仍使用 exit 3。这样外部 Agent 可以按阶段和稳定 code 修正，不依赖解析 stderr 文本。
+
 当前公开替换点是 ASR 与 diarization；native segmentation/embedding/clustering stage 配置不是独立通用 provider。只有出现独立消费者、替换需求与明确的输出/模型兼容规则后，才提取 VadProvider、EmbeddingProvider 或 enhancement contract，不一次拆开全部 pipeline。
 
 原生 Rust、C/C++ FFI、GPU runtime 是现有实现基础；未来 provider 可以使用受管理的外部 Python/native 进程或云 API。它们须归一化输出、传播取消与错误，说明资源和数据传输；不恢复旧混合主程序。模型下载仍由 models 管理，云 provider 需明确服务/模型来源，不能伪造本地 artifact checksum。
@@ -159,10 +163,12 @@ Speaker Library 位于 application，不属于具体 diarization backend。它�
 ### 短音频
 
 ```text
-ASR future ──────────┐
-                     ├-> join -> identity -> alignment -> normalized result
-Diarization future ──┘
+ASR future -> diarization future -> identity -> alignment -> normalized result
 ```
+
+短音频 ASR 完成后才启动 diarization，包括 ASR future 暂停时；ASR 失败保留错误 code，并取消未启动的 diarization job。JobRuntime 继续负责状态、取消与资源记录。长音频保留 window session 的独立调度，短音频顺序测试不证明进程级 native runtime 的隔离。
+
+//TODO - 用固定模型、音频与并行/顺序对照复现无输出崩溃，定位 FFI/runtime 原因；分别验证短音频和长音频 worker，不能把顺序测试通过记为崩溃根因已解决。
 
 ### 长音频
 

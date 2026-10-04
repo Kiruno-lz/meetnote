@@ -1,5 +1,248 @@
 use domain::{DiarizationSegment, TranscriptSegment};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
+use std::ops::{Deref, DerefMut};
+
+mod assistant;
+mod capability;
+mod workspace_capability;
+
+pub use assistant::*;
+pub use capability::*;
+pub use workspace_capability::*;
+
+/// Version of the wire envelope shared by all capability services.
+pub const CAPABILITY_ENVELOPE_VERSION: u32 = 1;
+
+/// The capability service that owns a request and its validation rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityService {
+    Workspace,
+    Audio,
+    Settings,
+}
+
+/// Stable location data for a service error.
+///
+/// The request id identifies the wire call. This context identifies the
+/// service operation and, when applicable, the resource, field, path, or
+/// revision that caused the failure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityErrorContext {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<CapabilityService>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual_revision: Option<String>,
+    #[serde(flatten)]
+    details: BTreeMap<String, Value>,
+}
+
+impl CapabilityErrorContext {
+    pub fn new(service: CapabilityService, operation: impl Into<String>) -> Self {
+        Self {
+            service: Some(service),
+            operation: Some(operation.into()),
+            resource_type: None,
+            resource_id: None,
+            field: None,
+            path: None,
+            expected_revision: None,
+            actual_revision: None,
+            details: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_resource(
+        mut self,
+        resource_type: impl Into<String>,
+        resource_id: impl Into<String>,
+    ) -> Self {
+        self.resource_type = Some(resource_type.into());
+        self.resource_id = Some(resource_id.into());
+        self
+    }
+
+    pub fn with_field(mut self, field: impl Into<String>) -> Self {
+        self.field = Some(field.into());
+        self
+    }
+
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
+        self
+    }
+
+    pub fn with_revisions(
+        mut self,
+        expected_revision: impl Into<String>,
+        actual_revision: impl Into<String>,
+    ) -> Self {
+        self.expected_revision = Some(expected_revision.into());
+        self.actual_revision = Some(actual_revision.into());
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.service.is_none()
+            && self.operation.is_none()
+            && self.resource_type.is_none()
+            && self.resource_id.is_none()
+            && self.field.is_none()
+            && self.path.is_none()
+            && self.expected_revision.is_none()
+            && self.actual_revision.is_none()
+            && self.details.is_empty()
+    }
+}
+
+impl Deref for CapabilityErrorContext {
+    type Target = BTreeMap<String, Value>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.details
+    }
+}
+
+impl DerefMut for CapabilityErrorContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.details
+    }
+}
+
+/// A service-owned error that preserves a stable code and typed location.
+///
+/// `CapabilityError` remains the small adapter error used by the existing
+/// CLI writers. Service ports can use this richer error without encoding
+/// location data into human-readable messages.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityServiceError {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<CapabilityErrorContext>,
+}
+
+impl CapabilityServiceError {
+    pub fn new(code: impl Into<String>, message: impl Into<String>, retryable: bool) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            retryable,
+            context: None,
+        }
+    }
+
+    pub fn with_context(mut self, context: CapabilityErrorContext) -> Self {
+        self.context = Some(context);
+        self
+    }
+}
+
+/// Common wire envelope for capability results and failures.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CapabilityEnvelope<T, E = CapabilityError> {
+    pub schema_version: u32,
+    pub capability_id: String,
+    pub capability_version: u32,
+    pub request_id: String,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<T>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<E>,
+}
+
+impl<T> CapabilityEnvelope<T, CapabilityError> {
+    pub fn success(
+        capability_id: impl Into<String>,
+        capability_version: u32,
+        request_id: impl Into<String>,
+        result: T,
+    ) -> Self {
+        Self {
+            schema_version: CAPABILITY_ENVELOPE_VERSION,
+            capability_id: capability_id.into(),
+            capability_version,
+            request_id: request_id.into(),
+            ok: true,
+            result: Some(result),
+            error: None,
+        }
+    }
+}
+
+impl<T, E> CapabilityEnvelope<T, E> {
+    pub fn success_with_error_type(
+        capability_id: impl Into<String>,
+        capability_version: u32,
+        request_id: impl Into<String>,
+        result: T,
+    ) -> Self {
+        Self {
+            schema_version: CAPABILITY_ENVELOPE_VERSION,
+            capability_id: capability_id.into(),
+            capability_version,
+            request_id: request_id.into(),
+            ok: true,
+            result: Some(result),
+            error: None,
+        }
+    }
+
+    pub fn failure(
+        capability_id: impl Into<String>,
+        capability_version: u32,
+        request_id: impl Into<String>,
+        error: E,
+    ) -> Self {
+        Self {
+            schema_version: CAPABILITY_ENVELOPE_VERSION,
+            capability_id: capability_id.into(),
+            capability_version,
+            request_id: request_id.into(),
+            ok: false,
+            result: None,
+            error: Some(error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapabilityError {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl CapabilityError {
+    pub fn with_context(self, context: CapabilityErrorContext) -> CapabilityServiceError {
+        CapabilityServiceError {
+            code: self.code,
+            message: self.message,
+            retryable: self.retryable,
+            context: Some(context),
+        }
+    }
+}
 
 pub const DOCUMENT_COMMAND_SCHEMA_VERSION: u32 = 1;
 
@@ -69,6 +312,23 @@ pub enum DocumentCommand {
         target_id: domain::DocumentId,
         before: bool,
     },
+    /// Manual correction: attribute every segment of one speaker to another.
+    /// Only speaker fields of `results.diarization` and
+    /// `results.speaker_segments` change.
+    MergeSpeaker {
+        document_id: domain::DocumentId,
+        expected_revision: u64,
+        from_speaker_id: String,
+        into_speaker_id: String,
+    },
+    /// Manual correction: set or clear (`None`) one speaker's display label.
+    SetSpeakerLabel {
+        document_id: domain::DocumentId,
+        expected_revision: u64,
+        speaker_id: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -100,27 +360,33 @@ pub struct DocumentCommandIssue {
     pub message: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelRef {
+    #[serde(alias = "backend_id")]
     pub backend_id: String,
+    #[serde(alias = "model_id")]
     pub model_id: String,
     pub revision: Option<String>,
+    #[serde(alias = "artifact_path")]
     pub artifact_path: String,
     #[serde(default)]
     pub artifacts: Vec<ModelArtifactRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelArtifactRef {
     pub filename: String,
     #[serde(default)]
+    #[serde(alias = "expected_sha256")]
     pub expected_sha256: Option<String>,
     #[serde(default)]
+    #[serde(alias = "archive_member")]
     pub archive_member: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum ComputeDevice {
     Auto,
     Cpu,
@@ -389,7 +655,7 @@ pub struct DiarizationRequest {
     pub stage_configuration: DiarizationStageConfiguration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DiarizationStageConfiguration {
     #[serde(default)]
@@ -408,7 +674,7 @@ impl DiarizationStageConfiguration {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AlgorithmRef {
     pub id: String,
@@ -437,6 +703,7 @@ pub enum BackendErrorCode {
     ModelIncompatible,
     ModelLoadFailed,
     DeviceUnavailable,
+    AccessDenied,
     InvalidAudio,
     InferenceFailed,
     Cancelled,
@@ -529,6 +796,38 @@ mod tests {
         let mut unknown = legacy;
         unknown.legacy_feature_config = Some("unknown-feature-config".into());
         assert!(!unknown.compatible_with(&structured));
+    }
+
+    #[test]
+    fn speaker_correction_commands_round_trip() {
+        for (command, tag) in [
+            (
+                DocumentCommand::MergeSpeaker {
+                    document_id: domain::DocumentId::new("doc"),
+                    expected_revision: 3,
+                    from_speaker_id: "speaker-1".into(),
+                    into_speaker_id: "speaker-0".into(),
+                },
+                "mergeSpeaker",
+            ),
+            (
+                DocumentCommand::SetSpeakerLabel {
+                    document_id: domain::DocumentId::new("doc"),
+                    expected_revision: 3,
+                    speaker_id: "speaker-1".into(),
+                    label: None,
+                },
+                "setSpeakerLabel",
+            ),
+        ] {
+            let json = serde_json::to_value(&command).unwrap();
+            assert_eq!(json["type"], tag);
+            assert_eq!(json["payload"]["expected_revision"], 3);
+            assert_eq!(
+                serde_json::from_value::<DocumentCommand>(json).unwrap(),
+                command
+            );
+        }
     }
 
     #[test]

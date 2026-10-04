@@ -14,10 +14,10 @@ MeetNote 已有 Rust-native 核心分层和主要音频处理链路，当前进�
 | Speaker Library 匹配、候选、enroll、merge、split | application 已实现 |
 | 短音频整文件 pipeline | 已完成 |
 | 长音频离线分窗与 native 全局聚类 | 已完成技术链路 |
-| GPUI 文档、模型、设置和处理界面 | 功能脚手架 |
-| Assistant / external Agent | Assistant 为占位客户端；工具、Skill、LLM adapter 与通用 Host 尚待实现 |
-| 通用 Agent Host / Extension 生命周期 | 未实现；目标不等于当前能力 |
-| 长音频资源、精度、故障与发布验收 | 未完成 |
+| GPUI 文档、模型、设置和处理界面 | zui/gpui-base 页面与键盘流程已实现，自动与离屏验收见 UI 计划；原生窗口和无障碍发布检查待手验 |
+| Assistant / external Agent | 工作树已有工具、Skill、adapter 和 loop；本分支收口三服务 capability 与无 UI 调用验收，UI/音频质量分别归对应计划 |
+| Capability / Extension 生命周期 | 插件共享 port 与生命周期待收敛；不建设完整 Agent Runtime |
+| 长音频资源、精度、故障与发布验收 | 音频质量矩阵计划已建立；已有数据下载/转换、Audio Host export、WER/CER/DER 和复合边界评分工具；导出到评分器的协议回归已通过，冻结矩阵与真实模型质量/资源验收仍待执行 |
 
 基础验证：
 
@@ -27,7 +27,9 @@ cargo check --workspace
 cargo test --workspace
 ```
 
-真实模型验收由显式 `#[ignore]` 测试执行。当前 Paraformer + native diarization 分窗链路已在约 3 分钟中文音频上运行，证明模型与结构可执行；无人工 transcript/RTTM，不能据此声称 WER/CER、DER 或 speaker 数正确。
+评测数据集、下载 receipt 与评测输出位于仓库根 `eval-data/`（gitignored）：音频评测在 `eval-data/audio-quality/`，Assistant 评测在 `eval-data/assistant/`。`target/` 只含可重建的构建产物，不是 MeetNote 的运行时数据源，也没有 `.db`、SQLite 或 SQL 数据库文件；确认没有正在运行的测试或构建任务后可直接 `cargo clean`。
+
+真实模型验收由显式 `#[ignore]` 测试执行。真实数据的下载、reference 转换和矩阵定义见[音频质量矩阵计划](audio-quality-plan.md)。协议回归使用固定 fixture 验证导出、评分与语义质量边界；真实模型执行、WER/CER/DER 质量、speaker 数与长音频资源必须由对应音频、模型和运行 receipt 单独证明。
 
 ## P0：生产正确性与资源边界
 
@@ -40,8 +42,7 @@ cargo test --workspace
 
 ### 文档一致性
 
-- 为 Workspace 文档包提交增加并验证 mutation journal，覆盖所有受管理写路径。
-- 在已有多文档 batch/journal 基础上验证跨进程互斥、恢复所有权、外部编辑冲突和普通附件保留，不把实例内锁当作工作区锁。
+- Workspace 资产生命周期、CAS、journal/恢复与读取上限的唯一进度/TODO 见 [Workspace Host](../architecture/workspace-host.md)；由 Workspace 分支交付，不重复列入 Assistant 接入计划。
 - 为源音频、Markdown、项目 JSON 和 Speaker Library 固化不可删除资产边界；为全文索引、embedding index 和搜索缓存定义 stale、删除与重建测试。
 - 所有 UI 写回统一使用 revision-aware document service。
 - 在正常文档工作区展示 scanner issue 的路径和原因。
@@ -52,11 +53,13 @@ P0 完成条件：长音频受控并发和资源上限可证明；任意写入�
 ## P1：产品闭环
 
 - 将文档根目录加入 settings，支持选择并恢复目标工作区。
-- 明确音频资产是外部引用还是项目托管，并实现缺失文件检测与恢复入口。
+- 资产生命周期依赖 [Workspace Host](../architecture/workspace-host.md)；本计划只安排其产品集成，不重复维护托管/恢复任务。
 - 完成标题、标签、总结、Markdown、`document_status`、revision 和 provenance 的查看/编辑 UI。
 - 完成 Speaker Library 候选确认、enrollment、样本追加、profile merge/split 与证据查看。
 - 提供首批 Workspace capability port，让插件通过受控接口访问读取、搜索、索引构建和订阅能力；不开放任意文件系统操作。
-- 按[架构对齐计划](architecture-alignment.md)先建立 Built-in 最小会话与共享 Workspace 能力，再实现 LLM adapter、CLI 并验证 Codex/Claude Code backend；文档场景见[Assistant 计划](assistant-plan.md)。
+- 按[Assistant 计划](assistant-plan.md)收口三服务 capability、外部薄入口与最小 Built-in loop；不要求该分支完成 UI、底层恢复、音频质量或完整模型语义矩阵。
+- //TODO - Audio 跨进程执行基础设施复用统一 JobRuntime：明确状态所有者、配置快照、幂等、进度/结果、取消竞争、worker 崩溃与清理；避免 CLI 文件状态与内存 registry 平行演进。接口越权修复仍由 Assistant 接入计划负责。
+- Settings 基础服务已实现跨进程 CAS、owner-only 设置/凭据文件、原子替换与失败恢复测试；Agent 复用配置/授权契约。
 - Agent 写回默认自动执行，并可在 settings 切换为逐次确认；两种模式都不能修改 processing/results 所有权字段。
 - 将 identity matching 实际阈值、模型 license 和来源快照写入处理 provenance。
 

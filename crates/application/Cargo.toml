@@ -7,9 +7,14 @@ edition.workspace = true
 audio = { path = "../audio" }
 contracts = { path = "../contracts" }
 domain = { path = "../domain" }
+llm = { path = "../llm" }
+models = { path = "../models" }
 runtime = { path = "../runtime" }
+settings = { path = "../settings" }
 futures.workspace = true
+schemars.workspace = true
 sha2.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 uuid.workspace = true

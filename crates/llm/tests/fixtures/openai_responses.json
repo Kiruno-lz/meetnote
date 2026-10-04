@@ -1,0 +1,103 @@
+{
+  "expectedRequest": {
+    "model": "route-test",
+    "input": [
+      {
+        "type": "message",
+        "role": "user",
+        "content": [{ "type": "input_text", "text": "Read both documents" }]
+      },
+      {
+        "type": "message",
+        "role": "assistant",
+        "content": [{ "type": "input_text", "text": "I will read both." }]
+      },
+      {
+        "type": "function_call",
+        "call_id": "call-1",
+        "name": "read_document",
+        "arguments": "{\"documentId\":\"doc-1\"}"
+      },
+      {
+        "type": "function_call",
+        "call_id": "call-2",
+        "name": "read_document",
+        "arguments": "{\"documentId\":\"doc-2\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call-1",
+        "output": "{\"title\":\"Example\"}"
+      },
+      {
+        "type": "function_call_output",
+        "call_id": "call-2",
+        "output": "{\"error\":{\"code\":\"DOCUMENT_NOT_FOUND\"}}"
+      },
+      {
+        "type": "message",
+        "role": "user",
+        "content": [{ "type": "input_text", "text": "Continue with what is available" }]
+      }
+    ],
+    "store": false,
+    "stream": false,
+    "instructions": "Use only granted documents.",
+    "max_output_tokens": 256,
+    "tools": [
+      {
+        "type": "function",
+        "name": "read_document",
+        "description": "Read one document",
+        "parameters": {
+          "type": "object",
+          "properties": { "documentId": { "type": "string" } },
+          "required": ["documentId"],
+          "additionalProperties": false
+        }
+      }
+    ],
+    "tool_choice": "auto"
+  },
+  "text": {
+    "model": "resolved-test",
+    "status": "completed",
+    "output": [
+      {
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{ "type": "output_text", "text": "Done", "annotations": [] }]
+      }
+    ],
+    "usage": { "input_tokens": 11, "output_tokens": 3, "total_tokens": 14 }
+  },
+  "multiTool": {
+    "model": "resolved-test",
+    "status": "completed",
+    "output": [
+      {
+        "type": "function_call",
+        "call_id": "call-a",
+        "name": "read_document",
+        "arguments": "{\"documentId\":\"doc-a\"}",
+        "status": "completed"
+      },
+      {
+        "type": "function_call",
+        "call_id": "call-b",
+        "name": "read_document",
+        "arguments": "{\"documentId\":\"doc-b\"}",
+        "status": "completed"
+      }
+    ],
+    "usage": { "input_tokens": 10, "output_tokens": 8, "total_tokens": 18 }
+  },
+  "truncated": {
+    "model": "resolved-test",
+    "status": "incomplete",
+    "incomplete_details": { "reason": "max_output_tokens" },
+    "output": [],
+    "usage": { "input_tokens": 10, "output_tokens": 0, "total_tokens": 10 }
+  }
+}
