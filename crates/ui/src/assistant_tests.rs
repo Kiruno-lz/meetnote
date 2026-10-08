@@ -472,6 +472,44 @@ fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
 }
 
 #[gpui::test]
+fn the_sent_request_is_quoted_above_its_result(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let gate = Gate::default();
+    let (view, cx, assistant) = open_assistant(
+        cx,
+        FakeAssistantUiService {
+            run_gate: Some(gate.clone()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        !shown(cx, "assistant-request".into()),
+        "nothing is quoted before a run"
+    );
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        answer: Some("done".into()),
+        ..empty_result()
+    });
+    gate.arm();
+    start_run(cx, &view);
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    let results = rendered(cx, "assistant-results");
+    let request = rendered(cx, "assistant-request");
+    assert!(
+        within(request, results),
+        "the request is quoted while the run goes on"
+    );
+    gate.release();
+    wait_for(cx, &view, |root| root.assistant.result.is_some());
+    let request = rendered(cx, "assistant-request");
+    let result = rendered(cx, "assistant-result");
+    assert!(
+        request.bottom() <= result.top() && within(request, rendered(cx, "assistant-results")),
+        "the request leads the results: {request:?} above {result:?}"
+    );
+}
+
+#[gpui::test]
 fn a_scene_tab_selects_and_explains_its_scene_and_leaves_focus_in_the_prompt(
     cx: &mut TestAppContext,
 ) {

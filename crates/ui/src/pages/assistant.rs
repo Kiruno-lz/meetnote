@@ -64,6 +64,11 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .flex()
         .flex_col()
         .gap_3()
+        .children(
+            root.assistant
+                .sent_request()
+                .map(|request| render_request(request.to_owned(), &tokens)),
+        )
         .children(result.map(|result| render_result(result, warnings, root.ui.locale, cx)))
         .children(
             (!receipts.is_empty())
@@ -524,8 +529,23 @@ fn task_label(locale: Locale, task: &AssistantTaskState) -> String {
 }
 
 /// The position of the receipts among the results of a run that wrote:
-/// after its result, before its pending review.
-pub(crate) const RECEIPTS_ITEM: usize = 1;
+/// after its request and result, before its pending review.
+pub(crate) const RECEIPTS_ITEM: usize = 2;
+
+/// The request of the run, quoted at the top of its results.
+fn render_request(request: String, tokens: &Tokens) -> gpui::AnyElement {
+    div()
+        .debug_selector(|| "assistant-request".into())
+        .border_l_2()
+        .border_color(tokens.border)
+        .pl(tokens.spacing.md)
+        .py(tokens.spacing.xs)
+        .text_sm()
+        .text_color(tokens.text_muted)
+        .line_clamp(3)
+        .child(request)
+        .into_any_element()
+}
 
 /// The run's answer, evidence, model route, usage, diagnostics and every
 /// warning it returned.
