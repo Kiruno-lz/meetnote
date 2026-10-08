@@ -671,12 +671,22 @@ fn a_failed_download_probe_shows_the_localized_reason_and_retry_starts_the_downl
     let (view, cx) = open_models(cx, models.clone(), &state, test_settings());
 
     let facts = facts(cx, &view, "native-diarization");
+    let failure = facts.failure.clone().expect("the failure is shown");
     assert_eq!(
-        facts.failure.as_deref(),
-        Some(
-            "下载失败（2026-08-29 10:40 UTC）：后端 diarization-native 未通过检查：\
-             plda_psi.npy is missing"
+        (
+            failure.headline.as_str(),
+            failure.explanation.as_str(),
+            failure.time.as_str()
+        ),
+        (
+            "加载检查未通过",
+            "diarization-native 无法加载这个模型",
+            PROBED_AT
         )
+    );
+    assert_eq!(
+        failure.detail,
+        "后端 diarization-native 未通过检查：plda_psi.npy is missing"
     );
     assert_eq!(
         facts.probe.map(|probe| probe.summary),
@@ -692,6 +702,13 @@ fn a_failed_download_probe_shows_the_localized_reason_and_retry_starts_the_downl
     // Retry replaces the download button; nothing is installed to re-probe.
     assert!(!shown(cx, "download", "native-diarization"));
     assert!(!shown(cx, "reprobe", "native-diarization"));
+    // The backend's own words wait in the details.
+    assert!(!shown(cx, "failure-detail", "native-diarization"));
+    click_selector(cx, "model-details-toggle-native-diarization");
+    assert!(within(
+        rendered(cx, "model-failure-detail-native-diarization"),
+        rendered(cx, "model-card-native-diarization")
+    ));
 
     click_selector(cx, "model-retry-native-diarization");
     wait_for(cx, &view, |_| !models.starts().is_empty());
@@ -885,13 +902,16 @@ fn a_real_reprobe_of_changed_files_reports_the_mismatch_and_keeps_the_model_inst
     });
     let failed = facts(cx, &view, "real-asr");
     let failure = failed.failure.expect("the failure is shown");
-    assert!(failure.starts_with("重新校验失败（"), "{failure}");
-    assert!(
-        failure.ends_with(&format!(
-            "）：{} 的校验和不符：应为 731e82f72481…，实际为 13c12877ebfb…",
+    assert_eq!(
+        (failure.headline.as_str(), failure.explanation.as_str()),
+        ("校验未通过", "文件内容与目录记录不符")
+    );
+    assert_eq!(
+        failure.detail,
+        format!(
+            "{} 的校验和不符：应为 731e82f72481…，实际为 13c12877ebfb…",
             file.display()
-        )),
-        "{failure}"
+        )
     );
     assert_eq!(
         failed.probe.unwrap().artifacts,

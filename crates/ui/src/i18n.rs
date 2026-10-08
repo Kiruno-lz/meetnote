@@ -4,8 +4,7 @@ use application::{
 use contracts::ComputeDevice;
 use domain::ProjectStatus;
 use models::{
-    BackendCheck, ChecksumResult, ModelFailure, ModelFailureRecord, ModelOperation, ProbeRecord,
-    ProbeRecordError,
+    BackendCheck, ChecksumResult, ModelFailure, ModelOperation, ProbeRecord, ProbeRecordError,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +83,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "show_model_details") => "展开详情",
         (Locale::ZhCn, "hide_model_details") => "收起详情",
         (Locale::ZhCn, "declared_checksums") => "目录声明的校验和",
+        (Locale::ZhCn, "model_failure_detail") => "失败详情",
         (Locale::ZhCn, "probe_backends") => "后端检查",
         (Locale::ZhCn, "probe_artifacts") => "文件校验",
         (Locale::ZhCn, "expected_checksum") => "应为",
@@ -413,7 +413,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "task_asr") => "Speech recognition",
         (Locale::EnUs, "task_diarization") => "Speaker diarization",
         (Locale::EnUs, "catalog_candidate_source") => {
-            "The source isn't verified yet, so it can't be downloaded"
+            "The source is not verified yet, so it cannot be downloaded"
         }
         (Locale::EnUs, "catalog_requires_native_adapter") => {
             "Needs a native adapter before it can be downloaded"
@@ -423,6 +423,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "show_model_details") => "Show details",
         (Locale::EnUs, "hide_model_details") => "Hide details",
         (Locale::EnUs, "declared_checksums") => "Checksums in the catalog",
+        (Locale::EnUs, "model_failure_detail") => "Failure details",
         (Locale::EnUs, "probe_backends") => "Backend checks",
         (Locale::EnUs, "probe_artifacts") => "Artifact checksums",
         (Locale::EnUs, "expected_checksum") => "expected",
@@ -1314,16 +1315,58 @@ pub fn model_failure_reason(locale: Locale, failure: &ModelFailure) -> String {
     }
 }
 
-/// The last failed download or re-probe: the operation, when it failed and
-/// why.
-pub fn model_failure(locale: Locale, record: &ModelFailureRecord) -> String {
-    let time = crate::components::utc_time(record.failed_at_ms);
-    let reason = model_failure_reason(locale, &record.reason);
-    match (locale, record.operation) {
-        (Locale::ZhCn, ModelOperation::Download) => format!("下载失败（{time}）：{reason}"),
-        (Locale::ZhCn, ModelOperation::Reprobe) => format!("重新校验失败（{time}）：{reason}"),
-        (Locale::EnUs, ModelOperation::Download) => format!("Download failed ({time}): {reason}"),
-        (Locale::EnUs, ModelOperation::Reprobe) => format!("Re-probe failed ({time}): {reason}"),
+/// What failed, in a few words: a backend's load check, the check of the
+/// files against the catalog, or the download. A re-probe downloads
+/// nothing, so its other failures are failed checks too.
+pub fn model_failure_headline(
+    locale: Locale,
+    operation: ModelOperation,
+    failure: &ModelFailure,
+) -> &'static str {
+    use ModelFailure as Failure;
+    match (locale, failure, operation) {
+        (Locale::ZhCn, Failure::BackendProbe { .. }, _) => "加载检查未通过",
+        (Locale::EnUs, Failure::BackendProbe { .. }, _) => "Load check failed",
+        (Locale::ZhCn, Failure::SizeMismatch { .. } | Failure::ChecksumMismatch { .. }, _)
+        | (Locale::ZhCn, _, ModelOperation::Reprobe) => "校验未通过",
+        (Locale::EnUs, Failure::SizeMismatch { .. } | Failure::ChecksumMismatch { .. }, _)
+        | (Locale::EnUs, _, ModelOperation::Reprobe) => "Verification failed",
+        (Locale::ZhCn, _, ModelOperation::Download) => "下载失败",
+        (Locale::EnUs, _, ModelOperation::Download) => "Download failed",
+    }
+}
+
+/// Why a model failed, in plain words per reason kind; the paths and the
+/// backend's own message are left to `model_failure_reason`.
+pub fn model_failure_explanation(locale: Locale, failure: &ModelFailure) -> String {
+    use ModelFailure as Failure;
+    match (locale, failure) {
+        (Locale::ZhCn, Failure::UnsupportedSource { .. }) => "这个来源不支持直接下载".into(),
+        (Locale::EnUs, Failure::UnsupportedSource { .. }) => {
+            "This source cannot be downloaded directly".into()
+        }
+        (Locale::ZhCn, Failure::Network { .. }) => "网络连接出错，可稍后重试".into(),
+        (Locale::EnUs, Failure::Network { .. }) => "The connection failed; try again later".into(),
+        (Locale::ZhCn, Failure::Io { .. }) => "无法读写模型文件".into(),
+        (Locale::EnUs, Failure::Io { .. }) => "The model files could not be read or written".into(),
+        (Locale::ZhCn, Failure::SizeMismatch { .. }) => "文件大小与目录记录不符".into(),
+        (Locale::EnUs, Failure::SizeMismatch { .. }) => {
+            "A file's size does not match the catalog".into()
+        }
+        (Locale::ZhCn, Failure::ChecksumMismatch { .. }) => "文件内容与目录记录不符".into(),
+        (Locale::EnUs, Failure::ChecksumMismatch { .. }) => {
+            "A file's contents do not match the catalog".into()
+        }
+        (Locale::ZhCn, Failure::Archive { .. }) => "下载的压缩包无法解压".into(),
+        (Locale::EnUs, Failure::Archive { .. }) => {
+            "The downloaded archive could not be unpacked".into()
+        }
+        (Locale::ZhCn, Failure::BackendProbe { backend_id, .. }) => {
+            format!("{backend_id} 无法加载这个模型")
+        }
+        (Locale::EnUs, Failure::BackendProbe { backend_id, .. }) => {
+            format!("{backend_id} could not load this model")
+        }
     }
 }
 
@@ -1806,8 +1849,8 @@ mod tests {
     #[test]
     fn every_model_failure_and_probe_result_reads_in_both_locales() {
         use models::{
-            BackendCheck, ChecksumResult, ModelFailure, ModelFailureRecord, ModelOperation,
-            ProbeOutcome, ProbeRecord, ProbeRecordError,
+            BackendCheck, ChecksumResult, ModelFailure, ModelOperation, ProbeOutcome, ProbeRecord,
+            ProbeRecordError,
         };
         let failures = [
             (
@@ -1873,28 +1916,47 @@ mod tests {
             );
         }
 
-        // The failed operation and its time head the reason.
-        let (reason, _) = &failures[6];
-        let record = |operation| ModelFailureRecord {
-            operation,
-            failed_at_ms: 1_788_000_000_000,
-            revision: None,
-            reason: reason.clone(),
-        };
-        let [download, reprobe] = [ModelOperation::Download, ModelOperation::Reprobe]
-            .map(|operation| model_failure(Locale::ZhCn, &record(operation)));
-        assert_ne!(download, reprobe, "the operation is named");
-        for sentence in [&download, &reprobe] {
-            assert!(sentence.contains("2026-08-29 10:40 UTC"), "{sentence}");
-            assert!(
-                sentence.ends_with(&model_failure_reason(Locale::ZhCn, reason)),
-                "{sentence}"
-            );
+        // A failure heads its banner with what failed: the download, the
+        // check of its files, or a backend's load check; a re-probe never
+        // fails as a download.
+        let mut explanations = std::collections::BTreeSet::new();
+        for (failure, named) in &failures {
+            let expected = match failure {
+                ModelFailure::BackendProbe { .. } => ["加载检查未通过"; 2],
+                ModelFailure::SizeMismatch { .. } | ModelFailure::ChecksumMismatch { .. } => {
+                    ["校验未通过"; 2]
+                }
+                _ => ["下载失败", "校验未通过"],
+            };
+            for (operation, headline) in [ModelOperation::Download, ModelOperation::Reprobe]
+                .into_iter()
+                .zip(expected)
+            {
+                assert_eq!(
+                    model_failure_headline(Locale::ZhCn, operation, failure),
+                    headline,
+                    "{failure:?} {operation:?}"
+                );
+                assert_localized(
+                    headline,
+                    model_failure_headline(Locale::EnUs, operation, failure),
+                );
+            }
+            // Plain words for each kind, without the paths or the backend's
+            // own message.
+            let chinese = model_failure_explanation(Locale::ZhCn, failure);
+            let english = model_failure_explanation(Locale::EnUs, failure);
+            assert_localized(&chinese, &english);
+            assert!(explanations.insert(chinese.clone()), "{chinese}");
+            for fact in named {
+                for sentence in [&chinese, &english] {
+                    // Only the backend is named.
+                    let named = *fact == "sherpa-onnx";
+                    assert_eq!(sentence.contains(fact), named, "{sentence} and {fact}");
+                }
+            }
         }
-        assert_localized(
-            &download,
-            &model_failure(Locale::EnUs, &record(ModelOperation::Download)),
-        );
+        let (reason, _) = &failures[6];
 
         let checksums = [
             ChecksumResult::Matched,

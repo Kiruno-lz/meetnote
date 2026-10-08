@@ -1,5 +1,5 @@
 use crate::{
-    components::empty_card,
+    components::{empty_card, utc_time},
     controller::{DownloadAction, RootView},
     controls::{Button, Collapsible, ProgressBar, Scrollbar},
     i18n::{self, text as tr, Locale},
@@ -357,7 +357,34 @@ fn model_card(
     let failure = facts.failure.clone().filter(|_| !busy).map(|failure| {
         notice(&tokens)
             .debug_selector(marked("failure"))
-            .child(div().flex_1().min_w_0().child(failure))
+            .child(
+                gpui::svg()
+                    .path("icons/triangle-alert.svg")
+                    .size(px(16.))
+                    .flex_none()
+                    .text_color(tokens.warning_text),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_wrap()
+                    .gap_x(tokens.spacing.sm)
+                    .child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(failure.headline),
+                    )
+                    .child(failure.explanation),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(tokens.text_muted)
+                    .child(failure.time),
+            )
     });
     let record_error = facts.record_error.clone().map(|error| {
         notice(&tokens)
@@ -402,14 +429,27 @@ fn model_card(
     });
 
     let details = expanded.then(|| {
-        let mut details = div().flex().flex_col().gap(tokens.spacing.sm).child(
+        let failure_detail = facts.failure.as_ref().map(|failure| {
             detail_text(
-                tr(locale, "model_source"),
-                facts.source_url.clone(),
+                tr(locale, "model_failure_detail"),
+                failure.detail.clone(),
                 &tokens,
             )
-            .debug_selector(marked("source-url")),
-        );
+            .debug_selector(marked("failure-detail"))
+        });
+        let mut details = div()
+            .flex()
+            .flex_col()
+            .gap(tokens.spacing.sm)
+            .children(failure_detail)
+            .child(
+                detail_text(
+                    tr(locale, "model_source"),
+                    facts.source_url.clone(),
+                    &tokens,
+                )
+                .debug_selector(marked("source-url")),
+            );
         let artifacts = match &facts.probe {
             Some(probe) => {
                 details = details.child(fact_rows(
@@ -503,7 +543,8 @@ fn notice(tokens: &Tokens) -> gpui::Div {
         .gap_3()
 }
 
-/// A titled text of a card's details, wrapped to the card's width.
+/// A titled text of a card's details, in muted type wrapped to the card's
+/// width.
 fn detail_text(title: &'static str, text: String, tokens: &Tokens) -> gpui::Div {
     div()
         .flex()
@@ -511,7 +552,7 @@ fn detail_text(title: &'static str, text: String, tokens: &Tokens) -> gpui::Div 
         .gap_1()
         .text_xs()
         .child(div().text_color(tokens.accent_text).child(title))
-        .child(div().min_w_0().child(text))
+        .child(div().min_w_0().text_color(tokens.text_muted).child(text))
 }
 
 /// A titled list of a card's details, each row named `<prefix>-<index>`.
@@ -699,6 +740,19 @@ pub(crate) struct ProbeFacts {
     pub(crate) artifacts: Vec<FactRow>,
 }
 
+/// The last failed download or re-probe as its card shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FailureFacts {
+    /// What failed, in a few words.
+    pub(crate) headline: String,
+    /// Why, in plain words.
+    pub(crate) explanation: String,
+    pub(crate) time: String,
+    /// The reason with its paths and the backend's own message, in the
+    /// details.
+    pub(crate) detail: String,
+}
+
 /// What a model card shows beyond its id and install status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModelFacts {
@@ -713,7 +767,7 @@ pub(crate) struct ModelFacts {
     pub(crate) declared: Vec<FactRow>,
     pub(crate) probe: Option<ProbeFacts>,
     /// The last failed download or re-probe and why.
-    pub(crate) failure: Option<String>,
+    pub(crate) failure: Option<FailureFacts>,
     /// Why the probe record cannot be read, and where it is.
     pub(crate) record_error: Option<String>,
     /// Why a model that is not installed cannot be downloaded.
@@ -759,10 +813,12 @@ pub(crate) fn model_facts(entry: &ModelAvailability, locale: Locale) -> ModelFac
                 })
                 .collect(),
         }),
-        failure: entry
-            .failure
-            .as_ref()
-            .map(|failure| i18n::model_failure(locale, failure)),
+        failure: entry.failure.as_ref().map(|record| FailureFacts {
+            headline: i18n::model_failure_headline(locale, record.operation, &record.reason).into(),
+            explanation: i18n::model_failure_explanation(locale, &record.reason),
+            time: utc_time(record.failed_at_ms),
+            detail: i18n::model_failure_reason(locale, &record.reason),
+        }),
         record_error: entry
             .record_error
             .as_ref()
