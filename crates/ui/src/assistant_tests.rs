@@ -471,6 +471,34 @@ fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
     );
 }
 
+#[gpui::test]
+fn the_scope_and_its_context_share_one_line_above_the_privacy_note(cx: &mut TestAppContext) {
+    let (_view, cx, _) = open_assistant(cx, FakeAssistantUiService::default());
+    cx.run_until_parked();
+    let scope = rendered(cx, "assistant-scope-group");
+    let context = rendered(cx, "assistant-context");
+    let mode = rendered(cx, "assistant-write-mode-automatic");
+    let privacy = rendered(cx, "assistant-privacy");
+    assert!(
+        context.left() >= scope.right()
+            && context.top() < scope.bottom()
+            && scope.top() < context.bottom(),
+        "the context sits beside the scope: {context:?} and {scope:?}"
+    );
+    assert!(
+        within(mode, context),
+        "the write mode is part of the context"
+    );
+    assert!(
+        privacy.top() >= scope.bottom() && privacy.top() >= context.bottom(),
+        "the privacy note sits under the line"
+    );
+    assert!(
+        privacy.bottom() <= rendered(cx, "assistant-body").top(),
+        "the results start below the context"
+    );
+}
+
 /// Opens Settings at its Assistant section.
 fn open_assistant_settings(cx: &mut VisualTestContext, view: &View) {
     view.update(cx, |root, cx| {

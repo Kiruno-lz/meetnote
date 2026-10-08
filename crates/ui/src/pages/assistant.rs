@@ -8,7 +8,7 @@ use crate::{
     i18n::{text as tr, Locale},
     theme::{self, BlurLevel, Tokens},
 };
-use contracts::{AgentScene, DocumentProjection};
+use contracts::AgentScene;
 use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Pixels, SharedString};
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
@@ -18,39 +18,15 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .selected_project
         .as_ref()
         .and_then(|id| root.projects.iter().find(|project| project.id() == id));
-    let document_summary = match root.assistant.scope_mode {
-        AssistantScopeMode::CurrentDocument => selected
-            .map(|document| {
-                format!(
-                    "{} · {} · r{}",
-                    document.title(),
-                    document.id().as_str(),
-                    document.revision()
-                )
-            })
-            .unwrap_or_else(|| tr(root.ui.locale, "assistant_no_document").into()),
-        AssistantScopeMode::AllVisibleDocuments => format!(
-            "{} · {}",
-            tr(root.ui.locale, "assistant_all_visible_documents"),
-            root.projects.len()
-        ),
-    };
-    let connection_summary = root
-        .saved_assistant()
-        .active_connection()
-        .map(|profile| {
-            format!(
-                "{} · {} · {}",
-                profile.name,
-                profile.model,
-                if profile.is_local() {
-                    tr(root.ui.locale, "assistant_local_connection")
-                } else {
-                    tr(root.ui.locale, "assistant_remote_connection")
-                }
-            )
-        })
-        .unwrap_or_else(|| tr(root.ui.locale, "assistant_connection_required").into());
+    let context = context_parts(
+        root.ui.locale,
+        root.assistant.scope_mode,
+        selected.map(|document| document.title()),
+        root.projects.len(),
+        root.saved_assistant()
+            .active_connection()
+            .map(|profile| (profile.name.as_str(), profile.is_local())),
+    );
     let write_mode = root.saved_assistant().write_mode;
     let task = task_label(root.ui.locale, &root.assistant.task);
     let task_selector = task_selector(&root.assistant.task);
@@ -207,81 +183,53 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         )
         .child(
             div()
-                .rounded(tokens.radius.md)
-                .border_1()
-                .border_color(tokens.border)
-                .bg(tokens.surface)
-                .p_4()
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap(tokens.spacing.xs)
                 .child(
-                    RadioGroup::new("assistant-scope", tr(root.ui.locale, "assistant_scope"))
-                        .debug_selector(|| "assistant-scope-group".into())
+                    div()
                         .flex()
-                        .gap_2()
-                        .options(
-                            [
-                                AssistantScopeMode::CurrentDocument,
-                                AssistantScopeMode::AllVisibleDocuments,
-                            ]
-                            .map(|scope| {
-                                (
-                                    scope == root.assistant.scope_mode,
-                                    scope_button(scope, root.ui.locale, cx),
-                                )
-                            }),
-                        ),
-                )
-                .child(info_line(
-                    tr(root.ui.locale, "assistant_authorized_document"),
-                    document_summary,
-                    &tokens,
-                ))
-                .child(info_line(
-                    tr(root.ui.locale, "assistant_projection"),
-                    tr(root.ui.locale, projection_key(root.assistant.projection)).into(),
-                    &tokens,
-                ))
-                .child(info_line(
-                    tr(root.ui.locale, "assistant_connection"),
-                    connection_summary,
-                    &tokens,
-                ))
-                .child(
-                    info_line(
-                        tr(root.ui.locale, "assistant_write_mode"),
-                        tr(
-                            root.ui.locale,
-                            match write_mode {
-                                contracts::AgentWriteMode::Automatic => "assistant_automatic",
-                                contracts::AgentWriteMode::ConfirmEach => "assistant_confirm_each",
-                            },
+                        .items_center()
+                        .gap(tokens.spacing.md)
+                        .child(
+                            RadioGroup::new(
+                                "assistant-scope",
+                                tr(root.ui.locale, "assistant_scope"),
+                            )
+                            .debug_selector(|| "assistant-scope-group".into())
+                            .flex_shrink_0()
+                            .flex()
+                            .gap_1()
+                            .options(
+                                [
+                                    AssistantScopeMode::CurrentDocument,
+                                    AssistantScopeMode::AllVisibleDocuments,
+                                ]
+                                .map(|scope| {
+                                    (
+                                        scope == root.assistant.scope_mode,
+                                        scope_button(scope, root.ui.locale, cx),
+                                    )
+                                }),
+                            ),
                         )
-                        .into(),
-                        &tokens,
-                    )
-                    .debug_selector(move || {
-                        match write_mode {
-                            contracts::AgentWriteMode::Automatic => {
-                                "assistant-write-mode-automatic"
-                            }
-                            contracts::AgentWriteMode::ConfirmEach => {
-                                "assistant-write-mode-confirm-each"
-                            }
-                        }
-                        .into()
-                    }),
+                        .child(context_line(context, write_mode, root.ui.locale, &tokens)),
                 )
-                .child(div().text_xs().text_color(tokens.text_muted).child(tr(
-                    root.ui.locale,
-                    match root.assistant.scope_mode {
-                        AssistantScopeMode::CurrentDocument => "assistant_scope_notice",
-                        AssistantScopeMode::AllVisibleDocuments => {
-                            "assistant_all_visible_scope_notice"
-                        }
-                    },
-                ))),
+                .child(
+                    div()
+                        .debug_selector(|| "assistant-privacy".into())
+                        .text_xs()
+                        .text_color(tokens.text_subtle)
+                        .child(tr(
+                            root.ui.locale,
+                            match root.assistant.scope_mode {
+                                AssistantScopeMode::CurrentDocument => "assistant_scope_notice",
+                                AssistantScopeMode::AllVisibleDocuments => {
+                                    "assistant_all_visible_scope_notice"
+                                }
+                            },
+                        )),
+                ),
         )
         .child(
             div()
@@ -359,14 +307,98 @@ fn scene_key(scene: AgentScene) -> &'static str {
     }
 }
 
-fn projection_key(projection: DocumentProjection) -> &'static str {
-    match projection {
-        DocumentProjection::Metadata => "projection_metadata",
-        DocumentProjection::Markdown => "projection_markdown",
-        DocumentProjection::Transcript => "projection_transcript",
-        DocumentProjection::SpeakerSegments => "projection_speaker_segments",
-        DocumentProjection::Complete => "projection_complete",
+/// What a run would read and where it would send it: the documents in
+/// scope, the connection and whether it stays on this machine. Ids and
+/// revisions stay out of it.
+fn context_parts(
+    locale: Locale,
+    scope: AssistantScopeMode,
+    selected_title: Option<&str>,
+    visible_documents: usize,
+    connection: Option<(&str, bool)>,
+) -> Vec<String> {
+    let documents = match scope {
+        AssistantScopeMode::CurrentDocument => selected_title
+            .map(str::to_owned)
+            .unwrap_or_else(|| tr(locale, "assistant_no_document").into()),
+        AssistantScopeMode::AllVisibleDocuments => crate::i18n::message(
+            locale,
+            "assistant_document_count",
+            &visible_documents.to_string(),
+        ),
+    };
+    let mut parts = vec![documents];
+    match connection {
+        Some((name, local)) => parts.extend([
+            name.to_owned(),
+            tr(
+                locale,
+                if local {
+                    "assistant_local_connection"
+                } else {
+                    "assistant_remote_connection"
+                },
+            )
+            .to_owned(),
+        ]),
+        None => parts.push(tr(locale, "assistant_no_connection").into()),
     }
+    parts
+}
+
+/// The context beside the scope: its parts and the write mode in muted
+/// text, separated by dots. The first part, a document title, fades out
+/// when it is too long.
+fn context_line(
+    parts: Vec<String>,
+    write_mode: contracts::AgentWriteMode,
+    locale: Locale,
+    tokens: &Tokens,
+) -> gpui::Div {
+    let (mode_key, mode_selector) = match write_mode {
+        contracts::AgentWriteMode::Automatic => {
+            ("assistant_automatic", "assistant-write-mode-automatic")
+        }
+        contracts::AgentWriteMode::ConfirmEach => (
+            "assistant_confirm_each",
+            "assistant-write-mode-confirm-each",
+        ),
+    };
+    let separator = || {
+        div()
+            .flex_shrink_0()
+            .text_color(tokens.text_subtle)
+            .child("·")
+    };
+    let mut parts = parts.into_iter();
+    let mut line = div()
+        .debug_selector(|| "assistant-context".into())
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .items_center()
+        .gap(tokens.spacing.xs)
+        .text_sm()
+        .text_color(tokens.text_muted)
+        .whitespace_nowrap();
+    if let Some(first) = parts.next() {
+        line = line.child(div().min_w_0().child(theme::tail_faded_label(
+            "assistant-context-documents",
+            first,
+            tokens.content,
+        )));
+    }
+    for part in parts {
+        line = line
+            .child(separator())
+            .child(div().flex_shrink_0().child(part));
+    }
+    line.child(separator()).child(
+        div()
+            .debug_selector(move || mode_selector.into())
+            .flex_shrink_0()
+            .child(tr(locale, mode_key)),
+    )
 }
 
 /// A revision for display: `r3`, or a dash when there is none.
@@ -1008,6 +1040,39 @@ mod tests {
                 .map(|mutation| mutation.mutation_id)
                 .collect::<Vec<_>>(),
             ["first", "second", "primary-mutation"]
+        );
+    }
+
+    #[test]
+    fn the_context_names_the_documents_and_connection_without_ids() {
+        use AssistantScopeMode::{AllVisibleDocuments, CurrentDocument};
+        assert_eq!(
+            context_parts(
+                Locale::ZhCn,
+                CurrentDocument,
+                Some("产品周会"),
+                3,
+                Some(("Local LiteLLM", true))
+            ),
+            ["产品周会", "Local LiteLLM", "本机连接"]
+        );
+        assert_eq!(
+            context_parts(
+                Locale::EnUs,
+                AllVisibleDocuments,
+                Some("Weekly sync"),
+                3,
+                Some(("Cloud", false))
+            ),
+            ["3 documents", "Cloud", "Remote connection"]
+        );
+        assert_eq!(
+            context_parts(Locale::EnUs, AllVisibleDocuments, None, 1, None),
+            ["1 document", "No connection"]
+        );
+        assert_eq!(
+            context_parts(Locale::ZhCn, CurrentDocument, None, 3, None),
+            ["未选择文档", "未配置连接"]
         );
     }
 
