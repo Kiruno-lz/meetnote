@@ -427,6 +427,50 @@ fn reviews_over_the_queue_limit_are_noticed_on_the_page(cx: &mut TestAppContext)
     assert!(shown(cx, "assistant-pending-position-1-of-8".into()));
 }
 
+/// Scrolls the results to their end and draws the page.
+fn scroll_results_to_end(cx: &mut VisualTestContext, view: &View) {
+    let scroll = view.read_with(cx, |root, _| root.scroll.assistant_results.clone());
+    assert!(
+        scroll.max_offset().y > gpui::px(0.),
+        "the results overflow the page"
+    );
+    scroll.scroll_to_bottom();
+    cx.update(|window, cx| window.draw(cx).clear());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        answer: Some("done".into()),
+        mutations: (0..12)
+            .map(|index| write(&format!("write-{index}")))
+            .collect(),
+        pending_reviews: (0..10)
+            .map(|index| pending_review(&format!("review-{index}"), u64::MAX))
+            .collect(),
+        ..empty_result()
+    });
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    scroll_results_to_end(cx, &view);
+
+    let bar = rendered(cx, "assistant-input-bar");
+    let results = rendered(cx, "assistant-results");
+    let last = rendered(cx, "assistant-pending-overflow");
+    assert!(
+        last.bottom() <= bar.top(),
+        "the last card ends above the bar: {last:?} and {bar:?}"
+    );
+    assert!(
+        results.top() < bar.top() && results.bottom() <= bar.bottom(),
+        "the results run under the bar but end with it: {results:?} and {bar:?}"
+    );
+}
+
 /// Opens Settings at its Assistant section.
 fn open_assistant_settings(cx: &mut VisualTestContext, view: &View) {
     view.update(cx, |root, cx| {

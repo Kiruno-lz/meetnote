@@ -74,14 +74,15 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
     let review_focus = root.review_focus.clone();
     let scroll = root.scroll.assistant_results.clone();
     // Results, diffs and pending cards stay on the opaque plane and scroll
-    // under the frosted input bar; the padding lets the last card clear it.
+    // under the frosted input bar, ending with it; the padding lets the
+    // last card clear it.
     let results = div()
         .id("assistant-results")
         .debug_selector(|| "assistant-results".into())
         .size_full()
         .overflow_y_scroll()
         .track_scroll(&scroll)
-        .pb(input_bar_height(&tokens) + tokens.spacing.xl + tokens.spacing.md)
+        .pb(input_bar_height(&tokens) + tokens.spacing.md)
         .flex()
         .flex_col()
         .gap_3()
@@ -288,9 +289,17 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .relative()
                 .flex_1()
                 .min_h_0()
-                // The scrollbar stays outside the fade.
-                .child(theme::scroll_faded(&scroll, tokens.content, results))
-                .child(Scrollbar::vertical("assistant-results-scrollbar", &scroll))
+                // The results end at the bar's bottom edge, so nothing
+                // scrolls into view below the bar.
+                .pb(tokens.spacing.xl)
+                .child(
+                    div()
+                        .relative()
+                        .size_full()
+                        // The scrollbar stays outside the fade.
+                        .child(theme::scroll_faded(&scroll, tokens.content, results))
+                        .child(Scrollbar::vertical("assistant-results-scrollbar", &scroll)),
+                )
                 .child(
                     div()
                         .debug_selector(|| "assistant-input-bar".into())
