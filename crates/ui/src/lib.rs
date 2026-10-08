@@ -2080,11 +2080,16 @@ mod tests {
     }
 
     /// The colors every control and page paints, except the window fill.
-    fn painted_colors_without_the_window_fill(cx: &mut gpui::VisualTestContext) -> String {
+    fn palette_without_material_alphas(cx: &mut gpui::VisualTestContext) -> String {
         cx.update(|_, cx| {
             let tokens = theme::Tokens {
                 material: theme::Material::Opaque,
                 window: gpui::Hsla::default(),
+                sidebar: theme::tokens(cx).sidebar.alpha(1.),
+                content: theme::tokens(cx).content.alpha(1.),
+                surface: theme::tokens(cx).surface.alpha(1.),
+                raised: theme::tokens(cx).raised.alpha(1.),
+                hairline: theme::tokens(cx).hairline.alpha(1.),
                 ..*theme::tokens(cx)
             };
             format!("{tokens:?}")
@@ -2138,11 +2143,11 @@ mod tests {
                         settings::MaterialPreference::Opaque => theme::Material::Opaque,
                     },
                 );
-                colors.push(painted_colors_without_the_window_fill(cx));
+                colors.push(palette_without_material_alphas(cx));
             }
             assert_eq!(
                 colors[0], colors[1],
-                "{theme:?}: the material may change only the window fill"
+                "{theme:?}: the material preserves palette colors while changing surface alpha"
             );
         }
     }

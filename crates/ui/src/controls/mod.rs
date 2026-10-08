@@ -40,6 +40,7 @@ mod region;
 mod scrollbar;
 mod select;
 mod separator;
+pub(crate) mod sidebar;
 mod text_area;
 mod text_field;
 pub(crate) mod tree;
@@ -328,11 +329,12 @@ mod tests {
     ];
 
     /// The constructors a chain may start from to call `INTERACTIVE`.
-    const WRAPPER_ROOTS: [&str; 9] = [
+    const WRAPPER_ROOTS: [&str; 10] = [
         "Button::new(",
         "Collapsible::new(",
         "NavEntry::new(",
         "NavList::new(",
+        "SidebarPanel::new(",
         "Tree::new(",
         "TreeItem::new(",
         "Region::new(",
@@ -590,7 +592,7 @@ mod tests {
         // Button, Collapsible, ConfirmDialog, Dropdown, NavEntry, NavList,
         // ProgressBar, Region, TextArea, TextField's plain and secret
         // constructors, Tree and TreeItem.
-        assert_eq!(constructors, 14, "a wrapper constructor was added or lost");
+        assert_eq!(constructors, 15, "a wrapper constructor was added or lost");
         assert!(
             unnamed.is_empty(),
             "constructors without a name: {unnamed:#?}"

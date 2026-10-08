@@ -4,10 +4,9 @@
 //! palette, plus the layout and motion scales. Pages read them through
 //! `theme::tokens(cx)` and never write color literals.
 //!
-//! The material changes only the window/chrome fill (`window`). Under glass
-//! it is the palette's window color at the least alpha that keeps chrome text
-//! legible over any desktop (`contrast::min_glass_alpha`); the content plane
-//! and everything painted on it stay opaque.
+//! Window, secondary sidebar and content have separate translucent tints.
+//! The native window supplies desktop blur; inner tints preserve it instead
+//! of covering it with an opaque reading plane.
 
 use super::contrast;
 use super::material::{Material, Mode};
@@ -111,7 +110,7 @@ impl Motion {
             hover: duration(150),
             menu: duration(140),
             dialog: duration(180),
-            layout: duration(200),
+            layout: duration(280),
         }
     }
 }
@@ -123,7 +122,9 @@ pub(crate) struct Tokens {
     /// Window glass tint behind the title bar and sidebar chrome; opaque
     /// under the opaque material.
     pub(crate) window: Hsla,
-    /// The content plane: reading, transcripts, Detail, forms. Always opaque.
+    /// The secondary sidebar inside the rounded frame.
+    pub(crate) sidebar: Hsla,
+    /// The deepest content tint; translucent under glass.
     pub(crate) content: Hsla,
     /// Cards and fields on the content plane.
     pub(crate) surface: Hsla,
@@ -238,6 +239,10 @@ impl Tokens {
         if material == Material::Glass {
             tokens.material = Material::Glass;
             tokens.window = tokens.window.alpha(glass_alpha(&tokens));
+            tokens.sidebar = tokens.sidebar.alpha(0.30);
+            tokens.content = tokens.content.alpha(0.52);
+            tokens.surface = tokens.surface.alpha(0.35);
+            tokens.raised = tokens.raised.alpha(0.60);
         }
         tokens
     }
@@ -329,21 +334,22 @@ fn dark() -> Tokens {
     Tokens {
         mode: Mode::Dark,
         material: Material::Opaque,
-        window: hex(0x111318),
-        content: hex(0x111318),
-        surface: hex(0x171b22),
-        raised: hex(0x202733),
-        float: hex(0x1c222c),
-        frost: hex(0x1c222c),
-        sheet_frost: hex(0x1c222c),
+        window: hex(0x292d30),
+        sidebar: hex(0x1e2225),
+        content: hex(0x101416),
+        surface: hex(0x202528),
+        raised: hex(0x252a2e),
+        float: hex(0x1b2023),
+        frost: hex(0x1b2023),
+        sheet_frost: hex(0x1b2023),
         shadow: hsla(0., 0., 0., 0.5),
-        hairline: hex(0x2b303b),
+        hairline: hsla(0., 0., 1., 0.10),
         border: hex(0x303744),
         wash: hsla(0., 0., 1., 0.06),
         selection: hex(0x27344a),
         scrim: hsla(0., 0., 0., 0.6),
         text: hex(0xe9edf5),
-        text_muted: hex(0x8992a3),
+        text_muted: hex(0xa5adb7),
         text_subtle: hex(0x667085),
         accent: hex(0x3b82f6),
         accent_text: hex(0x60a5fa),
@@ -367,8 +373,8 @@ fn dark() -> Tokens {
             secondary_text: hex(0xf9f9f9),
             ghost: [hsla(0., 0., 0.164, 0.8), hsla(0., 0., 0.179, 0.8)],
             danger: hex(0xf87171),
-            danger_text: hex(0xf87171),
-            text_muted: hex(0x8992a3),
+            danger_text: hex(0xffa0a0),
+            text_muted: hex(0xa5adb7),
         }),
         focus_ring: hex(0x3b82f6),
         scrollbar_thumb: hsla(0., 0., 0.32, 0.9),
@@ -389,15 +395,16 @@ fn light() -> Tokens {
     Tokens {
         mode: Mode::Light,
         material: Material::Opaque,
-        window: hex(0xe8ebf0),
-        content: hex(0xffffff),
+        window: hex(0xf5f6f8),
+        sidebar: hex(0xe7eaee),
+        content: hex(0xdce1e8),
         surface: hex(0xf4f6f9),
         raised: hex(0xffffff),
         float: hex(0xffffff),
         frost: hex(0xffffff),
         sheet_frost: hex(0xffffff),
         shadow: hsla(0., 0., 0., 0.18),
-        hairline: hex(0xdde1e8),
+        hairline: hsla(0., 0., 0., 0.12),
         border: hex(0xc9d0db),
         wash: hsla(0., 0., 0., 0.05),
         selection: hex(0xdbe7fd),
@@ -428,7 +435,7 @@ fn light() -> Tokens {
             ghost: [hsla(0., 0., 0.808, 0.8), hsla(0., 0., 0.718, 0.8)],
             danger: hex(0xdc2626),
             // Darker than `danger`: legible on its own wash.
-            danger_text: hex(0xa51d1d),
+            danger_text: hex(0x8a1818),
             text_muted: hex(0x566072),
         }),
         focus_ring: hex(0x2563eb),
@@ -519,24 +526,43 @@ mod tests {
     }
 
     #[test]
-    fn the_material_changes_only_the_window_fill() {
+    fn glass_content_remains_translucent() {
         for mode in MODES {
             let opaque = Tokens::new(mode, Material::Opaque, false);
             let glass = Tokens::new(mode, Material::Glass, false);
 
             assert_eq!(opaque.window.a, 1.);
-            assert_eq!(glass.content.a, 1., "the glass content plane is opaque");
+            assert_eq!(opaque.sidebar.a, 1.);
+            assert_eq!(opaque.content.a, 1.);
+            assert!(
+                glass.sidebar.a < 1.,
+                "the inner sidebar must preserve desktop glass"
+            );
+            assert!(
+                glass.content.a < 1.,
+                "the content must transmit the desktop glass"
+            );
             assert_eq!(opaque.root_background(), opaque.window);
             assert_eq!(glass.root_background().a, 0.);
-            assert_eq!(
-                Tokens {
-                    material: Material::Opaque,
-                    window: opaque.window,
-                    ..glass
-                },
-                opaque,
-                "{mode:?}: glass may differ from opaque only in the window fill"
-            );
+            for backdrop in WORST_CASE_BACKDROPS {
+                let chrome = contrast::composite(glass.window.into(), backdrop);
+                let sidebar = contrast::composite(glass.sidebar.into(), chrome);
+                let content = contrast::composite(glass.content.into(), chrome);
+                for plane in [sidebar, content] {
+                    assert!(contrast_ratio(glass.text.into(), plane) >= BODY_TEXT_CONTRAST);
+                    assert!(contrast_ratio(glass.text_muted.into(), plane) >= MUTED_TEXT_CONTRAST);
+                }
+                if mode == Mode::Dark {
+                    assert!(
+                        contrast::relative_luminance(chrome)
+                            > contrast::relative_luminance(sidebar)
+                    );
+                    assert!(
+                        contrast::relative_luminance(sidebar)
+                            > contrast::relative_luminance(content)
+                    );
+                }
+            }
         }
     }
 

@@ -48,13 +48,45 @@ pub(crate) fn empty_card(message: impl Into<SharedString>, tokens: &Tokens) -> i
 pub(crate) fn settings_section(
     title: impl Into<SharedString>,
     rows: Vec<gpui::AnyElement>,
-) -> impl IntoElement {
-    div()
-        .pb_4()
-        .flex_shrink_0()
-        .child(div().mb_1().text_lg().child(title.into()))
-        .children(rows)
-        .child(div().mt_4().child(Separator::horizontal()))
+) -> SettingsSection {
+    SettingsSection {
+        title: title.into(),
+        rows,
+    }
+}
+
+#[derive(gpui::IntoElement)]
+pub(crate) struct SettingsSection {
+    title: SharedString,
+    rows: Vec<gpui::AnyElement>,
+}
+
+impl gpui::RenderOnce for SettingsSection {
+    fn render(self, _: &mut Window, cx: &mut gpui::App) -> impl gpui::IntoElement {
+        let tokens = *theme::tokens(cx);
+        div()
+            .flex_shrink_0()
+            .pb(tokens.spacing.lg)
+            .child(
+                div()
+                    .mb(tokens.spacing.md)
+                    .text_lg()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(self.title),
+            )
+            .child(
+                div()
+                    .border_1()
+                    .border_color(tokens.hairline)
+                    .rounded(tokens.radius.xl)
+                    .overflow_hidden()
+                    .children(self.rows.into_iter().enumerate().map(|(index, row)| {
+                        div()
+                            .when(index > 0, |row| row.child(Separator::horizontal()))
+                            .child(div().px(tokens.spacing.lg).py(tokens.spacing.sm).child(row))
+                    })),
+            )
+    }
 }
 
 /// The settings label column; wide enough for the longest label in either
@@ -72,8 +104,7 @@ pub(crate) fn setting_control_row(
     tokens: &Tokens,
 ) -> impl IntoElement {
     div()
-        .mt(tokens.spacing.sm)
-        .min_h(tokens.control_height.lg)
+        .min_h(px(52.))
         .flex()
         .items_center()
         .gap(tokens.spacing.lg)
@@ -81,8 +112,9 @@ pub(crate) fn setting_control_row(
         .child(
             div()
                 .w(SETTING_LABEL_WIDTH)
-                .flex_shrink_0()
-                .text_color(tokens.text_muted)
+                .min_w(px(110.))
+                .flex_shrink(1.)
+                .text_color(tokens.text)
                 .child(label.into()),
         )
         .child(
@@ -91,6 +123,7 @@ pub(crate) fn setting_control_row(
                 .min_w_0()
                 .flex()
                 .items_center()
+                .justify_end()
                 .child(control),
         )
 }

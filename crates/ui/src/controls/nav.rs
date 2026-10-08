@@ -63,6 +63,7 @@ pub(crate) struct NavEntry {
     label: SharedString,
     focus: FocusHandle,
     selected: bool,
+    icon_only: bool,
     previous: Option<FocusHandle>,
     next: Option<FocusHandle>,
 }
@@ -80,9 +81,15 @@ impl NavEntry {
             label: label.into(),
             focus: focus.clone(),
             selected: false,
+            icon_only: false,
             previous: None,
             next: None,
         }
+    }
+
+    pub(crate) fn icon_only(mut self) -> Self {
+        self.icon_only = true;
+        self
     }
 
     /// Whether the entry's route is the current one: filled with the
@@ -143,8 +150,19 @@ impl RenderOnce for NavEntry {
             .accessibility_label(self.label)
             .aria_selected(self.selected)
             .relative()
-            .h(tokens.control_height.md)
-            .px(tokens.spacing.md)
+            .h(if self.icon_only {
+                gpui::px(44.)
+            } else {
+                tokens.control_height.md
+            })
+            .px(if self.icon_only {
+                gpui::px(0.)
+            } else {
+                tokens.spacing.md
+            })
+            .when(self.icon_only, |entry| {
+                entry.w(gpui::px(44.)).justify_center()
+            })
             .flex()
             .items_center()
             .rounded(tokens.radius.sm)

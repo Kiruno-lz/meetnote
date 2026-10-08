@@ -4,7 +4,7 @@ use crate::{
         setting_control_row, settings_section, SETTING_CONTROL_WIDTH, SETTING_LABEL_WIDTH,
     },
     controller::{settings_error_text, RootView},
-    controls::{Button, Dropdown, RadioGroup, Region, Scrollbar, Separator, TextField},
+    controls::{Button, Dropdown, RadioGroup, Region, Scrollbar, TextField},
     i18n::text as tr,
     pages::meetings::marked_control,
     speakers::profile_summary,
@@ -13,6 +13,28 @@ use crate::{
 use contracts::AgentWriteMode;
 use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
 use settings::{AssistantAuthMode, LlmProtocol};
+
+pub(crate) const SECTIONS: [&str; 8] = [
+    "appearance",
+    "workspace",
+    "interface",
+    "transcription",
+    "speaker_separation",
+    "speaker_library",
+    "runtime",
+    "assistant_settings",
+];
+
+pub(crate) const SECTION_ICONS: [&str; 8] = [
+    "icons/palette.svg",
+    "icons/folder.svg",
+    "icons/globe.svg",
+    "icons/file.svg",
+    "icons/user.svg",
+    "icons/book-open.svg",
+    "icons/cpu.svg",
+    "icons/bot.svg",
+];
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
@@ -31,7 +53,9 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .track_scroll(&scroll)
         .flex()
         .flex_col()
-        .gap_5()
+        .gap(tokens.spacing.xl)
+        .max_w(px(960.))
+        .mx_auto()
         .child(settings_section(
             tr(root.ui.locale, "appearance"),
             vec![
@@ -219,6 +243,8 @@ fn workspace_section(
                 div()
                     .debug_selector(|| "documents-root-path".into())
                     .w(PATH_WIDTH)
+                    .min_w_0()
+                    .flex_shrink(1.)
                     .text_xs()
                     .text_color(tokens.text_muted)
                     .child(root.settings_draft.documents_root.clone()),
@@ -286,6 +312,8 @@ fn speaker_library_section(
             .child(
                 div()
                     .w(PATH_WIDTH)
+                    .min_w_0()
+                    .flex_shrink(1.)
                     .text_xs()
                     .text_color(tokens.text_muted)
                     .child(root.settings_draft.speaker_library_path.clone()),
@@ -449,8 +477,15 @@ fn speaker_library_section(
                     .text_lg()
                     .child(tr(locale, "speaker_library")),
                 )
-                .children(rows)
-                .child(div().mt_4().child(Separator::horizontal())),
+                .child(
+                    div()
+                        .border_1()
+                        .border_color(tokens.hairline)
+                        .rounded(tokens.radius.xl)
+                        .px(tokens.spacing.lg)
+                        .py(tokens.spacing.sm)
+                        .children(rows),
+                ),
         )
         .into_any_element()
 }
@@ -601,6 +636,7 @@ fn assistant_settings_section(
                 tr(locale, "assistant_connection_test"),
                 div()
                     .flex()
+                    .flex_wrap()
                     .gap_2()
                     .child(
                         Button::new("assistant-save-settings", tr(locale, "save"))
@@ -656,7 +692,8 @@ fn assistant_text_row(
     setting_control_row(
         label,
         div()
-            .w(SETTING_CONTROL_WIDTH)
+            .w_full()
+            .max_w(SETTING_CONTROL_WIDTH)
             .child(field.clone())
             .into_any_element(),
         tokens,
@@ -675,7 +712,8 @@ fn marked_text_row(
         label,
         div()
             .debug_selector(move || selector.into())
-            .w(SETTING_CONTROL_WIDTH)
+            .w_full()
+            .max_w(SETTING_CONTROL_WIDTH)
             .child(field.clone())
             .into_any_element(),
         tokens,
@@ -998,7 +1036,8 @@ fn capability_key(value: Option<bool>) -> &'static str {
 /// The select column of a settings row: `select-<id>` marks it for tests.
 fn select_control(dropdown: &gpui::Entity<Dropdown>, id: &'static str) -> gpui::AnyElement {
     div()
-        .w(SETTING_CONTROL_WIDTH)
+        .w_full()
+        .max_w(SETTING_CONTROL_WIDTH)
         .debug_selector(move || format!("select-{id}"))
         .child(dropdown.clone())
         .into_any_element()

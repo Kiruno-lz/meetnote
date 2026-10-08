@@ -170,7 +170,7 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                                 if selected {
                                     tokens.selection
                                 } else {
-                                    tokens.window
+                                    tokens.sidebar
                                 },
                             )),
                     ),
@@ -220,7 +220,7 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .relative()
                 .flex_1()
                 .min_h_0()
-                .child(theme::scroll_faded(&scroll, tokens.window, tree))
+                .child(theme::scroll_faded(&scroll, tokens.sidebar, tree))
                 .child(Scrollbar::vertical("project-tree-scrollbar", &scroll)),
         )
 }

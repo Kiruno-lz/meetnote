@@ -233,7 +233,11 @@ impl MainWindow {
                     .iter()
                     .position(|(route, _)| *route == Route::Settings)
                     .expect("Settings has an entry");
-                Some((self.view.read(cx).nav_focus[settings].clone(), 2))
+                // Import, the section navigation, then the theme select.
+                Some((
+                    self.view.read(cx).nav_focus[settings].clone(),
+                    2 + crate::pages::settings::SECTIONS.len(),
+                ))
             }
             _ => None,
         };

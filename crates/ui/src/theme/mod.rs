@@ -40,7 +40,7 @@ impl BlurLevel {
     /// Blur radius in pixels.
     pub(crate) const fn radius(self) -> f32 {
         match self {
-            Self::Menu => 16.,
+            Self::Menu => 10.,
             Self::Sheet => 32.,
         }
     }
@@ -165,7 +165,7 @@ mod tests {
     fn blur_levels_are_the_menu_level_and_a_larger_sheet_level() {
         // `BlurLevel::radius` matches exhaustively, so a third level cannot
         // be added without a radius of its own.
-        assert_eq!(BlurLevel::Menu.radius(), 16.);
+        assert_eq!(BlurLevel::Menu.radius(), 10.);
         assert_eq!(BlurLevel::Sheet.radius(), 32.);
     }
 
@@ -192,4 +192,41 @@ mod tests {
             found.len()
         );
     }
+}
+
+/// A quiet neutral divider cue: transparent at both ends, strongest in the
+/// middle. The narrow core and faint halo share the same vertical gradient.
+pub(crate) fn sidebar_glow() -> impl gpui::IntoElement {
+    use gpui::{
+        canvas, fill, linear_color_stop, linear_gradient, point, prelude::*, px, size, Bounds,
+    };
+    canvas(
+        |_, _, _| (),
+        |bounds, _, window, cx| {
+            let color = match tokens(cx).mode {
+                Mode::Dark => gpui::hsla(0., 0., 0.90, 0.30),
+                Mode::Light => gpui::hsla(0., 0., 0.35, 0.25),
+            };
+            for (inset, opacity) in [(px(0.), 0.18), (px(1.), 1.)] {
+                let half = bounds.size.height / 2.;
+                let top = Bounds::new(
+                    point(bounds.left() + inset, bounds.top()),
+                    size(bounds.size.width - inset * 2., half),
+                );
+                let bottom = Bounds::new(point(top.left(), top.bottom()), top.size);
+                let clear = linear_color_stop(color.alpha(0.), 0.);
+                let bright = linear_color_stop(color.opacity(opacity), 1.);
+                window.paint_quad(fill(top, linear_gradient(180., clear, bright)));
+                window.paint_quad(fill(
+                    bottom,
+                    linear_gradient(
+                        180.,
+                        linear_color_stop(color.opacity(opacity), 0.),
+                        linear_color_stop(color.alpha(0.), 1.),
+                    ),
+                ));
+            }
+        },
+    )
+    .size_full()
 }

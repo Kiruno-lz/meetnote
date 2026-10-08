@@ -169,7 +169,7 @@ fn leak(selector: String) -> &'static str {
 /// right, and `route`'s page, the only page rendered, lies in the plane.
 #[track_caller]
 fn page_in_content_plane(cx: &mut VisualTestContext, route: Route) -> Bounds<Pixels> {
-    let sidebar = visible(cx, "sidebar");
+    let sidebar = visible(cx, "navigation-rail");
     let navigation = visible(cx, "nav");
     assert!(
         within(navigation, sidebar),
@@ -244,7 +244,7 @@ fn the_assistant_route_floats_the_input_bar_over_the_results(cx: &mut TestAppCon
 #[gpui::test]
 fn the_meetings_route_shows_the_tree_content_and_process_button(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Meetings);
-    let sidebar = visible(cx, "sidebar");
+    let sidebar = visible(cx, "project-sidebar");
     let tree = scroll_content(cx, "project-tree", sidebar);
     let content = scroll_content(cx, "meeting-content", page);
     let process = visible(cx, "process-project");
@@ -407,11 +407,11 @@ fn the_project_tree_is_in_the_sidebar_on_meetings_only(cx: &mut TestAppContext) 
         click_entry(cx, &window, route);
         let tree = cx.debug_bounds("project-tree");
         if route == Route::Meetings {
-            let sidebar = visible(cx, "sidebar");
+            let sidebar = visible(cx, "project-sidebar");
             let tree = scroll_content(cx, "project-tree", sidebar);
             assert!(
-                visible(cx, "import-audio").bottom() <= tree.top(),
-                "the tree sits below the entries and import button"
+                tree.top() >= sidebar.top(),
+                "the tree starts inside the project sidebar"
             );
             for id in DOCUMENT_IDS {
                 let row = visible(cx, leak(format!("project-row-{id}")));
@@ -424,30 +424,23 @@ fn the_project_tree_is_in_the_sidebar_on_meetings_only(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
-fn the_window_is_titled_and_both_columns_start_with_a_drag_strip(cx: &mut TestAppContext) {
+fn the_toolbar_sits_above_the_fixed_rail_and_rounded_frame(cx: &mut TestAppContext) {
     let (_window, cx) = open_window(cx);
     assert_eq!(cx.window_title().as_deref(), Some("MeetNote"));
-
-    let sidebar = visible(cx, "sidebar");
-    let plane = visible(cx, "content-plane");
-    let sidebar_strip = visible(cx, "titlebar-drag-sidebar");
-    let content_strip = visible(cx, "titlebar-drag-content");
-    for strip in [sidebar_strip, content_strip] {
-        assert_eq!(strip.top(), gpui::px(0.), "the strip starts at the top");
-        assert_eq!(strip.size.height, sidebar_strip.size.height);
+    let toolbar = visible(cx, "window-toolbar");
+    let rail = visible(cx, "navigation-rail");
+    let frame = visible(cx, "inner-frame");
+    assert_eq!(toolbar.top(), gpui::px(0.));
+    assert!(toolbar.bottom() <= frame.top() && toolbar.bottom() <= rail.top());
+    for id in [
+        "navigate-back",
+        "navigate-forward",
+        "toggle-sidebar",
+        "titlebar-drag-content",
+        "titlebar-drag-sidebar",
+    ] {
+        assert!(within(visible(cx, id), toolbar));
     }
-    assert!(
-        within(sidebar_strip, sidebar) && sidebar_strip.size.width == sidebar.size.width,
-        "the sidebar strip spans the sidebar"
-    );
-    assert!(
-        content_strip.left() >= sidebar.right() && content_strip.bottom() <= plane.top(),
-        "the content strip lies above the content plane"
-    );
-    assert!(
-        sidebar_strip.bottom() <= visible(cx, "nav").top(),
-        "the entries start below the strip and the traffic lights"
-    );
 }
 
 #[gpui::test]
@@ -568,6 +561,19 @@ fn from_the_first_entry(mut stops: Vec<Option<&'static str>>) -> Vec<Option<&'st
 /// in reverse.
 #[track_caller]
 fn assert_tab_order(cx: &mut VisualTestContext, expected: &[&'static str]) {
+    let mut expected = expected.to_vec();
+    for id in ["navigate-back", "navigate-forward", "toggle-sidebar"] {
+        // All open_route fixtures have backward history and no forward history.
+        if id == "navigate-forward" {
+            continue;
+        }
+        let sidebar = cx.debug_bounds("project-sidebar").is_some()
+            || cx.debug_bounds("settings-sidebar").is_some();
+        if id != "toggle-sidebar" || sidebar {
+            expected.push(id);
+        }
+    }
+    let expected = expected.as_slice();
     let forward = from_the_first_entry(cycle(cx, "tab", expected));
     assert_eq!(
         forward,
@@ -672,6 +678,7 @@ fn tab_traverses_the_settings_route_in_order(cx: &mut TestAppContext) {
     // The form's selects, choose buttons and Assistant actions in reading
     // order; its text fields and Speaker Library rows lie between them.
     let mut listed = SIDEBAR_STOPS.to_vec();
+    listed.extend((0..8).map(|index| leak(format!("settings-section-{index}"))));
     listed.extend([
         "select-theme",
         "select-material",
@@ -693,6 +700,7 @@ fn tab_traverses_the_settings_route_in_order(cx: &mut TestAppContext) {
         "assistant-readiness",
         "assistant-model-probe",
     ]);
+    listed.extend(["navigate-back", "toggle-sidebar"]);
     let forward = from_the_first_entry(cycle(cx, "tab", &listed));
     assert_eq!(
         forward.iter().flatten().copied().collect::<Vec<_>>(),
@@ -935,4 +943,216 @@ fn ctrl_tab_leaves_a_text_area_that_takes_tab(cx: &mut TestAppContext) {
     );
     cx.simulate_keystrokes("ctrl-shift-tab");
     assert_eq!(height(cx), Some(summary), "Ctrl-Shift-Tab moves back");
+}
+
+#[gpui::test]
+fn project_sidebar_collapses_without_hiding_the_icon_rail(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Meetings);
+    let rail = visible(cx, "navigation-rail");
+    let sidebar = visible(cx, "project-sidebar");
+    let frame = visible(cx, "inner-frame");
+    let plane = visible(cx, "content-plane");
+    assert!(rail.right() <= frame.left());
+    assert!(within(sidebar, frame) && within(plane, frame));
+    assert_eq!(sidebar.right(), plane.left(), "the inner seam has no gap");
+    let toggle = visible(cx, "toggle-sidebar");
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.run_until_parked();
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert!(cx.debug_bounds("project-sidebar").is_none());
+    assert_eq!(visible(cx, "navigation-rail"), rail);
+    assert!(visible(cx, "content-plane").size.width > plane.size.width);
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.run_until_parked();
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert_eq!(visible(cx, "project-sidebar"), sidebar);
+}
+
+#[gpui::test]
+fn toolbar_back_forward_and_new_navigation_follow_history(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Meetings);
+    click_entry(cx, &window, Route::Settings);
+    let click = |cx: &mut VisualTestContext, id| {
+        let bounds = visible(cx, id);
+        cx.simulate_click(bounds.center(), Modifiers::none());
+        cx.run_until_parked();
+    };
+    click(cx, "navigate-back");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    click(cx, "navigate-back");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Assistant);
+    click(cx, "navigate-forward");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    click_entry(cx, &window, Route::Models);
+    click(cx, "navigate-forward");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Models);
+}
+
+#[gpui::test]
+fn dragging_the_sidebar_divider_resizes_and_clamps_then_returns(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Meetings);
+    let original = visible(cx, "project-sidebar");
+    let handle = visible(cx, "sidebar-resize-handle");
+    let start = handle.center();
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    assert!(cx.debug_bounds("sidebar-resize-glow").is_some());
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: start,
+        button: gpui::MouseButton::Left,
+        modifiers: Modifiers::none(),
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_move(
+        start + gpui::point(gpui::px(60.), gpui::px(0.)),
+        Some(gpui::MouseButton::Left),
+        Modifiers::none(),
+    );
+    assert_eq!(
+        visible(cx, "project-sidebar").size.width,
+        original.size.width + gpui::px(60.)
+    );
+    let far = start + gpui::point(gpui::px(900.), gpui::px(0.));
+    cx.simulate_mouse_move(far, Some(gpui::MouseButton::Left), Modifiers::none());
+    assert!(visible(cx, "project-sidebar").size.width <= gpui::px(380.));
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: far,
+        button: gpui::MouseButton::Left,
+        modifiers: Modifiers::none(),
+        click_count: 1,
+    });
+    cx.run_until_parked();
+    assert!(
+        visible(cx, "project-sidebar").size.width > gpui::px(360.),
+        "the release starts from the resisted width"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert_eq!(visible(cx, "project-sidebar").size.width, gpui::px(360.));
+}
+
+#[gpui::test]
+fn settings_categories_reveal_their_sections_and_collapse(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Settings);
+    let select = visible(cx, "select-theme");
+    let category = visible(cx, "settings-section-5");
+    cx.simulate_click(category.center(), Modifiers::none());
+    cx.run_until_parked();
+    let library = visible(cx, "speaker-library-title");
+    assert!(library.top() < visible(cx, "settings-page").top() + gpui::px(130.));
+    let appearance = visible(cx, "settings-section-0");
+    cx.simulate_click(appearance.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(visible(cx, "select-theme"), select);
+    let toggle = visible(cx, "toggle-sidebar");
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.run_until_parked();
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert!(cx.debug_bounds("settings-sidebar").is_none());
+    assert!(cx.debug_bounds("navigation-rail").is_some());
+}
+
+#[gpui::test]
+fn project_history_restores_the_selected_document(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Meetings);
+    let second = visible(cx, leak(format!("project-row-{}", DOCUMENT_IDS[2])));
+    cx.simulate_click(second.center(), Modifiers::none());
+    cx.run_until_parked();
+    let back = visible(cx, "navigate-back");
+    cx.simulate_click(back.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| window.selected_document(cx)).as_deref(),
+        Some(DOCUMENT_IDS[0])
+    );
+    let forward = visible(cx, "navigate-forward");
+    cx.simulate_click(forward.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_, cx| window.selected_document(cx)).as_deref(),
+        Some(DOCUMENT_IDS[2])
+    );
+}
+
+#[gpui::test]
+fn settings_still_fit_the_minimum_window_width(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Settings);
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.run_until_parked();
+    let page = rendered(cx, "settings-page");
+    for id in [
+        "select-theme",
+        "select-material",
+        "choose-documents-root",
+        "select-language",
+    ] {
+        let control = rendered(cx, id);
+        assert!(
+            control.right() <= page.right(),
+            "{id} overflows at the minimum width"
+        );
+    }
+}
+
+#[gpui::test]
+fn sidebar_fold_keeps_content_stable_and_can_reverse_mid_animation(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Meetings);
+    let original = visible(cx, "project-sidebar");
+    let row = visible(cx, leak(format!("project-row-{}", DOCUMENT_IDS[0])));
+    let toggle = visible(cx, "toggle-sidebar");
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("project-sidebar").is_some(),
+        "the sidebar must remain while folding"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    cx.update(|window, cx| window.draw(cx).clear());
+    let partial = rendered(cx, "project-sidebar").size.width;
+    assert!(
+        partial > gpui::px(0.) && partial < original.size.width,
+        "an intermediate fold width must be visible"
+    );
+    assert_eq!(
+        rendered(cx, leak(format!("project-row-{}", DOCUMENT_IDS[0])))
+            .size
+            .width,
+        row.size.width,
+        "the tree must crop smoothly instead of reflowing"
+    );
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.run_until_parked();
+    let reversed = rendered(cx, "project-sidebar").size.width;
+    assert!(
+        (reversed - partial).abs() < gpui::px(12.),
+        "reversal must begin at the current width: {partial:?} -> {reversed:?}"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(350));
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert_eq!(
+        visible(cx, "project-sidebar").size.width,
+        original.size.width
+    );
+}
+
+#[gpui::test]
+fn the_focused_select_visual_fixture_reaches_the_theme_control(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Settings);
+    cx.cx
+        .update(|cx| window.open_overlay(Overlay::FocusedSelect, cx));
+    cx.run_until_parked();
+    assert!(within(
+        ring(cx).expect("keyboard focus ring"),
+        visible(cx, "select-theme")
+    ));
 }

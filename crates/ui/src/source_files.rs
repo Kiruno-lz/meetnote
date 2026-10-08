@@ -30,6 +30,7 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
         include_str!("controls/scrollbar.rs"),
     ),
     ("controls/select.rs", include_str!("controls/select.rs")),
+    ("controls/sidebar.rs", include_str!("controls/sidebar.rs")),
     (
         "controls/separator.rs",
         include_str!("controls/separator.rs"),

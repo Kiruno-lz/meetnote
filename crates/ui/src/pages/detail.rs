@@ -87,6 +87,7 @@ pub(crate) fn render(
         .border_l_1()
         .border_color(tokens.hairline)
         .bg(tokens.raised)
+        .rounded_r(tokens.radius.xl)
         .flex()
         .flex_col()
         .child(
