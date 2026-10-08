@@ -39,6 +39,7 @@ pub(crate) struct Button {
     /// Whether this choice is the selected one of its group.
     choice: Option<bool>,
     focus: Option<FocusHandle>,
+    shortcut: Option<&'static str>,
 }
 
 impl Button {
@@ -58,6 +59,7 @@ impl Button {
             disabled: false,
             choice: None,
             focus: None,
+            shortcut: None,
         }
     }
 
@@ -118,6 +120,13 @@ impl Button {
     pub(crate) fn leading_icon(mut self, path: impl Into<SharedString>) -> Self {
         self.icon = Some(path.into());
         self.leading = true;
+        self
+    }
+
+    /// The keys of the window shortcut that runs the same action, which the
+    /// tooltip of a button shown without its label shows.
+    pub(crate) fn shortcut(mut self, keys: &'static str) -> Self {
+        self.shortcut = Some(keys);
         self
     }
 
@@ -234,7 +243,7 @@ impl RenderOnce for Button {
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             })
             .when(named_by_tooltip, |button| {
-                button.tooltip(Tooltip::builder(self.label.clone()))
+                button.tooltip(Tooltip::builder(self.label.clone(), self.shortcut))
             });
         button.style().refine(&caller);
         let button = button.child(

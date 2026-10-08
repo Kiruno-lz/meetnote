@@ -65,6 +65,7 @@ pub(crate) struct NavEntry {
     focus: FocusHandle,
     selected: bool,
     icon_only: bool,
+    shortcut: Option<&'static str>,
     previous: Option<FocusHandle>,
     next: Option<FocusHandle>,
 }
@@ -83,6 +84,7 @@ impl NavEntry {
             focus: focus.clone(),
             selected: false,
             icon_only: false,
+            shortcut: None,
             previous: None,
             next: None,
         }
@@ -90,6 +92,13 @@ impl NavEntry {
 
     pub(crate) fn icon_only(mut self) -> Self {
         self.icon_only = true;
+        self
+    }
+
+    /// The keys of the window shortcut that opens the route, which the
+    /// tooltip of an icon-only entry shows.
+    pub(crate) fn shortcut(mut self, keys: &'static str) -> Self {
+        self.shortcut = Some(keys);
         self
     }
 
@@ -144,7 +153,9 @@ impl RenderOnce for NavEntry {
         let tokens = *theme::tokens(cx);
         let ring = keyboard_focused(&self.focus, window);
         let (previous, next) = (self.previous, self.next);
-        let tooltip = self.icon_only.then(|| Tooltip::builder(self.label.clone()));
+        let tooltip = self
+            .icon_only
+            .then(|| Tooltip::builder(self.label.clone(), self.shortcut));
         let entry = self
             .base
             .track_focus(&self.focus)

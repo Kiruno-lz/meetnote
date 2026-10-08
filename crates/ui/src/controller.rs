@@ -2547,6 +2547,24 @@ impl RootView {
         cx.notify();
     }
 
+    /// Runs a window shortcut as its control in the shell would.
+    fn run_shortcut(
+        &mut self,
+        shortcut: controls::window::Shortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use controls::window::Shortcut;
+        match shortcut {
+            Shortcut::Entry(index) => self.navigate(pages::chrome::ENTRIES[index].0, cx),
+            Shortcut::Settings => self.navigate(Route::Settings, cx),
+            Shortcut::Back => self.travel(false, cx),
+            Shortcut::Forward => self.travel(true, cx),
+            Shortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
+            Shortcut::ImportAudio => self.import_audio(&ClickEvent::default(), window, cx),
+        }
+    }
+
     pub(crate) fn set_locale(&mut self, locale: i18n::Locale, cx: &mut Context<Self>) {
         self.persist_field_with_notice(
             move |settings| settings.ui_locale = locale.code().into(),
@@ -4533,6 +4551,11 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
 /// accessibility flags, where `run` reads the system's.
 pub(crate) fn init_app(accessibility: theme::Accessibility, cx: &mut App) {
     controls::window::init(cx);
+    controls::window::bind_shortcuts(cx, |shortcut, window, cx| {
+        if let Some(Some(root)) = window.root::<RootView>() {
+            root.update(cx, |root, cx| root.run_shortcut(shortcut, window, cx));
+        }
+    });
     theme::init(accessibility, cx);
 }
 

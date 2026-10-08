@@ -5,7 +5,11 @@
 
 use crate::{
     controller::RootView,
-    controls::{sidebar::SidebarPanel, window::DragStrip, Button, NavEntry, NavList, Toast},
+    controls::{
+        sidebar::SidebarPanel,
+        window::{DragStrip, Shortcut},
+        Button, NavEntry, NavList, Toast,
+    },
     i18n::{text as tr, Locale},
     route::Route,
     state, theme,
@@ -137,6 +141,7 @@ fn toolbar(root: &mut RootView, secondary: bool, cx: &mut Context<RootView>) -> 
                 .ghost()
                 .compact()
                 .icon("icons/arrow-left.svg")
+                .shortcut(Shortcut::Back.keys())
                 .disabled(!root.ui.can_go_back())
                 .on_click(cx.listener(|this, _, _, cx| this.travel(false, cx))),
         )
@@ -146,6 +151,7 @@ fn toolbar(root: &mut RootView, secondary: bool, cx: &mut Context<RootView>) -> 
                 .ghost()
                 .compact()
                 .icon("icons/arrow-right.svg")
+                .shortcut(Shortcut::Forward.keys())
                 .disabled(!root.ui.can_go_forward())
                 .on_click(cx.listener(|this, _, _, cx| this.travel(true, cx))),
         )
@@ -155,6 +161,7 @@ fn toolbar(root: &mut RootView, secondary: bool, cx: &mut Context<RootView>) -> 
                 .ghost()
                 .compact()
                 .icon("icons/panel-left.svg")
+                .shortcut(Shortcut::ToggleSidebar.keys())
                 .disabled(!secondary)
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx))),
         )
@@ -176,6 +183,7 @@ fn rail(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
             nav_entry(
                 tr(locale, key),
                 *route,
+                Shortcut::Entry(index).keys(),
                 *route == current,
                 &focus[index],
                 (
@@ -201,6 +209,7 @@ fn rail(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
                 .debug_selector(|| "import-audio".into())
                 .ghost()
                 .icon("icons/plus.svg")
+                .shortcut(Shortcut::ImportAudio.keys())
                 .w(px(44.))
                 .h(px(44.))
                 .on_click(cx.listener(RootView::import_audio)),
@@ -291,6 +300,7 @@ fn secondary_sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> AnyElem
 fn nav_entry(
     label: &'static str,
     route: Route,
+    shortcut: &'static str,
     active: bool,
     focus: &FocusHandle,
     beside: (Option<&FocusHandle>, Option<&FocusHandle>),
@@ -314,6 +324,7 @@ fn nav_entry(
     NavEntry::new(format!("nav-{route:?}"), label, focus)
         .debug_selector(move || format!("nav-{route:?}"))
         .icon_only()
+        .shortcut(shortcut)
         .selected(active)
         .beside(beside.0, beside.1)
         .on_click(cx.listener(move |this, _, _, cx| this.navigate(route, cx)))

@@ -4,18 +4,67 @@
 //! takes Tab for indenting). Focus inside a gpui-base focus trap, such as an
 //! open dialog's, cycles through the trap's tab stops and never reaches the
 //! page behind it. A control that keyboard focus moves to is scrolled into
-//! view in the scroll area that holds it. `DragStrip` is a titlebar strip
-//! that drags the window.
+//! view in the scroll area that holds it. The window's shortcuts
+//! (`Shortcut`) work wherever focus is, or with none, except while a focus
+//! trap holds the keyboard. `DragStrip` is a titlebar strip that drags the
+//! window.
 
 use crate::theme;
 use gpui::{
-    actions, div, prelude::*, px, App, Bounds, Div, ElementId, FocusHandle, Global, Interactivity,
-    IntoElement, KeyBinding, MouseButton, MouseMoveEvent, Pixels, ScrollHandle, Stateful,
-    StyleRefinement, Window, WindowControlArea,
+    actions, div, prelude::*, px, Action, App, Bounds, Div, ElementId, FocusHandle, Global,
+    Interactivity, IntoElement, KeyBinding, MouseButton, MouseMoveEvent, Pixels, ScrollHandle,
+    Stateful, StyleRefinement, Window, WindowControlArea,
 };
 use gpui_base::actions::Confirm;
+use std::rc::Rc;
 
-actions!(meetnote_window, [FocusNext, FocusPrevious]);
+actions!(
+    meetnote_window,
+    [
+        FocusNext,
+        FocusPrevious,
+        OpenEntry1,
+        OpenEntry2,
+        OpenEntry3,
+        OpenEntry4,
+        OpenSettings,
+        NavigateBack,
+        NavigateForward,
+        ToggleSidebar,
+        ImportAudio,
+    ]
+);
+
+/// A window shortcut. None is an editing key of a text field: a field that
+/// edits with one of them (a multi-line field outdents with ⌘[) takes it
+/// first, and passes it on when it has no use for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shortcut {
+    /// Opens the rail's entry at this index, of the first four.
+    Entry(usize),
+    Settings,
+    Back,
+    Forward,
+    ToggleSidebar,
+    ImportAudio,
+}
+
+impl Shortcut {
+    /// The keystroke, in gpui's key binding syntax.
+    pub(crate) fn keys(self) -> &'static str {
+        match self {
+            Self::Entry(index) => ["cmd-1", "cmd-2", "cmd-3", "cmd-4"][index],
+            Self::Settings => "cmd-,",
+            Self::Back => "cmd-[",
+            Self::Forward => "cmd-]",
+            Self::ToggleSidebar => "ctrl-cmd-s",
+            Self::ImportAudio => "cmd-o",
+        }
+    }
+}
+
+/// What a shortcut runs in the window it was pressed in.
+type ShortcutHandler = Rc<dyn Fn(Shortcut, &mut Window, &mut App)>;
 
 const KEY_CONTEXT: &str = "MeetNoteWindow";
 /// The key context of gpui-base's select root, which `Dropdown` renders.
@@ -38,6 +87,61 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", FocusPrevious, Some(KEY_CONTEXT)),
         KeyBinding::new("space", Confirm { secondary: false }, Some(SELECT_CONTEXT)),
     ]);
+}
+
+/// Binds the window's shortcuts, each of which runs `run` in the active
+/// window. They are bound in no key context, so they work with nothing
+/// focused, or with focus on a control the route no longer shows, and any
+/// binding of a focused control comes first. An unhandled shortcut reaches
+/// the app's listeners mid-dispatch, while the window is busy; `run` runs
+/// just after.
+pub(crate) fn bind_shortcuts(
+    cx: &mut App,
+    run: impl Fn(Shortcut, &mut Window, &mut App) + 'static,
+) {
+    cx.bind_keys([
+        KeyBinding::new(Shortcut::Entry(0).keys(), OpenEntry1, None),
+        KeyBinding::new(Shortcut::Entry(1).keys(), OpenEntry2, None),
+        KeyBinding::new(Shortcut::Entry(2).keys(), OpenEntry3, None),
+        KeyBinding::new(Shortcut::Entry(3).keys(), OpenEntry4, None),
+        KeyBinding::new(Shortcut::Settings.keys(), OpenSettings, None),
+        KeyBinding::new(Shortcut::Back.keys(), NavigateBack, None),
+        KeyBinding::new(Shortcut::Forward.keys(), NavigateForward, None),
+        KeyBinding::new(Shortcut::ToggleSidebar.keys(), ToggleSidebar, None),
+        KeyBinding::new(Shortcut::ImportAudio.keys(), ImportAudio, None),
+    ]);
+    let run: ShortcutHandler = Rc::new(run);
+    listen::<OpenEntry1>(cx, &run, Shortcut::Entry(0));
+    listen::<OpenEntry2>(cx, &run, Shortcut::Entry(1));
+    listen::<OpenEntry3>(cx, &run, Shortcut::Entry(2));
+    listen::<OpenEntry4>(cx, &run, Shortcut::Entry(3));
+    listen::<OpenSettings>(cx, &run, Shortcut::Settings);
+    listen::<NavigateBack>(cx, &run, Shortcut::Back);
+    listen::<NavigateForward>(cx, &run, Shortcut::Forward);
+    listen::<ToggleSidebar>(cx, &run, Shortcut::ToggleSidebar);
+    listen::<ImportAudio>(cx, &run, Shortcut::ImportAudio);
+}
+
+/// Runs `shortcut` for its action `A` in the active window once the
+/// dispatch is over, unless a focus trap (an open dialog) holds the
+/// keyboard.
+fn listen<A: Action>(cx: &mut App, run: &ShortcutHandler, shortcut: Shortcut) {
+    let run = run.clone();
+    cx.on_action(move |_: &A, cx| {
+        let Some(window) = cx.active_window() else {
+            return;
+        };
+        let run = run.clone();
+        cx.defer(move |cx| {
+            window
+                .update(cx, |_, window, cx| {
+                    if gpui_base::active_focus_trap(window, cx).is_none() {
+                        run(shortcut, window, cx);
+                    }
+                })
+                .ok();
+        });
+    });
 }
 
 /// Prepares a new window for `root`: rem-based sizes follow the body font

@@ -28,8 +28,9 @@
 //! - `Separator` and `Scrollbar`: a hairline divider and a scroll area's
 //!   scrollbar; neither is focusable, so neither takes a label.
 //! - `window`: the window's first layer, which moves focus on Tab, cycles
-//!   it inside focus traps and scrolls the control it moves to into view,
-//!   and `DragStrip`, the titlebar strip that drags the window.
+//!   it inside focus traps and scrolls the control it moves to into view;
+//!   the window's shortcuts; and `DragStrip`, the titlebar strip that drags
+//!   the window.
 //!
 //! Every focusable control shows the focus ring (`tokens.focus_ring`) only
 //! while it holds keyboard focus: after a press it shows none.

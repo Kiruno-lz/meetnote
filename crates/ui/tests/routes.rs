@@ -1055,6 +1055,68 @@ fn every_icon_only_control_names_itself_in_a_tooltip(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn shortcuts_open_routes_travel_fold_the_sidebar_and_import(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    // Shortcuts go to the key window, as the keystrokes do.
+    cx.update(|window, _| window.activate_window());
+    let route = |cx: &mut VisualTestContext| cx.update(|_, cx| window.route(cx));
+    assert!(
+        cx.update(|window, cx| window.focused(cx)).is_none(),
+        "the shortcuts work before anything has focus"
+    );
+    for (keys, expected) in [
+        ("cmd-2", Route::Meetings),
+        ("cmd-3", Route::Models),
+        ("cmd-4", Route::Settings),
+        ("cmd-1", Route::Assistant),
+        ("cmd-,", Route::Settings),
+    ] {
+        cx.simulate_keystrokes(keys);
+        assert_eq!(route(cx), expected, "{keys}");
+    }
+    cx.simulate_keystrokes("cmd-[");
+    assert_eq!(route(cx), Route::Assistant, "⌘[ goes back");
+    cx.simulate_keystrokes("cmd-]");
+    assert_eq!(route(cx), Route::Settings, "⌘] goes forward");
+
+    cx.simulate_keystrokes("cmd-2");
+    cx.update(|window, cx| window.draw(cx).clear());
+    let sidebar = visible(cx, "project-sidebar");
+    cx.simulate_keystrokes("ctrl-cmd-s");
+    fold_for(cx, 350);
+    assert!(
+        cx.debug_bounds("project-sidebar").is_none(),
+        "⌃⌘S folds the sidebar"
+    );
+    cx.simulate_keystrokes("ctrl-cmd-s");
+    fold_for(cx, 350);
+    assert_eq!(visible(cx, "project-sidebar"), sidebar, "and unfolds it");
+
+    assert!(!cx.cx.did_prompt_for_paths());
+    cx.simulate_keystrokes("cmd-o");
+    assert!(
+        cx.cx.did_prompt_for_paths(),
+        "⌘O asks for the audio to import"
+    );
+}
+
+#[gpui::test]
+fn shortcuts_pass_by_a_focused_field(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|window, _| window.activate_window());
+    click_entry(cx, &window, Route::Assistant);
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    cx.simulate_input("周会");
+    let field = cx.update(|window, cx| window.focused(cx));
+    assert!(field.is_some(), "the press focuses the field");
+    cx.simulate_keystrokes("cmd-[");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    cx.simulate_keystrokes("cmd-1");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Assistant);
+}
+
+#[gpui::test]
 fn dragging_the_sidebar_divider_resizes_and_clamps_then_returns(cx: &mut TestAppContext) {
     let (window, cx) = open_window(cx);
     click_entry(cx, &window, Route::Meetings);
