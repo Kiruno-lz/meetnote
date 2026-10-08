@@ -1,7 +1,8 @@
-//! L2: the Models route's diagnosis of each catalog model — task, catalog
-//! status, license, source and checksum; the latest probe record; a failed
-//! download or probe with its localized reason and retry; an unreadable
-//! probe record — and the re-probe of an installed model.
+//! L2: the Models route's diagnosis of each catalog model — its name, status
+//! and one action in the header row; task, size, VRAM, backends, license,
+//! source and checksum; the latest probe record; a failed download or probe
+//! with its localized reason and retry; an unreadable probe record — and the
+//! re-probe of an installed model.
 //!
 //! Most tests render installation states they build, as
 //! `InstallationService` would publish them, through a probe that returns
@@ -371,8 +372,25 @@ fn row(label: &str, value: impl Into<String>) -> FactRow {
     }
 }
 
+/// The card's header row: its name, then the status chip and the one
+/// action in fixed columns at its right edge.
+fn assert_in_header(cx: &mut VisualTestContext, name: &str, model_id: &str) {
+    let header = rendered(cx, selector("header", model_id));
+    let status = rendered(cx, selector("status", model_id));
+    let action = rendered(cx, selector(name, model_id));
+    assert!(
+        within(status, header) && within(action, header),
+        "{name} of {model_id} shares the header row with its status"
+    );
+    assert!(
+        status.right() <= action.left(),
+        "the action follows the status"
+    );
+    assert_eq!(action.right(), header.right(), "the action ends the row");
+}
+
 #[gpui::test]
-fn every_card_shows_task_status_license_source_and_a_short_checksum_with_the_full_one_in_details(
+fn every_card_leads_with_its_name_status_and_action_over_one_quiet_line_of_facts(
     cx: &mut TestAppContext,
 ) {
     let models = [bundle_asr(), native_diarization(), candidate_asr()];
@@ -392,13 +410,26 @@ fn every_card_shows_task_status_license_source_and_a_short_checksum_with_the_ful
 
     for model in &models {
         let card = rendered(cx, selector("card", &model.id));
-        for name in ["task", "license", "source", "checksum", "details-toggle"] {
+        for name in [
+            "header",
+            "status",
+            "facts",
+            "license",
+            "source",
+            "checksum",
+            "details-toggle",
+        ] {
             let fact = rendered(cx, selector(name, &model.id));
             assert!(within(fact, card), "{name} of {} is on its card", model.id);
         }
         let facts = facts(cx, &view, &model.id);
         assert_eq!(facts.license, model.license);
         assert_eq!(facts.source, model.source, "the full source, faded");
+        assert!(
+            !facts.summary.contains(':') && !facts.summary.contains('：'),
+            "facts read without labels: {}",
+            facts.summary
+        );
     }
     // The long source fades inside the card instead of widening it.
     let card = rendered(cx, "model-card-bundle-asr");
@@ -406,19 +437,40 @@ fn every_card_shows_task_status_license_source_and_a_short_checksum_with_the_ful
 
     let bundle = facts(cx, &view, "bundle-asr");
     assert_eq!(
-        (bundle.task.as_str(), bundle.catalog_status.as_str()),
-        ("语音识别", "可下载")
+        bundle.summary,
+        "语音识别 · 78 MiB · 显存约 1.0 GiB · sherpa-onnx, whisper-rs"
     );
+    assert_eq!(bundle.unavailable, None, "a ready model downloads");
     assert_eq!(bundle.checksum, "da92b3db5218…", "one archive checksum");
     let native = facts(cx, &view, "native-diarization");
-    assert_eq!(native.task, "说话人分离");
+    assert_eq!(
+        native.summary,
+        "说话人分离 · 78 MiB · 显存约 1.0 GiB · diarization-native"
+    );
     assert_eq!(native.checksum, "038b971741ed… 等 3 个");
     let candidate = facts(cx, &view, "candidate-asr");
-    assert_eq!(candidate.catalog_status, "候选来源，暂不可安装");
+    assert_eq!(
+        candidate.summary, "语音识别 · 显存约 1.0 GiB · sherpa-onnx",
+        "an unknown size is left out"
+    );
+    assert_eq!(
+        candidate.unavailable.as_deref(),
+        Some("来源尚未验证，暂不可下载")
+    );
     assert_eq!(candidate.checksum, "未声明");
-    // Only ready models that are missing offer a download.
-    assert!(shown(cx, "download", "bundle-asr") && shown(cx, "download", "native-diarization"));
+    assert!(shown(cx, "unavailable", "candidate-asr"));
+    assert!(!shown(cx, "unavailable", "bundle-asr"));
+    // Only ready models that are missing offer a download, in one column.
     assert!(!shown(cx, "download", "candidate-asr"));
+    for model_id in ["bundle-asr", "native-diarization"] {
+        assert_in_header(cx, "download", model_id);
+    }
+    let [first, second] =
+        ["bundle-asr", "native-diarization"].map(|id| rendered(cx, selector("download", id)));
+    assert_eq!(
+        (first.left(), first.size.width),
+        (second.left(), second.size.width)
+    );
 
     // The full checksums are one expansion away, collapsed at first.
     assert!(!shown(cx, "declared", "native-diarization-0"));
@@ -468,10 +520,7 @@ fn a_passing_probe_record_shows_its_outcome_kind_time_and_backends(cx: &mut Test
 
     let facts = facts(cx, &view, "bundle-asr");
     let probe = facts.probe.expect("the record is shown");
-    assert_eq!(
-        probe.summary,
-        format!("最近校验：通过 · 下载后校验 · {PROBED_AT}")
-    );
+    assert_eq!(probe.summary, format!("下载后校验通过 · {PROBED_AT}"));
     assert!(within(
         rendered(cx, "model-probe-bundle-asr"),
         rendered(cx, "model-card-bundle-asr")
@@ -479,10 +528,8 @@ fn a_passing_probe_record_shows_its_outcome_kind_time_and_backends(cx: &mut Test
     assert_eq!(facts.failure, None);
     assert!(!shown(cx, "failure", "bundle-asr") && !shown(cx, "retry", "bundle-asr"));
     assert!(!shown(cx, "download", "bundle-asr"), "installed");
-    assert!(
-        shown(cx, "reprobe", "bundle-asr"),
-        "installed models re-probe"
-    );
+    // Installed models re-probe from the header.
+    assert_in_header(cx, "reprobe", "bundle-asr");
 
     // Backend and checksum results are collapsed until expanded.
     assert!(!shown(cx, "backend", "bundle-asr-0"));
@@ -532,12 +579,15 @@ fn a_failed_download_probe_shows_the_localized_reason_and_retry_starts_the_downl
     );
     assert_eq!(
         facts.probe.map(|probe| probe.summary),
-        Some(format!("最近校验：未通过 · 下载后校验 · {PROBED_AT}"))
+        Some(format!("下载后校验未通过 · {PROBED_AT}"))
     );
     let card = rendered(cx, "model-card-native-diarization");
     let failure = rendered(cx, "model-failure-native-diarization");
-    let retry = rendered(cx, "model-retry-native-diarization");
-    assert!(within(failure, card) && within(retry, failure));
+    assert!(within(failure, card));
+    // The failure stands for the failed probe; retry takes the download's
+    // place in the header.
+    assert!(!shown(cx, "probe", "native-diarization"));
+    assert_in_header(cx, "retry", "native-diarization");
     // Retry replaces the download button; nothing is installed to re-probe.
     assert!(!shown(cx, "download", "native-diarization"));
     assert!(!shown(cx, "reprobe", "native-diarization"));
@@ -633,7 +683,7 @@ fn a_reprobe_runs_off_the_ui_thread_and_shows_progress_until_its_state_is_publis
         facts(cx, &view, "bundle-asr")
             .probe
             .map(|probe| probe.summary),
-        Some(format!("最近校验：通过 · 重新校验 · {PROBED_AT}"))
+        Some(format!("重新校验通过 · {PROBED_AT}"))
     );
 }
 
@@ -708,7 +758,7 @@ fn a_real_reprobe_of_changed_files_reports_the_mismatch_and_keeps_the_model_inst
     let passed = facts(cx, &view, "real-asr");
     let probe = passed.probe.expect("the written record is shown");
     assert!(
-        probe.summary.starts_with("最近校验：通过 · 重新校验 · "),
+        probe.summary.starts_with("重新校验通过 · "),
         "{}",
         probe.summary
     );

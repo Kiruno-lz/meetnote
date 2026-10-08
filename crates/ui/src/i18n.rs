@@ -68,18 +68,12 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "download") => "下载",
         (Locale::ZhCn, "downloaded") => "已下载",
         (Locale::ZhCn, "not_downloaded") => "未下载",
-        (Locale::ZhCn, "model_size") => "权重大小",
-        (Locale::ZhCn, "vram_estimate") => "显存预估",
-        (Locale::ZhCn, "applicable_backends") => "适用后端",
         (Locale::ZhCn, "no_models") => "模型目录中没有可用模型。",
-        (Locale::ZhCn, "model_task") => "任务",
         (Locale::ZhCn, "task_asr") => "语音识别",
         (Locale::ZhCn, "task_diarization") => "说话人分离",
-        (Locale::ZhCn, "catalog_status") => "目录状态",
-        (Locale::ZhCn, "catalog_ready") => "可下载",
-        (Locale::ZhCn, "catalog_candidate_source") => "候选来源，暂不可安装",
-        (Locale::ZhCn, "catalog_requires_native_adapter") => "需要原生适配",
-        (Locale::ZhCn, "model_license") => "许可",
+        (Locale::ZhCn, "catalog_candidate_source") => "来源尚未验证，暂不可下载",
+        (Locale::ZhCn, "catalog_requires_native_adapter") => "需要原生适配后才能使用，暂不可下载",
+        (Locale::ZhCn, "catalog_unavailable") => "暂不可下载",
         (Locale::ZhCn, "model_source") => "来源",
         (Locale::ZhCn, "model_checksum") => "校验和",
         (Locale::ZhCn, "show_model_details") => "展开详情",
@@ -404,18 +398,16 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "download") => "Download",
         (Locale::EnUs, "downloaded") => "Downloaded",
         (Locale::EnUs, "not_downloaded") => "Not downloaded",
-        (Locale::EnUs, "model_size") => "Weight size",
-        (Locale::EnUs, "vram_estimate") => "VRAM estimate",
-        (Locale::EnUs, "applicable_backends") => "Applicable backends",
         (Locale::EnUs, "no_models") => "No models are available in the catalog.",
-        (Locale::EnUs, "model_task") => "Task",
         (Locale::EnUs, "task_asr") => "Speech recognition",
         (Locale::EnUs, "task_diarization") => "Speaker diarization",
-        (Locale::EnUs, "catalog_status") => "Catalog status",
-        (Locale::EnUs, "catalog_ready") => "Downloadable",
-        (Locale::EnUs, "catalog_candidate_source") => "Candidate source, not installable",
-        (Locale::EnUs, "catalog_requires_native_adapter") => "Needs a native adapter",
-        (Locale::EnUs, "model_license") => "License",
+        (Locale::EnUs, "catalog_candidate_source") => {
+            "The source isn't verified yet, so it can't be downloaded"
+        }
+        (Locale::EnUs, "catalog_requires_native_adapter") => {
+            "Needs a native adapter before it can be downloaded"
+        }
+        (Locale::EnUs, "catalog_unavailable") => "Not available for download yet",
         (Locale::EnUs, "model_source") => "Source",
         (Locale::EnUs, "model_checksum") => "Checksum",
         (Locale::EnUs, "show_model_details") => "Show details",
@@ -427,8 +419,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "no_probe_record") => "No probe record yet",
         (Locale::EnUs, "probe_passed") => "passed",
         (Locale::EnUs, "probe_failed") => "failed",
-        (Locale::EnUs, "probe_kind_download") => "after download",
-        (Locale::EnUs, "probe_kind_reprobe") => "re-probe",
+        (Locale::EnUs, "probe_kind_download") => "Post-download check",
+        (Locale::EnUs, "probe_kind_reprobe") => "Re-probe",
         (Locale::EnUs, "backend_not_registered") => "not checked: no backend probe registered",
         (Locale::EnUs, "checksum_matched") => "matches",
         (Locale::EnUs, "checksum_archive_matched") => "archive matches",
@@ -1370,7 +1362,15 @@ pub fn backend_check(locale: Locale, check: &BackendCheck) -> String {
     }
 }
 
-/// The outcome, kind and time of a model's last probe.
+/// A model's estimated VRAM, `size` already formatted.
+pub fn model_vram(locale: Locale, size: &str) -> String {
+    match locale {
+        Locale::ZhCn => format!("显存约 {size}"),
+        Locale::EnUs => format!("~{size} VRAM"),
+    }
+}
+
+/// The kind, outcome and time of a model's last probe.
 pub fn probe_summary(locale: Locale, record: &ProbeRecord) -> String {
     let outcome = text(
         locale,
@@ -1389,8 +1389,8 @@ pub fn probe_summary(locale: Locale, record: &ProbeRecord) -> String {
     );
     let time = crate::components::utc_time(record.probed_at_ms);
     match locale {
-        Locale::ZhCn => format!("最近校验：{outcome} · {kind} · {time}"),
-        Locale::EnUs => format!("Last probe: {outcome} · {kind} · {time}"),
+        Locale::ZhCn => format!("{kind}{outcome} · {time}"),
+        Locale::EnUs => format!("{kind} {outcome} · {time}"),
     }
 }
 

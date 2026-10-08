@@ -5,7 +5,7 @@ use crate::{
     i18n::{self, text as tr, Locale},
     theme::{self, Tokens},
 };
-use gpui::{div, prelude::*, px, Context, IntoElement, Pixels};
+use gpui::{div, prelude::*, px, Context, FontWeight, IntoElement, Pixels};
 use models::{
     manager::{DownloadProgress, DownloadState},
     ArtifactChecksum, ModelAvailability, ModelCatalogEntry, ModelInstallState,
@@ -15,15 +15,15 @@ use std::collections::BTreeMap;
 /// The install status chip column; fixed, so the chips of every model row
 /// line up whatever the model id's length.
 const STATUS_COLUMN_WIDTH: Pixels = px(96.);
-/// The action column after it, empty when a model offers no download.
+/// The action column after it, empty when a model offers no action; every
+/// action button is this wide, so each takes the same place on its card.
 const ACTION_COLUMN_WIDTH: Pixels = px(88.);
-/// The widest a license gets before its tail fades; the source takes the
-/// rest of the row.
+/// The widest a license gets before its tail fades.
 const LICENSE_WIDTH: Pixels = px(200.);
 /// The file or backend column of a card's details.
 const DETAIL_LABEL_WIDTH: Pixels = px(240.);
-/// The re-probe progress bar beside the probe summary.
-const REPROBE_PROGRESS_WIDTH: Pixels = px(120.);
+/// Between the facts of a card's fact line.
+const FACT_SEPARATOR: &str = " · ";
 
 /// The catalog's task names and the status of a model it can install.
 const ASR_TASK: &str = "asr";
@@ -157,10 +157,11 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         )
 }
 
-/// A catalog model's card: identity, install status and its one action;
-/// task, catalog status, size, VRAM and backends; license, source and
-/// checksum; the last failure and an unreadable record; the last probe; the
-/// details when expanded; a running download.
+/// A catalog model's card: its name with the install status and its one
+/// action; one quiet line of task, size, VRAM, backends and license; the
+/// source, checksum and details toggle; then what is going on with it — a
+/// download, a re-probe, the last failure, an unreadable record, the last
+/// probe or why it cannot be downloaded — and the details when expanded.
 fn model_card(
     root: &mut RootView,
     entry: ModelAvailability,
@@ -189,19 +190,55 @@ fn model_card(
         move || selector.clone()
     };
 
-    let download = (action == CardAction::Download).then(|| {
+    let action_button = {
         let id = model_id.clone();
-        Button::new(format!("download-{id}"), tr(locale, "download"))
-            .debug_selector(marked("download"))
-            .primary()
-            .compact()
-            .on_click(cx.listener(move |this, _, _, cx| this.download_model(id.clone(), cx)))
-    });
+        match action {
+            CardAction::Download => Some(
+                Button::new(format!("download-{id}"), tr(locale, "download"))
+                    .debug_selector(marked("download"))
+                    .primary()
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.download_model(id.clone(), cx)),
+                    ),
+            ),
+            CardAction::Retry => Some(
+                Button::new(format!("retry-{id}"), tr(locale, "retry_download"))
+                    .debug_selector(marked("retry"))
+                    .primary()
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.download_model(id.clone(), cx)),
+                    ),
+            ),
+            CardAction::Reprobe => Some(
+                Button::new(format!("reprobe-{id}"), tr(locale, "reprobe"))
+                    .debug_selector(marked("reprobe"))
+                    .secondary()
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.reprobe_model(id.clone(), cx)),
+                    ),
+            ),
+            CardAction::None => None,
+        }
+        .map(|button| button.compact().w(ACTION_COLUMN_WIDTH))
+    };
     let header = div()
+        .debug_selector(marked("header"))
+        .min_h(tokens.control_height.md)
         .flex()
         .items_center()
-        .gap_3()
-        .child(div().flex_1().min_w_0().text_base().child(model_id.clone()))
+        .gap(tokens.spacing.md)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_base()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(theme::tail_faded_label(
+                    format!("model-name-{model_id}"),
+                    model_id.clone(),
+                    tokens.raised,
+                )),
+        )
         .child(
             div()
                 .debug_selector(marked("status"))
@@ -229,41 +266,30 @@ fn model_card(
                 .flex_shrink_0()
                 .flex()
                 .justify_end()
-                .children(download),
+                .children(action_button),
         );
 
-    let backends = if entry.model.candidate_backends.is_empty() {
-        "—".into()
-    } else {
-        entry.model.candidate_backends.join(", ")
-    };
-    let labelled = |label: &str, value: String| format!("{label}: {value}");
     let summary = div()
-        .mt_2()
+        .debug_selector(marked("facts"))
+        .mt(tokens.spacing.xs)
         .flex()
-        .flex_wrap()
-        .gap_x_6()
-        .gap_y_1()
+        .items_center()
         .text_sm()
         .text_color(tokens.text_muted)
+        .child(div().min_w_0().child(facts.summary.clone()))
+        .child(div().flex_none().whitespace_nowrap().child(FACT_SEPARATOR))
         .child(
             div()
-                .debug_selector(marked("task"))
-                .child(labelled(tr(locale, "model_task"), facts.task.clone())),
-        )
-        .child(labelled(
-            tr(locale, "catalog_status"),
-            facts.catalog_status.clone(),
-        ))
-        .child(labelled(
-            tr(locale, "model_size"),
-            format_bytes(entry.model.size_bytes),
-        ))
-        .child(labelled(
-            tr(locale, "vram_estimate"),
-            format_bytes(entry.model.estimated_vram_bytes),
-        ))
-        .child(labelled(tr(locale, "applicable_backends"), backends));
+                .debug_selector(marked("license"))
+                .max_w(LICENSE_WIDTH)
+                .min_w_0()
+                .flex()
+                .child(div().min_w_0().child(theme::tail_faded_label(
+                    format!("model-license-label-{model_id}"),
+                    facts.license.clone(),
+                    tokens.raised,
+                ))),
+        );
 
     let details_label = tr(
         locale,
@@ -276,55 +302,30 @@ fn model_card(
     let details_label = format!("{details_label} {}", if expanded { "▾" } else { "▸" });
     let details_id = model_id.clone();
     let provenance = div()
-        .mt_1()
         .flex()
         .items_center()
-        .gap_6()
+        .gap(tokens.spacing.lg)
         .text_sm()
         .text_color(tokens.text_muted)
-        .child(
-            div()
-                .debug_selector(marked("license"))
-                .max_w(LICENSE_WIDTH)
-                .min_w_0()
-                .flex()
-                .gap_1()
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .child(format!("{}:", tr(locale, "model_license"))),
-                )
-                .child(div().min_w_0().child(theme::tail_faded_label(
-                    format!("model-license-label-{model_id}"),
-                    facts.license.clone(),
-                    tokens.raised,
-                ))),
-        )
         .child(
             div()
                 .debug_selector(marked("source"))
                 .flex_1()
                 .min_w_0()
-                .flex()
-                .gap_1()
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .child(format!("{}:", tr(locale, "model_source"))),
-                )
-                .child(div().flex_1().min_w_0().child(theme::tail_faded_label(
+                .child(theme::tail_faded_label(
                     format!("model-source-label-{model_id}"),
                     facts.source.clone(),
                     tokens.raised,
-                ))),
+                )),
         )
         .child(
             div()
                 .debug_selector(marked("checksum"))
                 .flex_shrink_0()
-                .child(labelled(
+                .child(format!(
+                    "{} {}",
                     tr(locale, "model_checksum"),
-                    facts.checksum.clone(),
+                    facts.checksum
                 )),
         )
         .child(
@@ -337,19 +338,12 @@ fn model_card(
                 })),
         );
 
-    let failure = facts.failure.clone().map(|failure| {
-        let retry = (action == CardAction::Retry).then(|| {
-            let id = model_id.clone();
-            Button::new(format!("retry-{id}"), tr(locale, "retry_download"))
-                .debug_selector(marked("retry"))
-                .primary()
-                .compact()
-                .on_click(cx.listener(move |this, _, _, cx| this.download_model(id.clone(), cx)))
-        });
+    // A running download or re-probe supersedes the last failure.
+    let busy = progress.is_some() || reprobing;
+    let failure = facts.failure.clone().filter(|_| !busy).map(|failure| {
         notice(&tokens)
             .debug_selector(marked("failure"))
             .child(div().flex_1().min_w_0().child(failure))
-            .children(retry)
     });
     let record_error = facts.record_error.clone().map(|error| {
         notice(&tokens)
@@ -357,64 +351,44 @@ fn model_card(
             .child(div().flex_1().min_w_0().child(error))
     });
 
-    let probe = (downloaded || reprobing || facts.probe.is_some()).then(|| {
+    let reprobe_progress = reprobing.then(|| {
+        progress_block(
+            ProgressBar::new(
+                format!("reprobe-progress-{model_id}"),
+                tr(locale, "model_reprobe_progress"),
+            )
+            .indeterminate(true),
+            tr(locale, "reprobing").into(),
+            &tokens,
+        )
+        .debug_selector(marked("reprobe-progress"))
+    });
+    // The failure stands for the probe that failed with it.
+    let probe = (!busy && failure.is_none() && (downloaded || facts.probe.is_some())).then(|| {
         let (summary, passed) = match (&facts.probe, entry.probe.as_ref()) {
             (Some(probe), Some(record)) => (probe.summary.clone(), record.passed()),
             _ => (tr(locale, "no_probe_record").to_string(), true),
         };
-        let progress = reprobing.then(|| {
-            div()
-                .debug_selector(marked("reprobe-progress"))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div().w(REPROBE_PROGRESS_WIDTH).child(
-                        ProgressBar::new(
-                            format!("reprobe-progress-{model_id}"),
-                            tr(locale, "model_reprobe_progress"),
-                        )
-                        .indeterminate(true),
-                    ),
-                )
-                .child(tr(locale, "reprobing"))
-        });
-        let reprobe = (action == CardAction::Reprobe).then(|| {
-            let id = model_id.clone();
-            Button::new(format!("reprobe-{id}"), tr(locale, "reprobe"))
-                .debug_selector(marked("reprobe"))
-                .secondary()
-                .compact()
-                .on_click(cx.listener(move |this, _, _, cx| this.reprobe_model(id.clone(), cx)))
-        });
         div()
             .debug_selector(marked("probe"))
-            .mt_3()
-            .pt_3()
-            .border_t_1()
-            .border_color(tokens.hairline)
-            .flex()
-            .items_center()
-            .gap_3()
             .text_sm()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_color(if passed {
-                        tokens.text_muted
-                    } else {
-                        tokens.warning_text
-                    })
-                    .child(summary),
-            )
-            .children(progress)
-            .children(reprobe)
+            .text_color(if passed {
+                tokens.text_muted
+            } else {
+                tokens.warning_text
+            })
+            .child(summary)
+    });
+    let unavailable = facts.unavailable.clone().map(|reason| {
+        div()
+            .debug_selector(marked("unavailable"))
+            .text_sm()
+            .text_color(tokens.text_muted)
+            .child(reason)
     });
 
     let details = expanded.then(|| {
-        let mut details = div().mt_2().flex().flex_col().gap_2();
+        let mut details = div().flex().flex_col().gap(tokens.spacing.sm);
         let artifacts = match &facts.probe {
             Some(probe) => {
                 details = details.child(fact_rows(
@@ -444,28 +418,60 @@ fn model_card(
     let progress_view =
         progress.map(|progress| download_progress_view(root, &model_id, progress, cx));
 
+    // What is going on with the model, under its identity.
+    let status = [
+        progress_view,
+        reprobe_progress.map(IntoElement::into_any_element),
+        failure.map(IntoElement::into_any_element),
+        record_error.map(IntoElement::into_any_element),
+        probe.map(IntoElement::into_any_element),
+        unavailable.map(IntoElement::into_any_element),
+        details.map(IntoElement::into_any_element),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+
     div()
         .debug_selector(marked("card"))
-        .p_4()
-        .rounded(tokens.radius.sm)
+        .p(tokens.spacing.lg)
+        .rounded(tokens.radius.md)
         .bg(tokens.raised)
+        .flex()
+        .flex_col()
         .child(header)
         .child(summary)
         .child(provenance)
-        .children(failure)
-        .children(record_error)
-        .children(probe)
-        .children(details)
-        .children(progress_view)
+        .when(!status.is_empty(), |card| {
+            card.child(
+                div()
+                    .mt(tokens.spacing.md)
+                    .flex()
+                    .flex_col()
+                    .gap(tokens.spacing.md)
+                    .children(status),
+            )
+        })
         .into_any_element()
+}
+
+/// A progress bar over the line that says what it measures.
+fn progress_block(bar: ProgressBar, label: String, tokens: &Tokens) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.xs)
+        .child(bar)
+        .child(div().text_xs().text_color(tokens.text_muted).child(label))
 }
 
 /// A warning on a card: a failure or an unreadable record.
 fn notice(tokens: &Tokens) -> gpui::Div {
     div()
-        .mt_3()
-        .px_3()
-        .py_2()
+        .px(tokens.spacing.md)
+        .py(tokens.spacing.sm)
         .rounded(tokens.radius.sm)
         .bg(tokens.warning_surface)
         .text_color(tokens.warning_text)
@@ -533,7 +539,6 @@ fn download_progress_view(
         DownloadAction::Cancel => tr(root.ui.locale, "cancel"),
     };
     div()
-        .mt_3()
         .flex()
         .items_center()
         .gap_3()
@@ -573,10 +578,8 @@ fn download_progress_view(
         .into_any_element()
 }
 
-fn format_bytes(bytes: Option<u64>) -> String {
-    let Some(bytes) = bytes else {
-        return "—".into();
-    };
+/// A size in binary units: `78 MiB`, `1.0 GiB`.
+pub(crate) fn format_size(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
     const GIB: f64 = MIB * 1024.0;
@@ -608,11 +611,11 @@ pub(crate) struct ProbeFacts {
     pub(crate) artifacts: Vec<FactRow>,
 }
 
-/// What a model card shows beyond its id, sizes and backends.
+/// What a model card shows beyond its id and install status.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ModelFacts {
-    pub(crate) task: String,
-    pub(crate) catalog_status: String,
+    /// Task, size, VRAM and backends, each only when the catalog names it.
+    pub(crate) summary: String,
     pub(crate) license: String,
     /// The full source; the card fades its tail.
     pub(crate) source: String,
@@ -625,6 +628,8 @@ pub(crate) struct ModelFacts {
     pub(crate) failure: Option<String>,
     /// Why the probe record cannot be read, and where it is.
     pub(crate) record_error: Option<String>,
+    /// Why a model that is not installed cannot be downloaded.
+    pub(crate) unavailable: Option<String>,
 }
 
 /// A card's facts: the catalog entry, the last probe record and failure,
@@ -644,10 +649,7 @@ pub(crate) fn model_facts(entry: &ModelAvailability, locale: Locale) -> ModelFac
             distinct
         });
     ModelFacts {
-        task: task_key(&model.task)
-            .map_or_else(|| model.task.clone(), |key| tr(locale, key).into()),
-        catalog_status: catalog_status_key(&model.status)
-            .map_or_else(|| model.status.clone(), |key| tr(locale, key).into()),
+        summary: fact_summary(model, locale),
         license: model.license.clone(),
         source: model.source.clone(),
         checksum: i18n::declared_checksums(locale, &distinct),
@@ -687,7 +689,28 @@ pub(crate) fn model_facts(entry: &ModelAvailability, locale: Locale) -> ModelFac
             .record_error
             .as_ref()
             .map(|error| i18n::probe_record_error(locale, error)),
+        unavailable: (model.status != READY_STATUS
+            && entry.install_state != ModelInstallState::Installed)
+            .then(|| tr(locale, unavailable_key(&model.status)).into()),
     }
+}
+
+/// A card's fact line: task, size, VRAM and backends, without labels; what
+/// the catalog leaves out is left out.
+fn fact_summary(model: &ModelCatalogEntry, locale: Locale) -> String {
+    let task =
+        task_key(&model.task).map_or_else(|| model.task.clone(), |key| tr(locale, key).into());
+    let mut facts = vec![task];
+    facts.extend(model.size_bytes.map(format_size));
+    facts.extend(
+        model
+            .estimated_vram_bytes
+            .map(|bytes| i18n::model_vram(locale, &format_size(bytes))),
+    );
+    if !model.candidate_backends.is_empty() {
+        facts.push(model.candidate_backends.join(", "));
+    }
+    facts.join(FACT_SEPARATOR)
 }
 
 /// Each artifact file and the SHA-256 the catalog declares for it, as the
@@ -726,12 +749,12 @@ fn task_key(task: &str) -> Option<&'static str> {
     }
 }
 
-fn catalog_status_key(status: &str) -> Option<&'static str> {
+/// Why the catalog does not offer a model that is not `ready`.
+fn unavailable_key(status: &str) -> &'static str {
     match status {
-        READY_STATUS => Some("catalog_ready"),
-        CANDIDATE_SOURCE_STATUS => Some("catalog_candidate_source"),
-        NATIVE_ADAPTER_STATUS => Some("catalog_requires_native_adapter"),
-        _ => None,
+        CANDIDATE_SOURCE_STATUS => "catalog_candidate_source",
+        NATIVE_ADAPTER_STATUS => "catalog_requires_native_adapter",
+        _ => "catalog_unavailable",
     }
 }
 
