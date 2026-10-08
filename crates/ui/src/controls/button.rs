@@ -30,6 +30,8 @@ pub(crate) struct Button {
     base: gpui_base::Button,
     label: SharedString,
     glyph: Option<SharedString>,
+    icon: Option<SharedString>,
+    leading: bool,
     variant: Variant,
     compact: bool,
     disabled: bool,
@@ -48,6 +50,8 @@ impl Button {
             id,
             label: label.into(),
             glyph: None,
+            icon: None,
+            leading: false,
             variant: Variant::Secondary,
             compact: false,
             disabled: false,
@@ -102,6 +106,17 @@ impl Button {
     /// Shows `glyph` in place of the label, which still names the button.
     pub(crate) fn glyph(mut self, glyph: impl Into<SharedString>) -> Self {
         self.glyph = Some(glyph.into());
+        self
+    }
+
+    pub(crate) fn icon(mut self, path: impl Into<SharedString>) -> Self {
+        self.icon = Some(path.into());
+        self
+    }
+
+    pub(crate) fn leading_icon(mut self, path: impl Into<SharedString>) -> Self {
+        self.icon = Some(path.into());
+        self.leading = true;
         self
     }
 
@@ -222,13 +237,27 @@ impl RenderOnce for Button {
                 .size_full()
                 .flex()
                 .items_center()
-                .justify_center()
+                .map(|content| {
+                    if self.leading {
+                        content.justify_start()
+                    } else {
+                        content.justify_center()
+                    }
+                })
                 .text_size(tokens.font_size.md)
                 .child(
                     div()
                         .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(tokens.spacing.md)
                         .line_height(relative(1.))
-                        .child(self.glyph.unwrap_or(self.label)),
+                        .map(|content| match self.icon {
+                            Some(path) => content
+                                .child(gpui::svg().path(path).size(gpui::px(18.)).text_color(text))
+                                .when(self.leading, |content| content.child(self.label)),
+                            None => content.child(self.glyph.unwrap_or(self.label)),
+                        }),
                 ),
         );
         with_focus_ring(button, ring, &focus, &tokens)

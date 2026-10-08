@@ -89,14 +89,8 @@ fn build_plugin(workspace: &Path) -> PathBuf {
     PLUGIN
         .get_or_init(|| {
             let status = Command::new("moon")
-                .args([
-                    "build",
-                    "--manifest-path",
-                    "plugins/assistant-test-plugin/moon.mod.json",
-                    "--target",
-                    "native",
-                ])
-                .current_dir(workspace)
+                .args(["build", "--target", "native"])
+                .current_dir(workspace.join("plugins/assistant-test-plugin"))
                 .status()
                 .expect("MoonBit compiler must be available for the Host acceptance test");
             assert!(status.success(), "MoonBit test plugin did not compile");

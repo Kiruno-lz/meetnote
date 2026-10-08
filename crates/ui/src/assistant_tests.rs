@@ -443,6 +443,26 @@ fn open_assistant_settings(cx: &mut VisualTestContext, view: &View) {
     cx.run_until_parked();
 }
 
+/// The taller grouped form requires scrolling a control into the viewport
+/// before the simulated pointer can press it.
+fn click_assistant_setting(cx: &mut VisualTestContext, view: &View, selector: &'static str) {
+    for _ in 0..3 {
+        let bounds = rendered(cx, selector);
+        let scroll = view.read_with(cx, |root, _| root.scroll.settings.clone());
+        let viewport = scroll.bounds();
+        let delta = if bounds.bottom() > viewport.bottom() {
+            viewport.bottom() - bounds.bottom() - gpui::px(8.)
+        } else if bounds.top() < viewport.top() {
+            viewport.top() - bounds.top() + gpui::px(8.)
+        } else {
+            break;
+        };
+        scroll.set_offset(gpui::point(scroll.offset().x, scroll.offset().y + delta));
+        cx.update(|window, cx| window.draw(cx).clear());
+    }
+    click_selector(cx, selector);
+}
+
 #[gpui::test]
 fn turning_automatic_write_back_off_explains_confirm_each(cx: &mut TestAppContext) {
     let settings = stored_key_settings();
@@ -455,14 +475,14 @@ fn turning_automatic_write_back_off_explains_confirm_each(cx: &mut TestAppContex
     assert!(shown(cx, "settings-write-mode-notice-automatic".into()));
     assert!(!shown(cx, "settings-write-mode-unsaved".into()));
 
-    click_selector(cx, "settings-write-mode-confirm-each");
+    click_assistant_setting(cx, &view, "settings-write-mode-confirm-each");
     assert!(shown(cx, "settings-write-mode-notice-confirm-each".into()));
     assert!(!shown(cx, "settings-write-mode-notice-automatic".into()));
     assert!(
         shown(cx, "settings-write-mode-unsaved".into()),
         "the change waits for Save"
     );
-    click_selector(cx, "assistant-save-settings");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
     wait_for(cx, &view, |root| {
         settings.snapshot().unwrap().assistant.write_mode == contracts::AgentWriteMode::ConfirmEach
             && root.saved_write_mode() == contracts::AgentWriteMode::ConfirmEach
@@ -513,18 +533,18 @@ fn connection_probes_succeed_fail_retry_and_cancel_off_the_ui_thread(cx: &mut Te
     ]);
     open_assistant_settings(cx, &view);
 
-    click_selector(cx, "assistant-readiness");
+    click_assistant_setting(cx, &view, "assistant-readiness");
     wait_for(cx, &view, |root| {
         matches!(root.assistant.diagnostic, Some(Ok(_)))
     });
     assert!(shown(cx, "assistant-probe-result".into()));
 
-    click_selector(cx, "assistant-model-probe");
+    click_assistant_setting(cx, &view, "assistant-model-probe");
     wait_for(cx, &view, |root| {
         matches!(root.assistant.diagnostic, Some(Err(_)))
     });
     assert!(shown(cx, "assistant-probe-error".into()));
-    click_selector(cx, "assistant-probe-retry");
+    click_assistant_setting(cx, &view, "assistant-probe-retry");
     wait_for(cx, &view, |root| {
         matches!(root.assistant.diagnostic, Some(Ok(_)))
     });
@@ -542,16 +562,16 @@ fn connection_probes_succeed_fail_retry_and_cancel_off_the_ui_thread(cx: &mut Te
 
     // A probe in flight can be cancelled; its late answer is dropped.
     gate.arm();
-    click_selector(cx, "assistant-readiness");
+    click_assistant_setting(cx, &view, "assistant-readiness");
     wait_for(cx, &view, |_| gate.counts().0 == 1);
     assert!(shown(cx, "assistant-probe-running".into()));
-    click_selector(cx, "assistant-model-probe");
+    click_assistant_setting(cx, &view, "assistant-model-probe");
     assert_eq!(
         assistant.probe_calls.lock().unwrap().len(),
         4,
         "no second probe starts while one runs"
     );
-    click_selector(cx, "assistant-cancel-probe");
+    click_assistant_setting(cx, &view, "assistant-cancel-probe");
     assert_eq!(probing(&view, cx), None);
     gate.release();
     for _ in 0..20 {
@@ -561,7 +581,7 @@ fn connection_probes_succeed_fail_retry_and_cancel_off_the_ui_thread(cx: &mut Te
     assert!(shown(cx, "assistant-probe-cancelled".into()));
     assert!(!shown(cx, "assistant-probe-result".into()));
 
-    click_selector(cx, "assistant-readiness");
+    click_assistant_setting(cx, &view, "assistant-readiness");
     wait_for(cx, &view, |root| {
         matches!(root.assistant.diagnostic, Some(Err(_)))
     });
@@ -601,7 +621,7 @@ fn an_endpoint_changed_without_the_key_is_refused_next_to_the_key_field(cx: &mut
     });
 
     retype(cx, &base_url, "http://127.0.0.1:4010");
-    click_selector(cx, "assistant-save-settings");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
     wait_for(cx, &view, |root: &RootView| root.settings_error.is_some());
     let error = view.read_with(cx, |root, _| root.settings_error.clone().unwrap());
     assert_eq!(error.code, SETTINGS_CREDENTIAL_TARGET_CONFLICT);
@@ -618,7 +638,7 @@ fn an_endpoint_changed_without_the_key_is_refused_next_to_the_key_field(cx: &mut
     assert_eq!(field_value(cx, &base_url), "http://127.0.0.1:4010");
 
     retype(cx, &api_key, "sk-new-target");
-    click_selector(cx, "assistant-save-settings");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
     wait_for(cx, &view, |_| {
         settings.snapshot().unwrap().assistant.connections[0].base_url == "http://127.0.0.1:4010"
     });

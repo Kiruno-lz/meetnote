@@ -25,25 +25,38 @@ struct CapturedRequest {
     body: Value,
 }
 
-/// Serve `responses` in order, one connection each, and report every request.
+/// Serve `responses` in order, one provider request each, and report those requests.
 fn spawn_stub(responses: Vec<(u16, Value)>) -> (String, Receiver<CapturedRequest>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         for (status, body) in responses {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            let request = read_request(&mut stream);
-            let _ = sender.send(request);
-            let body = body.to_string();
-            let reason = if status == 200 { "OK" } else { "Error" };
-            let _ = write!(
-                stream,
-                "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            );
+            loop {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let request = read_request(&mut stream);
+                // Unrelated local clients discover servers with HEAD /. That
+                // health route has no provider response to consume. Capture
+                // every other request, including credentialless API calls.
+                if request.method == "HEAD" && request.path == "/" {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    );
+                    continue;
+                }
+                let _ = sender.send(request);
+                let body = body.to_string();
+                let reason = if status == 200 { "OK" } else { "Error" };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} {reason}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                break;
+            }
         }
     });
     (format!("http://{address}"), receiver)
@@ -299,4 +312,46 @@ fn host_probe_refuses_a_symlinked_credentials_directory_before_contacting_the_pr
         leaked.and_then(|request| request.authorization)
     );
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn stub_health_checks_do_not_consume_or_hide_provider_requests() {
+    let (base_url, requests) = spawn_stub(vec![
+        (200, serde_json::json!({})),
+        (200, serde_json::json!({})),
+    ]);
+    let send = |request: &str| {
+        let mut stream = TcpStream::connect(base_url.trim_start_matches("http://")).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    };
+    assert!(
+        send("HEAD / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .starts_with("HTTP/1.1 404")
+    );
+    assert!(requests.try_recv().is_err());
+    assert!(send("POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").starts_with("HTTP/1.1 200"));
+    let captured = requests.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(captured.method, "POST");
+    assert_eq!(captured.path, "/v1/chat/completions");
+    assert!(
+        captured.authorization.is_none(),
+        "credentialless provider requests must still be captured"
+    );
+    assert!(send(
+        "HEAD /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+    )
+    .starts_with("HTTP/1.1 200"));
+    assert_eq!(
+        requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .method,
+        "HEAD"
+    );
 }

@@ -525,6 +525,7 @@ pub(crate) struct RootView {
     dialog_return: Option<FocusHandle>,
     /// The sidebar entries, in `pages::chrome::ENTRIES` order.
     pub(crate) nav_focus: [FocusHandle; 4],
+    pub(crate) sidebar_sizing: Entity<controls::sidebar::SidebarSizing>,
     /// The project tree, one tab stop whose arrow keys move the selection.
     pub(crate) tree_focus: FocusHandle,
     /// Scrolls the tree's selection into view on the next render, after a
@@ -718,6 +719,7 @@ impl RootView {
             dialog_focus: cx.focus_handle(),
             dialog_return: None,
             nav_focus: std::array::from_fn(|_| cx.focus_handle()),
+            sidebar_sizing: cx.new(|_| controls::sidebar::SidebarSizing::default()),
             tree_focus: cx.focus_handle(),
             reveal_tree_selection: false,
             detail_focus: cx.focus_handle(),
@@ -2489,19 +2491,35 @@ impl RootView {
 
     pub(crate) fn select_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
         self.ui.selected_project = Some(project_id);
+        self.ui.remember_navigation();
         self.ui.notice.clear();
         self.check_selected_audio(cx);
         cx.notify();
     }
 
     pub(crate) fn navigate(&mut self, route: Route, cx: &mut Context<Self>) {
+        self.sidebar_sizing
+            .update(cx, |state, _| state.reset_interaction());
         self.ui.route = route;
+        self.ui.remember_navigation();
         self.ui.detail_open = false;
         // Processing or another writer may have changed the library.
         if route == Route::Settings {
             self.reload_speaker_profiles(cx);
         }
         cx.notify();
+    }
+
+    pub(crate) fn travel(&mut self, forward: bool, cx: &mut Context<Self>) {
+        if self.ui.travel(forward) {
+            self.sidebar_sizing
+                .update(cx, |state, _| state.reset_interaction());
+            if self.ui.route == Route::Settings {
+                self.reload_speaker_profiles(cx);
+            }
+            self.check_selected_audio(cx);
+            cx.notify();
+        }
     }
 
     pub(crate) fn set_locale(&mut self, locale: i18n::Locale, cx: &mut Context<Self>) {
@@ -4383,7 +4401,7 @@ impl Render for RootView {
             )
             .into_any_element()
         });
-        let shell = pages::chrome::shell(self, body, detail, cx)
+        let shell = pages::chrome::shell(self, body, detail, window, cx)
             .children(self.speaker_library_dialog(cx))
             .children(self.speaker_confirmation_dialog(cx));
         controls::window::root(shell, cx)
