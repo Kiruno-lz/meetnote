@@ -59,8 +59,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "process") => "处理项目",
         (Locale::ZhCn, "reprocess") => "重新处理",
         (Locale::ZhCn, "cancel") => "取消",
-        (Locale::ZhCn, "summary") => "总结文",
-        (Locale::ZhCn, "original") => "原始文",
+        (Locale::ZhCn, "summary") => "摘要",
+        (Locale::ZhCn, "original") => "转录",
         (Locale::ZhCn, "no_summary") => "还没有总结。可以使用助手整理这个项目。",
         (Locale::ZhCn, "need_process") => "请先处理项目以生成带 speaker 的转录。",
         (Locale::ZhCn, "empty_meetings") => "导入音频以创建项目。",
@@ -405,7 +405,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "reprocess") => "Reprocess",
         (Locale::EnUs, "cancel") => "Cancel",
         (Locale::EnUs, "summary") => "Summary",
-        (Locale::EnUs, "original") => "Original",
+        (Locale::EnUs, "original") => "Transcript",
         (Locale::EnUs, "no_summary") => {
             "No summary yet. Use the Assistant to organize this project."
         }

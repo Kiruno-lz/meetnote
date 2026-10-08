@@ -358,10 +358,9 @@ fn main_panel(
         // processed.
         let mut controls = RadioGroup::new("content-mode", tr(locale, "content_mode"))
             .debug_selector(|| "content-mode-group".into())
+            .segmented()
             .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap_2()
+            .self_start()
             .option(
                 mode == ContentMode::Summary,
                 crate::components::mode_button(tr(locale, "summary"), ContentMode::Summary, cx),

@@ -266,6 +266,36 @@ fn the_meetings_route_shows_the_tree_content_and_process_button(cx: &mut TestApp
     );
 }
 
+/// The content views are the segments of one control: adjacent segments
+/// inset in a track one control tall.
+#[gpui::test]
+fn the_content_views_form_one_segmented_control(cx: &mut TestAppContext) {
+    let (_window, cx, page) = open_route(cx, Route::Meetings);
+    let track = visible(cx, "content-mode-group");
+    assert!(within(track, page));
+    assert_eq!(track.size.height, gpui::px(32.), "one control tall");
+    let segments = [
+        "content-mode-summary",
+        "content-mode-original",
+        "content-mode-edit",
+    ]
+    .map(|selector| visible(cx, selector));
+    for (index, segment) in segments.iter().enumerate() {
+        assert!(
+            segment.top() > track.top() && segment.bottom() < track.bottom(),
+            "segment {index} is inset in the track: {segment:?} in {track:?}"
+        );
+        assert!(segment.left() > track.left() && segment.right() < track.right());
+        if let Some(before) = index.checked_sub(1).map(|before| segments[before]) {
+            let gap = segment.left() - before.right();
+            assert!(
+                gap >= gpui::px(0.) && gap <= gpui::px(2.),
+                "segments {before:?} and {segment:?} adjoin"
+            );
+        }
+    }
+}
+
 /// The document header beside an open Detail: the title with the Detail
 /// toggle at its right, the file line under it, and the status and actions
 /// of a document whose audio is missing on one line.

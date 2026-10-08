@@ -22,6 +22,8 @@ enum Variant {
     Secondary,
     Ghost,
     Danger,
+    /// A segment of a segmented control.
+    Segment,
 }
 
 #[derive(IntoElement)]
@@ -93,6 +95,15 @@ impl Button {
         } else {
             Variant::Secondary
         };
+        self.choice = Some(selected);
+        self
+    }
+
+    /// One segment of a segmented control: raised on a hairline while
+    /// `selected`, muted text on the track otherwise; a radio button checked
+    /// while selected for assistive technology.
+    pub(super) fn segment(mut self, selected: bool) -> Self {
+        self.variant = Variant::Segment;
         self.choice = Some(selected);
         self
     }
@@ -173,11 +184,27 @@ impl InteractiveElement for Button {
 impl RenderOnce for Button {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = *theme::tokens(cx);
+        let segment = self.variant == Variant::Segment;
+        let selected = self.choice == Some(true);
         let colors = match self.variant {
             Variant::Primary => tokens.button.primary,
             Variant::Secondary => tokens.button.secondary,
             Variant::Ghost => tokens.button.ghost,
             Variant::Danger => tokens.button.danger,
+            Variant::Segment => {
+                let mut colors = tokens.button.ghost;
+                if selected {
+                    colors.fill = tokens.raised;
+                    colors.hover = tokens.raised;
+                    colors.pressed = tokens.raised;
+                    colors.text = tokens.text;
+                } else {
+                    colors.hover = tokens.wash;
+                    colors.pressed = tokens.wash;
+                    colors.text = tokens.text_muted;
+                }
+                colors
+            }
         };
         let (fill, text) = if self.disabled {
             (colors.disabled, tokens.button.disabled_text)
@@ -222,6 +249,13 @@ impl RenderOnce for Button {
                 button.min_w(tokens.control_height.md)
             })
             .rounded(tokens.radius.sm)
+            .when(segment, |button| {
+                button.border_1().border_color(if selected {
+                    tokens.hairline
+                } else {
+                    gpui::transparent_black()
+                })
+            })
             .cursor_default()
             .bg(fill)
             .text_color(text)
@@ -244,7 +278,11 @@ impl RenderOnce for Button {
                         content.justify_center()
                     }
                 })
-                .text_size(tokens.font_size.md)
+                .text_size(if segment {
+                    tokens.font_size.sm
+                } else {
+                    tokens.font_size.md
+                })
                 .child(
                     div()
                         .flex_none()
@@ -359,6 +397,12 @@ mod tests {
                 choice.accessibility_role(),
                 (Role::RadioButton, Some(selected))
             );
+            let segment = Button::new("summary", "Summary").segment(selected);
+            assert_eq!(
+                segment.accessibility_role(),
+                (Role::RadioButton, Some(selected))
+            );
+            assert_eq!(segment.variant, Variant::Segment);
             let variant = if selected {
                 Variant::Primary
             } else {
