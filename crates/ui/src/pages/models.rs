@@ -53,7 +53,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .track_scroll(&scroll)
         .flex()
         .flex_col()
-        .gap_4();
+        .gap(tokens.spacing.lg);
     if groups.is_empty() {
         content = content.child(empty_card(tr(root.ui.locale, "no_models"), &tokens));
     } else {
@@ -79,7 +79,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .collect::<Vec<_>>();
             let group = div()
                 .flex_shrink_0()
-                .rounded(tokens.radius.md)
+                .rounded(tokens.radius.lg)
                 .bg(tokens.surface)
                 .child(
                     Collapsible::new(format!("model-family-{family}"), family.clone())
@@ -145,23 +145,32 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .min_w_0()
         .h_full()
         .min_h_0()
-        .p_6()
+        .p(tokens.spacing.xl)
         .flex()
         .flex_col()
-        .gap_3()
+        .gap(tokens.spacing.md)
+        // The title and its readiness line read as one block; the list
+        // starts a step further down.
         .child(
             div()
                 .flex_shrink_0()
-                .text_2xl()
-                .child(tr(root.ui.locale, "models")),
-        )
-        .child(
-            div()
-                .debug_selector(|| "models-readiness".into())
-                .flex_shrink_0()
-                .text_sm()
-                .text_color(tokens.text_muted)
-                .child(readiness_text(&root.installation, root.ui.locale)),
+                .pb(tokens.spacing.xs)
+                .flex()
+                .flex_col()
+                .gap(tokens.spacing.xs)
+                .child(
+                    div()
+                        .debug_selector(|| "models-title".into())
+                        .text_2xl()
+                        .child(tr(root.ui.locale, "models")),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "models-readiness".into())
+                        .text_sm()
+                        .text_color(tokens.text_muted)
+                        .child(readiness_text(&root.installation, root.ui.locale)),
+                ),
         )
         // The scrollbar stays outside the fade.
         .child(
@@ -434,7 +443,7 @@ fn model_card(
                     .gap_x(tokens.spacing.sm)
                     .child(
                         div()
-                            .font_weight(FontWeight::MEDIUM)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .child(failure.headline),
                     )
                     .child(failure.explanation),
@@ -498,7 +507,11 @@ fn model_card(
             )
             .debug_selector(marked("failure-detail"))
         });
+        // A hairline sets the details apart from what is going on.
         let mut details = div()
+            .pt(tokens.spacing.md)
+            .border_t_1()
+            .border_color(tokens.hairline)
             .flex()
             .flex_col()
             .gap(tokens.spacing.sm)
@@ -601,7 +614,7 @@ fn notice(tokens: &Tokens) -> gpui::Div {
         .text_sm()
         .flex()
         .items_center()
-        .gap_3()
+        .gap(tokens.spacing.md)
 }
 
 /// A titled text of a card's details, in muted type wrapped to the card's
@@ -610,7 +623,7 @@ fn detail_text(title: &'static str, text: String, tokens: &Tokens) -> gpui::Div 
     div()
         .flex()
         .flex_col()
-        .gap_1()
+        .gap(tokens.spacing.xs)
         .text_xs()
         .child(div().text_color(tokens.accent_text).child(title))
         .child(div().min_w_0().text_color(tokens.text_muted).child(text))
@@ -621,7 +634,7 @@ fn fact_rows(title: &'static str, rows: &[FactRow], prefix: &str, tokens: &Token
     div()
         .flex()
         .flex_col()
-        .gap_1()
+        .gap(tokens.spacing.xs)
         .text_xs()
         .child(div().text_color(tokens.accent_text).child(title))
         .children(rows.iter().enumerate().map(|(index, row)| {
@@ -632,7 +645,7 @@ fn fact_rows(title: &'static str, rows: &[FactRow], prefix: &str, tokens: &Token
                     move || selector.clone()
                 })
                 .flex()
-                .gap_3()
+                .gap(tokens.spacing.md)
                 .child(
                     div()
                         .w(DETAIL_LABEL_WIDTH)

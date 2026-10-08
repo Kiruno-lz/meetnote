@@ -636,6 +636,24 @@ fn the_page_says_whether_the_default_models_are_ready_and_each_family_what_is_do
         "说话人分离模型尚未就绪，可在下方下载或到设置中选择"
     );
 
+    // The page keeps one rhythm of spacing tokens: the title and its
+    // readiness line read as one block above the list, and every card sits
+    // one step inside its family and keeps its content one step inside.
+    let spacing = view.read_with(cx, |_, cx| crate::theme::tokens(cx).spacing);
+    let title = rendered(cx, "models-title");
+    let list = rendered(cx, "models-scroll");
+    assert_eq!(readiness.top() - title.bottom(), spacing.xs);
+    assert_eq!(list.top() - readiness.bottom(), spacing.lg);
+    let family = rendered(cx, "model-family-a-bundle");
+    let card = rendered(cx, "model-card-bundle-asr");
+    let header = rendered(cx, "model-header-bundle-asr");
+    assert_eq!(card.left() - family.left(), spacing.lg);
+    assert_eq!(family.right() - card.right(), spacing.lg);
+    assert_eq!(
+        (header.left() - card.left(), card.right() - header.right()),
+        (spacing.lg, spacing.lg)
+    );
+
     // Each family header ends with how many of its models are downloaded.
     for family in ["a-bundle", "b-native", "c-candidate"] {
         let header = rendered(cx, leak(format!("model-family-{family}")));
