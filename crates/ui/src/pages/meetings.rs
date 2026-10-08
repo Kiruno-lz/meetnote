@@ -674,7 +674,7 @@ fn document_header(
                         .gap(tokens.spacing.xs)
                         .child(
                             div()
-                                .text_xs()
+                                .text_sm()
                                 .text_color(tokens.text_muted)
                                 .child(tr(locale, hint)),
                         )
