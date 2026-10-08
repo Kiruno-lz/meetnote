@@ -3338,6 +3338,20 @@ impl RootView {
         }
     }
 
+    /// Opens Settings at its Assistant section, where a connection, key or
+    /// limit an Assistant error names is fixed.
+    pub(crate) fn open_assistant_settings(&mut self, cx: &mut Context<Self>) {
+        self.navigate(Route::Settings, cx);
+        if let Some(section) = pages::settings::SECTIONS
+            .iter()
+            .position(|key| *key == "assistant_settings")
+        {
+            self.ui.settings_section = section;
+            self.scroll.settings.scroll_to_top_of_item(section);
+        }
+        cx.notify();
+    }
+
     pub(crate) fn select_assistant_scene(&mut self, scene: AgentScene, cx: &mut Context<Self>) {
         self.assistant.select_scene(scene);
         cx.notify();

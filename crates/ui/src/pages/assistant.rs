@@ -79,6 +79,12 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .sent_request()
                 .map(|request| render_request(request.to_owned(), &tokens)),
         )
+        .children(match &root.assistant.task {
+            AssistantTaskState::Failed(error) => {
+                Some(render_error(error, retry, busy, root.ui.locale, cx))
+            }
+            _ => None,
+        })
         .children(result.map(|result| render_result(result, warnings, root.ui.locale, cx)))
         .children(
             (!receipts.is_empty())
@@ -128,14 +134,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         .secondary()
                         .disabled(!cancellable)
                         .on_click(cx.listener(RootView::cancel_assistant)),
-                )
-                .children(retry.then(|| {
-                    Button::new("assistant-retry", tr(root.ui.locale, "assistant_retry"))
-                        .debug_selector(|| "assistant-retry".into())
-                        .secondary()
-                        .disabled(busy)
-                        .on_click(cx.listener(RootView::retry_assistant_run))
-                })),
+                ),
         )
         .child(
             div()
@@ -530,16 +529,23 @@ fn task_label(locale: Locale, task: &AssistantTaskState) -> String {
             tr(locale, "assistant_awaiting_confirmation").into()
         }
         AssistantTaskState::Completed => tr(locale, "assistant_completed").into(),
-        AssistantTaskState::Partial(error) => {
-            format!("{} · {error}", tr(locale, "assistant_partial"))
-        }
-        AssistantTaskState::Failed(error) => format!("{} · {error}", tr(locale, "failed")),
+        AssistantTaskState::Partial(error) => format!(
+            "{} · {}",
+            tr(locale, "assistant_partial"),
+            describe_error(locale, error).title
+        ),
+        AssistantTaskState::Failed(error) => format!(
+            "{} · {}",
+            tr(locale, "failed"),
+            describe_error(locale, error).title
+        ),
         AssistantTaskState::Cancelled => tr(locale, "assistant_cancelled").into(),
     }
 }
 
-/// The position of the receipts among the results of a run that wrote:
-/// after its request and result, before its pending review.
+/// The position of the receipts among the results of a run that wrote and
+/// has no error to show: after its request and result, before its pending
+/// review.
 pub(crate) const RECEIPTS_ITEM: usize = 2;
 
 /// The request of the run, quoted at the top of its results.
@@ -715,14 +721,315 @@ fn render_warning(
         .px_3()
         .py_2()
         .rounded(tokens.radius.sm)
-        .bg(tokens.warning_surface)
-        .text_color(tokens.warning_text)
-        .child(info_line(
-            tr(locale, "assistant_warning"),
-            format!("{}: {}", warning.code, warning.message),
+        .bg(tokens.raised)
+        .child(problem(
+            "icons/triangle-alert.svg",
+            tokens.warning,
+            &warning,
+            locale,
             tokens,
         ))
         .into_any_element()
+}
+
+/// The error the task ended with: what happened and what to do, a way to
+/// Assistant settings when that is where it is fixed, and the retry of a
+/// run that can be sent again.
+fn render_error(
+    error: &AssistantUiError,
+    retry: bool,
+    busy: bool,
+    locale: Locale,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let tokens = *theme::tokens(cx);
+    let opens_settings = describe_error(locale, error).opens_settings;
+    div()
+        .debug_selector(|| "assistant-error".into())
+        .rounded(tokens.radius.md)
+        .border_1()
+        .border_color(tokens.border)
+        .bg(tokens.surface)
+        .p_4()
+        .flex()
+        .flex_col()
+        .gap_3()
+        .child(problem(
+            "icons/circle-x.svg",
+            tokens.danger,
+            error,
+            locale,
+            &tokens,
+        ))
+        .when(opens_settings || retry, |card| {
+            card.child(
+                div()
+                    // Under the text, past the icon.
+                    .pl(PROBLEM_ICON + tokens.spacing.sm)
+                    .flex()
+                    .gap_2()
+                    .when(opens_settings, |actions| {
+                        actions.child(
+                            Button::new(
+                                "assistant-open-settings",
+                                tr(locale, "assistant_open_settings"),
+                            )
+                            .debug_selector(|| "assistant-open-settings".into())
+                            .secondary()
+                            .compact()
+                            .on_click(
+                                cx.listener(|root, _, _, cx| root.open_assistant_settings(cx)),
+                            ),
+                        )
+                    })
+                    .when(retry, |actions| {
+                        actions.child(
+                            Button::new("assistant-retry", tr(locale, "assistant_retry"))
+                                .debug_selector(|| "assistant-retry".into())
+                                .secondary()
+                                .compact()
+                                .disabled(busy)
+                                .on_click(cx.listener(RootView::retry_assistant_run)),
+                        )
+                    }),
+            )
+        })
+        .into_any_element()
+}
+
+/// The size of a problem's icon.
+const PROBLEM_ICON: Pixels = px(16.);
+
+/// An error or warning in words: an icon in its semantic color, what
+/// happened, what to do next, and the code in small print for
+/// troubleshooting.
+fn problem(
+    icon: &'static str,
+    color: gpui::Hsla,
+    error: &AssistantUiError,
+    locale: Locale,
+    tokens: &Tokens,
+) -> gpui::Div {
+    let copy = describe_error(locale, error);
+    div()
+        .flex()
+        .gap(tokens.spacing.sm)
+        .child(
+            div()
+                .flex_shrink_0()
+                .h(px(20.))
+                .flex()
+                .items_center()
+                .child(gpui::svg().path(icon).size(PROBLEM_ICON).text_color(color)),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(tokens.text)
+                        .child(copy.title),
+                )
+                .children(
+                    copy.hint
+                        .map(|hint| div().text_sm().text_color(tokens.text_muted).child(hint)),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "assistant-error-details".into())
+                        .text_xs()
+                        .text_color(tokens.text_subtle)
+                        .child(error_details(error)),
+                ),
+        )
+}
+
+/// What an error means for the person at the page, by its code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorKind {
+    Authentication,
+    CredentialFile,
+    ConnectionSetup,
+    Disabled,
+    Timeout,
+    RateLimited,
+    ProviderResponse,
+    ModelUnsupported,
+    ContextLimitUnknown,
+    ContextTooLarge,
+    StepLimit,
+    InvalidChange,
+    OutOfScope,
+    DocumentChanged,
+    TreeRule,
+    WriteFailed,
+    Expired,
+    Unavailable,
+    Interrupted,
+    Cancelled,
+}
+
+impl ErrorKind {
+    /// Whether Assistant settings are where the error is fixed.
+    fn opens_settings(self) -> bool {
+        matches!(
+            self,
+            Self::Authentication
+                | Self::CredentialFile
+                | Self::ConnectionSetup
+                | Self::Disabled
+                | Self::Timeout
+                | Self::ProviderResponse
+                | Self::ModelUnsupported
+                | Self::ContextLimitUnknown
+                | Self::ContextTooLarge
+                | Self::StepLimit
+        )
+    }
+}
+
+/// Every code an Assistant run, decision or undo reports: the agent
+/// contract's codes and the desktop service's own.
+const KNOWN_ERRORS: [(&str, ErrorKind); 37] = [
+    ("PROVIDER_AUTHENTICATION_FAILED", ErrorKind::Authentication),
+    (
+        "ASSISTANT_API_KEY_FILE_READ_FAILED",
+        ErrorKind::CredentialFile,
+    ),
+    ("ASSISTANT_API_KEY_FILE_EMPTY", ErrorKind::CredentialFile),
+    ("CONNECTION_NOT_CONFIGURED", ErrorKind::ConnectionSetup),
+    ("ASSISTANT_SETTINGS_INVALID", ErrorKind::ConnectionSetup),
+    ("ASSISTANT_DISABLED", ErrorKind::Disabled),
+    ("PROVIDER_TIMEOUT", ErrorKind::Timeout),
+    ("PROVIDER_RATE_LIMITED", ErrorKind::RateLimited),
+    ("PROVIDER_RESPONSE_INVALID", ErrorKind::ProviderResponse),
+    (
+        "PROVIDER_CAPABILITY_UNSUPPORTED",
+        ErrorKind::ModelUnsupported,
+    ),
+    ("CONTEXT_LIMIT_UNKNOWN", ErrorKind::ContextLimitUnknown),
+    ("CONTEXT_LIMIT_EXCEEDED", ErrorKind::ContextTooLarge),
+    ("TOOL_LOOP_LIMIT_REACHED", ErrorKind::StepLimit),
+    ("TOOL_UNKNOWN", ErrorKind::InvalidChange),
+    ("TOOL_NOT_ALLOWED", ErrorKind::InvalidChange),
+    ("TOOL_ARGUMENTS_INVALID", ErrorKind::InvalidChange),
+    ("SKILL_NOT_FOUND", ErrorKind::InvalidChange),
+    ("DOCUMENT_FIELD_READ_ONLY", ErrorKind::InvalidChange),
+    ("SEGMENT_NOT_FOUND", ErrorKind::InvalidChange),
+    ("RANGE_INVALID_ORDER", ErrorKind::InvalidChange),
+    ("RANGE_OUTSIDE_PARENT", ErrorKind::InvalidChange),
+    ("RANGE_OVERLAP", ErrorKind::InvalidChange),
+    ("RANGE_COVERAGE_GAP", ErrorKind::InvalidChange),
+    ("WRITE_POLICY_REJECTED", ErrorKind::InvalidChange),
+    ("DOCUMENT_ACCESS_DENIED", ErrorKind::OutOfScope),
+    ("DOCUMENT_REVISION_CONFLICT", ErrorKind::DocumentChanged),
+    ("DOCUMENT_NOT_FOUND", ErrorKind::DocumentChanged),
+    ("TREE_PARENT_NOT_FOUND", ErrorKind::TreeRule),
+    ("TREE_CYCLE", ErrorKind::TreeRule),
+    ("TREE_MAX_DEPTH_EXCEEDED", ErrorKind::TreeRule),
+    ("TREE_CROSS_AUDIO_ASSET", ErrorKind::TreeRule),
+    ("WRITE_TRANSACTION_FAILED", ErrorKind::WriteFailed),
+    ("IDEMPOTENCY_CONFLICT", ErrorKind::WriteFailed),
+    ("WRITE_CONFIRMATION_EXPIRED", ErrorKind::Expired),
+    ("ASSISTANT_RUNTIME_NOT_CONNECTED", ErrorKind::Unavailable),
+    ("TASK_FAILED", ErrorKind::Interrupted),
+    ("TASK_CANCELLED", ErrorKind::Cancelled),
+];
+
+fn error_title_key(kind: ErrorKind) -> &'static str {
+    match kind {
+        ErrorKind::Authentication => "assistant_error_authentication",
+        ErrorKind::CredentialFile => "assistant_error_credential_file",
+        ErrorKind::ConnectionSetup => "assistant_error_connection",
+        ErrorKind::Disabled => "assistant_error_disabled",
+        ErrorKind::Timeout => "assistant_error_timeout",
+        ErrorKind::RateLimited => "assistant_error_rate_limited",
+        ErrorKind::ProviderResponse => "assistant_error_provider_response",
+        ErrorKind::ModelUnsupported => "assistant_error_model_unsupported",
+        ErrorKind::ContextLimitUnknown => "assistant_error_context_unknown",
+        ErrorKind::ContextTooLarge => "assistant_error_context_exceeded",
+        ErrorKind::StepLimit => "assistant_error_step_limit",
+        ErrorKind::InvalidChange => "assistant_error_invalid_change",
+        ErrorKind::OutOfScope => "assistant_error_out_of_scope",
+        ErrorKind::DocumentChanged => "assistant_error_document_changed",
+        ErrorKind::TreeRule => "assistant_error_tree_rule",
+        ErrorKind::WriteFailed => "assistant_error_write_failed",
+        ErrorKind::Expired => "assistant_error_expired",
+        ErrorKind::Unavailable => "assistant_error_unavailable",
+        ErrorKind::Interrupted => "assistant_error_interrupted",
+        ErrorKind::Cancelled => "assistant_error_cancelled",
+    }
+}
+
+fn error_hint_key(kind: ErrorKind) -> &'static str {
+    match kind {
+        ErrorKind::Authentication => "assistant_error_authentication_hint",
+        ErrorKind::CredentialFile => "assistant_error_credential_file_hint",
+        ErrorKind::ConnectionSetup => "assistant_error_connection_hint",
+        ErrorKind::Disabled => "assistant_error_disabled_hint",
+        ErrorKind::Timeout => "assistant_error_timeout_hint",
+        ErrorKind::RateLimited => "assistant_error_rate_limited_hint",
+        ErrorKind::ProviderResponse => "assistant_error_provider_response_hint",
+        ErrorKind::ModelUnsupported => "assistant_error_model_unsupported_hint",
+        ErrorKind::ContextLimitUnknown => "assistant_error_context_unknown_hint",
+        ErrorKind::ContextTooLarge => "assistant_error_context_exceeded_hint",
+        ErrorKind::StepLimit => "assistant_error_step_limit_hint",
+        ErrorKind::InvalidChange => "assistant_error_invalid_change_hint",
+        ErrorKind::OutOfScope => "assistant_error_out_of_scope_hint",
+        ErrorKind::DocumentChanged => "assistant_error_document_changed_hint",
+        ErrorKind::TreeRule => "assistant_error_tree_rule_hint",
+        ErrorKind::WriteFailed => "assistant_error_write_failed_hint",
+        ErrorKind::Expired => "assistant_error_expired_hint",
+        ErrorKind::Unavailable => "assistant_error_unavailable_hint",
+        ErrorKind::Interrupted => "assistant_error_interrupted_hint",
+        ErrorKind::Cancelled => "assistant_error_cancelled_hint",
+    }
+}
+
+/// How the page words an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ErrorCopy {
+    /// What happened.
+    title: String,
+    /// What to do next.
+    hint: Option<&'static str>,
+    /// Whether Assistant settings are where to do it.
+    opens_settings: bool,
+}
+
+/// A known code reads as what happened and what to do next; an unknown one
+/// falls back to the error's own message.
+fn describe_error(locale: Locale, error: &AssistantUiError) -> ErrorCopy {
+    match KNOWN_ERRORS.iter().find(|(code, _)| *code == error.code) {
+        Some(&(_, kind)) => ErrorCopy {
+            title: tr(locale, error_title_key(kind)).into(),
+            hint: Some(tr(locale, error_hint_key(kind))),
+            opens_settings: kind.opens_settings(),
+        },
+        None => ErrorCopy {
+            title: match error.message.trim() {
+                "" => tr(locale, "assistant_error_unknown").into(),
+                message => message.into(),
+            },
+            hint: None,
+            opens_settings: false,
+        },
+    }
+}
+
+/// The code, and the raw message of a known code, for troubleshooting.
+fn error_details(error: &AssistantUiError) -> String {
+    let known = KNOWN_ERRORS.iter().any(|(code, _)| *code == error.code);
+    match error.message.trim() {
+        message if known && !message.is_empty() => format!("{} · {message}", error.code),
+        _ => error.code.clone(),
+    }
 }
 
 /// A receipt of a write the run applied: what it changed, named by
@@ -1341,12 +1648,210 @@ mod tests {
     }
 
     #[test]
-    fn partial_task_label_preserves_warning_code_for_non_visual_regression() {
-        let label = task_label(
+    fn partial_and_failed_task_labels_read_as_sentences_without_codes() {
+        let partial = task_label(
             Locale::EnUs,
-            &AssistantTaskState::Partial(warning("PARTIAL_RESULT")),
+            &AssistantTaskState::Partial(warning("PROVIDER_TIMEOUT")),
         );
-        assert!(label.contains("partially"));
-        assert!(label.contains("PARTIAL_RESULT"));
+        assert!(partial.contains("partially"), "{partial}");
+        assert!(partial.contains("took too long"), "{partial}");
+        assert!(!partial.contains("PROVIDER_TIMEOUT"), "{partial}");
+        let failed = task_label(
+            Locale::ZhCn,
+            &AssistantTaskState::Failed(warning("PROVIDER_AUTHENTICATION_FAILED")),
+        );
+        assert!(failed.contains("API key 无效或已过期"), "{failed}");
+        assert!(!failed.contains("PROVIDER_"), "{failed}");
+    }
+
+    /// `AgentErrorCode` as it crosses the service boundary:
+    /// `ProviderTimeout` becomes `PROVIDER_TIMEOUT`.
+    fn screaming_snake(code: contracts::AgentErrorCode) -> String {
+        let mut name = String::new();
+        for (index, letter) in format!("{code:?}").chars().enumerate() {
+            if letter.is_uppercase() && index > 0 {
+                name.push('_');
+            }
+            name.push(letter.to_ascii_uppercase());
+        }
+        name
+    }
+
+    /// Every code of the agent contract. The match stops compiling when the
+    /// contract gains a code, so a new code is mapped before it ships.
+    fn every_agent_code() -> Vec<String> {
+        use contracts::AgentErrorCode as Code;
+        let codes = [
+            Code::ToolUnknown,
+            Code::ToolNotAllowed,
+            Code::ToolArgumentsInvalid,
+            Code::ToolLoopLimitReached,
+            Code::SkillNotFound,
+            Code::DocumentNotFound,
+            Code::DocumentAccessDenied,
+            Code::DocumentRevisionConflict,
+            Code::DocumentFieldReadOnly,
+            Code::SegmentNotFound,
+            Code::RangeInvalidOrder,
+            Code::RangeOutsideParent,
+            Code::RangeOverlap,
+            Code::RangeCoverageGap,
+            Code::TreeParentNotFound,
+            Code::TreeCycle,
+            Code::TreeMaxDepthExceeded,
+            Code::TreeCrossAudioAsset,
+            Code::WritePolicyRejected,
+            Code::WriteConfirmationExpired,
+            Code::IdempotencyConflict,
+            Code::WriteTransactionFailed,
+            Code::ConnectionNotConfigured,
+            Code::ProviderCapabilityUnsupported,
+            Code::ProviderAuthenticationFailed,
+            Code::ProviderRateLimited,
+            Code::ProviderTimeout,
+            Code::ProviderResponseInvalid,
+            Code::ContextLimitUnknown,
+            Code::ContextLimitExceeded,
+            Code::TaskCancelled,
+        ];
+        for code in codes {
+            match code {
+                Code::ToolUnknown
+                | Code::ToolNotAllowed
+                | Code::ToolArgumentsInvalid
+                | Code::ToolLoopLimitReached
+                | Code::SkillNotFound
+                | Code::DocumentNotFound
+                | Code::DocumentAccessDenied
+                | Code::DocumentRevisionConflict
+                | Code::DocumentFieldReadOnly
+                | Code::SegmentNotFound
+                | Code::RangeInvalidOrder
+                | Code::RangeOutsideParent
+                | Code::RangeOverlap
+                | Code::RangeCoverageGap
+                | Code::TreeParentNotFound
+                | Code::TreeCycle
+                | Code::TreeMaxDepthExceeded
+                | Code::TreeCrossAudioAsset
+                | Code::WritePolicyRejected
+                | Code::WriteConfirmationExpired
+                | Code::IdempotencyConflict
+                | Code::WriteTransactionFailed
+                | Code::ConnectionNotConfigured
+                | Code::ProviderCapabilityUnsupported
+                | Code::ProviderAuthenticationFailed
+                | Code::ProviderRateLimited
+                | Code::ProviderTimeout
+                | Code::ProviderResponseInvalid
+                | Code::ContextLimitUnknown
+                | Code::ContextLimitExceeded
+                | Code::TaskCancelled => {}
+            }
+        }
+        codes.into_iter().map(screaming_snake).collect()
+    }
+
+    fn has_chinese(text: &str) -> bool {
+        text.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    }
+
+    fn error(code: &str, message: &str) -> AssistantUiError {
+        AssistantUiError {
+            code: code.into(),
+            message: message.into(),
+            retryable: false,
+        }
+    }
+
+    #[test]
+    fn every_known_error_code_reads_as_a_sentence_with_what_to_do_next() {
+        assert_eq!(
+            screaming_snake(contracts::AgentErrorCode::ProviderTimeout),
+            "PROVIDER_TIMEOUT"
+        );
+        let codes = every_agent_code();
+        for code in &codes {
+            assert!(
+                KNOWN_ERRORS.iter().any(|(known, _)| known == code),
+                "{code} of the agent contract has no wording"
+            );
+        }
+        for (code, _) in KNOWN_ERRORS {
+            let raw = error(code, "raw provider message");
+            let (chinese, english) = (
+                describe_error(Locale::ZhCn, &raw),
+                describe_error(Locale::EnUs, &raw),
+            );
+            for copy in [&chinese, &english] {
+                assert!(!copy.title.contains(code), "{code}: {copy:?}");
+                assert!(!copy.title.contains("raw provider"), "{code}: {copy:?}");
+                assert!(copy.hint.is_some_and(|hint| !hint.is_empty()), "{code}");
+            }
+            assert!(has_chinese(&chinese.title), "{code}: {chinese:?}");
+            assert!(chinese.hint.is_some_and(has_chinese), "{code}: {chinese:?}");
+            assert!(!has_chinese(&english.title), "{code}: {english:?}");
+            assert!(
+                !english.hint.is_some_and(has_chinese),
+                "{code}: {english:?}"
+            );
+            assert_eq!(chinese.opens_settings, english.opens_settings, "{code}");
+            assert_eq!(
+                error_details(&raw),
+                format!("{code} · raw provider message"),
+                "the code stays for troubleshooting"
+            );
+        }
+
+        let authentication = describe_error(
+            Locale::ZhCn,
+            &error("PROVIDER_AUTHENTICATION_FAILED", "401 Unauthorized"),
+        );
+        assert_eq!(authentication.title, "API key 无效或已过期");
+        assert!(authentication.opens_settings);
+        for code in [
+            "ASSISTANT_API_KEY_FILE_READ_FAILED",
+            "CONNECTION_NOT_CONFIGURED",
+            "ASSISTANT_DISABLED",
+            "CONTEXT_LIMIT_UNKNOWN",
+        ] {
+            assert!(
+                describe_error(Locale::EnUs, &error(code, "")).opens_settings,
+                "{code}"
+            );
+        }
+        for code in [
+            "PROVIDER_RATE_LIMITED",
+            "DOCUMENT_REVISION_CONFLICT",
+            "TASK_CANCELLED",
+        ] {
+            assert!(
+                !describe_error(Locale::EnUs, &error(code, "")).opens_settings,
+                "{code}"
+            );
+        }
+        assert_eq!(
+            error_details(&error("PROVIDER_TIMEOUT", " ")),
+            "PROVIDER_TIMEOUT"
+        );
+    }
+
+    #[test]
+    fn an_unknown_error_code_falls_back_to_its_message_and_keeps_the_code() {
+        let notice = error("PROVIDER_NOTICE", " 上下文按窗口截断到 128000 token ");
+        let copy = describe_error(Locale::ZhCn, &notice);
+        assert_eq!(copy.title, "上下文按窗口截断到 128000 token");
+        assert_eq!((copy.hint, copy.opens_settings), (None, false));
+        assert_eq!(error_details(&notice), "PROVIDER_NOTICE");
+
+        let silent = error("SOMETHING_NEW", "  ");
+        assert_eq!(
+            describe_error(Locale::EnUs, &silent).title,
+            "The Assistant task did not finish"
+        );
+        assert_eq!(
+            describe_error(Locale::ZhCn, &silent).title,
+            "助手任务没有完成"
+        );
     }
 }

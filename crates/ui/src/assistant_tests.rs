@@ -297,6 +297,12 @@ fn a_retryable_run_failure_offers_retry_and_the_retry_succeeds(cx: &mut TestAppC
         |root| matches!(&root.assistant.task, AssistantTaskState::Failed(error) if error.retryable),
     );
     assert!(shown(cx, "assistant-task-failed".into()));
+    let error = rendered(cx, "assistant-error");
+    assert!(
+        within(rendered(cx, "assistant-retry"), error),
+        "the retry sits on the error it repeats the request after"
+    );
+    assert!(within(rendered(cx, "assistant-error-details"), error));
     click_selector(cx, "assistant-retry");
     wait_for(cx, &view, |root| {
         root.assistant.task == AssistantTaskState::Completed
@@ -307,6 +313,50 @@ fn a_retryable_run_failure_offers_retry_and_the_retry_succeeds(cx: &mut TestAppC
         "the retry sends the failed prompt again"
     );
     assert!(!shown(cx, "assistant-retry".into()));
+    assert!(
+        !shown(cx, "assistant-error".into()),
+        "a run that succeeds shows no error"
+    );
+}
+
+#[gpui::test]
+fn a_rejected_api_key_explains_itself_and_opens_assistant_settings(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    assistant
+        .run_errors
+        .lock()
+        .unwrap()
+        .push_back(warning("PROVIDER_AUTHENTICATION_FAILED", false));
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| {
+        matches!(root.assistant.task, AssistantTaskState::Failed(_))
+    });
+    let results = rendered(cx, "assistant-results");
+    let error = rendered(cx, "assistant-error");
+    assert!(within(error, results), "the error is part of the results");
+    assert!(
+        rendered(cx, "assistant-request").bottom() <= error.top(),
+        "the error follows the request it answers"
+    );
+    assert!(within(rendered(cx, "assistant-open-settings"), error));
+    assert!(!shown(cx, "assistant-retry".into()));
+
+    click_selector(cx, "assistant-open-settings");
+    let assistant_section = crate::pages::settings::SECTIONS
+        .iter()
+        .position(|key| *key == "assistant_settings");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Settings);
+        assert_eq!(Some(root.ui.settings_section), assistant_section);
+    });
+    assert_eq!(
+        assistant_section,
+        Some(crate::pages::settings::ASSISTANT_SECTION)
+    );
+    assert!(
+        shown(cx, "assistant-api-key-field".into()),
+        "the key field is in reach"
+    );
 }
 
 fn confirmed(id: &str) -> AssistantRunResult {
