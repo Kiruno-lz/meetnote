@@ -430,7 +430,7 @@ fn detail_shows_revision_status_provenance_and_statistics(cx: &mut TestAppContex
             .map(|row| row.value.clone())
     };
     assert_eq!(value("detail_revision").as_deref(), Some("3"));
-    assert_eq!(value("detail_document_status").as_deref(), Some("review"));
+    assert_eq!(value("detail_document_status").as_deref(), Some("待复核"));
     assert_eq!(
         value("detail_asr").as_deref(),
         Some("whisper-rs · large-v3-turbo · r1")
