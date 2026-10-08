@@ -56,7 +56,6 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .unwrap_or_default();
     let pending = root.assistant.pending.clone().map(|state| PendingCard {
         state,
-        queued: root.assistant.pending_queue_len(),
         position: root.assistant.pending_position(),
     });
     let busy = root.assistant_busy();
@@ -93,7 +92,10 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             (!receipts.is_empty())
                 .then(|| render_receipts(receipts, &titles, root.ui.locale, cx, &root.assistant)),
         )
-        .children(pending.map(|pending| render_pending(pending, &review_focus, root.ui.locale, cx)))
+        .children(
+            pending
+                .map(|pending| render_pending(pending, &titles, &review_focus, root.ui.locale, cx)),
+        )
         .children((root.assistant.pending_overflow_count() > 0).then(|| {
             render_pending_overflow(
                 root.assistant.pending_overflow_count(),
@@ -1233,25 +1235,24 @@ fn uncovered_text(locale: Locale, segments: &[String]) -> Option<String> {
 /// The review the pending card shows, with its place in the run.
 struct PendingCard {
     state: PendingReviewState,
-    queued: usize,
     position: Option<(usize, usize)>,
 }
 
 /// The awaiting review: the run is paused before this write. The card
-/// holds `focus`, which a decision or expiry moves to the next review; both
-/// decisions are disabled while one is in flight.
+/// leads with what the write changes, old value struck through above the
+/// new one, keeps its place in the queue and its expiry in small print, and
+/// closes with the decisions at its right edge. It holds `focus`, which a
+/// decision or expiry moves to the next review; both decisions are disabled
+/// while one is in flight.
 fn render_pending(
     card: PendingCard,
+    titles: &DocumentTitles,
     focus: &FocusHandle,
     locale: Locale,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
     let tokens = *theme::tokens(cx);
-    let PendingCard {
-        state,
-        queued,
-        position,
-    } = card;
+    let PendingCard { state, position } = card;
     let decision = match &state {
         PendingReviewState::Accepting(_) => Some("assistant-review-accepting"),
         PendingReviewState::Rejecting(_) => Some("assistant-review-rejecting"),
@@ -1288,64 +1289,12 @@ fn render_pending(
         return div()
             .debug_selector(move || selector.into())
             .p_3()
+            .text_sm()
             .text_color(tokens.text_muted)
             .child(label)
             .into_any_element();
     };
-    let fields = pending
-        .field_diffs
-        .iter()
-        .map(|diff| {
-            format!(
-                "{} · {}: {} → {}",
-                diff.document_id,
-                diff.field,
-                diff.before.as_deref().unwrap_or("∅"),
-                diff.after.as_deref().unwrap_or("∅")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    let tree = pending
-        .tree_changes
-        .iter()
-        .map(|change| {
-            let parent = |parent: &Option<String>| {
-                parent
-                    .clone()
-                    .unwrap_or_else(|| tr(locale, "assistant_tree_root").into())
-            };
-            let order =
-                |order: Option<u32>| order.map_or_else(|| "—".into(), |order| format!("#{order}"));
-            format!(
-                "{}: {}/{} → {}/{}",
-                change.document_id,
-                parent(&change.previous_parent_id),
-                order(change.previous_sibling_order),
-                parent(&change.new_parent_id),
-                order(change.new_sibling_order)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    let ranges = pending
-        .ranges
-        .iter()
-        .map(|range| {
-            format!(
-                "{}: {}..{} [{}]",
-                range
-                    .document_id
-                    .as_deref()
-                    .unwrap_or(tr(locale, "assistant_new_document")),
-                range.start_segment_id,
-                range.end_segment_id,
-                range.evidence_segment_ids.join(", ")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    let gaps = pending.uncovered_segment_ids.join(", ");
+    let title_of = |id: &str| titles.get(id).cloned();
     let busy = decision.is_some();
     let card_selector = format!("assistant-pending-{}", pending.confirmation_id);
     let expires = crate::i18n::message(
@@ -1353,6 +1302,25 @@ fn render_pending(
         "assistant_pending_expires",
         &crate::components::utc_time(pending.expires_at_ms),
     );
+    let affects = (pending.field_diffs.is_empty()
+        && pending.tree_changes.is_empty()
+        && pending.ranges.is_empty())
+    .then(|| {
+        crate::i18n::message(
+            locale,
+            "assistant_pending_affects",
+            &pending
+                .affected_document_ids
+                .iter()
+                .map(|id| quoted_title(locale, id, &title_of))
+                .collect::<Vec<_>>()
+                .join(match locale {
+                    Locale::ZhCn => "、",
+                    Locale::EnUs => ", ",
+                }),
+        )
+    });
+    let small = |text: String| div().text_xs().text_color(tokens.text_muted).child(text);
 
     Region::new(
         SharedString::from(card_selector.clone()),
@@ -1366,94 +1334,210 @@ fn render_pending(
     .p_4()
     .flex()
     .flex_col()
-    .gap_2()
+    .gap_3()
     .child(
         div()
             .flex()
-            .items_center()
-            .gap_3()
-            .child(div().text_lg().child(tr(locale, "assistant_pending")))
-            .children(position.map(|(position, total)| {
-                div()
-                    .debug_selector(move || {
-                        format!("assistant-pending-position-{position}-of-{total}")
-                    })
-                    .text_sm()
-                    .text_color(tokens.text_muted)
-                    .child(crate::i18n::message(
-                        locale,
-                        "assistant_pending_position",
-                        &format!("{position}|{total}"),
-                    ))
-            }))
+            .flex_col()
+            .gap_1()
             .child(
                 div()
-                    .debug_selector(|| "assistant-pending-expires".into())
+                    .flex()
+                    .items_baseline()
+                    .gap_3()
+                    .child(
+                        div()
+                            .debug_selector(|| "assistant-pending-title".into())
+                            .text_base()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(tr(locale, "assistant_pending")),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .flex()
+                            .gap_1()
+                            .text_xs()
+                            .text_color(tokens.text_subtle)
+                            .children(position.map(|(position, total)| {
+                                div()
+                                    .debug_selector(move || {
+                                        format!("assistant-pending-position-{position}-of-{total}")
+                                    })
+                                    .child(crate::i18n::message(
+                                        locale,
+                                        "assistant_pending_position",
+                                        &format!("{position}|{total}"),
+                                    ))
+                            }))
+                            .when(position.is_some(), |meta| meta.child("·"))
+                            .child(
+                                div()
+                                    .debug_selector(|| "assistant-pending-expires".into())
+                                    .child(expires),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "assistant-pending-paused".into())
                     .text_sm()
                     .text_color(tokens.text_muted)
-                    .child(expires),
+                    .child(tr(locale, "assistant_pending_paused")),
             ),
     )
-    .child(
+    .children(pending.field_diffs.iter().enumerate().map(|(index, diff)| {
         div()
-            .debug_selector(|| "assistant-pending-paused".into())
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(small(field_diff_label(locale, diff, &title_of)))
+            .children(diff.before.clone().map(|before| {
+                diff_value(before, false, &tokens)
+                    .debug_selector(move || format!("assistant-diff-{index}-before"))
+            }))
+            .children(diff.after.clone().map(|after| {
+                diff_value(after, true, &tokens)
+                    .debug_selector(move || format!("assistant-diff-{index}-after"))
+            }))
+    }))
+    .children(pending.tree_changes.iter().map(|change| {
+        div()
             .text_sm()
-            .text_color(tokens.warning_text)
-            .child(tr(locale, "assistant_pending_paused")),
+            .child(tree_change_text(locale, change, &title_of))
+    }))
+    .children(
+        pending
+            .ranges
+            .iter()
+            .map(|range| small(range_text(locale, range, &title_of))),
     )
-    .child(info_line(
-        tr(locale, "assistant_pending_queue"),
-        queued.to_string(),
-        &tokens,
-    ))
-    .child(info_line(
-        tr(locale, "assistant_affected"),
-        pending.affected_document_ids.join(", "),
-        &tokens,
-    ))
-    .child(info_line(
-        tr(locale, "assistant_field_diff"),
-        empty_as_dash(fields),
-        &tokens,
-    ))
-    .child(info_line(
-        tr(locale, "assistant_tree_change"),
-        empty_as_dash(tree),
-        &tokens,
-    ))
-    .child(info_line(
-        tr(locale, "assistant_range"),
-        empty_as_dash(ranges),
-        &tokens,
-    ))
-    .child(info_line(
-        tr(locale, "assistant_uncovered"),
-        empty_as_dash(gaps),
-        &tokens,
-    ))
+    .children(uncovered_text(locale, &pending.uncovered_segment_ids).map(small))
+    .children(affects.map(|affects| {
+        div()
+            .debug_selector(|| "assistant-pending-affects".into())
+            .text_sm()
+            .child(affects)
+    }))
     .child(
         div()
             .when_some(decision, |this, decision| {
                 this.debug_selector(move || decision.into())
             })
             .flex()
+            .justify_end()
             .gap_2()
-            .child(
-                Button::new("assistant-confirm", accept_label)
-                    .debug_selector(|| "assistant-confirm".into())
-                    .primary()
-                    .disabled(busy)
-                    .on_click(cx.listener(RootView::accept_assistant_pending)),
-            )
             .child(
                 Button::new("assistant-reject", reject_label)
                     .debug_selector(|| "assistant-reject".into())
                     .secondary()
                     .disabled(busy)
                     .on_click(cx.listener(RootView::reject_assistant_pending)),
+            )
+            .child(
+                Button::new("assistant-confirm", accept_label)
+                    .debug_selector(|| "assistant-confirm".into())
+                    .primary()
+                    .disabled(busy)
+                    .on_click(cx.listener(RootView::accept_assistant_pending)),
             ),
     )
     .into_any_element()
+}
+
+/// A field's old or new value: the old one muted and struck through, the
+/// new one in full color, each marked by a thin bar in its semantic color.
+fn diff_value(value: String, added: bool, tokens: &Tokens) -> gpui::Div {
+    div()
+        .border_l_2()
+        .border_color(if added { tokens.success } else { tokens.danger })
+        .pl(tokens.spacing.sm)
+        .text_sm()
+        .line_clamp(4)
+        .map(|value| {
+            if added {
+                value.text_color(tokens.text)
+            } else {
+                value.text_color(tokens.text_muted).line_through()
+            }
+        })
+        .child(value)
+}
+
+/// The document and field a diff changes, both by name.
+fn field_diff_label(
+    locale: Locale,
+    diff: &crate::assistant_ui::AssistantFieldDiff,
+    title_of: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    let field = FIELD_LABELS
+        .iter()
+        .find(|(name, _)| *name == diff.field)
+        .map_or_else(|| diff.field.clone(), |(_, key)| tr(locale, key).to_owned());
+    format!(
+        "{} · {field}",
+        quoted_title(locale, &diff.document_id, title_of)
+    )
+}
+
+/// The labels of the document fields the capability reports by name.
+const FIELD_LABELS: [(&str, &str); 5] = [
+    ("title", "document_title"),
+    ("tags", "document_tags"),
+    ("summary", "document_summary"),
+    ("markdown", "document_body"),
+    ("document_status", "document_status"),
+];
+
+/// Where a tree change moves a document: under another parent, to the top
+/// level, or to a new place among its siblings.
+fn tree_change_text(
+    locale: Locale,
+    change: &crate::assistant_ui::AssistantTreeChange,
+    title_of: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    let document = quoted_title(locale, &change.document_id, title_of);
+    match (
+        change.previous_parent_id == change.new_parent_id,
+        change.new_sibling_order,
+    ) {
+        (true, Some(order)) => crate::i18n::message_pair(
+            locale,
+            "assistant_tree_reordered",
+            &document,
+            &(order + 1).to_string(),
+        ),
+        _ => {
+            let place = match &change.new_parent_id {
+                Some(parent) => crate::i18n::message(
+                    locale,
+                    "assistant_tree_under",
+                    &quoted_title(locale, parent, title_of),
+                ),
+                None => tr(locale, "assistant_tree_root").into(),
+            };
+            crate::i18n::message_pair(locale, "assistant_tree_moved", &document, &place)
+        }
+    }
+}
+
+/// The transcript segments a range covers and the document they go to.
+fn range_text(
+    locale: Locale,
+    range: &crate::assistant_ui::AssistantRangePreview,
+    title_of: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    let target = range.document_id.as_deref().map_or_else(
+        || tr(locale, "assistant_new_document").to_owned(),
+        |id| quoted_title(locale, id, title_of),
+    );
+    format!(
+        "{} {} – {} → {target}",
+        tr(locale, "assistant_range"),
+        range.start_segment_id,
+        range.end_segment_id
+    )
 }
 
 /// The reviews of the run beyond the queue limit: not listed, not written.
@@ -1477,14 +1561,6 @@ fn render_pending_overflow(count: usize, locale: Locale, tokens: &Tokens) -> gpu
                 )),
         )
         .into_any_element()
-}
-
-fn empty_as_dash(value: String) -> String {
-    if value.is_empty() {
-        "—".into()
-    } else {
-        value
-    }
 }
 
 #[cfg(test)]
@@ -1615,6 +1691,102 @@ mod tests {
         assert_eq!(
             uncovered_text(Locale::EnUs, &write.uncovered_segment_ids).as_deref(),
             Some("2 transcript segments left out")
+        );
+    }
+
+    fn tree_change(
+        previous: (Option<&str>, Option<u32>),
+        new: (Option<&str>, Option<u32>),
+    ) -> crate::assistant_ui::AssistantTreeChange {
+        crate::assistant_ui::AssistantTreeChange {
+            document_id: "decisions".into(),
+            previous_parent_id: previous.0.map(Into::into),
+            new_parent_id: new.0.map(Into::into),
+            previous_sibling_order: previous.1,
+            new_sibling_order: new.1,
+        }
+    }
+
+    fn pending_titles(id: &str) -> Option<String> {
+        match id {
+            "weekly" => Some("产品周会".into()),
+            "decisions" => Some("决策与行动项".into()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_review_names_documents_and_fields_by_their_titles() {
+        let diff = crate::assistant_ui::AssistantFieldDiff {
+            document_id: "decisions".into(),
+            field: "summary".into(),
+            before: None,
+            after: Some("确认发布".into()),
+        };
+        assert_eq!(
+            field_diff_label(Locale::ZhCn, &diff, &pending_titles),
+            "「决策与行动项」 · 总结"
+        );
+        for (_, key) in FIELD_LABELS {
+            for locale in [Locale::ZhCn, Locale::EnUs] {
+                assert!(!tr(locale, key).is_empty(), "{key} has a label");
+            }
+        }
+        let unknown = crate::assistant_ui::AssistantFieldDiff {
+            field: "speakerNote".into(),
+            ..diff
+        };
+        assert_eq!(
+            field_diff_label(Locale::EnUs, &unknown, &pending_titles),
+            "“决策与行动项” · speakerNote",
+            "a field without a label keeps its name"
+        );
+
+        let moved = tree_change((None, Some(1)), (Some("weekly"), Some(0)));
+        assert_eq!(
+            tree_change_text(Locale::ZhCn, &moved, &pending_titles),
+            "「决策与行动项」移到「产品周会」下"
+        );
+        assert_eq!(
+            tree_change_text(Locale::EnUs, &moved, &pending_titles),
+            "Moves “决策与行动项” under “产品周会”"
+        );
+        let lifted = tree_change((Some("weekly"), Some(0)), (None, Some(2)));
+        assert_eq!(
+            tree_change_text(Locale::ZhCn, &lifted, &pending_titles),
+            "「决策与行动项」移到顶层"
+        );
+        assert_eq!(
+            tree_change_text(Locale::EnUs, &lifted, &pending_titles),
+            "Moves “决策与行动项” to the top level"
+        );
+        let reordered = tree_change((Some("weekly"), Some(2)), (Some("weekly"), Some(0)));
+        assert_eq!(
+            tree_change_text(Locale::ZhCn, &reordered, &pending_titles),
+            "「决策与行动项」调整到同级第 1 位"
+        );
+        assert_eq!(
+            tree_change_text(Locale::EnUs, &reordered, &pending_titles),
+            "Moves “决策与行动项” to position 1 among its siblings"
+        );
+
+        let range = crate::assistant_ui::AssistantRangePreview {
+            document_id: None,
+            start_segment_id: "seg-014".into(),
+            end_segment_id: "seg-020".into(),
+            evidence_segment_ids: vec!["seg-014".into()],
+        };
+        assert_eq!(
+            range_text(Locale::ZhCn, &range, &pending_titles),
+            "转写片段 seg-014 – seg-020 → 新文档"
+        );
+        let range = crate::assistant_ui::AssistantRangePreview {
+            document_id: Some("decisions".into()),
+            ..range
+        };
+        assert_eq!(
+            range_text(Locale::EnUs, &range, &pending_titles),
+            "Transcript seg-014 – seg-020 → “决策与行动项”"
         );
     }
 

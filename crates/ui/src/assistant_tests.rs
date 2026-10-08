@@ -403,6 +403,8 @@ fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut Te
         "assistant-pending-position-1-of-3",
         "assistant-pending-paused",
         "assistant-pending-expires",
+        // A review without a diff names the documents it changes.
+        "assistant-pending-affects",
     ] {
         assert!(shown(cx, selector.into()), "`{selector}` is shown");
     }
@@ -457,6 +459,72 @@ fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut Te
     });
     assert!(shown(cx, "assistant-pending-rejected".into()));
     assert!(shown(cx, "assistant-task-completed".into()));
+}
+
+#[gpui::test]
+fn a_review_shows_its_diff_and_lines_its_decisions_up_at_the_end(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    let diff =
+        |field: &str, before: Option<&str>, after: &str| crate::assistant_ui::AssistantFieldDiff {
+            document_id: "first".into(),
+            field: field.into(),
+            before: before.map(Into::into),
+            after: Some(after.into()),
+        };
+    let mut review = pending_review("review-1", u64::MAX);
+    review.field_diffs = vec![
+        diff("title", Some("Old title"), "New title"),
+        diff("summary", None, "A summary"),
+    ];
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        pending_reviews: vec![review, pending_review("review-2", u64::MAX)],
+        ..empty_result()
+    });
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+
+    let card = rendered(cx, "assistant-pending-review-1");
+    let title = rendered(cx, "assistant-pending-title");
+    for selector in [
+        "assistant-pending-position-1-of-2",
+        "assistant-pending-expires",
+    ] {
+        let meta = rendered(cx, selector);
+        assert!(
+            meta.left() >= title.right()
+                && meta.top() < title.bottom()
+                && title.top() < meta.bottom(),
+            "`{selector}` trails the title on its line"
+        );
+        assert!(within(meta, card));
+    }
+    let (before, after) = (
+        rendered(cx, "assistant-diff-0-before"),
+        rendered(cx, "assistant-diff-0-after"),
+    );
+    assert!(before.bottom() <= after.top(), "the old value reads first");
+    assert!(
+        !shown(cx, "assistant-diff-1-before".into()),
+        "nothing was there before"
+    );
+    assert!(shown(cx, "assistant-diff-1-after".into()));
+    assert!(
+        !shown(cx, "assistant-pending-affects".into()),
+        "the diff already names the document"
+    );
+
+    let (reject, confirm) = (
+        rendered(cx, "assistant-reject"),
+        rendered(cx, "assistant-confirm"),
+    );
+    assert!(
+        reject.right() <= confirm.left() && reject.top() == confirm.top(),
+        "reject sits left of accept on one line"
+    );
+    assert!(
+        confirm.right() > card.right() - gpui::px(24.) && after.bottom() <= confirm.top(),
+        "the decisions close the card at its right edge"
+    );
 }
 
 #[gpui::test]

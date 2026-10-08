@@ -249,14 +249,11 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_model_route") => "请求/实际模型",
         (Locale::ZhCn, "assistant_usage") => "输入/输出/总 token",
         (Locale::ZhCn, "assistant_diagnostics") => "执行诊断",
-        (Locale::ZhCn, "assistant_affected") => "受影响文档",
-        (Locale::ZhCn, "assistant_uncovered") => "未覆盖 segment",
         (Locale::ZhCn, "assistant_undo") => "撤销",
         (Locale::ZhCn, "assistant_undoing") => "正在撤销",
         (Locale::ZhCn, "assistant_receipt_written") => "已写入变更",
         (Locale::ZhCn, "assistant_undone") => "已撤销",
         (Locale::ZhCn, "assistant_pending") => "等待写回确认",
-        (Locale::ZhCn, "assistant_pending_queue") => "排队中的确认",
         (Locale::ZhCn, "assistant_pending_paused") => "任务在这项写回前暂停：接受才会写入，拒绝则丢弃这项变更。",
         (Locale::ZhCn, "assistant_accepting") => "正在写回……",
         (Locale::ZhCn, "assistant_rejecting") => "正在拒绝……",
@@ -303,14 +300,12 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_error_interrupted_hint") => "再试一次。",
         (Locale::ZhCn, "assistant_error_cancelled") => "任务已取消",
         (Locale::ZhCn, "assistant_error_cancelled_hint") => "已写入的变更会保留。",
-        (Locale::ZhCn, "assistant_field_diff") => "字段差异",
-        (Locale::ZhCn, "assistant_tree_change") => "树结构变化",
-        (Locale::ZhCn, "assistant_range") => "语义范围与证据",
+        (Locale::ZhCn, "assistant_range") => "转写片段",
         (Locale::ZhCn, "assistant_accept") => "接受并写回",
         (Locale::ZhCn, "assistant_reject") => "拒绝",
         (Locale::ZhCn, "assistant_rejected") => "已拒绝本次写回。",
         (Locale::ZhCn, "assistant_expired") => "确认已过期，请重新运行任务。",
-        (Locale::ZhCn, "assistant_tree_root") => "根层级",
+        (Locale::ZhCn, "assistant_tree_root") => "顶层",
         (Locale::ZhCn, "assistant_new_document") => "新文档",
         (Locale::ZhCn, "assistant_probe_readiness") => "连接测试",
         (Locale::ZhCn, "assistant_probe_model") => "模型能力探测",
@@ -636,14 +631,11 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_model_route") => "Requested/resolved model",
         (Locale::EnUs, "assistant_usage") => "Input/output/total tokens",
         (Locale::EnUs, "assistant_diagnostics") => "Execution diagnostics",
-        (Locale::EnUs, "assistant_affected") => "Affected documents",
-        (Locale::EnUs, "assistant_uncovered") => "Uncovered segments",
         (Locale::EnUs, "assistant_undo") => "Undo",
         (Locale::EnUs, "assistant_undoing") => "Undoing",
         (Locale::EnUs, "assistant_receipt_written") => "Change written",
         (Locale::EnUs, "assistant_undone") => "Undone",
         (Locale::EnUs, "assistant_pending") => "Write confirmation pending",
-        (Locale::EnUs, "assistant_pending_queue") => "Queued confirmations",
         (Locale::EnUs, "assistant_pending_paused") => "The run paused before this write: accepting writes it, rejecting discards it.",
         (Locale::EnUs, "assistant_accepting") => "Writing…",
         (Locale::EnUs, "assistant_rejecting") => "Rejecting…",
@@ -690,14 +682,12 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_error_interrupted_hint") => "Try again.",
         (Locale::EnUs, "assistant_error_cancelled") => "The task was cancelled",
         (Locale::EnUs, "assistant_error_cancelled_hint") => "Changes already written are kept.",
-        (Locale::EnUs, "assistant_field_diff") => "Field differences",
-        (Locale::EnUs, "assistant_tree_change") => "Tree changes",
-        (Locale::EnUs, "assistant_range") => "Semantic ranges and evidence",
+        (Locale::EnUs, "assistant_range") => "Transcript",
         (Locale::EnUs, "assistant_accept") => "Accept and write",
         (Locale::EnUs, "assistant_reject") => "Reject",
         (Locale::EnUs, "assistant_rejected") => "This write was rejected.",
         (Locale::EnUs, "assistant_expired") => "Confirmation expired; run the task again.",
-        (Locale::EnUs, "assistant_tree_root") => "top level",
+        (Locale::EnUs, "assistant_tree_root") => "to the top level",
         (Locale::EnUs, "assistant_new_document") => "new document",
         (Locale::EnUs, "assistant_probe_readiness") => "connection test",
         (Locale::EnUs, "assistant_probe_model") => "model probe",
@@ -1056,6 +1046,10 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
             "1" => "1 transcript segment left out".into(),
             _ => format!("{value} transcript segments left out"),
         },
+        (Locale::ZhCn, "assistant_pending_affects") => format!("将修改{value}"),
+        (Locale::EnUs, "assistant_pending_affects") => format!("Changes {value}"),
+        (Locale::ZhCn, "assistant_tree_under") => format!("{value}下"),
+        (Locale::EnUs, "assistant_tree_under") => format!("under {value}"),
         (Locale::ZhCn, "assistant_pending_expires") => format!("{value} 过期"),
         (Locale::EnUs, "assistant_pending_expires") => format!("Expires {value}"),
         (Locale::ZhCn, "assistant_pending_overflow") => format!(
@@ -1078,6 +1072,14 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
 /// is merged into.
 pub fn message_pair(locale: Locale, key: &str, first: &str, second: &str) -> String {
     match (locale, key) {
+        (Locale::ZhCn, "assistant_tree_moved") => format!("{first}移到{second}"),
+        (Locale::EnUs, "assistant_tree_moved") => format!("Moves {first} {second}"),
+        (Locale::ZhCn, "assistant_tree_reordered") => {
+            format!("{first}调整到同级第 {second} 位")
+        }
+        (Locale::EnUs, "assistant_tree_reordered") => {
+            format!("Moves {first} to position {second} among its siblings")
+        }
         (Locale::ZhCn, "merge_document_speaker_title") => {
             format!("将「{first}」合并到「{second}」？")
         }
