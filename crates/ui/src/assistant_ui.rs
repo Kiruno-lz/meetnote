@@ -590,6 +590,12 @@ impl AssistantController {
         self.result_run.clone()
     }
 
+    /// The request of the run whose result is shown, quoted above it; kept
+    /// in memory only, and replaced by the next run.
+    pub fn sent_request(&self) -> Option<&str> {
+        self.prompt.as_deref()
+    }
+
     /// The prompt to send again when the run failed with a retryable error.
     pub fn retry_prompt(&self) -> Option<String> {
         self.retryable_failure
@@ -1791,6 +1797,26 @@ mod tests {
         );
         assert!(controller.begin_mutation_undo("first").is_none());
         assert!(controller.begin_mutation_undo("second").is_none());
+    }
+
+    #[test]
+    fn the_sent_request_is_the_latest_run_until_the_workspace_is_forgotten() {
+        let document = DocumentState::new(ProjectId::new("echo"), "Echo", "echo.wav");
+        let mut controller = AssistantController::default();
+        assert_eq!(controller.sent_request(), None);
+        controller.authorize_document(Some(&document));
+        controller.begin("first".into(), &settings()).unwrap();
+        assert_eq!(controller.sent_request(), Some("first"));
+        assert!(controller.begin("  ".into(), &settings()).is_err());
+        assert_eq!(
+            controller.sent_request(),
+            Some("first"),
+            "a refused request replaces nothing"
+        );
+        controller.begin("second".into(), &settings()).unwrap();
+        assert_eq!(controller.sent_request(), Some("second"));
+        controller.forget_workspace();
+        assert_eq!(controller.sent_request(), None);
     }
 
     #[test]
