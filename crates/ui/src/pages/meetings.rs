@@ -1,5 +1,8 @@
 use crate::{
-    components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
+    components::{
+        backend_ids, document_meta, ordered_projects, status_label, timestamp, DragGhost,
+        ProjectDrag,
+    },
     controller::RootView,
     controls::{tree, Button, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
@@ -296,10 +299,6 @@ fn main_panel(
         .children(issues_panel(root, &tokens));
     if let Some(project) = project {
         let ready = project.processing_status() == ProjectStatus::Ready;
-        let audio_problem = root.audio.problem(project.id());
-        let process_label = tr(locale, if processing_here { "cancel" } else { "process" });
-        // One foreground job at a time; another document's is under way.
-        let busy_elsewhere = root.ui.processing && !processing_here;
         let mode = root.ui.content_mode;
         let scroll = root.scroll.meeting_content.clone();
         let mut content = div()
@@ -348,84 +347,13 @@ fn main_panel(
                     .child(tr(locale, "need_process")),
             ),
         };
-        panel = panel
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_2xl()
-                    .child(project.title().to_string()),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_sm()
-                    .text_color(tokens.text_muted)
-                    .child(project.audio_path().to_string()),
-            )
-            // The status and actions wrap beside an open Detail rather than
-            // run past the content column.
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .px_3()
-                            .py_1()
-                            .rounded(tokens.radius.sm)
-                            .bg(tokens.status(display_status.unwrap_or(ProjectStatus::Imported)))
-                            .text_sm()
-                            .child(status_label(
-                                locale,
-                                display_status.unwrap_or(ProjectStatus::Imported),
-                            )),
-                    )
-                    .children(audio_problem.map(|problem| {
-                        div()
-                            .debug_selector(|| "audio-problem".into())
-                            .px_3()
-                            .py_1()
-                            .rounded(tokens.radius.sm)
-                            .bg(tokens.warning_surface)
-                            .text_color(tokens.warning_text)
-                            .text_sm()
-                            .child(tr(locale, problem.label_key()))
-                    }))
-                    .child(
-                        Button::new("process-project", process_label)
-                            .debug_selector(|| "process-project".into())
-                            .primary()
-                            .compact()
-                            // Missing audio cannot be processed; relink it.
-                            .disabled(
-                                busy_elsewhere
-                                    || (!processing_here && root.audio.missing(project.id())),
-                            )
-                            .on_click(cx.listener(RootView::process_or_cancel)),
-                    )
-                    .children(audio_problem.map(|_| {
-                        Button::new("relink-audio", tr(locale, "relink_audio"))
-                            .debug_selector(|| "relink-audio".into())
-                            .secondary()
-                            .compact()
-                            .disabled(root.audio.relinking.is_some())
-                            .on_click(cx.listener(RootView::relink_audio))
-                    }))
-                    .child(
-                        Button::new("open-project-detail", tr(locale, "open_detail"))
-                            .debug_selector(|| "open-project-detail".into())
-                            .focus_handle(&root.detail_trigger)
-                            .secondary()
-                            .compact()
-                            .on_click(cx.listener(RootView::open_detail)),
-                    ),
-            );
-        if let Some(progress) = root.ui.progress.as_ref().filter(|_| processing_here) {
-            panel = panel.child(processing_progress(progress, locale, &tokens));
-        }
+        panel = panel.child(document_header(
+            root,
+            project,
+            display_status.unwrap_or(ProjectStatus::Imported),
+            &tokens,
+            cx,
+        ));
         // Summary and Edit always; the speaker-labelled original once
         // processed.
         let mut controls = RadioGroup::new("content-mode", tr(locale, "content_mode"))
@@ -493,6 +421,135 @@ fn main_panel(
                 state::model_status(&root.installation, locale)
             )),
     )
+}
+
+/// The document's header: its title with the Detail toggle at the right,
+/// the file line, then its status and actions on one line, and the
+/// progress of its processing while that runs.
+fn document_header(
+    root: &RootView,
+    project: &DocumentState,
+    status: ProjectStatus,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> AnyElement {
+    let locale = root.ui.locale;
+    let processing_here = root.ui.processing_document() == Some(project.id());
+    // One foreground job at a time; another document's is under way.
+    let busy_elsewhere = root.ui.processing && !processing_here;
+    let audio_problem = root.audio.problem(project.id());
+    let process_label = if processing_here {
+        "cancel"
+    } else if project.processing_status() == ProjectStatus::Ready {
+        "reprocess"
+    } else {
+        "process"
+    };
+    let detail_open = root.ui.detail_open;
+    let chip = |selector: &'static str, fill, text, label: &'static str| {
+        div()
+            .debug_selector(move || selector.into())
+            .flex_shrink_0()
+            .px(tokens.spacing.sm)
+            .py(px(2.))
+            .rounded(tokens.radius.sm)
+            .bg(fill)
+            .text_color(text)
+            .text_xs()
+            .child(label)
+    };
+    let actions = div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(tokens.spacing.sm)
+        .child(chip(
+            "document-status",
+            tokens.status(status),
+            tokens.text,
+            status_label(locale, status),
+        ))
+        .children(audio_problem.map(|problem| {
+            chip(
+                "audio-problem",
+                tokens.warning_surface,
+                tokens.warning_text,
+                tr(locale, problem.label_key()),
+            )
+        }))
+        .child(
+            Button::new("process-project", tr(locale, process_label))
+                .debug_selector(|| "process-project".into())
+                .secondary()
+                .compact()
+                // Missing audio cannot be processed; relink it.
+                .disabled(busy_elsewhere || (!processing_here && root.audio.missing(project.id())))
+                .on_click(cx.listener(RootView::process_or_cancel)),
+        )
+        .children(audio_problem.map(|_| {
+            Button::new("relink-audio", tr(locale, "relink_audio"))
+                .debug_selector(|| "relink-audio".into())
+                .secondary()
+                .compact()
+                .disabled(root.audio.relinking.is_some())
+                .on_click(cx.listener(RootView::relink_audio))
+        }));
+    div()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.sm)
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(tokens.spacing.md)
+                .child(
+                    div()
+                        .debug_selector(|| "document-title".into())
+                        .flex_1()
+                        .min_w_0()
+                        .text_2xl()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(project.title().to_string()),
+                )
+                .child(
+                    Button::new(
+                        "open-project-detail",
+                        tr(
+                            locale,
+                            if detail_open {
+                                "hide_detail"
+                            } else {
+                                "show_detail"
+                            },
+                        ),
+                    )
+                    .debug_selector(|| "open-project-detail".into())
+                    .focus_handle(&root.detail_trigger)
+                    .ghost()
+                    .compact()
+                    .icon("icons/panel-right.svg")
+                    .when(detail_open, |toggle| toggle.bg(tokens.selection))
+                    .on_click(cx.listener(RootView::toggle_detail)),
+                ),
+        )
+        .child(
+            div()
+                .debug_selector(|| "document-meta".into())
+                .text_sm()
+                .text_color(tokens.text_muted)
+                .child(document_meta(project, locale)),
+        )
+        .child(div().pt(tokens.spacing.xs).child(actions))
+        .children(
+            root.ui
+                .progress
+                .as_ref()
+                .filter(|_| processing_here)
+                .map(|progress| processing_progress(progress, locale, tokens)),
+        )
+        .into_any_element()
 }
 
 /// Where the foreground processing of the shown document is: its phase

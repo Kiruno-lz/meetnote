@@ -326,6 +326,35 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year_of_era + era * 400 + i64::from(month <= 2), month, day)
 }
 
+/// The quiet line under a document's title: its audio file's name, then
+/// how long its results run and how many speakers they name, once there are
+/// results.
+pub(crate) fn document_meta(document: &DocumentState, locale: i18n::Locale) -> String {
+    let path = document.audio_path();
+    let mut parts = vec![path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()];
+    let results = &document.results;
+    let end = results
+        .transcript
+        .iter()
+        .map(|segment| segment.end_ms)
+        .chain(results.diarization.iter().map(|segment| segment.end_ms))
+        .max();
+    if let Some(end) = end {
+        parts.push(timestamp(
+            end.saturating_sub(document.source.audio_start_ms),
+        ));
+    }
+    let speakers = domain::document_result_statistics(document).speakers;
+    if speakers > 0 {
+        parts.push(i18n::message(
+            locale,
+            "speaker_count",
+            &speakers.to_string(),
+        ));
+    }
+    parts.join(" · ")
+}
+
 pub(crate) fn backend_ids(descriptors: &[application::BackendDescriptor]) -> String {
     descriptors
         .iter()
@@ -336,9 +365,12 @@ pub(crate) fn backend_ids(descriptors: &[application::BackendDescriptor]) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::{timestamp, tree_move, tree_shift, utc_time, TreeMove, TreeShiftMove};
+    use super::{
+        document_meta, timestamp, tree_move, tree_shift, utc_time, TreeMove, TreeShiftMove,
+    };
     use crate::controls::{TreeShift, TreeStep};
-    use domain::{DocumentState, ProjectId};
+    use crate::i18n::Locale;
+    use domain::{DocumentState, ProjectId, SpeakerTaggedSegment, TranscriptSegment};
     use std::collections::BTreeSet;
 
     /// Two roots, the first with two children; the second child has a
@@ -499,6 +531,70 @@ mod tests {
                 target: ProjectId::new("a2"),
                 before: false
             })
+        );
+    }
+
+    #[test]
+    fn the_meta_line_names_the_audio_file_then_the_length_and_speakers() {
+        let mut document = DocumentState::new(
+            ProjectId::new("weekly"),
+            "Weekly",
+            "fixtures/weekly-sync.wav",
+        );
+        assert_eq!(document_meta(&document, Locale::ZhCn), "weekly-sync.wav");
+
+        let spoken = |id: &str, speaker: &str, start_ms, end_ms| SpeakerTaggedSegment {
+            transcript_segment_id: id.into(),
+            speaker_id: speaker.into(),
+            speaker_profile_id: None,
+            speaker_label: None,
+            start_ms,
+            end_ms,
+            text: id.into(),
+        };
+        document.results.speaker_segments = vec![
+            spoken("t-1", "speaker-0", 0, 42_000),
+            spoken("t-2", "speaker-1", 42_000, 95_000),
+        ];
+        document.results.transcript = document
+            .results
+            .speaker_segments
+            .iter()
+            .map(|segment| TranscriptSegment {
+                id: segment.transcript_segment_id.clone(),
+                start_ms: segment.start_ms,
+                end_ms: segment.end_ms,
+                text: segment.text.clone(),
+            })
+            .collect();
+        document.results.diarization = document
+            .results
+            .speaker_segments
+            .iter()
+            .map(|segment| domain::DiarizationSegment {
+                id: segment.transcript_segment_id.clone(),
+                speaker_id: segment.speaker_id.clone(),
+                speaker_profile_id: None,
+                speaker_label: None,
+                start_ms: segment.start_ms,
+                end_ms: segment.end_ms,
+                confidence: None,
+            })
+            .collect();
+        assert_eq!(
+            document_meta(&document, Locale::ZhCn),
+            "weekly-sync.wav · 1:35 · 2 位说话人"
+        );
+        assert_eq!(
+            document_meta(&document, Locale::EnUs),
+            "weekly-sync.wav · 1:35 · 2 speakers"
+        );
+
+        // A part of the recording counts from where it starts.
+        let child = document.semantic_child(ProjectId::new("part"), "Part", 42_000, 95_000, vec![]);
+        assert_eq!(
+            document_meta(&child, Locale::EnUs),
+            "weekly-sync.wav · 0:53 · 1 speaker"
         );
     }
 

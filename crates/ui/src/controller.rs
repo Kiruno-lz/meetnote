@@ -2531,8 +2531,17 @@ impl RootView {
         self.sync_locale(cx);
     }
 
-    pub(crate) fn open_detail(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.ui.selected_project.is_some() {
+    /// The header's Detail toggle: opens Detail, or closes it like its own
+    /// close button.
+    pub(crate) fn toggle_detail(
+        &mut self,
+        event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ui.detail_open {
+            self.close_detail(event, window, cx);
+        } else if self.ui.selected_project.is_some() {
             self.ui.detail_open = true;
             cx.notify();
         }

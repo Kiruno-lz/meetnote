@@ -266,6 +266,59 @@ fn the_meetings_route_shows_the_tree_content_and_process_button(cx: &mut TestApp
     );
 }
 
+/// The document header beside an open Detail: the title with the Detail
+/// toggle at its right, the file line under it, and the status and actions
+/// of a document whose audio is missing on one line.
+#[gpui::test]
+fn the_document_header_keeps_its_actions_on_one_line_beside_detail(cx: &mut TestAppContext) {
+    let (window, cx, page) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::MissingAudio(DOCUMENT_IDS[2]), cx));
+    wait_for(cx, |cx| cx.debug_bounds("relink-audio").is_some());
+    let detail = visible(cx, "detail-panel");
+    let title = visible(cx, "document-title");
+    let toggle = visible(cx, "open-project-detail");
+    assert!(
+        toggle.left() >= title.right() && toggle.top() < title.bottom(),
+        "the Detail toggle sits at the right of the title: {toggle:?} / {title:?}"
+    );
+    assert!(
+        toggle.right() <= detail.left(),
+        "the toggle stays left of Detail"
+    );
+    let meta = visible(cx, "document-meta");
+    assert!(title.bottom() <= meta.top());
+    let actions = [
+        "document-status",
+        "audio-problem",
+        "process-project",
+        "relink-audio",
+    ]
+    .map(|selector| visible(cx, selector));
+    for action in &actions {
+        assert!(
+            meta.bottom() <= action.top(),
+            "actions follow the file line"
+        );
+        assert!(within(*action, page) && action.right() <= detail.left());
+        assert!(
+            (action.center().y - actions[2].center().y).abs() < gpui::px(1.),
+            "the status and actions share one line: {actions:?}"
+        );
+    }
+
+    // The toggle closes Detail again.
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("detail-panel").is_none(),
+        "the toggle closes Detail"
+    );
+    let toggle = visible(cx, "open-project-detail");
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.run_until_parked();
+    visible(cx, "detail-panel");
+}
+
 #[gpui::test]
 fn the_models_route_shows_the_catalog_and_aligned_status_chips(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Models);
@@ -635,8 +688,9 @@ fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
     expected.extend([
         // The tree is one stop, on its selected row.
         leak(format!("project-row-{}", DOCUMENT_IDS[0])),
-        "process-project",
+        // The Detail toggle beside the title, then the actions under it.
         "open-project-detail",
+        "process-project",
         "content-mode-summary",
         "content-mode-original",
         "content-mode-edit",
