@@ -156,18 +156,7 @@ fn toolbar(root: &mut RootView, secondary: bool, cx: &mut Context<RootView>) -> 
                 .compact()
                 .icon("icons/panel-left.svg")
                 .disabled(!secondary)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    if this.ui.sidebar_open && this.tree_focus.contains_focused(window, cx) {
-                        this.nav_focus[1].focus(window, cx);
-                    }
-                    this.ui.sidebar_open = !this.ui.sidebar_open;
-                    let duration = theme::tokens(cx).motion.layout;
-                    let now = cx.background_executor().now();
-                    this.sidebar_sizing.update(cx, |state, _| {
-                        state.set_open(this.ui.sidebar_open, duration, now)
-                    });
-                    cx.notify();
-                })),
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx))),
         )
         .child(drag_strip("titlebar-drag-content").flex_1())
 }

@@ -2529,6 +2529,24 @@ impl RootView {
         }
     }
 
+    /// Folds the Meetings or Settings sidebar closed or open; the other
+    /// routes have none. Focus in the folding project tree moves to the
+    /// Meetings entry.
+    pub(crate) fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.ui.route, Route::Meetings | Route::Settings) {
+            return;
+        }
+        if self.ui.sidebar_open && self.tree_focus.contains_focused(window, cx) {
+            self.nav_focus[1].focus(window, cx);
+        }
+        self.ui.sidebar_open = !self.ui.sidebar_open;
+        let (open, duration) = (self.ui.sidebar_open, theme::tokens(cx).motion.layout);
+        let now = cx.background_executor().now();
+        self.sidebar_sizing
+            .update(cx, |state, _| state.set_open(open, duration, now));
+        cx.notify();
+    }
+
     pub(crate) fn set_locale(&mut self, locale: i18n::Locale, cx: &mut Context<Self>) {
         self.persist_field_with_notice(
             move |settings| settings.ui_locale = locale.code().into(),
