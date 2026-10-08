@@ -549,13 +549,14 @@ pub(crate) const RECEIPTS_ITEM: usize = 2;
 fn render_request(request: String, tokens: &Tokens) -> gpui::AnyElement {
     div()
         .debug_selector(|| "assistant-request".into())
+        // The results overflow their scroll area; the quote keeps its line.
+        .flex_shrink_0()
         .border_l_2()
         .border_color(tokens.border)
         .pl(tokens.spacing.md)
         .py(tokens.spacing.xs)
         .text_sm()
         .text_color(tokens.text_muted)
-        .line_clamp(3)
         .child(request)
         .into_any_element()
 }

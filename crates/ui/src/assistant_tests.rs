@@ -576,6 +576,10 @@ fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
     wait_for(cx, &view, |root| root.assistant.pending.is_some());
     scroll_results_to_end(cx, &view);
 
+    assert!(
+        rendered(cx, "assistant-request").size.height >= gpui::px(16.),
+        "results that overflow keep the quoted request whole"
+    );
     let bar = rendered(cx, "assistant-input-bar");
     let results = rendered(cx, "assistant-results");
     let last = rendered(cx, "assistant-pending-overflow");
