@@ -472,6 +472,26 @@ fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
 }
 
 #[gpui::test]
+fn a_receipt_shows_left_out_segments_only_when_there_are_some(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    let mut gaps = write("with-gaps");
+    gaps.uncovered_segment_ids = vec!["seg-9".into()];
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        mutations: vec![write("plain"), gaps],
+        ..empty_result()
+    });
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.result.is_some());
+    assert!(!shown(cx, "assistant-receipt-gaps-plain".into()));
+    let receipt = rendered(cx, "assistant-receipt-with-gaps");
+    assert!(within(
+        rendered(cx, "assistant-receipt-gaps-with-gaps"),
+        receipt
+    ));
+    assert!(within(rendered(cx, "assistant-undo-with-gaps"), receipt));
+}
+
+#[gpui::test]
 fn the_sent_request_is_quoted_above_its_result(cx: &mut TestAppContext) {
     let _alone = hold_a_worker_alone();
     let gate = Gate::default();

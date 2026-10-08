@@ -1,7 +1,7 @@
 use crate::{
     assistant_ui::{
-        AssistantController, AssistantMutationSummary, AssistantRunResult, AssistantScopeMode,
-        AssistantTaskState, AssistantUiError, PendingReviewState,
+        AssistantController, AssistantDocumentChange, AssistantMutationSummary, AssistantRunResult,
+        AssistantScopeMode, AssistantTaskState, AssistantUiError, PendingReviewState,
     },
     controller::RootView,
     controls::{Button, NavEntry, NavList, RadioGroup, Region, Scrollbar},
@@ -36,6 +36,16 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .assistant
         .job_progress
         .map(|progress| job_progress_label(root.ui.locale, progress));
+    let titles: DocumentTitles = root
+        .projects
+        .iter()
+        .map(|document| {
+            (
+                document.id().as_str().to_owned(),
+                document.title().to_owned(),
+            )
+        })
+        .collect();
     let result = root.assistant.result.clone();
     let render_model = result.as_ref().map(result_render_model);
     let (warnings, receipts) = render_model
@@ -72,7 +82,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .children(result.map(|result| render_result(result, warnings, root.ui.locale, cx)))
         .children(
             (!receipts.is_empty())
-                .then(|| render_receipts(receipts, root.ui.locale, cx, &root.assistant)),
+                .then(|| render_receipts(receipts, &titles, root.ui.locale, cx, &root.assistant)),
         )
         .children(pending.map(|pending| render_pending(pending, &review_focus, root.ui.locale, cx)))
         .children((root.assistant.pending_overflow_count() > 0).then(|| {
@@ -640,6 +650,7 @@ fn render_result(
 /// the run failed or was cancelled.
 fn render_receipts(
     mutations: Vec<AssistantMutationSummary>,
+    titles: &DocumentTitles,
     locale: Locale,
     cx: &mut Context<RootView>,
     controller: &AssistantController,
@@ -668,6 +679,7 @@ fn render_receipts(
             let mutation_id = mutation.mutation_id.clone();
             render_mutation(
                 mutation,
+                titles,
                 locale,
                 cx,
                 controller.is_mutation_undone(&mutation_id),
@@ -713,40 +725,22 @@ fn render_warning(
         .into_any_element()
 }
 
-/// A receipt of a write the run applied: the mutation, the documents it
-/// changed and the segments it left uncovered on one line, with its own
-/// undo entry beside it.
+/// A receipt of a write the run applied: what it changed, named by
+/// document title, with the mutation and revisions as details for
+/// troubleshooting, the segments it left out when there are any, and its
+/// own undo entry beside it.
 fn render_mutation(
     mutation: AssistantMutationSummary,
+    titles: &DocumentTitles,
     locale: Locale,
     cx: &mut Context<RootView>,
     undone: bool,
     undo_in_flight: bool,
 ) -> gpui::AnyElement {
-    let affected = mutation
-        .affected_documents
-        .iter()
-        .map(|change| {
-            format!(
-                "{}: {} → {}{}",
-                change.document_id,
-                revision_text(change.previous_revision),
-                revision_text(change.revision),
-                if change.deleted {
-                    format!(" ({})", tr(locale, "assistant_deleted"))
-                } else {
-                    String::new()
-                }
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("; ");
-    let gaps = if mutation.uncovered_segment_ids.is_empty() {
-        "—".into()
-    } else {
-        mutation.uncovered_segment_ids.join(", ")
-    };
-    let mutation_id = mutation.mutation_id.clone();
+    let summary = receipt_summary(locale, &mutation, &|id| titles.get(id).cloned());
+    let details = receipt_details(&mutation);
+    let gaps = uncovered_text(locale, &mutation.uncovered_segment_ids);
+    let mutation_id = mutation.mutation_id;
     let tokens = *theme::tokens(cx);
     let undo_label = if undone {
         tr(locale, "assistant_undone")
@@ -758,6 +752,7 @@ fn render_mutation(
     let receipt = format!("assistant-receipt-{mutation_id}");
     let undo = format!("assistant-undo-{mutation_id}");
     let undone_marker = format!("assistant-undone-{mutation_id}");
+    let gaps_marker = format!("assistant-receipt-gaps-{mutation_id}");
 
     div()
         .debug_selector(move || receipt.clone())
@@ -774,21 +769,29 @@ fn render_mutation(
                 .min_w_0()
                 .flex()
                 .flex_col()
-                .gap_1()
-                .child(info_line(
-                    tr(locale, "assistant_mutation"),
-                    mutation.mutation_id,
-                    &tokens,
-                ))
+                .gap(px(2.))
                 .child(
                     div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_x_4()
+                        .text_sm()
+                        .text_color(if undone {
+                            tokens.text_muted
+                        } else {
+                            tokens.text
+                        })
+                        .child(summary),
+                )
+                .children(gaps.map(|gaps| {
+                    div()
+                        .debug_selector(move || gaps_marker.clone())
                         .text_xs()
                         .text_color(tokens.text_muted)
-                        .child(format!("{} {affected}", tr(locale, "assistant_affected")))
-                        .child(format!("{} {gaps}", tr(locale, "assistant_uncovered"))),
+                        .child(gaps)
+                }))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(tokens.text_subtle)
+                        .child(details),
                 ),
         )
         .child(
@@ -801,7 +804,7 @@ fn render_mutation(
                         .when(undone, |this| {
                             this.debug_selector(move || undone_marker.clone())
                         })
-                        .secondary()
+                        .ghost()
                         .compact()
                         .disabled(undone || undo_in_flight)
                         .on_click(cx.listener(move |root, _, _window, cx| {
@@ -810,6 +813,110 @@ fn render_mutation(
                 ),
         )
         .into_any_element()
+}
+
+/// Document titles by id, to name documents instead of showing their ids.
+type DocumentTitles = std::collections::HashMap<String, String>;
+
+/// A document's title in the locale's quotes; its id while the list does
+/// not have it yet.
+fn quoted_title(locale: Locale, id: &str, title_of: &dyn Fn(&str) -> Option<String>) -> String {
+    crate::i18n::message(
+        locale,
+        "assistant_quoted",
+        &title_of(id).unwrap_or_else(|| id.to_owned()),
+    )
+}
+
+/// What a write did, in words: the documents it created, updated and
+/// deleted, each named by title.
+fn receipt_summary(
+    locale: Locale,
+    mutation: &AssistantMutationSummary,
+    title_of: &dyn Fn(&str) -> Option<String>,
+) -> String {
+    let (list_separator, phrase_separator) = match locale {
+        Locale::ZhCn => ("、", "；"),
+        Locale::EnUs => (", ", "; "),
+    };
+    let documents = |kept: fn(&AssistantDocumentChange) -> bool| {
+        mutation
+            .affected_documents
+            .iter()
+            .filter(|change| kept(change))
+            .map(|change| quoted_title(locale, &change.document_id, title_of))
+            .collect::<Vec<_>>()
+            .join(list_separator)
+    };
+    let phrases = [
+        (
+            "assistant_receipt_created",
+            documents(|change| !change.deleted && change.previous_revision.is_none()),
+        ),
+        (
+            "assistant_receipt_updated",
+            documents(|change| !change.deleted && change.previous_revision.is_some()),
+        ),
+        (
+            "assistant_receipt_deleted",
+            documents(|change| change.deleted),
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, documents)| !documents.is_empty())
+    .enumerate()
+    .map(|(index, (key, documents))| {
+        let phrase = crate::i18n::message(locale, key, &documents);
+        match (locale, index) {
+            // Only the first phrase of an English sentence is capitalized.
+            (Locale::EnUs, 1..) => {
+                let mut chars = phrase.chars();
+                chars
+                    .next()
+                    .map(|first| first.to_lowercase().chain(chars).collect())
+                    .unwrap_or_default()
+            }
+            _ => phrase,
+        }
+    })
+    .collect::<Vec<String>>();
+    if phrases.is_empty() {
+        tr(locale, "assistant_receipt_written").into()
+    } else {
+        phrases.join(phrase_separator)
+    }
+}
+
+/// The mutation and the revisions it moved each document between.
+fn receipt_details(mutation: &AssistantMutationSummary) -> String {
+    let revisions = mutation
+        .affected_documents
+        .iter()
+        .map(|change| {
+            format!(
+                "{} → {}",
+                revision_text(change.previous_revision),
+                revision_text(change.revision)
+            )
+        })
+        .collect::<Vec<_>>();
+    if revisions.is_empty() {
+        mutation.mutation_id.clone()
+    } else {
+        format!("{} · {}", mutation.mutation_id, revisions.join(", "))
+    }
+}
+
+/// How many transcript segments a write left out of its documents; nothing
+/// when it left none out.
+fn uncovered_text(locale: Locale, segments: &[String]) -> Option<String> {
+    (!segments.is_empty()).then(|| {
+        crate::i18n::message(
+            locale,
+            "assistant_uncovered_count",
+            &segments.len().to_string(),
+        )
+    })
 }
 
 /// The review the pending card shows, with its place in the run.
@@ -1116,6 +1223,87 @@ mod tests {
                 .map(|mutation| mutation.mutation_id)
                 .collect::<Vec<_>>(),
             ["first", "second", "primary-mutation"]
+        );
+    }
+
+    fn change(id: &str, previous: Option<u64>, deleted: bool) -> AssistantDocumentChange {
+        AssistantDocumentChange {
+            document_id: id.into(),
+            previous_revision: previous,
+            revision: (!deleted).then_some(previous.map_or(1, |revision| revision + 1)),
+            deleted,
+        }
+    }
+
+    fn titles(id: &str) -> Option<String> {
+        (id == "weekly").then(|| "产品周会".into())
+    }
+
+    #[test]
+    fn a_receipt_names_what_it_changed_by_document_title() {
+        let mut write = mutation("m");
+        write.affected_documents = vec![change("weekly", Some(3), false)];
+        assert_eq!(
+            receipt_summary(Locale::ZhCn, &write, &titles),
+            "已更新「产品周会」"
+        );
+        assert_eq!(
+            receipt_summary(Locale::EnUs, &write, &titles),
+            "Updated “产品周会”"
+        );
+
+        write.affected_documents = vec![
+            change("topic-1", None, false),
+            change("topic-2", None, false),
+            change("weekly", Some(3), false),
+        ];
+        assert_eq!(
+            receipt_summary(Locale::ZhCn, &write, &titles),
+            "已新建「topic-1」、「topic-2」；已更新「产品周会」",
+            "a document missing from the list keeps its id"
+        );
+        assert_eq!(
+            receipt_summary(Locale::EnUs, &write, &titles),
+            "Created “topic-1”, “topic-2”; updated “产品周会”"
+        );
+
+        write.affected_documents = vec![change("weekly", Some(3), true)];
+        assert_eq!(
+            receipt_summary(Locale::ZhCn, &write, &titles),
+            "已删除「产品周会」"
+        );
+        write.affected_documents.clear();
+        assert_eq!(receipt_summary(Locale::ZhCn, &write, &titles), "已写入变更");
+        assert_eq!(
+            receipt_summary(Locale::EnUs, &write, &titles),
+            "Change written"
+        );
+    }
+
+    #[test]
+    fn a_receipt_keeps_ids_and_revisions_as_details_and_drops_empty_gaps() {
+        let mut write = mutation("mutation-weekly-title");
+        write.affected_documents = vec![change("weekly", Some(3), false)];
+        assert_eq!(receipt_details(&write), "mutation-weekly-title · r3 → r4");
+        assert_eq!(
+            uncovered_text(Locale::ZhCn, &write.uncovered_segment_ids),
+            None
+        );
+
+        write.affected_documents.push(change("topic", None, false));
+        write.uncovered_segment_ids = vec!["seg-021".into()];
+        assert_eq!(
+            receipt_details(&write),
+            "mutation-weekly-title · r3 → r4, — → r1"
+        );
+        assert_eq!(
+            uncovered_text(Locale::ZhCn, &write.uncovered_segment_ids).as_deref(),
+            Some("1 段转写未纳入")
+        );
+        write.uncovered_segment_ids.push("seg-022".into());
+        assert_eq!(
+            uncovered_text(Locale::EnUs, &write.uncovered_segment_ids).as_deref(),
+            Some("2 transcript segments left out")
         );
     }
 
