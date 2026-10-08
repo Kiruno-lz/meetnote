@@ -1,4 +1,5 @@
 use crate::{
+    audio::AudioProblem,
     controller::RootView,
     controls::{Button, Separator, TreeShift, TreeStep},
     i18n,
@@ -319,6 +320,50 @@ pub(crate) fn tree_shift(
     }
 }
 
+/// What a tree row shows at its end: a spinner while its document is
+/// processed, a warning while its audio is missing or changed, the word
+/// for a failure, or else a dot in its status color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowIndicator {
+    Spinner,
+    Audio,
+    Failed,
+    Dot(ProjectStatus),
+}
+
+pub(crate) fn row_indicator(
+    status: ProjectStatus,
+    processing: bool,
+    audio: Option<AudioProblem>,
+) -> RowIndicator {
+    if processing {
+        RowIndicator::Spinner
+    } else if audio.is_some() {
+        RowIndicator::Audio
+    } else if status == ProjectStatus::Failed {
+        RowIndicator::Failed
+    } else {
+        RowIndicator::Dot(status)
+    }
+}
+
+/// A tree row's name for assistive technology: its title, status and any
+/// audio problem.
+pub(crate) fn tree_row_label(
+    locale: i18n::Locale,
+    title: &str,
+    status: ProjectStatus,
+    audio: Option<AudioProblem>,
+) -> String {
+    let separator = match locale {
+        i18n::Locale::ZhCn => "，",
+        i18n::Locale::EnUs => ", ",
+    };
+    let mut parts = vec![title, status_label(locale, status)];
+    parts.extend(audio.map(|problem| i18n::text(locale, problem.label_key())));
+    parts.join(separator)
+}
+
 pub(crate) fn status_label(locale: i18n::Locale, status: ProjectStatus) -> &'static str {
     i18n::status(locale, status)
 }
@@ -399,10 +444,13 @@ pub(crate) fn document_meta(document: &DocumentState, locale: i18n::Locale) -> S
 #[cfg(test)]
 mod tests {
     use super::{
-        document_meta, timestamp, tree_move, tree_shift, utc_time, TreeMove, TreeShiftMove,
+        document_meta, row_indicator, timestamp, tree_move, tree_row_label, tree_shift, utc_time,
+        RowIndicator, TreeMove, TreeShiftMove,
     };
+    use crate::audio::AudioProblem;
     use crate::controls::{TreeShift, TreeStep};
     use crate::i18n::Locale;
+    use domain::ProjectStatus;
     use domain::{DocumentState, ProjectId, SpeakerTaggedSegment, TranscriptSegment};
     use std::collections::BTreeSet;
 
@@ -628,6 +676,45 @@ mod tests {
         assert_eq!(
             document_meta(&child, Locale::EnUs),
             "weekly-sync.wav · 0:53 · 1 speaker"
+        );
+    }
+
+    #[test]
+    fn a_row_shows_its_most_pressing_state_and_names_all_of_it() {
+        use ProjectStatus::{Failed, Imported, Ready};
+        assert_eq!(row_indicator(Ready, false, None), RowIndicator::Dot(Ready));
+        assert_eq!(
+            row_indicator(Imported, false, None),
+            RowIndicator::Dot(Imported)
+        );
+        assert_eq!(row_indicator(Failed, false, None), RowIndicator::Failed);
+        assert_eq!(
+            row_indicator(Failed, false, Some(AudioProblem::Missing)),
+            RowIndicator::Audio,
+            "missing audio comes before an old failure"
+        );
+        assert_eq!(
+            row_indicator(Imported, true, Some(AudioProblem::Missing)),
+            RowIndicator::Spinner,
+            "a running job comes first"
+        );
+
+        assert_eq!(
+            tree_row_label(Locale::ZhCn, "产品周会", Ready, None),
+            "产品周会，就绪"
+        );
+        assert_eq!(
+            tree_row_label(
+                Locale::ZhCn,
+                "客户访谈",
+                Imported,
+                Some(AudioProblem::Missing)
+            ),
+            "客户访谈，等待处理，音频缺失"
+        );
+        assert_eq!(
+            tree_row_label(Locale::EnUs, "Weekly", ProjectStatus::Processing, None),
+            "Weekly, Processing"
         );
     }
 

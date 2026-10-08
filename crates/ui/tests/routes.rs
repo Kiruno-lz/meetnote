@@ -377,6 +377,31 @@ fn the_document_header_keeps_its_actions_on_one_line_beside_detail(cx: &mut Test
     visible(cx, "detail-panel");
 }
 
+/// Each tree row is one line: the drag handle, the title and, at the end,
+/// a dot in its status color.
+#[gpui::test]
+fn tree_rows_are_one_line_with_the_status_at_the_end(cx: &mut TestAppContext) {
+    let (_window, cx, _page) = open_route(cx, Route::Meetings);
+    for id in DOCUMENT_IDS {
+        let row = visible(cx, leak(format!("project-row-{id}")));
+        let title = visible(cx, leak(format!("project-title-{id}")));
+        let dot = visible(cx, leak(format!("status-dot-{id}")));
+        assert!(within(visible(cx, leak(format!("drag-{id}"))), row));
+        assert!(
+            within(dot, row) && dot.left() >= title.right(),
+            "{id}: the dot ends the row"
+        );
+        assert!(
+            (dot.center().y - title.center().y).abs() < gpui::px(1.),
+            "{id}: the dot sits on the title's line"
+        );
+        assert!(
+            row.size.height < gpui::px(36.),
+            "{id}: the row is one line: {row:?}"
+        );
+    }
+}
+
 #[gpui::test]
 fn the_models_route_shows_the_catalog_and_aligned_status_chips(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Models);

@@ -1,7 +1,7 @@
 use crate::{
     components::{
-        document_meta, empty_state, ordered_projects, status_label, timestamp, DragGhost,
-        ProjectDrag,
+        document_meta, empty_state, ordered_projects, row_indicator, status_label, timestamp,
+        tree_row_label, DragGhost, ProjectDrag, RowIndicator,
     },
     controller::RootView,
     controls::{tree, Button, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
@@ -20,6 +20,12 @@ use std::time::Duration;
 
 /// The tallest the issue list grows before it scrolls.
 const ISSUE_LIST_HEIGHT: Pixels = px(168.);
+/// The group of a tree row, whose hover shows its drag handle.
+const ROW_GROUP: &str = "project-row";
+/// The drag handle's column in a tree row.
+const GRIP_WIDTH: Pixels = px(14.);
+/// The status dot at the end of a tree row.
+const STATUS_DOT: Pixels = px(6.);
 /// The widest a line of the summary or transcript runs.
 pub(crate) const READING_WIDTH: Pixels = px(680.);
 /// The line height of the reading column, relative to its text.
@@ -100,13 +106,28 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .iter()
                 .any(|child| child.hierarchy.parent_id.as_ref() == Some(project.id()));
             let expanded = root.ui.expanded_projects.contains(project.id());
+            let id = project.id().as_str().to_string();
+            let audio = root.audio.problem(project.id());
+            // The handle shows on the selected row and the one under the
+            // pointer; it is there to drag from either way.
             let drag_handle = div()
-                .id(format!("drag-{}", project.id().as_str()))
+                .id(format!("drag-{id}"))
                 .debug_selector(|| format!("drag-{}", project.id().as_str()))
-                .mr_2()
-                .cursor_pointer()
-                .text_color(tokens.text_muted)
-                .child("⋮⋮")
+                .flex_shrink_0()
+                .w(GRIP_WIDTH)
+                .flex()
+                .justify_center()
+                .cursor_grab()
+                .child(
+                    svg()
+                        .path("icons/ellipsis-vertical.svg")
+                        .size(px(14.))
+                        .text_color(tokens.text_muted),
+                )
+                .when(!selected, |grip| {
+                    grip.opacity(0.)
+                        .group_hover(ROW_GROUP, |style| style.opacity(1.))
+                })
                 .on_drag(
                     ProjectDrag {
                         project_id: drag_id,
@@ -121,8 +142,9 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
             let expand_handle = if has_children {
                 let expand_id = project.id().clone();
                 tree::disclosure(
-                    format!("expand-{}", project.id().as_str()),
+                    format!("expand-{id}"),
                     expanded,
+                    tokens.text_muted,
                     cx.listener(move |this, _, _, cx| this.toggle_project(expand_id.clone(), cx)),
                 )
                 .into_any_element()
@@ -132,30 +154,31 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
             let before_target = project.id().clone();
             let after_target = project.id().clone();
             let before_drop = div()
-                .id(format!("before-{}", project.id().as_str()))
+                .id(format!("before-{id}"))
                 .debug_selector(|| format!("before-{}", project.id().as_str()))
                 .h(px(5.))
                 .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
                     this.reorder_document(dragged.clone(), before_target.clone(), true, cx)
                 }));
             let after_drop = div()
-                .id(format!("after-{}", project.id().as_str()))
+                .id(format!("after-{id}"))
                 .debug_selector(|| format!("after-{}", project.id().as_str()))
                 .h(px(5.))
                 .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
                     this.reorder_document(dragged.clone(), after_target.clone(), false, cx)
                 }));
             let row = TreeItem::new(
-                project.id().as_str().to_string(),
-                project.title().to_string(),
+                id.clone(),
+                tree_row_label(root.ui.locale, project.title(), display_status, audio),
                 &root.tree_focus,
             )
             .debug_selector(|| format!("project-row-{}", project.id().as_str()))
+            .group(ROW_GROUP)
             .depth(depth.into())
             .selected(selected)
             .expanded(has_children.then_some(expanded))
             .cursor_pointer()
-            .px(tokens.spacing.sm)
+            .px(tokens.spacing.xs)
             .py(tokens.spacing.xs)
             .ml(px((depth as f32) * 16.))
             .rounded(tokens.radius.sm)
@@ -170,20 +193,21 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 div()
                     .flex()
                     .items_center()
+                    .gap(tokens.spacing.xs)
                     .child(drag_handle)
                     .child(expand_handle)
                     .child(
                         div()
+                            .debug_selector({
+                                let id = id.clone();
+                                move || format!("project-title-{id}")
+                            })
                             .flex_1()
                             .min_w_0()
                             .text_sm()
                             .child(theme::tail_faded_label(
-                                format!("project-title-{}", project.id().as_str()),
-                                format!(
-                                    "{} {}",
-                                    if depth > 0 { "↳" } else { "◈" },
-                                    project.title()
-                                ),
+                                format!("project-title-{id}"),
+                                project.title().to_string(),
                                 if selected {
                                     tokens.selection
                                 } else {
@@ -191,27 +215,13 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                                 },
                             )),
                     )
-                    .children(processing.then(|| {
-                        let id = project.id().as_str().to_string();
-                        div()
-                            .debug_selector(move || format!("processing-indicator-{id}"))
-                            .ml(tokens.spacing.xs)
-                            .child(spinner(
-                                format!("processing-spinner-{}", project.id().as_str()),
-                                &tokens,
-                            ))
-                    })),
+                    .child(row_end(
+                        &id,
+                        row_indicator(project.processing_status(), processing, audio),
+                        root.ui.locale,
+                        &tokens,
+                    )),
             )
-            .child(status_line(
-                status_label(root.ui.locale, display_status),
-                root.audio.problem(project.id()).map(|problem| {
-                    (
-                        format!("audio-indicator-{}", project.id().as_str()),
-                        tr(root.ui.locale, problem.label_key()),
-                    )
-                }),
-                &tokens,
-            ))
             .on_click(
                 cx.listener(move |this, _, _, cx| this.select_project(project_id.clone(), cx)),
             )
@@ -252,28 +262,55 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
         )
 }
 
-/// A tree row's processing status, and beside it the audio problem the
-/// last check found, if any, as `(selector, label)`.
-fn status_line(
-    status: &'static str,
-    audio_problem: Option<(String, &'static str)>,
-    tokens: &Tokens,
-) -> gpui::Div {
-    let line = div().mt_1().text_xs();
-    match audio_problem {
-        None => line.text_color(tokens.text_muted).child(status),
-        Some((selector, label)) => line
-            .flex()
-            .items_center()
-            .gap(tokens.spacing.sm)
-            .child(div().text_color(tokens.text_muted).child(status))
+/// The end of tree row `id`: a spinner, a warning, the word for a failure
+/// or a status dot, as `indicator` says.
+fn row_end(id: &str, indicator: RowIndicator, locale: i18n::Locale, tokens: &Tokens) -> AnyElement {
+    let dot = |color| {
+        let id = id.to_string();
+        div()
+            .debug_selector(move || format!("status-dot-{id}"))
+            .flex_shrink_0()
+            .size(STATUS_DOT)
+            .rounded_full()
+            .bg(color)
+    };
+    let end = div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(tokens.spacing.xs)
+        .pr(px(2.));
+    match indicator {
+        RowIndicator::Spinner => {
+            let selector = format!("processing-indicator-{id}");
+            end.debug_selector(move || selector.clone())
+                .child(spinner(format!("processing-spinner-{id}"), tokens))
+        }
+        RowIndicator::Audio => {
+            let selector = format!("audio-indicator-{id}");
+            end.debug_selector(move || selector.clone()).child(
+                svg()
+                    .path("icons/triangle-alert.svg")
+                    .size(px(14.))
+                    .text_color(tokens.warning_text),
+            )
+        }
+        RowIndicator::Failed => end
             .child(
                 div()
-                    .debug_selector(move || selector.clone())
-                    .text_color(tokens.warning_text)
-                    .child(label),
-            ),
+                    .text_xs()
+                    .text_color(tokens.danger)
+                    .child(status_label(locale, ProjectStatus::Failed)),
+            )
+            .child(dot(tokens.danger)),
+        RowIndicator::Dot(status) => end.child(dot(match status {
+            ProjectStatus::Ready => tokens.success,
+            ProjectStatus::Processing => tokens.warning,
+            ProjectStatus::Failed => tokens.danger,
+            ProjectStatus::Imported => tokens.text_subtle,
+        })),
     }
+    .into_any_element()
 }
 
 fn main_panel(
