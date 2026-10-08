@@ -1299,7 +1299,6 @@ mod tests {
         click_selector(cx, "nav-Models");
         assert_eq!(view.read_with(cx, |root, _| root.ui.route), route);
         // Nor do the window's shortcuts reach past it.
-        cx.update(|window, _| window.activate_window());
         cx.simulate_keystrokes("cmd-3");
         assert_eq!(view.read_with(cx, |root, _| root.ui.route), route);
         assert!(cx.debug_bounds("confirm-dialog").is_some());

@@ -523,6 +523,8 @@ pub(crate) struct RootView {
     /// What held focus before the open dialog took it; closing the dialog
     /// returns focus there.
     dialog_return: Option<FocusHandle>,
+    /// The window root's, which holds focus whenever no control does.
+    pub(crate) window_focus: FocusHandle,
     /// The sidebar entries, in `pages::chrome::ENTRIES` order.
     pub(crate) nav_focus: [FocusHandle; 4],
     pub(crate) sidebar_sizing: Entity<controls::sidebar::SidebarSizing>,
@@ -718,6 +720,7 @@ impl RootView {
             scroll: ScrollAreas::default(),
             dialog_focus: cx.focus_handle(),
             dialog_return: None,
+            window_focus: cx.focus_handle(),
             nav_focus: std::array::from_fn(|_| cx.focus_handle()),
             sidebar_sizing: cx.new(|_| controls::sidebar::SidebarSizing::default()),
             tree_focus: cx.focus_handle(),
@@ -2550,12 +2553,12 @@ impl RootView {
     /// Runs a window shortcut as its control in the shell would.
     fn run_shortcut(
         &mut self,
-        shortcut: controls::window::Shortcut,
+        shortcut: &controls::window::Shortcut,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         use controls::window::Shortcut;
-        match shortcut {
+        match *shortcut {
             Shortcut::Entry(index) => self.navigate(pages::chrome::ENTRIES[index].0, cx),
             Shortcut::Settings => self.navigate(Route::Settings, cx),
             Shortcut::Back => self.travel(false, cx),
@@ -4495,7 +4498,8 @@ impl Render for RootView {
         let shell = pages::chrome::shell(self, body, detail, window, cx)
             .children(self.speaker_library_dialog(cx))
             .children(self.speaker_confirmation_dialog(cx));
-        controls::window::root(shell, cx)
+        let focus = self.window_focus.clone();
+        controls::window::root(shell, &focus, cx.listener(Self::run_shortcut), window, cx)
     }
 }
 
@@ -4516,7 +4520,9 @@ impl RootView {
         let take = match request {
             ReviewFocus::Decision => true,
             ReviewFocus::Expiry => {
-                window.focused(cx).is_none() || self.review_focus.contains_focused(window, cx)
+                self.window_focus.is_focused(window)
+                    || window.focused(cx).is_none()
+                    || self.review_focus.contains_focused(window, cx)
             }
         };
         if take {
@@ -4551,11 +4557,6 @@ pub fn run(inventory: BackendInventory, services: DesktopServices) {
 /// accessibility flags, where `run` reads the system's.
 pub(crate) fn init_app(accessibility: theme::Accessibility, cx: &mut App) {
     controls::window::init(cx);
-    controls::window::bind_shortcuts(cx, |shortcut, window, cx| {
-        if let Some(Some(root)) = window.root::<RootView>() {
-            root.update(cx, |root, cx| root.run_shortcut(shortcut, window, cx));
-        }
-    });
     theme::init(accessibility, cx);
 }
 

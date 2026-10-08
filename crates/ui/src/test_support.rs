@@ -430,6 +430,12 @@ impl MainWindow {
         });
     }
 
+    /// Whether the window root holds keyboard focus, as it does whenever no
+    /// control has it.
+    pub fn root_holds_focus(&self, window: &gpui::Window, cx: &App) -> bool {
+        self.view.read(cx).window_focus.is_focused(window)
+    }
+
     /// Whether the startup installation probe, project list, Speaker
     /// Library and the selected document's audio check, which run on worker
     /// threads, have reached the view.

@@ -717,6 +717,46 @@ fn tab_traverses_the_settings_route_in_order(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn tab_starts_at_the_first_entry_when_no_control_has_focus(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    assert!(
+        cx.update(|gpui_window, cx| window.root_holds_focus(gpui_window, cx)),
+        "no control has focus at launch: the window root holds it"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        focused_control(cx, &SIDEBAR_STOPS),
+        Some("nav-Assistant"),
+        "Tab with nothing focused"
+    );
+
+    // The focused field leaves with its route.
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    window_navigate(cx, &window, Route::Models);
+    assert!(
+        cx.update(|gpui_window, cx| window.root_holds_focus(gpui_window, cx)),
+        "focus returns to the root with the field gone"
+    );
+    cx.simulate_keystrokes("tab");
+    // With history to go back to, the toolbar's Back comes first.
+    let stops = [&["navigate-back"], SIDEBAR_STOPS.as_slice()].concat();
+    assert_eq!(
+        focused_control(cx, &stops),
+        Some("navigate-back"),
+        "Tab from a control the route no longer shows"
+    );
+}
+
+/// Opens `route` the way a shortcut or history would, leaving focus where
+/// it was.
+fn window_navigate(cx: &mut VisualTestContext, window: &MainWindow, route: Route) {
+    cx.update(|_, cx| window.navigate(route, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+}
+
+#[gpui::test]
 fn the_ring_shows_for_keyboard_focus_only(cx: &mut TestAppContext) {
     let (_window, cx, _) = open_route(cx, Route::Assistant);
     assert!(ring(cx).is_none(), "a press on an entry shows no ring");
@@ -1057,12 +1097,10 @@ fn every_icon_only_control_names_itself_in_a_tooltip(cx: &mut TestAppContext) {
 #[gpui::test]
 fn shortcuts_open_routes_travel_fold_the_sidebar_and_import(cx: &mut TestAppContext) {
     let (window, cx) = open_window(cx);
-    // Shortcuts go to the key window, as the keystrokes do.
-    cx.update(|window, _| window.activate_window());
     let route = |cx: &mut VisualTestContext| cx.update(|_, cx| window.route(cx));
     assert!(
-        cx.update(|window, cx| window.focused(cx)).is_none(),
-        "the shortcuts work before anything has focus"
+        cx.update(|gpui_window, cx| window.root_holds_focus(gpui_window, cx)),
+        "the shortcuts work before any control has focus"
     );
     for (keys, expected) in [
         ("cmd-2", Route::Meetings),
@@ -1103,7 +1141,6 @@ fn shortcuts_open_routes_travel_fold_the_sidebar_and_import(cx: &mut TestAppCont
 #[gpui::test]
 fn shortcuts_pass_by_a_focused_field(cx: &mut TestAppContext) {
     let (window, cx, _) = open_route(cx, Route::Meetings);
-    cx.update(|window, _| window.activate_window());
     click_entry(cx, &window, Route::Assistant);
     let prompt = visible(cx, "assistant-input");
     cx.simulate_click(prompt.center(), Modifiers::none());
