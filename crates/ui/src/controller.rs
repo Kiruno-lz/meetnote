@@ -2562,6 +2562,12 @@ impl RootView {
         cx.notify();
     }
 
+    /// Shows or folds the rename and merge rows of the transcript's speakers.
+    pub(crate) fn toggle_speakers(&mut self, cx: &mut Context<Self>) {
+        self.ui.speakers_expanded = !self.ui.speakers_expanded;
+        cx.notify();
+    }
+
     pub(crate) fn set_content_mode(&mut self, mode: ContentMode, cx: &mut Context<Self>) {
         self.ui.content_mode = mode;
         cx.notify();

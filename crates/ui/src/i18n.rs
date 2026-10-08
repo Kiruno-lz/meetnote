@@ -168,7 +168,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "speaker_library_loading") => "正在读取声纹库……",
         (Locale::ZhCn, "speaker_library_empty") => "声纹库中还没有说话人档案。",
         (Locale::ZhCn, "speaker_profile_name_placeholder") => "档案名称",
-        (Locale::ZhCn, "speakers") => "说话人",
         (Locale::ZhCn, "speakers_hint") => {
             "重命名只改变显示名称；合并把一位说话人的全部片段归给另一位。转录文字、时间和处理记录保持不变。"
         }
@@ -541,7 +540,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "speaker_library_loading") => "Reading the speaker library…",
         (Locale::EnUs, "speaker_library_empty") => "The speaker library has no profiles yet.",
         (Locale::EnUs, "speaker_profile_name_placeholder") => "Profile name",
-        (Locale::EnUs, "speakers") => "Speakers",
         (Locale::EnUs, "speakers_hint") => {
             "Renaming changes only the displayed name; merging gives every segment of one speaker to another. Transcript text, timings and the processing record stay as they are."
         }
@@ -815,6 +813,8 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::ZhCn, "processing") => format!("正在处理 {value}……"),
         (Locale::EnUs, "processing") => format!("Processing {value}…"),
         (Locale::ZhCn, "speaker_number") => format!("说话人 {value}"),
+        (Locale::ZhCn, "speakers_summary") => format!("说话人 · {value}"),
+        (Locale::EnUs, "speakers_summary") => format!("Speakers · {value}"),
         (Locale::EnUs, "speaker_number") => format!("Speaker {value}"),
         (Locale::ZhCn, "speaker_count") => format!("{value} 位说话人"),
         (Locale::EnUs, "speaker_count") if value == "1" => "1 speaker".into(),

@@ -4,7 +4,7 @@ use crate::{
         tree_row_label, DragGhost, ProjectDrag, RowIndicator,
     },
     controller::RootView,
-    controls::{tree, Button, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
+    controls::{tree, Button, Collapsible, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
     route::Route,
     speakers::{document_speakers, transcript_turns, DocumentSpeaker},
@@ -808,16 +808,60 @@ fn speakers_panel(
         .as_ref()
         .filter(|rows| &rows.key().0 == project.id());
     let speakers = document_speakers(project);
+    let expanded = root.ui.speakers_expanded;
+    let summary = i18n::message(locale, "speakers_summary", &speakers.len().to_string());
+    let names = speakers
+        .iter()
+        .map(|speaker| speaker.name(locale))
+        .collect::<Vec<_>>()
+        .join(match locale {
+            i18n::Locale::ZhCn => "、",
+            i18n::Locale::EnUs => ", ",
+        });
+    let header = Collapsible::new("document-speakers-toggle", summary.clone())
+        .debug_selector(|| "document-speakers-toggle".into())
+        .open(expanded)
+        .on_toggle(cx.listener(|this, _, _, cx| this.toggle_speakers(cx)))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(tokens.spacing.sm)
+        .py(tokens.spacing.xs)
+        .rounded(tokens.radius.sm)
+        .child(
+            svg()
+                .path(if expanded {
+                    "icons/chevron-down.svg"
+                } else {
+                    "icons/chevron-right.svg"
+                })
+                .size(px(12.))
+                .text_color(tokens.text_muted),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(summary),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .text_color(tokens.text_muted)
+                .child(theme::tail_faded_label(
+                    "document-speaker-names",
+                    names,
+                    tokens.surface,
+                )),
+        );
     let mut panel = div()
-        .debug_selector(|| "document-speakers".into())
-        .mb(tokens.spacing.lg)
-        .pb(tokens.spacing.md)
-        .border_b_1()
-        .border_color(tokens.hairline)
         .flex()
         .flex_col()
         .gap(tokens.spacing.sm)
-        .child(div().text_sm().child(tr(locale, "speakers")))
+        .pt(tokens.spacing.xs)
         .child(
             div()
                 .text_xs()
@@ -893,7 +937,14 @@ fn speakers_panel(
                 })),
         );
     }
-    panel.into_any_element()
+    div()
+        .debug_selector(|| "document-speakers".into())
+        .mb(tokens.spacing.lg)
+        .pb(tokens.spacing.sm)
+        .border_b_1()
+        .border_color(tokens.hairline)
+        .child(header.content(panel))
+        .into_any_element()
 }
 
 /// The quiet line under a speaker's name: its segment count.

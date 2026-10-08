@@ -29,6 +29,8 @@ pub struct UiState {
     pub processing: bool,
     /// The foreground processing job's stages, while `processing`.
     pub(crate) progress: Option<ProcessingProgress>,
+    /// Whether the transcript's speakers show their rename and merge rows.
+    pub(crate) speakers_expanded: bool,
 }
 
 impl UiState {
@@ -53,6 +55,7 @@ impl UiState {
             notice: super::i18n::text(locale, "ask_notice").into(),
             processing: false,
             progress: None,
+            speakers_expanded: false,
         }
     }
 
