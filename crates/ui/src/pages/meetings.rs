@@ -338,7 +338,7 @@ fn main_panel(
         .flex_col()
         .gap_4()
         .children(conflict_notice(root, &tokens, cx))
-        .children(issues_panel(root, &tokens));
+        .children(issues_panel(root, &tokens, cx));
     if let Some(project) = project {
         let ready = project.processing_status() == ProjectStatus::Ready;
         let mode = root.ui.content_mode;
@@ -1022,12 +1022,65 @@ pub(crate) fn issue_sentence(issue: &application::DocumentIssue, locale: i18n::L
     )
 }
 
-/// The scanner's issues of the documents directory, each with its path and
-/// reason, as the last reload read them. Nothing when there are none.
-fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
+/// The scanner's issues of the documents directory as the last reload read
+/// them: one line with their count, which expands to each path and reason.
+/// Nothing when there are none.
+fn issues_panel(
+    root: &RootView,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> Option<AnyElement> {
     if root.document_issues.is_empty() {
         return None;
     }
+    let locale = root.ui.locale;
+    let expanded = root.ui.issues_expanded;
+    let summary = i18n::message(
+        locale,
+        "document_issues",
+        &root.document_issues.len().to_string(),
+    );
+    let header = Collapsible::new("document-issues-toggle", summary.clone())
+        .debug_selector(|| "document-issues-toggle".into())
+        .open(expanded)
+        .on_toggle(cx.listener(|this, _, _, cx| this.toggle_issues(cx)))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(tokens.spacing.sm)
+        .child(
+            svg()
+                .path("icons/triangle-alert.svg")
+                .size(px(14.))
+                .text_color(tokens.warning_text),
+        )
+        .child(div().flex_1().min_w_0().text_sm().child(summary))
+        .child(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(tokens.spacing.xs)
+                .text_xs()
+                .child(tr(
+                    locale,
+                    if expanded {
+                        "hide_issues"
+                    } else {
+                        "show_issues"
+                    },
+                ))
+                .child(
+                    svg()
+                        .path(if expanded {
+                            "icons/chevron-up.svg"
+                        } else {
+                            "icons/chevron-down.svg"
+                        })
+                        .size(px(12.))
+                        .text_color(tokens.warning_text),
+                ),
+        );
     let scroll = root.scroll.document_issues.clone();
     let list = div()
         .id("document-issue-list")
@@ -1051,7 +1104,7 @@ fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
                             div()
                                 .text_sm()
                                 .text_color(tokens.text)
-                                .child(issue_sentence(issue, root.ui.locale)),
+                                .child(issue_sentence(issue, locale)),
                         )
                 }),
         );
@@ -1059,24 +1112,20 @@ fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
         div()
             .debug_selector(|| "document-issues".into())
             .flex_shrink_0()
-            .p_3()
+            .px(tokens.spacing.md)
+            .py(tokens.spacing.sm)
             .rounded(tokens.radius.sm)
             .bg(tokens.warning_surface)
             .text_color(tokens.warning_text)
-            .flex()
-            .flex_col()
-            .gap(tokens.spacing.sm)
-            .child(div().text_sm().child(i18n::message(
-                root.ui.locale,
-                "document_issues",
-                &root.document_issues.len().to_string(),
-            )))
-            // The scrollbar stays outside the fade.
             .child(
-                div()
-                    .relative()
-                    .child(theme::scroll_faded(&scroll, tokens.warning_surface, list))
-                    .child(Scrollbar::vertical("document-issues-scrollbar", &scroll)),
+                header.content(
+                    // The scrollbar stays outside the fade.
+                    div()
+                        .relative()
+                        .mt(tokens.spacing.sm)
+                        .child(theme::scroll_faded(&scroll, tokens.warning_surface, list))
+                        .child(Scrollbar::vertical("document-issues-scrollbar", &scroll)),
+                ),
             )
             .into_any_element(),
     )

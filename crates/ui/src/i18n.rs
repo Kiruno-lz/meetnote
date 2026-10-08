@@ -72,6 +72,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "models_missing_diarization") => "需要先安装说话人分离模型",
         (Locale::ZhCn, "models_missing_both") => "需要先安装语音识别和说话人分离模型",
         (Locale::ZhCn, "go_to_models") => "前往模型",
+        (Locale::ZhCn, "show_issues") => "展开",
+        (Locale::ZhCn, "hide_issues") => "收起",
         (Locale::ZhCn, "no_projects_title") => "还没有项目",
         (Locale::ZhCn, "no_projects_hint") => "导入一段录音，开始整理",
         (Locale::ZhCn, "no_selection_title") => "未选择项目",
@@ -438,6 +440,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
             "Install the speech recognition and speaker diarization models first"
         }
         (Locale::EnUs, "go_to_models") => "Go to Models",
+        (Locale::EnUs, "show_issues") => "Show",
+        (Locale::EnUs, "hide_issues") => "Hide",
         (Locale::EnUs, "no_projects_title") => "No projects yet",
         (Locale::EnUs, "no_projects_hint") => "Import a recording to get started",
         (Locale::EnUs, "no_selection_title") => "No project selected",

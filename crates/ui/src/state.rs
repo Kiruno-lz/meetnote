@@ -31,6 +31,8 @@ pub struct UiState {
     pub(crate) progress: Option<ProcessingProgress>,
     /// Whether the transcript's speakers show their rename and merge rows.
     pub(crate) speakers_expanded: bool,
+    /// Whether the scanner issues list each path and reason.
+    pub(crate) issues_expanded: bool,
 }
 
 impl UiState {
@@ -56,6 +58,7 @@ impl UiState {
             processing: false,
             progress: None,
             speakers_expanded: false,
+            issues_expanded: false,
         }
     }
 

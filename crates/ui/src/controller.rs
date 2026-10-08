@@ -2562,6 +2562,12 @@ impl RootView {
         cx.notify();
     }
 
+    /// Shows or folds the path and reason of each scanner issue.
+    pub(crate) fn toggle_issues(&mut self, cx: &mut Context<Self>) {
+        self.ui.issues_expanded = !self.ui.issues_expanded;
+        cx.notify();
+    }
+
     /// Shows or folds the rename and merge rows of the transcript's speakers.
     pub(crate) fn toggle_speakers(&mut self, cx: &mut Context<Self>) {
         self.ui.speakers_expanded = !self.ui.speakers_expanded;

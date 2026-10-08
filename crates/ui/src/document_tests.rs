@@ -279,10 +279,18 @@ fn scanner_issues_list_path_and_reason_until_the_files_are_fixed(cx: &mut TestAp
         issue(&stray).message.contains("not a document package"),
         "{issues:#?}"
     );
-    // The panel heads the Meetings content plane, above the document.
+    // The panel heads the Meetings content plane, above the document, as
+    // one line until it is expanded.
     let page = rendered(cx, "meetings-page");
+    let folded = rendered(cx, "document-issues");
+    assert!(within(folded, page), "{folded:?} in {page:?}");
+    assert!(folded.bottom() <= rendered(cx, "meeting-content").top());
+    assert!(within(rendered(cx, "document-issues-toggle"), folded));
+    assert!(folded.size.height < px(48.), "one line: {folded:?}");
+    assert!(cx.debug_bounds("document-issue-0").is_none());
+    click_selector(cx, "document-issues-toggle");
     let panel = rendered(cx, "document-issues");
-    assert!(within(panel, page), "{panel:?} in {page:?}");
+    assert!(panel.size.height > folded.size.height);
     assert!(panel.bottom() <= rendered(cx, "meeting-content").top());
     for index in 0..2 {
         let entry = rendered(cx, leak(format!("document-issue-{index}")));
@@ -324,6 +332,7 @@ fn scanner_issues_read_in_the_ui_locale_and_keep_their_kind_after_a_move(cx: &mu
     std::fs::write(broken.join("state.json"), "{ not json").unwrap();
     std::fs::write(root.path().join("notes.txt"), "stray").unwrap();
     let (view, cx, _changes) = open_on(cx, &root);
+    click_selector(cx, "document-issues-toggle");
     for index in 0..2 {
         rendered(cx, leak(format!("document-issue-{index}")));
     }
