@@ -31,7 +31,6 @@ pub(crate) struct Button {
     id: ElementId,
     base: gpui_base::Button,
     label: SharedString,
-    glyph: Option<SharedString>,
     icon: Option<SharedString>,
     leading: bool,
     variant: Variant,
@@ -51,7 +50,6 @@ impl Button {
             base: gpui_base::Button::new(id.clone()),
             id,
             label: label.into(),
-            glyph: None,
             icon: None,
             leading: false,
             variant: Variant::Secondary,
@@ -111,12 +109,6 @@ impl Button {
     /// Narrower side padding, for buttons in rows of controls.
     pub(crate) fn compact(mut self) -> Self {
         self.compact = true;
-        self
-    }
-
-    /// Shows `glyph` in place of the label, which still names the button.
-    pub(crate) fn glyph(mut self, glyph: impl Into<SharedString>) -> Self {
-        self.glyph = Some(glyph.into());
         self
     }
 
@@ -294,7 +286,7 @@ impl RenderOnce for Button {
                             Some(path) => content
                                 .child(gpui::svg().path(path).size(gpui::px(18.)).text_color(text))
                                 .when(self.leading, |content| content.child(self.label)),
-                            None => content.child(self.glyph.unwrap_or(self.label)),
+                            None => content.child(self.label),
                         }),
                 ),
         );
@@ -375,11 +367,11 @@ mod tests {
     }
 
     #[test]
-    fn the_label_names_the_button_even_behind_a_glyph() {
+    fn the_label_names_the_button_even_behind_an_icon() {
         assert_eq!(Button::new("save", "Save").accessibility_label(), "Save");
         assert_eq!(
             Button::new("close", "Close detail")
-                .glyph("×")
+                .icon("icons/close.svg")
                 .accessibility_label(),
             "Close detail"
         );
