@@ -171,8 +171,8 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .flex_1()
         .min_w_0()
         .min_h_0()
-        // No bottom padding: the results scroll to the plane's edge, and the
-        // input bar floats above it.
+        // No bottom padding: the body below holds the space under the
+        // floating input bar.
         .pt_6()
         .px_6()
         .flex()
