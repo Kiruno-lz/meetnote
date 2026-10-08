@@ -45,6 +45,47 @@ pub(crate) fn empty_card(message: impl Into<SharedString>, tokens: &Tokens) -> i
         .child(message.into())
 }
 
+/// A short note centered where content will appear: an icon, a title, one
+/// sentence on what comes next and the action that brings it, if any.
+pub(crate) fn empty_state(
+    icon: &'static str,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    action: Option<Button>,
+    tokens: &Tokens,
+) -> gpui::Div {
+    div()
+        .max_w(EMPTY_STATE_WIDTH)
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(tokens.spacing.sm)
+        .child(
+            gpui::svg()
+                .path(icon)
+                .size(px(28.))
+                .text_color(tokens.text_subtle),
+        )
+        .child(
+            div()
+                .mt(tokens.spacing.xs)
+                .text_size(tokens.font_size.md)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_center()
+                .text_color(tokens.text_muted)
+                .child(description.into()),
+        )
+        .children(action.map(|action| div().mt(tokens.spacing.sm).child(action)))
+}
+
+/// The widest an empty state's sentence runs.
+const EMPTY_STATE_WIDTH: Pixels = px(360.);
+
 pub(crate) fn settings_section(
     title: impl Into<SharedString>,
     rows: Vec<gpui::AnyElement>,

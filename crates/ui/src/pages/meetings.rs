@@ -1,7 +1,7 @@
 use crate::{
     components::{
-        backend_ids, document_meta, ordered_projects, status_label, timestamp, DragGhost,
-        ProjectDrag,
+        backend_ids, document_meta, empty_state, ordered_projects, status_label, timestamp,
+        DragGhost, ProjectDrag,
     },
     controller::RootView,
     controls::{tree, Button, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
@@ -305,6 +305,8 @@ fn main_panel(
         let ready = project.processing_status() == ProjectStatus::Ready;
         let mode = root.ui.content_mode;
         let scroll = root.scroll.meeting_content.clone();
+        let empty = (mode != ContentMode::Edit && !ready)
+            .then(|| unprocessed_state(root, project, &tokens, cx));
         let mut content = div()
             .id("meeting-content")
             .debug_selector(|| "meeting-content".into())
@@ -323,11 +325,7 @@ fn main_panel(
             ContentMode::Original if ready => content
                 .child(speakers_panel(root, project, &tokens, cx))
                 .child(transcript(project, locale, &tokens)),
-            _ => content.child(
-                div()
-                    .text_color(tokens.text_muted)
-                    .child(tr(locale, "need_process")),
-            ),
+            _ => content,
         };
         panel = panel.child(document_header(
             root,
@@ -358,9 +356,10 @@ fn main_panel(
             crate::components::mode_button(tr(locale, "edit"), ContentMode::Edit, cx),
         );
         panel = panel.child(controls);
-        // The scrollbar stays outside the fade.
-        panel = panel.child(
-            div()
+        panel = panel.child(match empty {
+            Some(empty) => empty_region(empty),
+            // The scrollbar stays outside the fade.
+            None => div()
                 .relative()
                 .flex_1()
                 .min_h_0()
@@ -368,19 +367,28 @@ fn main_panel(
                     theme::scroll_faded(&scroll, tokens.surface, content).rounded(tokens.radius.md),
                 )
                 .child(Scrollbar::vertical("meeting-content-scrollbar", &scroll)),
-        );
+        });
+    } else if root.projects.is_empty() {
+        panel = panel.child(empty_region(empty_state(
+            "icons/inbox.svg",
+            tr(locale, "no_projects_title"),
+            tr(locale, "no_projects_hint"),
+            Some(
+                Button::new("empty-import-audio", tr(locale, "import_audio"))
+                    .debug_selector(|| "empty-import-audio".into())
+                    .primary()
+                    .on_click(cx.listener(RootView::import_audio)),
+            ),
+            &tokens,
+        )));
     } else {
-        panel = panel
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_2xl()
-                    .child(tr(locale, "meetings")),
-            )
-            .child(crate::components::empty_card(
-                tr(locale, "empty_meetings"),
-                &tokens,
-            ));
+        panel = panel.child(empty_region(empty_state(
+            "icons/file.svg",
+            tr(locale, "no_selection_title"),
+            tr(locale, "no_selection_hint"),
+            None,
+            &tokens,
+        )));
     }
     panel.child(
         div()
@@ -401,6 +409,67 @@ fn main_panel(
                 tr(locale, "models"),
                 state::model_status(&root.installation, locale)
             )),
+    )
+}
+
+/// The content region holding a centered empty state.
+fn empty_region(empty: gpui::Div) -> gpui::Div {
+    div()
+        .debug_selector(|| "meeting-content".into())
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(empty.debug_selector(|| "document-empty".into()))
+}
+
+/// What an unprocessed document shows in place of its summary: that it is
+/// being processed, or the one step that processes it.
+fn unprocessed_state(
+    root: &RootView,
+    project: &DocumentState,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> gpui::Div {
+    let locale = root.ui.locale;
+    if root.ui.processing_document() == Some(project.id()) {
+        return empty_state(
+            "icons/loader-circle.svg",
+            tr(locale, "processing_empty_title"),
+            tr(locale, "processing_empty_hint"),
+            None,
+            tokens,
+        );
+    }
+    if root.audio.missing(project.id()) {
+        return empty_state(
+            "icons/triangle-alert.svg",
+            tr(locale, "audio_missing_title"),
+            tr(locale, "audio_missing_hint"),
+            Some(
+                Button::new("empty-relink-audio", tr(locale, "relink_audio"))
+                    .debug_selector(|| "empty-relink-audio".into())
+                    .primary()
+                    .disabled(root.audio.relinking.is_some())
+                    .on_click(cx.listener(RootView::relink_audio)),
+            ),
+            tokens,
+        );
+    }
+    empty_state(
+        "icons/file.svg",
+        tr(locale, "transcript_empty_title"),
+        tr(locale, "transcript_empty_hint"),
+        Some(
+            Button::new("empty-process", tr(locale, "process"))
+                .debug_selector(|| "empty-process".into())
+                .primary()
+                // One foreground job at a time.
+                .disabled(root.ui.processing)
+                .on_click(cx.listener(RootView::process_selected)),
+        ),
+        tokens,
     )
 }
 

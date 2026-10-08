@@ -1062,3 +1062,77 @@ fn the_transcript_reads_as_turns_in_a_measured_column(cx: &mut TestAppContext) {
         "the column is narrower than the plane"
     );
 }
+
+/// The empty state is one compact group centered in the content region.
+#[track_caller]
+fn assert_centered_empty_state(cx: &mut VisualTestContext, action: Option<&'static str>) {
+    let region = rendered(cx, "meeting-content");
+    let empty = rendered(cx, "document-empty");
+    assert!(within(empty, region));
+    assert!(
+        (empty.center().x - region.center().x).abs() < px(1.)
+            && (empty.center().y - region.center().y).abs() < px(1.),
+        "the empty state is centered: {empty:?} in {region:?}"
+    );
+    assert!(empty.size.height < region.size.height / 2., "and compact");
+    for selector in ["empty-process", "empty-relink-audio", "empty-import-audio"] {
+        let shown = cx.debug_bounds(selector);
+        if Some(selector) == action {
+            assert!(within(shown.expect("the action is shown"), empty));
+        } else {
+            assert!(shown.is_none(), "`{selector}` is not offered");
+        }
+    }
+}
+
+#[gpui::test]
+fn an_unprocessed_document_offers_its_next_step_in_place(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let audio = root.path().join("present.wav");
+    std::fs::write(&audio, b"audio").unwrap();
+    root.put(
+        DocumentState::new(
+            ProjectId::new("present"),
+            "Present",
+            audio.display().to_string(),
+        ),
+        "# Present\n",
+    );
+    let mut gone = DocumentState::new(ProjectId::new("gone"), "Gone", "gone.wav");
+    gone.hierarchy.sibling_order = 1;
+    root.put(gone, "# Gone\n");
+    let (view, cx, _changes) = open_on(cx, &root);
+
+    select_row(cx, &view, "present");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    cx.run_until_parked();
+    assert_centered_empty_state(cx, Some("empty-process"));
+    let before = view.read_with(cx, |root, _| root.ui.notice.clone());
+    click_selector(cx, "empty-process");
+    wait_for(cx, &view, |root| {
+        !root.ui.processing && root.ui.notice != before
+    });
+
+    // Missing audio is relinked first.
+    select_row(cx, &view, "gone");
+    wait_for(cx, &view, |root| {
+        root.audio.missing(&ProjectId::new("gone"))
+    });
+    cx.run_until_parked();
+    assert_centered_empty_state(cx, Some("empty-relink-audio"));
+
+    // While it is processed, the state says so and offers nothing.
+    view.update(cx, |root, cx| {
+        root.ui.begin_processing(ProjectId::new("gone"));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_centered_empty_state(cx, None);
+}
+
+#[gpui::test]
+fn an_empty_workspace_offers_to_import_audio(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let (_view, cx, _changes) = open_on(cx, &root);
+    assert_centered_empty_state(cx, Some("empty-import-audio"));
+}

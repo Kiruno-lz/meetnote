@@ -62,8 +62,16 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "summary") => "摘要",
         (Locale::ZhCn, "original") => "转录",
         (Locale::ZhCn, "no_summary") => "还没有总结。可以使用助手整理这个项目。",
-        (Locale::ZhCn, "need_process") => "请先处理项目以生成带 speaker 的转录。",
-        (Locale::ZhCn, "empty_meetings") => "导入音频以创建项目。",
+        (Locale::ZhCn, "transcript_empty_title") => "尚未处理",
+        (Locale::ZhCn, "transcript_empty_hint") => "处理后，这里会显示带说话人的逐字稿",
+        (Locale::ZhCn, "processing_empty_title") => "正在处理",
+        (Locale::ZhCn, "processing_empty_hint") => "完成后，这里会显示带说话人的逐字稿",
+        (Locale::ZhCn, "audio_missing_title") => "找不到音频文件",
+        (Locale::ZhCn, "audio_missing_hint") => "重新关联音频后即可处理",
+        (Locale::ZhCn, "no_projects_title") => "还没有项目",
+        (Locale::ZhCn, "no_projects_hint") => "导入一段录音，开始整理",
+        (Locale::ZhCn, "no_selection_title") => "未选择项目",
+        (Locale::ZhCn, "no_selection_hint") => "从左侧选择一个项目查看",
         (Locale::ZhCn, "project_detail") => "项目详情",
         (Locale::ZhCn, "close_detail") => "关闭详情",
         (Locale::ZhCn, "catalog_description") => "模型目录、安装状态和下载任务",
@@ -409,10 +417,20 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "no_summary") => {
             "No summary yet. Use the Assistant to organize this project."
         }
-        (Locale::EnUs, "need_process") => {
-            "Run processing to generate a speaker-labelled transcript."
+        (Locale::EnUs, "transcript_empty_title") => "Not processed yet",
+        (Locale::EnUs, "transcript_empty_hint") => {
+            "Process it to see the transcript with speakers here"
         }
-        (Locale::EnUs, "empty_meetings") => "Import audio to create a project.",
+        (Locale::EnUs, "processing_empty_title") => "Processing",
+        (Locale::EnUs, "processing_empty_hint") => {
+            "The transcript with speakers appears here when it finishes"
+        }
+        (Locale::EnUs, "audio_missing_title") => "Audio file not found",
+        (Locale::EnUs, "audio_missing_hint") => "Relink the audio to process it",
+        (Locale::EnUs, "no_projects_title") => "No projects yet",
+        (Locale::EnUs, "no_projects_hint") => "Import a recording to get started",
+        (Locale::EnUs, "no_selection_title") => "No project selected",
+        (Locale::EnUs, "no_selection_hint") => "Choose a project on the left",
         (Locale::EnUs, "project_detail") => "PROJECT DETAIL",
         (Locale::EnUs, "close_detail") => "Close detail",
         (Locale::EnUs, "catalog_description") => "Catalog, installation state, and download tasks",
