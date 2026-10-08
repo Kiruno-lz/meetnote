@@ -2214,7 +2214,7 @@ impl RootView {
             speakers
                 .iter()
                 .find(|speaker| speaker.id == id)
-                .map_or_else(|| id.to_string(), |speaker| speaker.name().to_string())
+                .map_or_else(|| id.to_string(), |speaker| speaker.name(self.ui.locale))
         };
         self.speaker_confirmation = Some(SpeakerConfirmation::MergeDocumentSpeaker {
             document_id,

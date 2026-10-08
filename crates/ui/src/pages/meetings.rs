@@ -6,19 +6,23 @@ use crate::{
     controller::RootView,
     controls::{tree, Button, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
-    speakers::{document_speakers, DocumentSpeaker},
+    speakers::{document_speakers, transcript_turns, DocumentSpeaker},
     state::{self, ContentMode, ProcessingProgress},
     theme::{self, Tokens},
 };
 use domain::{DocumentState, ProjectStatus};
 use gpui::{
-    div, percentage, prelude::*, px, svg, Animation, AnimationExt as _, AnyElement, Context,
-    ElementId, IntoElement, Pixels, Transformation,
+    div, percentage, prelude::*, px, relative, svg, Animation, AnimationExt as _, AnyElement,
+    Context, ElementId, IntoElement, Pixels, Transformation,
 };
 use std::time::Duration;
 
 /// The tallest the issue list grows before it scrolls.
 const ISSUE_LIST_HEIGHT: Pixels = px(168.);
+/// The widest a line of the summary or transcript runs.
+pub(crate) const READING_WIDTH: Pixels = px(680.);
+/// The line height of the reading column, relative to its text.
+const READING_LINE_HEIGHT: f32 = 1.7;
 /// The widest the processing progress grows.
 const PROGRESS_WIDTH: Pixels = px(360.);
 /// One turn of the processing spinner.
@@ -312,35 +316,13 @@ fn main_panel(
             .bg(tokens.surface);
         content = match mode {
             ContentMode::Edit => content.child(editor_form(root, project, &tokens, cx)),
-            ContentMode::Summary if ready => content.child(
-                div().text_sm().child(
-                    project
-                        .content
-                        .summary
-                        .clone()
-                        .unwrap_or_else(|| tr(locale, "no_summary").into()),
-                ),
-            ),
+            ContentMode::Summary if ready => content.child(match &project.content.summary {
+                Some(summary) => reading(summary.clone()),
+                None => reading(tr(locale, "no_summary")).text_color(tokens.text_muted),
+            }),
             ContentMode::Original if ready => content
                 .child(speakers_panel(root, project, &tokens, cx))
-                .children(project.results.speaker_segments.iter().map(|segment| {
-                    div()
-                        .pb_3()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(tokens.accent_text)
-                                .child(format!(
-                                    "{}  {}",
-                                    timestamp(segment.start_ms),
-                                    segment
-                                        .speaker_label
-                                        .as_deref()
-                                        .unwrap_or(&segment.speaker_id)
-                                )),
-                        )
-                        .child(div().text_sm().child(segment.text.clone()))
-                })),
+                .child(transcript(project, locale, &tokens)),
             _ => content.child(
                 div()
                     .text_color(tokens.text_muted)
@@ -551,6 +533,53 @@ fn document_header(
         .into_any_element()
 }
 
+/// Prose of the reading column: a measured width and an open line height.
+fn reading(text: impl IntoElement) -> gpui::Div {
+    div()
+        .max_w(READING_WIDTH)
+        .text_sm()
+        .line_height(relative(READING_LINE_HEIGHT))
+        .child(text)
+}
+
+/// The speaker-labelled transcript as turns: each speaker's name in its
+/// color over the paragraphs it says, with a quiet start time.
+fn transcript(project: &DocumentState, locale: i18n::Locale, tokens: &Tokens) -> gpui::Div {
+    div().flex().flex_col().gap(tokens.spacing.lg).children(
+        transcript_turns(project, locale)
+            .into_iter()
+            .enumerate()
+            .map(|(index, turn)| {
+                div()
+                    .debug_selector(move || format!("transcript-turn-{index}"))
+                    .max_w(READING_WIDTH)
+                    .flex()
+                    .flex_col()
+                    .gap(tokens.spacing.xs)
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(tokens.spacing.sm)
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(tokens.speaker(turn.order))
+                                    .child(turn.name),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(tokens.text_muted)
+                                    .child(timestamp(turn.start_ms)),
+                            ),
+                    )
+                    .children(turn.paragraphs.into_iter().map(reading))
+            }),
+    )
+}
+
 /// Where the foreground processing of the shown document is: its phase
 /// over a thin bar, which sweeps until a stage knows its extent.
 fn processing_progress(
@@ -657,7 +686,7 @@ fn speakers_panel(
                         .flex_col()
                         .child(div().text_sm().child(theme::tail_faded_label(
                             format!("speaker-label-{}", speaker.id),
-                            speaker.name().to_string(),
+                            speaker.name(locale),
                             tokens.surface,
                         )))
                         .child(
@@ -700,14 +729,9 @@ fn speakers_panel(
     panel.into_any_element()
 }
 
-/// The quiet line under a speaker's name: its segment count, after its id
-/// when a label is shown above.
+/// The quiet line under a speaker's name: its segment count.
 fn speaker_facts(speaker: &DocumentSpeaker, locale: i18n::Locale) -> String {
-    let segments = i18n::message(locale, "speaker_segments", &speaker.segments.to_string());
-    match speaker.label {
-        Some(_) => format!("{} · {segments}", speaker.id),
-        None => segments,
-    }
+    i18n::message(locale, "speaker_segments", &speaker.segments.to_string())
 }
 
 /// A fixed-width wrapper that `selector` marks for tests; the control

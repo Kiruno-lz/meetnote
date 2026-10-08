@@ -1001,3 +1001,64 @@ fn a_cancelled_job_notes_the_cancellation_not_a_failure(cx: &mut TestAppContext)
         i18n::message(i18n::Locale::ZhCn, "cancelled", "New")
     );
 }
+
+#[gpui::test]
+fn the_transcript_reads_as_turns_in_a_measured_column(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let mut weekly = processed("weekly", "产品周会");
+    let said = [
+        ("speaker-0", 0, 4_000, "先过一下页面"),
+        ("speaker-0", 4_000, 9_000, "然后看截图"),
+        ("speaker-1", 9_000, 12_000, "那就开始迁移"),
+    ];
+    weekly.results.transcript = said
+        .iter()
+        .enumerate()
+        .map(|(index, (_, start_ms, end_ms, text))| TranscriptSegment {
+            id: format!("t-{index}"),
+            start_ms: *start_ms,
+            end_ms: *end_ms,
+            text: (*text).into(),
+        })
+        .collect();
+    weekly.results.diarization = said
+        .iter()
+        .enumerate()
+        .map(
+            |(index, (speaker, start_ms, end_ms, _))| DiarizationSegment {
+                id: format!("d-{index}"),
+                speaker_id: (*speaker).into(),
+                speaker_profile_id: None,
+                speaker_label: None,
+                start_ms: *start_ms,
+                end_ms: *end_ms,
+                confidence: None,
+            },
+        )
+        .collect();
+    weekly.results.speaker_segments = domain::align_transcript_and_speakers(
+        &weekly.results.transcript,
+        &weekly.results.diarization,
+    );
+    root.put(weekly, "# 产品周会\n");
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+
+    // Two turns: speaker-0's two segments, then speaker-1's.
+    let content = rendered(cx, "meeting-content");
+    let turns = [0, 1].map(|index| rendered(cx, leak(format!("transcript-turn-{index}"))));
+    assert!(cx.debug_bounds("transcript-turn-2").is_none());
+    assert!(turns[0].bottom() <= turns[1].top());
+    for turn in turns {
+        assert!(within(turn, content));
+        assert!(
+            turn.size.width <= meetings::READING_WIDTH,
+            "the transcript keeps to the reading width: {turn:?}"
+        );
+    }
+    assert!(
+        content.size.width > meetings::READING_WIDTH,
+        "the column is narrower than the plane"
+    );
+}

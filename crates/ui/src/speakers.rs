@@ -24,6 +24,8 @@ use gpui::{prelude::*, App, Context, Entity, Subscription, Window};
 /// One speaker of a document's results.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DocumentSpeaker {
+    /// Its place in speaking order, from 0; it picks the speaker's color.
+    pub(crate) order: usize,
     pub(crate) id: String,
     pub(crate) label: Option<String>,
     /// Segments of the speaker-labelled transcript attributed to it.
@@ -31,10 +33,57 @@ pub(crate) struct DocumentSpeaker {
 }
 
 impl DocumentSpeaker {
-    /// The label, or the id of a speaker without one.
-    pub(crate) fn name(&self) -> &str {
-        self.label.as_deref().unwrap_or(&self.id)
+    /// The label, or `Speaker n` by speaking order for one without a label.
+    pub(crate) fn name(&self, locale: Locale) -> String {
+        match &self.label {
+            Some(label) => label.clone(),
+            None => i18n::message(locale, "speaker_number", &(self.order + 1).to_string()),
+        }
     }
+}
+
+/// One speaker's consecutive segments of the speaker-labelled transcript.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptTurn {
+    /// The speaker's place in speaking order.
+    pub(crate) order: usize,
+    pub(crate) name: String,
+    /// When its first segment starts.
+    pub(crate) start_ms: u64,
+    /// The text of each of its segments.
+    pub(crate) paragraphs: Vec<String>,
+}
+
+/// The speaker-labelled transcript of `state` as turns: consecutive segments
+/// of one speaker under one name.
+pub(crate) fn transcript_turns(state: &DocumentState, locale: Locale) -> Vec<TranscriptTurn> {
+    let speakers = document_speakers(state);
+    let mut turns: Vec<(&str, TranscriptTurn)> = Vec::new();
+    for segment in &state.results.speaker_segments {
+        match turns.last_mut() {
+            Some((speaker, turn)) if *speaker == segment.speaker_id => {
+                turn.paragraphs.push(segment.text.clone());
+            }
+            _ => {
+                let speaker = speakers
+                    .iter()
+                    .find(|speaker| speaker.id == segment.speaker_id);
+                turns.push((
+                    &segment.speaker_id,
+                    TranscriptTurn {
+                        order: speaker.map_or(0, |speaker| speaker.order),
+                        name: speaker.map_or_else(
+                            || segment.speaker_id.clone(),
+                            |speaker| speaker.name(locale),
+                        ),
+                        start_ms: segment.start_ms,
+                        paragraphs: vec![segment.text.clone()],
+                    },
+                ));
+            }
+        }
+    }
+    turns.into_iter().map(|(_, turn)| turn).collect()
 }
 
 /// The speakers of `state` in the order they first speak, then those only
@@ -47,6 +96,7 @@ pub(crate) fn document_speakers(state: &DocumentState) -> Vec<DocumentSpeaker> {
             Some(index) => index,
             None => {
                 speakers.push(DocumentSpeaker {
+                    order: speakers.len(),
                     id: id.into(),
                     label: None,
                     segments: 0,
@@ -234,12 +284,13 @@ pub(crate) struct NameEntry {
 
 impl NameEntry {
     pub(crate) fn speaker(speaker: &DocumentSpeaker, locale: Locale) -> Self {
-        let name = speaker.name();
+        let name = speaker.name(locale);
+        let name = name.as_str();
         let option = SelectOption::labelled(speaker.id.clone(), name);
         Self {
             id: speaker.id.clone(),
             name: speaker.label.clone().unwrap_or_default(),
-            placeholder: speaker.id.clone(),
+            placeholder: name.to_string(),
             option: if speaker.label.is_some() {
                 option.detail(speaker.id.clone())
             } else {
@@ -428,7 +479,8 @@ mod tests {
             end_ms: 6_000,
             confidence: None,
         }];
-        let speaker = |id: &str, label: Option<&str>, segments| DocumentSpeaker {
+        let speaker = |order, id: &str, label: Option<&str>, segments| DocumentSpeaker {
+            order,
             id: id.into(),
             label: label.map(str::to_string),
             segments,
@@ -436,17 +488,65 @@ mod tests {
         assert_eq!(
             document_speakers(&state),
             [
-                speaker("speaker-3", None, 3),
-                speaker("speaker-0", Some("王经理"), 2),
-                speaker("speaker-9", Some("访客"), 0),
+                speaker(0, "speaker-3", None, 3),
+                speaker(1, "speaker-0", Some("王经理"), 2),
+                speaker(2, "speaker-9", Some("访客"), 0),
             ]
         );
-        assert_eq!(document_speakers(&state)[0].name(), "speaker-3");
-        assert_eq!(document_speakers(&state)[1].name(), "王经理");
+        // A speaker without a label is named by its speaking order.
+        let speakers = document_speakers(&state);
+        assert_eq!(speakers[0].name(Locale::ZhCn), "说话人 1");
+        assert_eq!(speakers[0].name(Locale::EnUs), "Speaker 1");
+        assert_eq!(speakers[1].name(Locale::ZhCn), "王经理");
         assert!(
             document_speakers(&DocumentState::new(ProjectId::new("new"), "New", "new.wav"))
                 .is_empty()
         );
+    }
+
+    fn timed(id: &str, speaker: &str, start_ms: u64) -> SpeakerTaggedSegment {
+        SpeakerTaggedSegment {
+            start_ms,
+            end_ms: start_ms + 1_000,
+            ..segment(id, speaker, None)
+        }
+    }
+
+    #[test]
+    fn consecutive_segments_of_a_speaker_form_one_turn() {
+        let mut state = DocumentState::new(ProjectId::new("doc"), "Doc", "doc.wav");
+        state.results.speaker_segments = vec![
+            timed("first", "speaker-3", 0),
+            timed("second", "speaker-3", 4_000),
+            timed("reply", "speaker-0", 9_000),
+            timed("again", "speaker-3", 65_000),
+        ];
+        state.results.speaker_segments[2].speaker_label = Some("王经理".into());
+        let turns = transcript_turns(&state, Locale::ZhCn);
+        let shape = turns
+            .iter()
+            .map(|turn| {
+                (
+                    turn.order,
+                    turn.name.as_str(),
+                    turn.start_ms,
+                    turn.paragraphs.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shape,
+            [
+                (0, "说话人 1", 0, vec!["first".to_string(), "second".into()]),
+                (1, "王经理", 9_000, vec!["reply".into()]),
+                (0, "说话人 1", 65_000, vec!["again".into()]),
+            ]
+        );
+        assert!(transcript_turns(
+            &DocumentState::new(ProjectId::new("new"), "New", "new.wav"),
+            Locale::ZhCn
+        )
+        .is_empty());
     }
 
     fn profile(id: &str) -> SpeakerProfile {

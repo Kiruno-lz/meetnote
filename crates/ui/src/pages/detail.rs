@@ -3,6 +3,7 @@ use crate::{
     controller::RootView,
     controls::{Button, Region, Scrollbar},
     i18n::{text as tr, Locale},
+    speakers::transcript_turns,
     theme::{self, Tokens},
 };
 use application::{AudioSourceError, AudioStatus};
@@ -36,18 +37,31 @@ pub(crate) fn render(
             let transcript = div()
                 .mt(tokens.spacing.lg)
                 .child(section_title(tr(locale, "detail_transcript"), &tokens))
-                .children(project.results.speaker_segments.iter().map(|segment| {
+                .children(transcript_turns(project, locale).into_iter().map(|turn| {
                     div()
                         .pt(tokens.spacing.sm)
-                        .child(div().text_xs().text_color(tokens.text_muted).child(format!(
-                                    "{}  {}",
-                                    timestamp(segment.start_ms),
-                                    segment
-                                        .speaker_label
-                                        .as_deref()
-                                        .unwrap_or(&segment.speaker_id)
-                                )))
-                        .child(div().text_sm().child(segment.text.clone()))
+                        .child(
+                            div()
+                                .flex()
+                                .gap(tokens.spacing.sm)
+                                .text_xs()
+                                .child(
+                                    div()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(tokens.speaker(turn.order))
+                                        .child(turn.name),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(tokens.text_muted)
+                                        .child(timestamp(turn.start_ms)),
+                                ),
+                        )
+                        .children(
+                            turn.paragraphs
+                                .into_iter()
+                                .map(|paragraph| div().text_sm().child(paragraph)),
+                        )
                 }));
             let body = div()
                 .id("detail-body")

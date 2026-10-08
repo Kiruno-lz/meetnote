@@ -784,6 +784,8 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::EnUs, "import_failed") => format!("Import failed: {value}"),
         (Locale::ZhCn, "processing") => format!("正在处理 {value}……"),
         (Locale::EnUs, "processing") => format!("Processing {value}…"),
+        (Locale::ZhCn, "speaker_number") => format!("说话人 {value}"),
+        (Locale::EnUs, "speaker_number") => format!("Speaker {value}"),
         (Locale::ZhCn, "speaker_count") => format!("{value} 位说话人"),
         (Locale::EnUs, "speaker_count") if value == "1" => "1 speaker".into(),
         (Locale::EnUs, "speaker_count") => format!("{value} speakers"),
