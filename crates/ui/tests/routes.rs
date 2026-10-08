@@ -992,6 +992,63 @@ fn toolbar_back_forward_and_new_navigation_follow_history(cx: &mut TestAppContex
     assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Models);
 }
 
+/// Rests the pointer on `selector` for `rest` of the test clock, then
+/// draws.
+fn rest_on(cx: &mut VisualTestContext, selector: &'static str, rest: std::time::Duration) {
+    let bounds = visible(cx, selector);
+    cx.simulate_mouse_move(bounds.center(), None, Modifiers::none());
+    cx.executor().advance_clock(rest);
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+}
+
+#[gpui::test]
+fn every_icon_only_control_names_itself_in_a_tooltip(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Meetings);
+    let delay = std::time::Duration::from_millis(500);
+    for selector in [
+        "nav-Assistant",
+        "nav-Meetings",
+        "nav-Models",
+        "nav-Settings",
+        "import-audio",
+        "navigate-back",
+        "navigate-forward",
+        "toggle-sidebar",
+    ] {
+        // Off every control, so each rest starts its own delay.
+        let plane = visible(cx, "content-plane");
+        cx.simulate_mouse_move(plane.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        rest_on(cx, selector, delay - std::time::Duration::from_millis(1));
+        assert!(
+            cx.debug_bounds("tooltip").is_none(),
+            "{selector}: no tooltip before the pointer rests"
+        );
+        rest_on(cx, selector, delay);
+        let pointer = visible(cx, selector).center();
+        let tooltip = visible(cx, "tooltip");
+        // Below the pointer, or above it where the window ends.
+        let beside = tooltip.left() > pointer.x
+            && tooltip.left() < pointer.x + gpui::px(24.)
+            && (tooltip.top() > pointer.y && tooltip.top() < pointer.y + gpui::px(32.)
+                || tooltip.bottom() < pointer.y && tooltip.bottom() > pointer.y - gpui::px(32.));
+        assert!(
+            beside,
+            "{selector}: the tooltip sits beside the pointer: {tooltip:?} {pointer:?}"
+        );
+    }
+    let plane = visible(cx, "content-plane");
+    cx.simulate_mouse_move(plane.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert!(
+        cx.debug_bounds("tooltip").is_none(),
+        "leaving the control hides it"
+    );
+}
+
 #[gpui::test]
 fn dragging_the_sidebar_divider_resizes_and_clamps_then_returns(cx: &mut TestAppContext) {
     let (window, cx) = open_window(cx);

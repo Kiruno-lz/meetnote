@@ -4,9 +4,10 @@
 //! focus is on it, the focus ring. A press activates the button without
 //! moving focus, so a field keeps focus when the button beside it is
 //! clicked. A choice among exclusive options (`selected`) is a radio button
-//! for assistive technology, checked while it is the selected one.
+//! for assistive technology, checked while it is the selected one. A button
+//! shown as an icon or a glyph alone names itself in a tooltip.
 
-use super::{keyboard_focused, with_focus_ring};
+use super::{keyboard_focused, tooltip::Tooltip, with_focus_ring};
 use crate::theme;
 use gpui::{
     div, prelude::*, px, relative, App, ClickEvent, ElementId, FocusHandle, Interactivity,
@@ -193,6 +194,7 @@ impl RenderOnce for Button {
                 .clone()
         });
         let ring = !self.disabled && keyboard_focused(&focus, window);
+        let named_by_tooltip = self.glyph.is_some() || (self.icon.is_some() && !self.leading);
         // The caller's styles apply over the button's own.
         let caller = std::mem::take(self.base.style());
         let mut button = self
@@ -230,6 +232,9 @@ impl RenderOnce for Button {
                     .hover(move |style| style.bg(colors.hover))
                     .active(move |style| style.bg(colors.pressed))
                     .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+            })
+            .when(named_by_tooltip, |button| {
+                button.tooltip(Tooltip::builder(self.label.clone()))
             });
         button.style().refine(&caller);
         let button = button.child(

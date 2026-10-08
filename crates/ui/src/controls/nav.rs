@@ -5,9 +5,10 @@
 //! route and leaves focus on the entry, so Tab goes on into the route's
 //! page; Up and Down move focus to the entry before or after it without
 //! opening it. The caller keeps each entry's focus handle, which the entries
-//! beside it move focus to.
+//! beside it move focus to. An entry shown as its icon alone names itself
+//! in a tooltip.
 
-use super::{keyboard_focused, with_focus_ring};
+use super::{keyboard_focused, tooltip::Tooltip, with_focus_ring};
 use crate::theme;
 use gpui::{
     div, prelude::*, AnyElement, App, ClickEvent, Div, ElementId, FocusHandle, FontWeight,
@@ -143,11 +144,13 @@ impl RenderOnce for NavEntry {
         let tokens = *theme::tokens(cx);
         let ring = keyboard_focused(&self.focus, window);
         let (previous, next) = (self.previous, self.next);
+        let tooltip = self.icon_only.then(|| Tooltip::builder(self.label.clone()));
         let entry = self
             .base
             .track_focus(&self.focus)
             .role(Role::Tab)
             .accessibility_label(self.label)
+            .when_some(tooltip, |entry, tooltip| entry.tooltip(tooltip))
             .aria_selected(self.selected)
             .relative()
             .h(if self.icon_only {

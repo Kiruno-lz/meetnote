@@ -23,6 +23,8 @@
 //! - `Region`: a labelled group that holds focus.
 //! - `Toast`: a frosted card showing one notice, with its tone's icon and,
 //!   when it stays until closed, a close button.
+//! - A `Button` or `NavEntry` shown without its label names itself in a
+//!   frosted tooltip (`tooltip`).
 //! - `Separator` and `Scrollbar`: a hairline divider and a scroll area's
 //!   scrollbar; neither is focusable, so neither takes a label.
 //! - `window`: the window's first layer, which moves focus on Tab, cycles
@@ -46,6 +48,7 @@ pub(crate) mod sidebar;
 mod text_area;
 mod text_field;
 mod toast;
+mod tooltip;
 pub(crate) mod tree;
 pub(crate) mod window;
 

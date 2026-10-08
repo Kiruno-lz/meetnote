@@ -44,6 +44,7 @@ pub(crate) const SOURCES: &[(&str, &str)] = &[
         include_str!("controls/text_field.rs"),
     ),
     ("controls/toast.rs", include_str!("controls/toast.rs")),
+    ("controls/tooltip.rs", include_str!("controls/tooltip.rs")),
     ("controls/tree.rs", include_str!("controls/tree.rs")),
     ("controls/window.rs", include_str!("controls/window.rs")),
     ("document_tests.rs", include_str!("document_tests.rs")),
