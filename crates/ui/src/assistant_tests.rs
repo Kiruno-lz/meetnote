@@ -522,6 +522,51 @@ fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
 }
 
 #[gpui::test]
+fn the_input_bar_shows_a_status_only_while_a_run_goes_on_or_has_an_outcome(
+    cx: &mut TestAppContext,
+) {
+    let _alone = hold_a_worker_alone();
+    let gate = Gate::default();
+    let (view, cx, assistant) = open_assistant(
+        cx,
+        FakeAssistantUiService {
+            run_gate: Some(gate.clone()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        !shown(cx, "assistant-status".into()),
+        "idle shows no status"
+    );
+    assert!(!shown(cx, "assistant-task-idle".into()));
+    let idle_bar = rendered(cx, "assistant-input-bar");
+
+    *assistant.run_result.lock().unwrap() = Some(empty_result());
+    gate.arm();
+    start_run(cx, &view);
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    let bar = rendered(cx, "assistant-input-bar");
+    let status = rendered(cx, "assistant-status");
+    assert!(within(status, bar), "the status sits in the bar");
+    assert!(within(rendered(cx, "assistant-task-running"), status));
+    assert!(
+        rendered(cx, "assistant-submit").bottom() <= status.top(),
+        "the status sits under the prompt row"
+    );
+    assert_eq!(
+        bar.bottom(),
+        idle_bar.bottom(),
+        "the bar grows upward from its place"
+    );
+
+    gate.release();
+    wait_for(cx, &view, |root| {
+        root.assistant.task == AssistantTaskState::Completed
+    });
+    assert!(shown(cx, "assistant-task-completed".into()));
+}
+
+#[gpui::test]
 fn a_receipt_shows_left_out_segments_only_when_there_are_some(cx: &mut TestAppContext) {
     let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
     let mut gaps = write("with-gaps");

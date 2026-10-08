@@ -30,12 +30,15 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             .map(|profile| (profile.name.as_str(), profile.is_local())),
     );
     let write_mode = root.saved_assistant().write_mode;
+    let status = shows_status(&root.assistant.task);
     let task = task_label(root.ui.locale, &root.assistant.task);
     let task_selector = task_selector(&root.assistant.task);
+    // The run's steps, while it runs and the runtime knows how many.
     let job_progress = root
         .assistant
         .job_progress
-        .map(|progress| job_progress_label(root.ui.locale, progress));
+        .filter(|_| matches!(root.assistant.task, AssistantTaskState::Running { .. }))
+        .and_then(job_progress_text);
     let titles: DocumentTitles = root
         .projects
         .iter()
@@ -70,7 +73,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .size_full()
         .overflow_y_scroll()
         .track_scroll(&scroll)
-        .pb(input_bar_height(&tokens) + tokens.spacing.md)
+        .pb(input_bar_height(&tokens, status) + tokens.spacing.md)
         .flex()
         .flex_col()
         .gap_3()
@@ -136,26 +139,30 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         .on_click(cx.listener(RootView::cancel_assistant)),
                 ),
         )
-        .child(
-            div()
-                .h(STATUS_HEIGHT)
-                .px(tokens.spacing.xs)
-                .flex()
-                .items_center()
-                .gap(tokens.spacing.md)
-                .text_xs()
-                .text_color(tokens.text_muted)
-                .child(
-                    div()
-                        .debug_selector(move || task_selector.into())
-                        .child(task),
-                )
-                .children(job_progress.map(|progress| {
-                    div()
-                        .debug_selector(|| "assistant-job-progress".into())
-                        .child(progress)
-                })),
-        );
+        .when(status, |bar| {
+            bar.child(
+                div()
+                    .debug_selector(|| "assistant-status".into())
+                    .h(STATUS_HEIGHT)
+                    .line_height(STATUS_HEIGHT)
+                    .px(tokens.spacing.xs)
+                    .flex()
+                    .items_center()
+                    .gap(tokens.spacing.md)
+                    .text_xs()
+                    .text_color(tokens.text_muted)
+                    .child(
+                        div()
+                            .debug_selector(move || task_selector.into())
+                            .child(task),
+                    )
+                    .children(job_progress.map(|progress| {
+                        div()
+                            .debug_selector(|| "assistant-job-progress".into())
+                            .child(progress)
+                    })),
+            )
+        });
 
     div()
         .debug_selector(|| "assistant-page".into())
@@ -262,10 +269,21 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
 /// The status line under the prompt in the input bar.
 const STATUS_HEIGHT: Pixels = px(16.);
 
-/// The input bar's height: its padding and border around the prompt row and
-/// the status line.
-fn input_bar_height(tokens: &Tokens) -> Pixels {
-    tokens.control_height.lg + tokens.spacing.xs + STATUS_HEIGHT + tokens.spacing.sm * 2. + px(2.)
+/// The input bar's height: its padding and border around the prompt row and,
+/// with `status`, the status line under it.
+fn input_bar_height(tokens: &Tokens, status: bool) -> Pixels {
+    let status = if status {
+        tokens.spacing.xs + STATUS_HEIGHT
+    } else {
+        px(0.)
+    };
+    tokens.control_height.lg + status + tokens.spacing.sm * 2. + px(2.)
+}
+
+/// Whether the input bar has a status to show: not while idle, where the
+/// page has nothing to report.
+fn shows_status(task: &AssistantTaskState) -> bool {
+    !matches!(task, AssistantTaskState::Idle)
 }
 
 fn scope_button(scope: AssistantScopeMode, locale: Locale, cx: &mut Context<RootView>) -> Button {
@@ -499,32 +517,18 @@ fn task_selector(task: &AssistantTaskState) -> &'static str {
     }
 }
 
-/// The run's job progress on the shared runtime.
-fn job_progress_label(locale: Locale, progress: runtime::Progress) -> String {
-    let assistant = tr(locale, "assistant");
-    match progress.total {
-        Some(total) => crate::i18n::message(
-            locale,
-            "job_progress_total",
-            &format!("{assistant}|{}|{total}", progress.completed),
-        ),
-        None => crate::i18n::message(
-            locale,
-            "job_progress",
-            &format!("{assistant}|{}", progress.completed),
-        ),
-    }
+/// The run's steps on the shared runtime, once it knows how many there are.
+fn job_progress_text(progress: runtime::Progress) -> Option<String> {
+    progress
+        .total
+        .map(|total| format!("{} / {total}", progress.completed))
 }
 
 fn task_label(locale: Locale, task: &AssistantTaskState) -> String {
     match task {
-        AssistantTaskState::Idle => tr(locale, "assistant_idle").into(),
-        AssistantTaskState::Running { request_id } => {
-            format!("{} · {request_id}", tr(locale, "assistant_running"))
-        }
-        AssistantTaskState::Cancelling { request_id } => {
-            format!("{} · {request_id}", tr(locale, "assistant_cancelling"))
-        }
+        AssistantTaskState::Idle => String::new(),
+        AssistantTaskState::Running { .. } => tr(locale, "assistant_running").into(),
+        AssistantTaskState::Cancelling { .. } => tr(locale, "assistant_cancelling").into(),
         AssistantTaskState::AwaitingConfirmation => {
             tr(locale, "assistant_awaiting_confirmation").into()
         }
@@ -1662,6 +1666,46 @@ mod tests {
         );
         assert!(failed.contains("API key 无效或已过期"), "{failed}");
         assert!(!failed.contains("PROVIDER_"), "{failed}");
+        assert_eq!(
+            task_label(
+                Locale::ZhCn,
+                &AssistantTaskState::Running {
+                    request_id: "assistant-1-2".into()
+                }
+            ),
+            "助手正在运行",
+            "the request id stays out of the label"
+        );
+        assert_eq!(
+            task_label(
+                Locale::EnUs,
+                &AssistantTaskState::Cancelling {
+                    request_id: "assistant-1-2".into()
+                }
+            ),
+            "Cancelling"
+        );
+    }
+
+    #[test]
+    fn the_status_shows_while_a_run_goes_on_or_has_an_outcome_and_counts_known_steps() {
+        assert!(!shows_status(&AssistantTaskState::Idle));
+        for task in [
+            AssistantTaskState::Running {
+                request_id: "run".into(),
+            },
+            AssistantTaskState::Completed,
+            AssistantTaskState::Cancelled,
+            AssistantTaskState::Failed(warning("TASK_FAILED")),
+        ] {
+            assert!(shows_status(&task), "{task:?}");
+        }
+        let progress = |completed, total| runtime::Progress { completed, total };
+        assert_eq!(
+            job_progress_text(progress(1, Some(3))).as_deref(),
+            Some("1 / 3")
+        );
+        assert_eq!(job_progress_text(progress(0, None)), None);
     }
 
     /// `AgentErrorCode` as it crosses the service boundary:
