@@ -7,7 +7,7 @@ use crate::{
 };
 use gpui::{div, prelude::*, px, Context, FontWeight, IntoElement, Pixels};
 use models::{
-    manager::{DownloadProgress, DownloadState},
+    manager::{DownloadId, DownloadProgress, DownloadState},
     ArtifactChecksum, ModelAvailability, ModelCatalogEntry, ModelInstallState,
 };
 use std::collections::BTreeMap;
@@ -182,9 +182,14 @@ fn model_card(
     });
     let reprobing = root.model_reprobes.contains_key(&model_id);
     let expanded = root.ui.expanded_model_details.contains(&model_id);
-    let action = card_action(&entry, progress.is_some(), reprobing);
+    let action = card_action(&entry, progress.as_ref(), reprobing);
     let facts = model_facts(&entry, locale);
     let downloaded = matches!(entry.install_state, ModelInstallState::Installed);
+    let (chip_key, chip_tone) = status_key(
+        downloaded,
+        progress.as_ref().map(|progress| &progress.state),
+        reprobing,
+    );
     let marked = |name: &str| {
         let selector = format!("model-{name}-{model_id}");
         move || selector.clone()
@@ -217,6 +222,29 @@ fn model_card(
                         cx.listener(move |this, _, _, cx| this.reprobe_model(id.clone(), cx)),
                     ),
             ),
+            // One id for both, so focus stays as pause turns into resume.
+            CardAction::Pause(download) => Some(
+                Button::new(
+                    format!("download-action-{}", download.0),
+                    tr(locale, "pause"),
+                )
+                .debug_selector(marked("pause"))
+                .secondary()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.control_download(download, DownloadAction::Pause, cx)
+                })),
+            ),
+            CardAction::Resume(download) => Some(
+                Button::new(
+                    format!("download-action-{}", download.0),
+                    tr(locale, "resume"),
+                )
+                .debug_selector(marked("resume"))
+                .primary()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.control_download(download, DownloadAction::Resume, cx)
+                })),
+            ),
             CardAction::None => None,
         }
         .map(|button| button.compact().w(ACTION_COLUMN_WIDTH))
@@ -248,17 +276,13 @@ fn model_card(
                 .justify_center()
                 .py_0p5()
                 .rounded(tokens.radius.sm)
-                .bg(if downloaded {
-                    tokens.status.ready
-                } else {
-                    tokens.status.imported
+                .bg(match chip_tone {
+                    ChipTone::Ready => tokens.status.ready,
+                    ChipTone::Busy => tokens.status.processing,
+                    ChipTone::Idle => tokens.status.imported,
                 })
                 .text_xs()
-                .child(if downloaded {
-                    tr(locale, "downloaded")
-                } else {
-                    tr(locale, "not_downloaded")
-                }),
+                .child(tr(locale, chip_key)),
         )
         .child(
             div()
@@ -412,8 +436,9 @@ fn model_card(
         ))
     });
 
-    let progress_view =
-        progress.map(|progress| download_progress_view(root, &model_id, progress, cx));
+    let progress_view = progress
+        .as_ref()
+        .map(|progress| download_progress_view(&model_id, progress, locale, &tokens, cx));
 
     // What is going on with the model, under its identity.
     let status = [
@@ -521,84 +546,139 @@ fn fact_rows(title: &'static str, rows: &[FactRow], prefix: &str, tokens: &Token
         }))
 }
 
+/// A running download: its bar over one compact line, and cancel under the
+/// header's pause or resume.
 fn download_progress_view(
-    root: &mut RootView,
     model_id: &str,
-    progress: DownloadProgress,
+    progress: &DownloadProgress,
+    locale: Locale,
+    tokens: &Tokens,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let tokens = *theme::tokens(cx);
-    let percent = progress
-        .total_bytes
-        .filter(|total| *total > 0)
-        .map(|total| progress.completed_bytes as f32 / total as f32 * 100.)
-        .unwrap_or(0.);
-    let loading = progress.total_bytes.is_none();
-    let action = match progress.state {
-        DownloadState::Paused => DownloadAction::Resume,
-        DownloadState::Queued | DownloadState::Downloading | DownloadState::Verifying => {
-            DownloadAction::Pause
-        }
-        _ => DownloadAction::Cancel,
+    let total = progress.total_bytes.filter(|total| *total > 0);
+    let percent = total.map_or(0., |total| {
+        progress.completed_bytes as f32 / total as f32 * 100.
+    });
+    let indeterminate = match progress.state {
+        DownloadState::Verifying => true,
+        DownloadState::Downloading => total.is_none(),
+        _ => false,
     };
-    let label = match action {
-        DownloadAction::Pause => tr(root.ui.locale, "pause"),
-        DownloadAction::Resume => tr(root.ui.locale, "resume"),
-        DownloadAction::Cancel => tr(root.ui.locale, "cancel"),
-    };
+    let download = progress.id;
+    let selector = format!("model-download-progress-{model_id}");
+    let cancel = format!("model-cancel-{model_id}");
     div()
         .flex()
         .items_center()
-        .gap_3()
+        .gap(tokens.spacing.md)
         .child(
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(
-                    ProgressBar::new(
-                        format!("download-progress-{model_id}"),
-                        tr(root.ui.locale, "model_download_progress"),
-                    )
-                    .value(percent)
-                    .indeterminate(loading),
+            progress_block(
+                ProgressBar::new(
+                    format!("download-progress-{model_id}"),
+                    tr(locale, "model_download_progress"),
                 )
-                .child(div().text_xs().text_color(tokens.text_muted).child(
-                    i18n::download_progress(
-                        root.ui.locale,
-                        model_id,
-                        progress.artifact_index,
-                        progress.artifact_count,
-                        progress.completed_bytes,
-                        progress.speed_bytes_per_second,
-                    ),
-                )),
+                .value(percent)
+                .indeterminate(indeterminate),
+                download_line(locale, progress),
+                tokens,
+            )
+            .debug_selector(move || selector.clone()),
         )
         .child(
-            Button::new(format!("download-action-{}", progress.id.0), label)
-                .secondary()
-                .compact()
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.control_download(progress.id, action, cx)
-                })),
+            Button::new(
+                format!("download-cancel-{}", download.0),
+                tr(locale, "cancel"),
+            )
+            .debug_selector(move || cancel.clone())
+            .ghost()
+            .compact()
+            .w(ACTION_COLUMN_WIDTH)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.control_download(download, DownloadAction::Cancel, cx)
+            })),
         )
         .into_any_element()
 }
 
+/// A running download in one line: the file when there are several, the
+/// share and amount done, then the rate and time left while it runs. A
+/// queued or verifying download says what it waits for.
+pub(crate) fn download_line(locale: Locale, progress: &DownloadProgress) -> String {
+    match progress.state {
+        DownloadState::Queued if progress.retry_count > 0 => {
+            return i18n::download_retrying(locale, progress.retry_count)
+        }
+        DownloadState::Queued => return tr(locale, "download_waiting").into(),
+        DownloadState::Verifying => return tr(locale, "download_verifying").into(),
+        _ => {}
+    }
+    let mut parts = Vec::new();
+    if progress.artifact_count > 1 {
+        parts.push(i18n::download_artifact(
+            locale,
+            progress.artifact_index.max(1),
+            progress.artifact_count,
+        ));
+    }
+    match progress.total_bytes.filter(|total| *total > 0) {
+        Some(total) => {
+            let done = progress.completed_bytes.min(total);
+            parts.push(format!("{}%", done * 100 / total));
+            let (divisor, unit, decimals) = binary_unit(total);
+            parts.push(format!(
+                "{:.1} / {:.*} {unit}",
+                progress.completed_bytes as f64 / divisor,
+                decimals,
+                total as f64 / divisor
+            ));
+        }
+        None => parts.push(format_size(progress.completed_bytes)),
+    }
+    if progress.state == DownloadState::Downloading {
+        parts.extend(
+            progress
+                .speed_bytes_per_second
+                .filter(|speed| *speed > 0)
+                .map(format_speed),
+        );
+        parts.extend(
+            progress
+                .eta_seconds
+                .filter(|seconds| *seconds > 0)
+                .map(|seconds| i18n::download_eta(locale, seconds)),
+        );
+    }
+    parts.join(FACT_SEPARATOR)
+}
+
+/// The divisor, name and decimals of the binary unit `bytes` reads in.
+fn binary_unit(bytes: u64) -> (f64, &'static str, usize) {
+    const KIB: u64 = 1 << 10;
+    const MIB: u64 = 1 << 20;
+    const GIB: u64 = 1 << 30;
+    match bytes {
+        GIB.. => (GIB as f64, "GiB", 1),
+        MIB.. => (MIB as f64, "MiB", 0),
+        KIB.. => (KIB as f64, "KiB", 0),
+        _ => (1., "B", 0),
+    }
+}
+
+/// A transfer rate: tenths from MiB/s up, whole KiB/s and B/s below.
+fn format_speed(bytes_per_second: u64) -> String {
+    let (divisor, unit, _) = binary_unit(bytes_per_second);
+    let decimals = usize::from(divisor >= (1 << 20) as f64);
+    format!(
+        "{:.*} {unit}/s",
+        decimals,
+        bytes_per_second as f64 / divisor
+    )
+}
+
 /// A size in binary units: `78 MiB`, `1.0 GiB`.
 pub(crate) fn format_size(bytes: u64) -> String {
-    const KIB: f64 = 1024.0;
-    const MIB: f64 = KIB * 1024.0;
-    const GIB: f64 = MIB * 1024.0;
-    let bytes = bytes as f64;
-    if bytes >= GIB {
-        format!("{:.1} GiB", bytes / GIB)
-    } else if bytes >= MIB {
-        format!("{:.0} MiB", bytes / MIB)
-    } else {
-        format!("{:.0} KiB", bytes / KIB)
-    }
+    let (divisor, unit, decimals) = binary_unit(bytes);
+    format!("{:.*} {unit}", decimals, bytes as f64 / divisor)
 }
 
 /// A labelled fact of a card's details: a file or backend and what its
@@ -796,7 +876,7 @@ fn unavailable_key(status: &str) -> &'static str {
     }
 }
 
-/// The one action a card offers besides its details.
+/// The one action in a card's header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CardAction {
     /// A ready model that is missing or partial.
@@ -805,18 +885,29 @@ pub(crate) enum CardAction {
     Retry,
     /// An installed model.
     Reprobe,
+    /// A running download.
+    Pause(DownloadId),
+    /// A paused download.
+    Resume(DownloadId),
     None,
 }
 
-/// Only a ready model that is missing or partial downloads; an installed
-/// one re-probes, which is also how a failed re-probe is retried. Nothing
-/// is offered while the model downloads or re-probes.
+/// A running download pauses or resumes; otherwise only a ready model that
+/// is missing or partial downloads, and an installed one re-probes, which
+/// is also how a failed re-probe is retried. Nothing is offered while the
+/// model re-probes.
 pub(crate) fn card_action(
     entry: &ModelAvailability,
-    downloading: bool,
+    download: Option<&DownloadProgress>,
     reprobing: bool,
 ) -> CardAction {
-    if downloading || reprobing {
+    if let Some(download) = download {
+        return match download.state {
+            DownloadState::Paused => CardAction::Resume(download.id),
+            _ => CardAction::Pause(download.id),
+        };
+    }
+    if reprobing {
         return CardAction::None;
     }
     match entry.install_state {
@@ -834,9 +925,198 @@ pub(crate) fn card_action(
     }
 }
 
+/// How a card's status chip is filled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChipTone {
+    Ready,
+    Busy,
+    Idle,
+}
+
+/// A card's status chip: a running download or check before whether the
+/// model is downloaded.
+pub(crate) fn status_key(
+    installed: bool,
+    download: Option<&DownloadState>,
+    reprobing: bool,
+) -> (&'static str, ChipTone) {
+    match download {
+        Some(DownloadState::Queued) => ("download_queued", ChipTone::Busy),
+        Some(DownloadState::Downloading) => ("downloading", ChipTone::Busy),
+        Some(DownloadState::Paused) => ("download_paused", ChipTone::Idle),
+        Some(DownloadState::Verifying) => ("verifying", ChipTone::Busy),
+        _ if reprobing => ("verifying", ChipTone::Busy),
+        _ if installed => ("downloaded", ChipTone::Ready),
+        _ => ("not_downloaded", ChipTone::Idle),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Halfway through the first of two files: 32.1 of 78 MiB at 5.2 MiB/s.
+    fn progress(state: DownloadState) -> DownloadProgress {
+        DownloadProgress {
+            id: DownloadId(1),
+            model_id: "paraformer-zh".into(),
+            state,
+            completed_bytes: 33_659_290,
+            speed_bytes_per_second: Some(5_452_595),
+            total_bytes: Some(81_904_027),
+            artifact_index: 1,
+            artifact_count: 2,
+            eta_seconds: Some(9),
+            retry_count: 0,
+        }
+    }
+
+    #[test]
+    fn sizes_read_in_binary_units() {
+        for (bytes, size) in [
+            (512, "512 B"),
+            (2_048, "2 KiB"),
+            (81_904_027, "78 MiB"),
+            (1 << 30, "1.0 GiB"),
+            (3_095_033_483, "2.9 GiB"),
+        ] {
+            assert_eq!(format_size(bytes), size, "{bytes}");
+        }
+    }
+
+    #[test]
+    fn a_running_download_reads_as_one_compact_line() {
+        let running = progress(DownloadState::Downloading);
+        assert_eq!(
+            download_line(Locale::ZhCn, &running),
+            "文件 1/2 · 41% · 32.1 / 78 MiB · 5.2 MiB/s · 约 9 秒"
+        );
+        assert_eq!(
+            download_line(Locale::EnUs, &running),
+            "File 1 of 2 · 41% · 32.1 / 78 MiB · 5.2 MiB/s · about 9 s left"
+        );
+
+        // One file names no file; a large one counts in GiB, a slow one in
+        // KiB/s, and a long wait in minutes or hours.
+        let large = DownloadProgress {
+            completed_bytes: 1_288_490_189,
+            total_bytes: Some(3_095_033_483),
+            speed_bytes_per_second: Some(900_000),
+            artifact_count: 1,
+            eta_seconds: Some(1_996),
+            ..running.clone()
+        };
+        assert_eq!(
+            download_line(Locale::ZhCn, &large),
+            "41% · 1.2 / 2.9 GiB · 879 KiB/s · 约 33 分钟"
+        );
+        assert_eq!(
+            download_line(Locale::EnUs, &large),
+            "41% · 1.2 / 2.9 GiB · 879 KiB/s · about 33 min left"
+        );
+        for (seconds, chinese, english) in [
+            (59, "约 59 秒", "about 59 s left"),
+            (89, "约 1 分钟", "about 1 min left"),
+            (3_599, "约 1 小时", "about 1 h left"),
+            (5_000, "约 1 小时 23 分钟", "about 1 h 23 min left"),
+            (7_200, "约 2 小时", "about 2 h left"),
+        ] {
+            assert_eq!(i18n::download_eta(Locale::ZhCn, seconds), chinese);
+            assert_eq!(i18n::download_eta(Locale::EnUs, seconds), english);
+        }
+
+        // An unknown total, speed or wait is left out, not shown as zero.
+        let unknown = DownloadProgress {
+            total_bytes: None,
+            speed_bytes_per_second: Some(0),
+            eta_seconds: Some(0),
+            artifact_count: 1,
+            ..running.clone()
+        };
+        assert_eq!(download_line(Locale::ZhCn, &unknown), "32 MiB");
+        let overshoot = DownloadProgress {
+            completed_bytes: 90_000_000,
+            speed_bytes_per_second: None,
+            eta_seconds: None,
+            ..running
+        };
+        assert_eq!(
+            download_line(Locale::EnUs, &overshoot),
+            "File 1 of 2 · 100% · 85.8 / 78 MiB"
+        );
+    }
+
+    #[test]
+    fn a_paused_queued_or_verifying_download_says_so_without_a_rate() {
+        assert_eq!(
+            download_line(Locale::ZhCn, &progress(DownloadState::Paused)),
+            "文件 1/2 · 41% · 32.1 / 78 MiB"
+        );
+        let queued = progress(DownloadState::Queued);
+        assert_eq!(download_line(Locale::ZhCn, &queued), "等待开始");
+        assert_eq!(download_line(Locale::EnUs, &queued), "Waiting to start");
+        let retrying = DownloadProgress {
+            retry_count: 2,
+            ..queued
+        };
+        assert_eq!(
+            download_line(Locale::ZhCn, &retrying),
+            "连接中断，正在第 2 次重试"
+        );
+        assert_eq!(
+            download_line(Locale::EnUs, &retrying),
+            "Connection lost, retrying (attempt 2)"
+        );
+        let verifying = progress(DownloadState::Verifying);
+        assert_eq!(
+            download_line(Locale::ZhCn, &verifying),
+            "正在校验下载的文件"
+        );
+        assert_eq!(
+            download_line(Locale::EnUs, &verifying),
+            "Checking the downloaded files"
+        );
+    }
+
+    #[test]
+    fn the_status_chip_names_a_running_download_or_check_before_the_install_state() {
+        use DownloadState as State;
+        for (installed, download, reprobing, chip) in [
+            (false, None, false, ("not_downloaded", ChipTone::Idle)),
+            (true, None, false, ("downloaded", ChipTone::Ready)),
+            (true, None, true, ("verifying", ChipTone::Busy)),
+            (
+                false,
+                Some(State::Queued),
+                false,
+                ("download_queued", ChipTone::Busy),
+            ),
+            (
+                false,
+                Some(State::Downloading),
+                false,
+                ("downloading", ChipTone::Busy),
+            ),
+            (
+                true,
+                Some(State::Paused),
+                false,
+                ("download_paused", ChipTone::Idle),
+            ),
+            (
+                false,
+                Some(State::Verifying),
+                false,
+                ("verifying", ChipTone::Busy),
+            ),
+        ] {
+            assert_eq!(
+                status_key(installed, download.as_ref(), reprobing),
+                chip,
+                "{installed} {download:?} {reprobing}"
+            );
+        }
+    }
 
     #[test]
     fn a_source_reads_as_its_host_and_for_hubs_its_owner_and_project() {

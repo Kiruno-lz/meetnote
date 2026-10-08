@@ -218,10 +218,14 @@ fn failed_download() -> ModelAvailability {
 }
 
 /// The calls the page makes. `start` completes at once; `reprobe` waits in
-/// `gate` while it is armed, then returns a task the test finishes.
+/// `gate` while it is armed, then returns a task the test finishes; `list`
+/// reports `downloads`, and pause, resume and cancel are recorded in
+/// `controls`.
 #[derive(Default)]
 struct FakeModels {
     catalog: Option<ModelCatalog>,
+    downloads: Mutex<Vec<DownloadProgress>>,
+    controls: Mutex<Vec<(&'static str, DownloadId)>>,
     starts: Mutex<Vec<String>>,
     reprobes: Mutex<Vec<String>>,
     gate: Gate,
@@ -243,6 +247,15 @@ impl FakeModels {
     fn reprobes(&self) -> Vec<String> {
         self.reprobes.lock().unwrap().clone()
     }
+
+    fn controls(&self) -> Vec<(&'static str, DownloadId)> {
+        self.controls.lock().unwrap().clone()
+    }
+
+    fn control(&self, action: &'static str, id: DownloadId) -> Result<(), ModelManagerError> {
+        self.controls.lock().unwrap().push((action, id));
+        Ok(())
+    }
 }
 
 impl ModelService for FakeModels {
@@ -251,7 +264,7 @@ impl ModelService for FakeModels {
     }
 
     fn list(&self) -> Result<Vec<DownloadProgress>, ModelManagerError> {
-        Ok(Vec::new())
+        Ok(self.downloads.lock().unwrap().clone())
     }
 
     fn model_ref(&self, model_id: &str, _: &str) -> Result<ModelRef, ModelManagerError> {
@@ -282,16 +295,16 @@ impl ModelService for FakeModels {
         })
     }
 
-    fn pause(&self, _: DownloadId) -> Result<(), ModelManagerError> {
-        Ok(())
+    fn pause(&self, id: DownloadId) -> Result<(), ModelManagerError> {
+        self.control("pause", id)
     }
 
-    fn resume(&self, _: DownloadId) -> Result<(), ModelManagerError> {
-        Ok(())
+    fn resume(&self, id: DownloadId) -> Result<(), ModelManagerError> {
+        self.control("resume", id)
     }
 
-    fn cancel(&self, _: DownloadId) -> Result<(), ModelManagerError> {
-        Ok(())
+    fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError> {
+        self.control("cancel", id)
     }
 
     fn reprobe(&self, model_id: &str) -> Result<ReprobeTask, ModelManagerError> {
@@ -512,6 +525,86 @@ fn every_card_leads_with_its_name_status_and_action_over_quiet_facts_and_its_sou
         "collapsed again"
     );
     assert_eq!(candidate.declared, [row("model.bin", "未声明")]);
+}
+
+/// A download of `model_id` halfway through the first of its two files.
+fn running(id: u64, model_id: &str, state: DownloadState) -> DownloadProgress {
+    DownloadProgress {
+        id: DownloadId(id),
+        model_id: model_id.into(),
+        state,
+        completed_bytes: 33_659_290,
+        speed_bytes_per_second: Some(5_452_595),
+        total_bytes: Some(81_904_027),
+        artifact_index: 1,
+        artifact_count: 2,
+        eta_seconds: Some(9),
+        retry_count: 0,
+    }
+}
+
+#[gpui::test]
+fn a_running_download_shows_its_progress_with_pause_or_resume_and_cancel_in_the_action_column(
+    cx: &mut TestAppContext,
+) {
+    let models = FakeModels::new(catalog(vec![bundle_asr(), native_diarization()]));
+    *models.downloads.lock().unwrap() = vec![
+        running(7, "bundle-asr", DownloadState::Downloading),
+        running(8, "native-diarization", DownloadState::Paused),
+    ];
+    let state = published(vec![
+        availability(bundle_asr(), ModelInstallState::Missing),
+        availability(native_diarization(), ModelInstallState::Partial),
+    ]);
+    let (view, cx) = open_models(cx, models.clone(), &state, test_settings());
+
+    // Pause or resume takes the download's place in the header.
+    assert_in_header(cx, "pause", "bundle-asr");
+    assert_in_header(cx, "resume", "native-diarization");
+    for model_id in ["bundle-asr", "native-diarization"] {
+        assert!(
+            !shown(cx, "download", model_id),
+            "{model_id} is downloading"
+        );
+        let card = rendered(cx, selector("card", model_id));
+        let progress = rendered(cx, selector("download-progress", model_id));
+        let cancel = rendered(cx, selector("cancel", model_id));
+        assert!(within(progress, card) && within(cancel, card));
+        assert!(
+            progress.right() <= cancel.left(),
+            "cancel ends the progress row"
+        );
+    }
+    // Pause, resume and both cancels share one column.
+    let actions = [
+        ("pause", "bundle-asr"),
+        ("resume", "native-diarization"),
+        ("cancel", "bundle-asr"),
+        ("cancel", "native-diarization"),
+    ]
+    .map(|(name, model_id)| rendered(cx, selector(name, model_id)));
+    for action in &actions {
+        assert_eq!(
+            (action.left(), action.size.width),
+            (actions[0].left(), actions[0].size.width),
+            "{actions:?}"
+        );
+    }
+
+    click_selector(cx, "model-pause-bundle-asr");
+    click_selector(cx, "model-resume-native-diarization");
+    click_selector(cx, "model-cancel-native-diarization");
+    wait_for(cx, &view, |_| models.controls().len() == 3);
+    let mut controls = models.controls();
+    controls.sort();
+    assert_eq!(
+        controls,
+        [
+            ("cancel", DownloadId(8)),
+            ("pause", DownloadId(7)),
+            ("resume", DownloadId(8)),
+        ]
+    );
 }
 
 #[gpui::test]

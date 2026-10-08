@@ -68,6 +68,12 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "download") => "下载",
         (Locale::ZhCn, "downloaded") => "已下载",
         (Locale::ZhCn, "not_downloaded") => "未下载",
+        (Locale::ZhCn, "download_queued") => "排队中",
+        (Locale::ZhCn, "downloading") => "下载中",
+        (Locale::ZhCn, "download_paused") => "已暂停",
+        (Locale::ZhCn, "verifying") => "校验中",
+        (Locale::ZhCn, "download_waiting") => "等待开始",
+        (Locale::ZhCn, "download_verifying") => "正在校验下载的文件",
         (Locale::ZhCn, "no_models") => "模型目录中没有可用模型。",
         (Locale::ZhCn, "task_asr") => "语音识别",
         (Locale::ZhCn, "task_diarization") => "说话人分离",
@@ -397,6 +403,12 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "download") => "Download",
         (Locale::EnUs, "downloaded") => "Downloaded",
         (Locale::EnUs, "not_downloaded") => "Not downloaded",
+        (Locale::EnUs, "download_queued") => "Queued",
+        (Locale::EnUs, "downloading") => "Downloading",
+        (Locale::EnUs, "download_paused") => "Paused",
+        (Locale::EnUs, "verifying") => "Verifying",
+        (Locale::EnUs, "download_waiting") => "Waiting to start",
+        (Locale::EnUs, "download_verifying") => "Checking the downloaded files",
         (Locale::EnUs, "no_models") => "No models are available in the catalog.",
         (Locale::EnUs, "task_asr") => "Speech recognition",
         (Locale::EnUs, "task_diarization") => "Speaker diarization",
@@ -1387,6 +1399,42 @@ pub fn probe_record_error(locale: Locale, error: &ProbeRecordError) -> String {
         Locale::EnUs => {
             format!("Cannot read the probe record {path}: {reason}. The next probe replaces it.")
         }
+    }
+}
+
+/// Which of a download's files is downloading, when it has several.
+pub fn download_artifact(locale: Locale, index: usize, count: usize) -> String {
+    match locale {
+        Locale::ZhCn => format!("文件 {index}/{count}"),
+        Locale::EnUs => format!("File {index} of {count}"),
+    }
+}
+
+/// The time a download has left: seconds under a minute, then minutes and
+/// hours rounded to the minute.
+pub fn download_eta(locale: Locale, seconds: u64) -> String {
+    if seconds < 60 {
+        return match locale {
+            Locale::ZhCn => format!("约 {seconds} 秒"),
+            Locale::EnUs => format!("about {seconds} s left"),
+        };
+    }
+    let minutes = (seconds + 30) / 60;
+    match (locale, minutes / 60, minutes % 60) {
+        (Locale::ZhCn, 0, minutes) => format!("约 {minutes} 分钟"),
+        (Locale::ZhCn, hours, 0) => format!("约 {hours} 小时"),
+        (Locale::ZhCn, hours, minutes) => format!("约 {hours} 小时 {minutes} 分钟"),
+        (Locale::EnUs, 0, minutes) => format!("about {minutes} min left"),
+        (Locale::EnUs, hours, 0) => format!("about {hours} h left"),
+        (Locale::EnUs, hours, minutes) => format!("about {hours} h {minutes} min left"),
+    }
+}
+
+/// A queued download the manager starts again after a dropped connection.
+pub fn download_retrying(locale: Locale, attempt: u32) -> String {
+    match locale {
+        Locale::ZhCn => format!("连接中断，正在第 {attempt} 次重试"),
+        Locale::EnUs => format!("Connection lost, retrying (attempt {attempt})"),
     }
 }
 
