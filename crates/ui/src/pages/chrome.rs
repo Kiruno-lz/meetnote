@@ -45,7 +45,8 @@ pub(crate) fn shell(
 ) -> gpui::Div {
     let tokens = *theme::tokens(cx);
     let secondary = matches!(root.ui.route, Route::Meetings | Route::Settings);
-    let folding = root.sidebar_sizing.read(cx).folding();
+    let now = cx.background_executor().now();
+    let folding = root.sidebar_sizing.read(cx).folding(now);
     let show_sidebar = secondary && (root.ui.sidebar_open || folding);
     if folding && secondary {
         window.request_animation_frame();
@@ -161,8 +162,9 @@ fn toolbar(root: &mut RootView, secondary: bool, cx: &mut Context<RootView>) -> 
                     }
                     this.ui.sidebar_open = !this.ui.sidebar_open;
                     let duration = theme::tokens(cx).motion.layout;
+                    let now = cx.background_executor().now();
                     this.sidebar_sizing.update(cx, |state, _| {
-                        state.set_open(this.ui.sidebar_open, duration)
+                        state.set_open(this.ui.sidebar_open, duration, now)
                     });
                     cx.notify();
                 })),

@@ -945,6 +945,13 @@ fn ctrl_tab_leaves_a_text_area_that_takes_tab(cx: &mut TestAppContext) {
     assert_eq!(height(cx), Some(summary), "Ctrl-Shift-Tab moves back");
 }
 
+/// Runs the sidebar fold for `milliseconds` of the test clock, then draws.
+fn fold_for(cx: &mut VisualTestContext, milliseconds: u64) {
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(milliseconds));
+    cx.update(|window, cx| window.draw(cx).clear());
+}
+
 #[gpui::test]
 fn project_sidebar_collapses_without_hiding_the_icon_rail(cx: &mut TestAppContext) {
     let (window, cx) = open_window(cx);
@@ -959,15 +966,13 @@ fn project_sidebar_collapses_without_hiding_the_icon_rail(cx: &mut TestAppContex
     let toggle = visible(cx, "toggle-sidebar");
     cx.simulate_click(toggle.center(), Modifiers::none());
     cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert!(cx.debug_bounds("project-sidebar").is_none());
     assert_eq!(visible(cx, "navigation-rail"), rail);
     assert!(visible(cx, "content-plane").size.width > plane.size.width);
     cx.simulate_click(toggle.center(), Modifiers::none());
     cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert_eq!(visible(cx, "project-sidebar"), sidebar);
 }
 
@@ -1088,6 +1093,8 @@ fn dragging_the_sidebar_divider_resizes_and_clamps_then_returns(cx: &mut TestApp
         visible(cx, "project-sidebar").size.width > gpui::px(360.),
         "the release starts from the resisted width"
     );
+    // The rebound is a GPUI animation on the wall clock; the wait only has
+    // to outlast it.
     std::thread::sleep(std::time::Duration::from_millis(350));
     cx.update(|window, cx| window.draw(cx).clear());
     assert_eq!(visible(cx, "project-sidebar").size.width, gpui::px(360.));
@@ -1110,8 +1117,7 @@ fn settings_categories_reveal_their_sections_and_collapse(cx: &mut TestAppContex
     let toggle = visible(cx, "toggle-sidebar");
     cx.simulate_click(toggle.center(), Modifiers::none());
     cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert!(cx.debug_bounds("settings-sidebar").is_none());
     assert!(cx.debug_bounds("navigation-rail").is_some());
 }
@@ -1173,8 +1179,7 @@ fn sidebar_fold_keeps_content_stable_and_can_reverse_mid_animation(cx: &mut Test
         cx.debug_bounds("project-sidebar").is_some(),
         "the sidebar must remain while folding"
     );
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 100);
     let partial = rendered(cx, "project-sidebar").size.width;
     assert!(
         partial > gpui::px(0.) && partial < original.size.width,
@@ -1194,8 +1199,7 @@ fn sidebar_fold_keeps_content_stable_and_can_reverse_mid_animation(cx: &mut Test
         (reversed - partial).abs() < gpui::px(12.),
         "reversal must begin at the current width: {partial:?} -> {reversed:?}"
     );
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert_eq!(
         visible(cx, "project-sidebar").size.width,
         original.size.width
