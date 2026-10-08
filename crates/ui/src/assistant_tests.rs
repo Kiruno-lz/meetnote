@@ -297,6 +297,12 @@ fn a_retryable_run_failure_offers_retry_and_the_retry_succeeds(cx: &mut TestAppC
         |root| matches!(&root.assistant.task, AssistantTaskState::Failed(error) if error.retryable),
     );
     assert!(shown(cx, "assistant-task-failed".into()));
+    let error = rendered(cx, "assistant-error");
+    assert!(
+        within(rendered(cx, "assistant-retry"), error),
+        "the retry sits on the error it repeats the request after"
+    );
+    assert!(within(rendered(cx, "assistant-error-details"), error));
     click_selector(cx, "assistant-retry");
     wait_for(cx, &view, |root| {
         root.assistant.task == AssistantTaskState::Completed
@@ -307,6 +313,50 @@ fn a_retryable_run_failure_offers_retry_and_the_retry_succeeds(cx: &mut TestAppC
         "the retry sends the failed prompt again"
     );
     assert!(!shown(cx, "assistant-retry".into()));
+    assert!(
+        !shown(cx, "assistant-error".into()),
+        "a run that succeeds shows no error"
+    );
+}
+
+#[gpui::test]
+fn a_rejected_api_key_explains_itself_and_opens_assistant_settings(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    assistant
+        .run_errors
+        .lock()
+        .unwrap()
+        .push_back(warning("PROVIDER_AUTHENTICATION_FAILED", false));
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| {
+        matches!(root.assistant.task, AssistantTaskState::Failed(_))
+    });
+    let results = rendered(cx, "assistant-results");
+    let error = rendered(cx, "assistant-error");
+    assert!(within(error, results), "the error is part of the results");
+    assert!(
+        rendered(cx, "assistant-request").bottom() <= error.top(),
+        "the error follows the request it answers"
+    );
+    assert!(within(rendered(cx, "assistant-open-settings"), error));
+    assert!(!shown(cx, "assistant-retry".into()));
+
+    click_selector(cx, "assistant-open-settings");
+    let assistant_section = crate::pages::settings::SECTIONS
+        .iter()
+        .position(|key| *key == "assistant_settings");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Settings);
+        assert_eq!(Some(root.ui.settings_section), assistant_section);
+    });
+    assert_eq!(
+        assistant_section,
+        Some(crate::pages::settings::ASSISTANT_SECTION)
+    );
+    assert!(
+        shown(cx, "assistant-api-key-field".into()),
+        "the key field is in reach"
+    );
 }
 
 fn confirmed(id: &str) -> AssistantRunResult {
@@ -353,6 +403,8 @@ fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut Te
         "assistant-pending-position-1-of-3",
         "assistant-pending-paused",
         "assistant-pending-expires",
+        // A review without a diff names the documents it changes.
+        "assistant-pending-affects",
     ] {
         assert!(shown(cx, selector.into()), "`{selector}` is shown");
     }
@@ -410,6 +462,72 @@ fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut Te
 }
 
 #[gpui::test]
+fn a_review_shows_its_diff_and_lines_its_decisions_up_at_the_end(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    let diff =
+        |field: &str, before: Option<&str>, after: &str| crate::assistant_ui::AssistantFieldDiff {
+            document_id: "first".into(),
+            field: field.into(),
+            before: before.map(Into::into),
+            after: Some(after.into()),
+        };
+    let mut review = pending_review("review-1", u64::MAX);
+    review.field_diffs = vec![
+        diff("title", Some("Old title"), "New title"),
+        diff("summary", None, "A summary"),
+    ];
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        pending_reviews: vec![review, pending_review("review-2", u64::MAX)],
+        ..empty_result()
+    });
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+
+    let card = rendered(cx, "assistant-pending-review-1");
+    let title = rendered(cx, "assistant-pending-title");
+    for selector in [
+        "assistant-pending-position-1-of-2",
+        "assistant-pending-expires",
+    ] {
+        let meta = rendered(cx, selector);
+        assert!(
+            meta.left() >= title.right()
+                && meta.top() < title.bottom()
+                && title.top() < meta.bottom(),
+            "`{selector}` trails the title on its line"
+        );
+        assert!(within(meta, card));
+    }
+    let (before, after) = (
+        rendered(cx, "assistant-diff-0-before"),
+        rendered(cx, "assistant-diff-0-after"),
+    );
+    assert!(before.bottom() <= after.top(), "the old value reads first");
+    assert!(
+        !shown(cx, "assistant-diff-1-before".into()),
+        "nothing was there before"
+    );
+    assert!(shown(cx, "assistant-diff-1-after".into()));
+    assert!(
+        !shown(cx, "assistant-pending-affects".into()),
+        "the diff already names the document"
+    );
+
+    let (reject, confirm) = (
+        rendered(cx, "assistant-reject"),
+        rendered(cx, "assistant-confirm"),
+    );
+    assert!(
+        reject.right() <= confirm.left() && reject.top() == confirm.top(),
+        "reject sits left of accept on one line"
+    );
+    assert!(
+        confirm.right() > card.right() - gpui::px(24.) && after.bottom() <= confirm.top(),
+        "the decisions close the card at its right edge"
+    );
+}
+
+#[gpui::test]
 fn reviews_over_the_queue_limit_are_noticed_on_the_page(cx: &mut TestAppContext) {
     let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
     *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
@@ -425,6 +543,218 @@ fn reviews_over_the_queue_limit_are_noticed_on_the_page(cx: &mut TestAppContext)
     assert!(within(notice, results));
     assert!(shown(cx, "assistant-pending-overflow-2".into()));
     assert!(shown(cx, "assistant-pending-position-1-of-8".into()));
+}
+
+/// Scrolls the results to their end and draws the page.
+fn scroll_results_to_end(cx: &mut VisualTestContext, view: &View) {
+    let scroll = view.read_with(cx, |root, _| root.scroll.assistant_results.clone());
+    assert!(
+        scroll.max_offset().y > gpui::px(0.),
+        "the results overflow the page"
+    );
+    scroll.scroll_to_bottom();
+    cx.update(|window, cx| window.draw(cx).clear());
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        answer: Some("done".into()),
+        mutations: (0..12)
+            .map(|index| write(&format!("write-{index}")))
+            .collect(),
+        pending_reviews: (0..10)
+            .map(|index| pending_review(&format!("review-{index}"), u64::MAX))
+            .collect(),
+        ..empty_result()
+    });
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    scroll_results_to_end(cx, &view);
+
+    assert!(
+        rendered(cx, "assistant-request").size.height >= gpui::px(16.),
+        "results that overflow keep the quoted request whole"
+    );
+    let bar = rendered(cx, "assistant-input-bar");
+    let results = rendered(cx, "assistant-results");
+    let last = rendered(cx, "assistant-pending-overflow");
+    assert!(
+        last.bottom() <= bar.top(),
+        "the last card ends above the bar: {last:?} and {bar:?}"
+    );
+    assert!(
+        results.top() < bar.top() && results.bottom() <= bar.bottom(),
+        "the results run under the bar but end with it: {results:?} and {bar:?}"
+    );
+}
+
+#[gpui::test]
+fn the_input_bar_shows_a_status_only_while_a_run_goes_on_or_has_an_outcome(
+    cx: &mut TestAppContext,
+) {
+    let _alone = hold_a_worker_alone();
+    let gate = Gate::default();
+    let (view, cx, assistant) = open_assistant(
+        cx,
+        FakeAssistantUiService {
+            run_gate: Some(gate.clone()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        !shown(cx, "assistant-status".into()),
+        "idle shows no status"
+    );
+    assert!(!shown(cx, "assistant-task-idle".into()));
+    let idle_bar = rendered(cx, "assistant-input-bar");
+
+    *assistant.run_result.lock().unwrap() = Some(empty_result());
+    gate.arm();
+    start_run(cx, &view);
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    let bar = rendered(cx, "assistant-input-bar");
+    let status = rendered(cx, "assistant-status");
+    assert!(within(status, bar), "the status sits in the bar");
+    assert!(within(rendered(cx, "assistant-task-running"), status));
+    assert!(
+        rendered(cx, "assistant-submit").bottom() <= status.top(),
+        "the status sits under the prompt row"
+    );
+    assert_eq!(
+        bar.bottom(),
+        idle_bar.bottom(),
+        "the bar grows upward from its place"
+    );
+
+    gate.release();
+    wait_for(cx, &view, |root| {
+        root.assistant.task == AssistantTaskState::Completed
+    });
+    assert!(shown(cx, "assistant-task-completed".into()));
+}
+
+#[gpui::test]
+fn a_receipt_shows_left_out_segments_only_when_there_are_some(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    let mut gaps = write("with-gaps");
+    gaps.uncovered_segment_ids = vec!["seg-9".into()];
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        mutations: vec![write("plain"), gaps],
+        ..empty_result()
+    });
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.result.is_some());
+    assert!(!shown(cx, "assistant-receipt-gaps-plain".into()));
+    let receipt = rendered(cx, "assistant-receipt-with-gaps");
+    assert!(within(
+        rendered(cx, "assistant-receipt-gaps-with-gaps"),
+        receipt
+    ));
+    assert!(within(rendered(cx, "assistant-undo-with-gaps"), receipt));
+}
+
+#[gpui::test]
+fn the_sent_request_is_quoted_above_its_result(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let gate = Gate::default();
+    let (view, cx, assistant) = open_assistant(
+        cx,
+        FakeAssistantUiService {
+            run_gate: Some(gate.clone()),
+            ..Default::default()
+        },
+    );
+    assert!(
+        !shown(cx, "assistant-request".into()),
+        "nothing is quoted before a run"
+    );
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        answer: Some("done".into()),
+        ..empty_result()
+    });
+    gate.arm();
+    start_run(cx, &view);
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    let results = rendered(cx, "assistant-results");
+    let request = rendered(cx, "assistant-request");
+    assert!(
+        within(request, results),
+        "the request is quoted while the run goes on"
+    );
+    gate.release();
+    wait_for(cx, &view, |root| root.assistant.result.is_some());
+    let request = rendered(cx, "assistant-request");
+    let result = rendered(cx, "assistant-result");
+    assert!(
+        request.bottom() <= result.top() && within(request, rendered(cx, "assistant-results")),
+        "the request leads the results: {request:?} above {result:?}"
+    );
+}
+
+#[gpui::test]
+fn a_scene_tab_selects_and_explains_its_scene_and_leaves_focus_in_the_prompt(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, _) = open_assistant(cx, FakeAssistantUiService::default());
+    assert!(shown(cx, "assistant-scene-selected-ask".into()));
+    assert!(shown(cx, "assistant-scene-description-ask".into()));
+    let tabs = rendered(cx, "assistant-scene-group");
+    let description = rendered(cx, "assistant-scene-description-ask");
+    assert!(
+        description.top() >= tabs.bottom() && description.left() == tabs.left(),
+        "the explanation sits under the tabs"
+    );
+
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    focus_field(cx, &prompt);
+    click_selector(cx, "assistant-scene-organize");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.assistant.scene),
+        contracts::AgentScene::Organize
+    );
+    assert!(shown(cx, "assistant-scene-selected-organize".into()));
+    assert!(!shown(cx, "assistant-scene-selected-ask".into()));
+    assert!(shown(cx, "assistant-scene-description-organize".into()));
+    assert!(!shown(cx, "assistant-scene-description-ask".into()));
+    assert!(
+        cx.update(|window, cx| {
+            gpui::Focusable::focus_handle(prompt.read(cx), cx).contains_focused(window, cx)
+        }),
+        "a press on a tab leaves focus in the prompt"
+    );
+}
+
+#[gpui::test]
+fn the_scope_and_its_context_share_one_line_above_the_privacy_note(cx: &mut TestAppContext) {
+    let (_view, cx, _) = open_assistant(cx, FakeAssistantUiService::default());
+    cx.run_until_parked();
+    let scope = rendered(cx, "assistant-scope-group");
+    let context = rendered(cx, "assistant-context");
+    let mode = rendered(cx, "assistant-write-mode-automatic");
+    let privacy = rendered(cx, "assistant-privacy");
+    assert!(
+        context.left() >= scope.right()
+            && context.top() < scope.bottom()
+            && scope.top() < context.bottom(),
+        "the context sits beside the scope: {context:?} and {scope:?}"
+    );
+    assert!(
+        within(mode, context),
+        "the write mode is part of the context"
+    );
+    assert!(
+        privacy.top() >= scope.bottom() && privacy.top() >= context.bottom(),
+        "the privacy note sits under the line"
+    );
+    assert!(
+        privacy.bottom() <= rendered(cx, "assistant-body").top(),
+        "the results start below the context"
+    );
 }
 
 /// Opens Settings at its Assistant section.

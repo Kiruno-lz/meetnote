@@ -1,7 +1,9 @@
-//! L2: the Models route's diagnosis of each catalog model — task, catalog
-//! status, license, source and checksum; the latest probe record; a failed
-//! download or probe with its localized reason and retry; an unreadable
-//! probe record — and the re-probe of an installed model.
+//! L2: the Models route's diagnosis of each catalog model — its name, status
+//! and one action in the header row; task, size, VRAM, backends, license and
+//! the source's short form, with the full source and checksums in its
+//! details; the latest probe record; a failed download or probe with its
+//! localized reason and retry; an unreadable probe record — and the re-probe
+//! of an installed model.
 //!
 //! Most tests render installation states they build, as
 //! `InstallationService` would publish them, through a probe that returns
@@ -12,7 +14,7 @@
 
 use crate::controller::{ModelService, ReprobeWait};
 use crate::document_tests::{leak, rendered, within, View};
-use crate::pages::models::{model_facts, FactRow, ModelFacts};
+use crate::pages::models::{family_summary, model_facts, readiness_text, FactRow, ModelFacts};
 use crate::route::Route;
 use crate::tests::{
     assert_ui_responsive_while_held, click_selector, desktop_services, hold_a_worker_alone,
@@ -216,10 +218,14 @@ fn failed_download() -> ModelAvailability {
 }
 
 /// The calls the page makes. `start` completes at once; `reprobe` waits in
-/// `gate` while it is armed, then returns a task the test finishes.
+/// `gate` while it is armed, then returns a task the test finishes; `list`
+/// reports `downloads`, and pause, resume and cancel are recorded in
+/// `controls`.
 #[derive(Default)]
 struct FakeModels {
     catalog: Option<ModelCatalog>,
+    downloads: Mutex<Vec<DownloadProgress>>,
+    controls: Mutex<Vec<(&'static str, DownloadId)>>,
     starts: Mutex<Vec<String>>,
     reprobes: Mutex<Vec<String>>,
     gate: Gate,
@@ -241,6 +247,15 @@ impl FakeModels {
     fn reprobes(&self) -> Vec<String> {
         self.reprobes.lock().unwrap().clone()
     }
+
+    fn controls(&self) -> Vec<(&'static str, DownloadId)> {
+        self.controls.lock().unwrap().clone()
+    }
+
+    fn control(&self, action: &'static str, id: DownloadId) -> Result<(), ModelManagerError> {
+        self.controls.lock().unwrap().push((action, id));
+        Ok(())
+    }
 }
 
 impl ModelService for FakeModels {
@@ -249,7 +264,7 @@ impl ModelService for FakeModels {
     }
 
     fn list(&self) -> Result<Vec<DownloadProgress>, ModelManagerError> {
-        Ok(Vec::new())
+        Ok(self.downloads.lock().unwrap().clone())
     }
 
     fn model_ref(&self, model_id: &str, _: &str) -> Result<ModelRef, ModelManagerError> {
@@ -280,16 +295,16 @@ impl ModelService for FakeModels {
         })
     }
 
-    fn pause(&self, _: DownloadId) -> Result<(), ModelManagerError> {
-        Ok(())
+    fn pause(&self, id: DownloadId) -> Result<(), ModelManagerError> {
+        self.control("pause", id)
     }
 
-    fn resume(&self, _: DownloadId) -> Result<(), ModelManagerError> {
-        Ok(())
+    fn resume(&self, id: DownloadId) -> Result<(), ModelManagerError> {
+        self.control("resume", id)
     }
 
-    fn cancel(&self, _: DownloadId) -> Result<(), ModelManagerError> {
-        Ok(())
+    fn cancel(&self, id: DownloadId) -> Result<(), ModelManagerError> {
+        self.control("cancel", id)
     }
 
     fn reprobe(&self, model_id: &str) -> Result<ReprobeTask, ModelManagerError> {
@@ -371,8 +386,25 @@ fn row(label: &str, value: impl Into<String>) -> FactRow {
     }
 }
 
+/// The card's header row: its name, then the status chip and the one
+/// action in fixed columns at its right edge.
+fn assert_in_header(cx: &mut VisualTestContext, name: &str, model_id: &str) {
+    let header = rendered(cx, selector("header", model_id));
+    let status = rendered(cx, selector("status", model_id));
+    let action = rendered(cx, selector(name, model_id));
+    assert!(
+        within(status, header) && within(action, header),
+        "{name} of {model_id} shares the header row with its status"
+    );
+    assert!(
+        status.right() <= action.left(),
+        "the action follows the status"
+    );
+    assert_eq!(action.right(), header.right(), "the action ends the row");
+}
+
 #[gpui::test]
-fn every_card_shows_task_status_license_source_and_a_short_checksum_with_the_full_one_in_details(
+fn every_card_leads_with_its_name_status_and_action_over_quiet_facts_and_its_source(
     cx: &mut TestAppContext,
 ) {
     let models = [bundle_asr(), native_diarization(), candidate_asr()];
@@ -392,37 +424,77 @@ fn every_card_shows_task_status_license_source_and_a_short_checksum_with_the_ful
 
     for model in &models {
         let card = rendered(cx, selector("card", &model.id));
-        for name in ["task", "license", "source", "checksum", "details-toggle"] {
+        for name in [
+            "header",
+            "status",
+            "facts",
+            "license",
+            "source",
+            "details-toggle",
+        ] {
             let fact = rendered(cx, selector(name, &model.id));
             assert!(within(fact, card), "{name} of {} is on its card", model.id);
         }
+        // Checksums wait in the details.
+        assert!(!shown(cx, "checksum", &model.id));
         let facts = facts(cx, &view, &model.id);
         assert_eq!(facts.license, model.license);
-        assert_eq!(facts.source, model.source, "the full source, faded");
+        assert_eq!(facts.source_url, model.source, "the full source in details");
+        assert!(
+            !facts.summary.contains(':') && !facts.summary.contains('：'),
+            "facts read without labels: {}",
+            facts.summary
+        );
     }
-    // The long source fades inside the card instead of widening it.
+    // The card names where a model comes from by host and project.
     let card = rendered(cx, "model-card-bundle-asr");
     assert!(within(rendered(cx, "model-source-bundle-asr"), card));
 
     let bundle = facts(cx, &view, "bundle-asr");
     assert_eq!(
-        (bundle.task.as_str(), bundle.catalog_status.as_str()),
-        ("语音识别", "可下载")
+        bundle.summary,
+        "语音识别 · 78 MiB · 显存约 1.0 GiB · sherpa-onnx, whisper-rs"
     );
-    assert_eq!(bundle.checksum, "da92b3db5218…", "one archive checksum");
+    assert_eq!(bundle.unavailable, None, "a ready model downloads");
+    assert_eq!(bundle.source, "github.com/k2-fsa/sherpa-onnx");
     let native = facts(cx, &view, "native-diarization");
-    assert_eq!(native.task, "说话人分离");
-    assert_eq!(native.checksum, "038b971741ed… 等 3 个");
+    assert_eq!(
+        native.summary,
+        "说话人分离 · 78 MiB · 显存约 1.0 GiB · diarization-native"
+    );
+    assert_eq!(native.source, "models.example");
     let candidate = facts(cx, &view, "candidate-asr");
-    assert_eq!(candidate.catalog_status, "候选来源，暂不可安装");
-    assert_eq!(candidate.checksum, "未声明");
-    // Only ready models that are missing offer a download.
-    assert!(shown(cx, "download", "bundle-asr") && shown(cx, "download", "native-diarization"));
+    assert_eq!(
+        candidate.summary, "语音识别 · 显存约 1.0 GiB · sherpa-onnx",
+        "an unknown size is left out"
+    );
+    assert_eq!(
+        candidate.unavailable.as_deref(),
+        Some("来源尚未验证，暂不可下载")
+    );
+    assert!(shown(cx, "unavailable", "candidate-asr"));
+    assert!(!shown(cx, "unavailable", "bundle-asr"));
+    // Only ready models that are missing offer a download, in one column.
     assert!(!shown(cx, "download", "candidate-asr"));
+    for model_id in ["bundle-asr", "native-diarization"] {
+        assert_in_header(cx, "download", model_id);
+    }
+    let [first, second] =
+        ["bundle-asr", "native-diarization"].map(|id| rendered(cx, selector("download", id)));
+    assert_eq!(
+        (first.left(), first.size.width),
+        (second.left(), second.size.width)
+    );
 
-    // The full checksums are one expansion away, collapsed at first.
+    // The full source and checksums are one expansion away, collapsed at
+    // first.
     assert!(!shown(cx, "declared", "native-diarization-0"));
+    assert!(!shown(cx, "source-url", "native-diarization"));
     click_selector(cx, "model-details-toggle-native-diarization");
+    assert!(within(
+        rendered(cx, "model-source-url-native-diarization"),
+        rendered(cx, "model-card-native-diarization")
+    ));
     assert_eq!(
         native.declared,
         [
@@ -448,10 +520,168 @@ fn every_card_shows_task_status_license_source_and_a_short_checksum_with_the_ful
     );
     click_selector(cx, "model-details-toggle-native-diarization");
     assert!(
-        !shown(cx, "declared", "native-diarization-0"),
+        !shown(cx, "declared", "native-diarization-0")
+            && !shown(cx, "source-url", "native-diarization"),
         "collapsed again"
     );
     assert_eq!(candidate.declared, [row("model.bin", "未声明")]);
+}
+
+/// A download of `model_id` halfway through the first of its two files.
+fn running(id: u64, model_id: &str, state: DownloadState) -> DownloadProgress {
+    DownloadProgress {
+        id: DownloadId(id),
+        model_id: model_id.into(),
+        state,
+        completed_bytes: 33_659_290,
+        speed_bytes_per_second: Some(5_452_595),
+        total_bytes: Some(81_904_027),
+        artifact_index: 1,
+        artifact_count: 2,
+        eta_seconds: Some(9),
+        retry_count: 0,
+    }
+}
+
+#[gpui::test]
+fn a_running_download_shows_its_progress_with_pause_or_resume_and_cancel_in_the_action_column(
+    cx: &mut TestAppContext,
+) {
+    let models = FakeModels::new(catalog(vec![bundle_asr(), native_diarization()]));
+    *models.downloads.lock().unwrap() = vec![
+        running(7, "bundle-asr", DownloadState::Downloading),
+        running(8, "native-diarization", DownloadState::Paused),
+    ];
+    let state = published(vec![
+        availability(bundle_asr(), ModelInstallState::Missing),
+        availability(native_diarization(), ModelInstallState::Partial),
+    ]);
+    let (view, cx) = open_models(cx, models.clone(), &state, test_settings());
+
+    // Pause or resume takes the download's place in the header.
+    assert_in_header(cx, "pause", "bundle-asr");
+    assert_in_header(cx, "resume", "native-diarization");
+    for model_id in ["bundle-asr", "native-diarization"] {
+        assert!(
+            !shown(cx, "download", model_id),
+            "{model_id} is downloading"
+        );
+        let card = rendered(cx, selector("card", model_id));
+        let progress = rendered(cx, selector("download-progress", model_id));
+        let cancel = rendered(cx, selector("cancel", model_id));
+        assert!(within(progress, card) && within(cancel, card));
+        assert!(
+            progress.right() <= cancel.left(),
+            "cancel ends the progress row"
+        );
+    }
+    // Pause, resume and both cancels share one column.
+    let actions = [
+        ("pause", "bundle-asr"),
+        ("resume", "native-diarization"),
+        ("cancel", "bundle-asr"),
+        ("cancel", "native-diarization"),
+    ]
+    .map(|(name, model_id)| rendered(cx, selector(name, model_id)));
+    for action in &actions {
+        assert_eq!(
+            (action.left(), action.size.width),
+            (actions[0].left(), actions[0].size.width),
+            "{actions:?}"
+        );
+    }
+
+    click_selector(cx, "model-pause-bundle-asr");
+    click_selector(cx, "model-resume-native-diarization");
+    click_selector(cx, "model-cancel-native-diarization");
+    wait_for(cx, &view, |_| models.controls().len() == 3);
+    let mut controls = models.controls();
+    controls.sort();
+    assert_eq!(
+        controls,
+        [
+            ("cancel", DownloadId(8)),
+            ("pause", DownloadId(7)),
+            ("resume", DownloadId(8)),
+        ]
+    );
+}
+
+#[gpui::test]
+fn the_page_says_whether_the_default_models_are_ready_and_each_family_what_is_downloaded(
+    cx: &mut TestAppContext,
+) {
+    let models = FakeModels::new(catalog(vec![
+        bundle_asr(),
+        native_diarization(),
+        candidate_asr(),
+    ]));
+    let state = published(vec![
+        availability(bundle_asr(), ModelInstallState::Installed),
+        availability(native_diarization(), ModelInstallState::Partial),
+        availability(candidate_asr(), ModelInstallState::Missing),
+    ]);
+    state.lock().unwrap().default_asr_ready = true;
+    let (view, cx) = open_models(cx, models, &state, test_settings());
+
+    // The line under the title answers whether audio can be processed.
+    let page = rendered(cx, "models-page");
+    let readiness = rendered(cx, "models-readiness");
+    assert!(within(readiness, page));
+    assert_eq!(
+        view.read_with(cx, |root, _| readiness_text(
+            &root.installation,
+            root.ui.locale
+        )),
+        "说话人分离模型尚未就绪，可在下方下载或到设置中选择"
+    );
+
+    // The page keeps one rhythm of spacing tokens: the title and its
+    // readiness line read as one block above the list, and every card sits
+    // one step inside its family and keeps its content one step inside.
+    let spacing = view.read_with(cx, |_, cx| crate::theme::tokens(cx).spacing);
+    let title = rendered(cx, "models-title");
+    let list = rendered(cx, "models-scroll");
+    assert_eq!(readiness.top() - title.bottom(), spacing.xs);
+    assert_eq!(list.top() - readiness.bottom(), spacing.lg);
+    let family = rendered(cx, "model-family-a-bundle");
+    let card = rendered(cx, "model-card-bundle-asr");
+    let header = rendered(cx, "model-header-bundle-asr");
+    assert_eq!(card.left() - family.left(), spacing.lg);
+    assert_eq!(family.right() - card.right(), spacing.lg);
+    assert_eq!(
+        (header.left() - card.left(), card.right() - header.right()),
+        (spacing.lg, spacing.lg)
+    );
+
+    // Each family header ends with how many of its models are downloaded.
+    for family in ["a-bundle", "b-native", "c-candidate"] {
+        let header = rendered(cx, leak(format!("model-family-{family}")));
+        let summary = rendered(cx, leak(format!("model-family-summary-{family}")));
+        assert!(
+            within(summary, header) && summary.left() > header.center().x,
+            "{family}: the summary ends the header"
+        );
+    }
+    let summaries = view.read_with(cx, |root, _| {
+        ["a-bundle", "b-native"].map(|family| {
+            let states = root
+                .installation
+                .catalog
+                .iter()
+                .filter(|entry| entry.model.model_family == family)
+                .map(|entry| entry.install_state)
+                .collect::<Vec<_>>();
+            family_summary(root.ui.locale, &states)
+        })
+    });
+    assert_eq!(
+        summaries,
+        [
+            ("已下载 1 / 1".to_string(), true),
+            ("已下载 0 / 1".to_string(), false)
+        ]
+    );
 }
 
 #[gpui::test]
@@ -468,10 +698,7 @@ fn a_passing_probe_record_shows_its_outcome_kind_time_and_backends(cx: &mut Test
 
     let facts = facts(cx, &view, "bundle-asr");
     let probe = facts.probe.expect("the record is shown");
-    assert_eq!(
-        probe.summary,
-        format!("最近校验：通过 · 下载后校验 · {PROBED_AT}")
-    );
+    assert_eq!(probe.summary, format!("下载后校验通过 · {PROBED_AT}"));
     assert!(within(
         rendered(cx, "model-probe-bundle-asr"),
         rendered(cx, "model-card-bundle-asr")
@@ -479,10 +706,8 @@ fn a_passing_probe_record_shows_its_outcome_kind_time_and_backends(cx: &mut Test
     assert_eq!(facts.failure, None);
     assert!(!shown(cx, "failure", "bundle-asr") && !shown(cx, "retry", "bundle-asr"));
     assert!(!shown(cx, "download", "bundle-asr"), "installed");
-    assert!(
-        shown(cx, "reprobe", "bundle-asr"),
-        "installed models re-probe"
-    );
+    // Installed models re-probe from the header.
+    assert_in_header(cx, "reprobe", "bundle-asr");
 
     // Backend and checksum results are collapsed until expanded.
     assert!(!shown(cx, "backend", "bundle-asr-0"));
@@ -523,24 +748,44 @@ fn a_failed_download_probe_shows_the_localized_reason_and_retry_starts_the_downl
     let (view, cx) = open_models(cx, models.clone(), &state, test_settings());
 
     let facts = facts(cx, &view, "native-diarization");
+    let failure = facts.failure.clone().expect("the failure is shown");
     assert_eq!(
-        facts.failure.as_deref(),
-        Some(
-            "下载失败（2026-08-29 10:40 UTC）：后端 diarization-native 未通过检查：\
-             plda_psi.npy is missing"
+        (
+            failure.headline.as_str(),
+            failure.explanation.as_str(),
+            failure.time.as_str()
+        ),
+        (
+            "加载检查未通过",
+            "diarization-native 无法加载这个模型",
+            PROBED_AT
         )
     );
     assert_eq!(
+        failure.detail,
+        "后端 diarization-native 未通过检查：plda_psi.npy is missing"
+    );
+    assert_eq!(
         facts.probe.map(|probe| probe.summary),
-        Some(format!("最近校验：未通过 · 下载后校验 · {PROBED_AT}"))
+        Some(format!("下载后校验未通过 · {PROBED_AT}"))
     );
     let card = rendered(cx, "model-card-native-diarization");
     let failure = rendered(cx, "model-failure-native-diarization");
-    let retry = rendered(cx, "model-retry-native-diarization");
-    assert!(within(failure, card) && within(retry, failure));
+    assert!(within(failure, card));
+    // The failure stands for the failed probe; retry takes the download's
+    // place in the header.
+    assert!(!shown(cx, "probe", "native-diarization"));
+    assert_in_header(cx, "retry", "native-diarization");
     // Retry replaces the download button; nothing is installed to re-probe.
     assert!(!shown(cx, "download", "native-diarization"));
     assert!(!shown(cx, "reprobe", "native-diarization"));
+    // The backend's own words wait in the details.
+    assert!(!shown(cx, "failure-detail", "native-diarization"));
+    click_selector(cx, "model-details-toggle-native-diarization");
+    assert!(within(
+        rendered(cx, "model-failure-detail-native-diarization"),
+        rendered(cx, "model-card-native-diarization")
+    ));
 
     click_selector(cx, "model-retry-native-diarization");
     wait_for(cx, &view, |_| !models.starts().is_empty());
@@ -633,7 +878,7 @@ fn a_reprobe_runs_off_the_ui_thread_and_shows_progress_until_its_state_is_publis
         facts(cx, &view, "bundle-asr")
             .probe
             .map(|probe| probe.summary),
-        Some(format!("最近校验：通过 · 重新校验 · {PROBED_AT}"))
+        Some(format!("重新校验通过 · {PROBED_AT}"))
     );
 }
 
@@ -708,7 +953,7 @@ fn a_real_reprobe_of_changed_files_reports_the_mismatch_and_keeps_the_model_inst
     let passed = facts(cx, &view, "real-asr");
     let probe = passed.probe.expect("the written record is shown");
     assert!(
-        probe.summary.starts_with("最近校验：通过 · 重新校验 · "),
+        probe.summary.starts_with("重新校验通过 · "),
         "{}",
         probe.summary
     );
@@ -734,13 +979,16 @@ fn a_real_reprobe_of_changed_files_reports_the_mismatch_and_keeps_the_model_inst
     });
     let failed = facts(cx, &view, "real-asr");
     let failure = failed.failure.expect("the failure is shown");
-    assert!(failure.starts_with("重新校验失败（"), "{failure}");
-    assert!(
-        failure.ends_with(&format!(
-            "）：{} 的校验和不符：应为 731e82f72481…，实际为 13c12877ebfb…",
+    assert_eq!(
+        (failure.headline.as_str(), failure.explanation.as_str()),
+        ("校验未通过", "文件内容与目录记录不符")
+    );
+    assert_eq!(
+        failure.detail,
+        format!(
+            "{} 的校验和不符：应为 731e82f72481…，实际为 13c12877ebfb…",
             file.display()
-        )),
-        "{failure}"
+        )
     );
     assert_eq!(
         failed.probe.unwrap().artifacts,

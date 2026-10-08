@@ -432,6 +432,31 @@ fn the_models_route_shows_the_catalog_and_aligned_status_chips(cx: &mut TestAppC
             "status chips share one column: {chips:?}"
         );
     }
+
+    // Each card's one action sits after its chip in a column of its own:
+    // the installed model's re-probe and the failed one's retry line up.
+    let [reprobe, retry] = [
+        "model-reprobe-paraformer-zh",
+        "model-retry-speakrs-community-1-cpu",
+    ]
+    .map(|selector| rendered(cx, selector));
+    assert_eq!(
+        (reprobe.left(), reprobe.size.width),
+        (retry.left(), retry.size.width),
+        "actions share one column"
+    );
+    assert!(reprobe.left() >= chips[0].right());
+    for (model, action) in [
+        ("paraformer-zh", reprobe),
+        ("speakrs-community-1-cpu", retry),
+    ] {
+        let chip = rendered(cx, leak(format!("model-status-{model}")));
+        // Centered on one row, up to pixel snapping.
+        assert!(
+            (chip.center().y - action.center().y).abs() <= gpui::px(0.5),
+            "the {model} action shares its chip's row: {chip:?} {action:?}"
+        );
+    }
 }
 
 /// The fixture's records load through the installation service: the
@@ -446,7 +471,8 @@ fn the_models_route_shows_the_fixture_probe_record_and_failure(cx: &mut TestAppC
         (format!("model-reprobe-{passing}"), true),
         (format!("model-failure-{passing}"), false),
         (format!("model-record-error-{passing}"), false),
-        (format!("model-probe-{failing}"), true),
+        // The failure stands for the failed download probe.
+        (format!("model-probe-{failing}"), false),
         (format!("model-failure-{failing}"), true),
         (format!("model-retry-{failing}"), true),
         (format!("model-download-{failing}"), false),
@@ -786,7 +812,7 @@ fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
 fn tab_traverses_the_models_route_in_order(cx: &mut TestAppContext) {
     let (_window, cx, _) = open_route(cx, Route::Models);
     // Families in name order, each header before its cards; each card's
-    // actions in reading order.
+    // header action before its details toggle.
     let mut families = std::collections::BTreeMap::<String, Vec<String>>::new();
     for model in support::catalog().models {
         families
@@ -798,7 +824,7 @@ fn tab_traverses_the_models_route_in_order(cx: &mut TestAppContext) {
     for (family, models) in families {
         expected.push(leak(format!("model-family-{family}")));
         for model in models {
-            for action in ["download", "details-toggle", "retry", "reprobe"] {
+            for action in ["download", "retry", "reprobe", "details-toggle"] {
                 let selector = leak(format!("model-{action}-{model}"));
                 if cx.debug_bounds(selector).is_some() {
                     expected.push(selector);

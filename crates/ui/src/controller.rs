@@ -537,6 +537,8 @@ pub(crate) struct RootView {
     pub(crate) detail_trigger: FocusHandle,
     /// The awaiting review's card on the Assistant page.
     pub(crate) review_focus: FocusHandle,
+    /// The Assistant page's scene tabs, in `pages::assistant::SCENES` order.
+    pub(crate) assistant_scene_focus: [FocusHandle; 5],
     /// Moves focus to the awaiting review on the next render.
     review_focus_request: Option<ReviewFocus>,
     /// Scanner issues of the documents directory, as the last project-list
@@ -725,6 +727,7 @@ impl RootView {
             detail_focus: cx.focus_handle(),
             detail_trigger: cx.focus_handle(),
             review_focus: cx.focus_handle(),
+            assistant_scene_focus: std::array::from_fn(|_| cx.focus_handle()),
             review_focus_request: None,
             document_issues: Vec::new(),
             editor,
@@ -3354,6 +3357,20 @@ impl RootView {
             self.ui.notice = i18n::text(self.ui.locale, "cancellation_requested").into();
             cx.notify();
         }
+    }
+
+    /// Opens Settings at its Assistant section, where a connection, key or
+    /// limit an Assistant error names is fixed.
+    pub(crate) fn open_assistant_settings(&mut self, cx: &mut Context<Self>) {
+        self.navigate(Route::Settings, cx);
+        if let Some(section) = pages::settings::SECTIONS
+            .iter()
+            .position(|key| *key == "assistant_settings")
+        {
+            self.ui.settings_section = section;
+            self.scroll.settings.scroll_to_top_of_item(section);
+        }
+        cx.notify();
     }
 
     pub(crate) fn select_assistant_scene(&mut self, scene: AgentScene, cx: &mut Context<Self>) {

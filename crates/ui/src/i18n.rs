@@ -4,8 +4,7 @@ use application::{
 use contracts::ComputeDevice;
 use domain::ProjectStatus;
 use models::{
-    BackendCheck, ChecksumResult, ModelFailure, ModelFailureRecord, ModelOperation, ProbeRecord,
-    ProbeRecordError,
+    BackendCheck, ChecksumResult, ModelFailure, ModelOperation, ProbeRecord, ProbeRecordError,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,27 +79,36 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "no_selection_hint") => "从左侧选择一个项目查看",
         (Locale::ZhCn, "project_detail") => "项目详情",
         (Locale::ZhCn, "close_detail") => "关闭详情",
-        (Locale::ZhCn, "catalog_description") => "模型目录、安装状态和下载任务",
+        (Locale::ZhCn, "models_ready") => "语音识别和说话人分离模型均已就绪",
+        (Locale::ZhCn, "models_asr_not_ready") => {
+            "语音识别模型尚未就绪，可在下方下载或到设置中选择"
+        }
+        (Locale::ZhCn, "models_diarization_not_ready") => {
+            "说话人分离模型尚未就绪，可在下方下载或到设置中选择"
+        }
+        (Locale::ZhCn, "models_not_ready") => {
+            "语音识别和说话人分离模型尚未就绪，可在下方下载或到设置中选择"
+        }
         (Locale::ZhCn, "download") => "下载",
         (Locale::ZhCn, "downloaded") => "已下载",
         (Locale::ZhCn, "not_downloaded") => "未下载",
-        (Locale::ZhCn, "model_size") => "权重大小",
-        (Locale::ZhCn, "vram_estimate") => "显存预估",
-        (Locale::ZhCn, "applicable_backends") => "适用后端",
+        (Locale::ZhCn, "download_queued") => "排队中",
+        (Locale::ZhCn, "downloading") => "下载中",
+        (Locale::ZhCn, "download_paused") => "已暂停",
+        (Locale::ZhCn, "verifying") => "校验中",
+        (Locale::ZhCn, "download_waiting") => "等待开始",
+        (Locale::ZhCn, "download_verifying") => "正在校验下载的文件",
         (Locale::ZhCn, "no_models") => "模型目录中没有可用模型。",
-        (Locale::ZhCn, "model_task") => "任务",
         (Locale::ZhCn, "task_asr") => "语音识别",
         (Locale::ZhCn, "task_diarization") => "说话人分离",
-        (Locale::ZhCn, "catalog_status") => "目录状态",
-        (Locale::ZhCn, "catalog_ready") => "可下载",
-        (Locale::ZhCn, "catalog_candidate_source") => "候选来源，暂不可安装",
-        (Locale::ZhCn, "catalog_requires_native_adapter") => "需要原生适配",
-        (Locale::ZhCn, "model_license") => "许可",
+        (Locale::ZhCn, "catalog_candidate_source") => "来源尚未验证，暂不可下载",
+        (Locale::ZhCn, "catalog_requires_native_adapter") => "需要原生适配后才能使用，暂不可下载",
+        (Locale::ZhCn, "catalog_unavailable") => "暂不可下载",
         (Locale::ZhCn, "model_source") => "来源",
-        (Locale::ZhCn, "model_checksum") => "校验和",
         (Locale::ZhCn, "show_model_details") => "展开详情",
         (Locale::ZhCn, "hide_model_details") => "收起详情",
         (Locale::ZhCn, "declared_checksums") => "目录声明的校验和",
+        (Locale::ZhCn, "model_failure_detail") => "失败详情",
         (Locale::ZhCn, "probe_backends") => "后端检查",
         (Locale::ZhCn, "probe_artifacts") => "文件校验",
         (Locale::ZhCn, "expected_checksum") => "应为",
@@ -198,8 +206,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "runtime_description") => "控制本地推理使用的计算设备",
         (Locale::ZhCn, "settings_description") => "后端、模型、运行设备和界面语言",
         (Locale::ZhCn, "saved_automatically") => "设置会在选择后自动保存",
-        (Locale::ZhCn, "models_count") => "个模型",
-        (Locale::ZhCn, "download_queue") => "下载任务",
         (Locale::ZhCn, "pause") => "暂停",
         (Locale::ZhCn, "resume") => "继续",
         (Locale::ZhCn, "empty_request") => "发送前请输入内容。",
@@ -249,51 +255,87 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_scene_partition") => "完整拆分",
         (Locale::ZhCn, "assistant_scene_extract") => "提取片段",
         (Locale::ZhCn, "assistant_scene_move") => "调整项目树",
-        (Locale::ZhCn, "assistant_authorized_document") => "授权文档",
+        (Locale::ZhCn, "assistant_scene_ask_description") => "根据所选文档回答问题并标出依据，不修改文档。",
+        (Locale::ZhCn, "assistant_scene_organize_description") => "按你的要求改进标题、标签和摘要，不改动转写内容。",
+        (Locale::ZhCn, "assistant_scene_partition_description") => "按话题把文档拆成若干子文档，完整覆盖全部转写。",
+        (Locale::ZhCn, "assistant_scene_extract_description") => "只把与你的要求相关的片段提取为子文档，其余内容不动。",
+        (Locale::ZhCn, "assistant_scene_move_description") => "按你的要求移动文档或调整同级顺序，不改动内容。",
         (Locale::ZhCn, "assistant_current_document") => "仅当前文档",
         (Locale::ZhCn, "assistant_all_visible_documents") => "全部可见文档",
         (Locale::ZhCn, "assistant_no_document") => "未选择文档",
-        (Locale::ZhCn, "assistant_projection") => "发送投影",
-        (Locale::ZhCn, "assistant_connection") => "连接",
+        (Locale::ZhCn, "assistant_no_connection") => "未配置连接",
         (Locale::ZhCn, "assistant_local_connection") => "本机连接",
         (Locale::ZhCn, "assistant_remote_connection") => "远程连接",
         (Locale::ZhCn, "assistant_scope_notice") => "只发送当前明确选择的文档；不会发送音频、凭据、本机路径或其他文档。",
         (Locale::ZhCn, "assistant_all_visible_scope_notice") => "发送当前工作区内全部可见文档；不会发送音频、凭据或本机路径。",
-        (Locale::ZhCn, "assistant_idle") => "等待任务",
-        (Locale::ZhCn, "assistant_running") => "Assistant 正在运行",
+        (Locale::ZhCn, "assistant_running") => "助手正在运行",
         (Locale::ZhCn, "assistant_cancelling") => "正在取消",
-        (Locale::ZhCn, "assistant_completed") => "Assistant 任务已完成",
-        (Locale::ZhCn, "assistant_partial") => "Assistant 任务部分完成",
-        (Locale::ZhCn, "assistant_cancelled") => "Assistant 任务已取消",
+        (Locale::ZhCn, "assistant_completed") => "助手任务已完成",
+        (Locale::ZhCn, "assistant_partial") => "助手任务部分完成",
+        (Locale::ZhCn, "assistant_cancelled") => "助手任务已取消",
         (Locale::ZhCn, "assistant_awaiting_confirmation") => "等待确认写回",
         (Locale::ZhCn, "assistant_no_answer") => "本次任务没有文本回答。",
-        (Locale::ZhCn, "assistant_evidence") => "证据 segment",
-        (Locale::ZhCn, "assistant_no_evidence") => "无",
-        (Locale::ZhCn, "assistant_model_route") => "请求/实际模型",
+        (Locale::ZhCn, "assistant_evidence") => "依据片段",
+        (Locale::ZhCn, "assistant_model_route") => "模型",
         (Locale::ZhCn, "assistant_usage") => "输入/输出/总 token",
         (Locale::ZhCn, "assistant_diagnostics") => "执行诊断",
-        (Locale::ZhCn, "assistant_warning") => "警告",
-        (Locale::ZhCn, "assistant_mutation") => "变更",
-        (Locale::ZhCn, "assistant_affected") => "受影响文档",
-        (Locale::ZhCn, "assistant_uncovered") => "未覆盖 segment",
-        (Locale::ZhCn, "assistant_undo") => "撤销变更",
+        (Locale::ZhCn, "assistant_undo") => "撤销",
         (Locale::ZhCn, "assistant_undoing") => "正在撤销",
+        (Locale::ZhCn, "assistant_receipt_written") => "已写入变更",
         (Locale::ZhCn, "assistant_undone") => "已撤销",
         (Locale::ZhCn, "assistant_pending") => "等待写回确认",
-        (Locale::ZhCn, "assistant_pending_queue") => "排队中的确认",
         (Locale::ZhCn, "assistant_pending_paused") => "任务在这项写回前暂停：接受才会写入，拒绝则丢弃这项变更。",
         (Locale::ZhCn, "assistant_accepting") => "正在写回……",
         (Locale::ZhCn, "assistant_rejecting") => "正在拒绝……",
         (Locale::ZhCn, "assistant_retry") => "重试",
-        (Locale::ZhCn, "assistant_field_diff") => "字段差异",
-        (Locale::ZhCn, "assistant_tree_change") => "树结构变化",
-        (Locale::ZhCn, "assistant_range") => "语义范围与证据",
+        (Locale::ZhCn, "assistant_open_settings") => "打开助手设置",
+        (Locale::ZhCn, "assistant_error_unknown") => "助手任务没有完成",
+        (Locale::ZhCn, "assistant_error_authentication") => "API key 无效或已过期",
+        (Locale::ZhCn, "assistant_error_authentication_hint") => "在助手设置中更新 API key，然后重试。",
+        (Locale::ZhCn, "assistant_error_credential_file") => "无法从密钥文件读取 API key",
+        (Locale::ZhCn, "assistant_error_credential_file_hint") => "确认密钥文件存在且写有 API key，或在助手设置中直接填写。",
+        (Locale::ZhCn, "assistant_error_connection") => "助手连接尚未配置好",
+        (Locale::ZhCn, "assistant_error_connection_hint") => "在助手设置中选择或补全一个连接。",
+        (Locale::ZhCn, "assistant_error_disabled") => "助手已在设置中关闭",
+        (Locale::ZhCn, "assistant_error_disabled_hint") => "在助手设置中启用后再发送。",
+        (Locale::ZhCn, "assistant_error_timeout") => "模型响应超时",
+        (Locale::ZhCn, "assistant_error_timeout_hint") => "稍后重试；如果经常超时，可在助手设置中延长超时时间。",
+        (Locale::ZhCn, "assistant_error_rate_limited") => "模型服务暂时限流",
+        (Locale::ZhCn, "assistant_error_rate_limited_hint") => "稍等片刻再重试。",
+        (Locale::ZhCn, "assistant_error_provider_response") => "模型服务没有正常响应",
+        (Locale::ZhCn, "assistant_error_provider_response_hint") => "确认连接地址可以访问、模型可用，然后重试。",
+        (Locale::ZhCn, "assistant_error_model_unsupported") => "当前模型不支持助手所需的能力",
+        (Locale::ZhCn, "assistant_error_model_unsupported_hint") => "在助手设置中换用支持工具调用的模型。",
+        (Locale::ZhCn, "assistant_error_context_unknown") => "模型拒绝了请求，而连接没有设置上下文上限",
+        (Locale::ZhCn, "assistant_error_context_unknown_hint") => "在助手设置中填写该模型的上下文 token 上限。",
+        (Locale::ZhCn, "assistant_error_context_exceeded") => "内容超出了模型的上下文上限",
+        (Locale::ZhCn, "assistant_error_context_exceeded_hint") => "缩小文档范围，或在助手设置中换用上下文更大的模型。",
+        (Locale::ZhCn, "assistant_error_step_limit") => "任务步骤达到上限，已停止",
+        (Locale::ZhCn, "assistant_error_step_limit_hint") => "把请求拆小一些，或在助手设置中提高最大工具轮次。",
+        (Locale::ZhCn, "assistant_error_invalid_change") => "模型给出的操作无效",
+        (Locale::ZhCn, "assistant_error_invalid_change_hint") => "再试一次，或换个说法描述请求。",
+        (Locale::ZhCn, "assistant_error_out_of_scope") => "文档不在本次授权范围内",
+        (Locale::ZhCn, "assistant_error_out_of_scope_hint") => "选择要处理的文档，或把范围改为全部可见文档。",
+        (Locale::ZhCn, "assistant_error_document_changed") => "文档已在别处修改或移除",
+        (Locale::ZhCn, "assistant_error_document_changed_hint") => "重新运行任务，助手会读取最新内容。",
+        (Locale::ZhCn, "assistant_error_tree_rule") => "项目树不能这样调整",
+        (Locale::ZhCn, "assistant_error_tree_rule_hint") => "项目树最多三层，父子文档须来自同一段录音，文档也不能移到自己下面。",
+        (Locale::ZhCn, "assistant_error_write_failed") => "写入文档失败",
+        (Locale::ZhCn, "assistant_error_write_failed_hint") => "这项变更没有写入，可以再试一次。",
+        (Locale::ZhCn, "assistant_error_expired") => "确认已过期",
+        (Locale::ZhCn, "assistant_error_expired_hint") => "重新运行任务，以生成新的确认。",
+        (Locale::ZhCn, "assistant_error_unavailable") => "助手服务暂不可用",
+        (Locale::ZhCn, "assistant_error_unavailable_hint") => "稍后再试；如果仍不可用，请重新启动 MeetNote。",
+        (Locale::ZhCn, "assistant_error_interrupted") => "任务意外中止",
+        (Locale::ZhCn, "assistant_error_interrupted_hint") => "再试一次。",
+        (Locale::ZhCn, "assistant_error_cancelled") => "任务已取消",
+        (Locale::ZhCn, "assistant_error_cancelled_hint") => "已写入的变更会保留。",
+        (Locale::ZhCn, "assistant_range") => "转写片段",
         (Locale::ZhCn, "assistant_accept") => "接受并写回",
         (Locale::ZhCn, "assistant_reject") => "拒绝",
         (Locale::ZhCn, "assistant_rejected") => "已拒绝本次写回。",
         (Locale::ZhCn, "assistant_expired") => "确认已过期，请重新运行任务。",
-        (Locale::ZhCn, "assistant_deleted") => "已删除",
-        (Locale::ZhCn, "assistant_tree_root") => "根层级",
+        (Locale::ZhCn, "assistant_tree_root") => "顶层",
         (Locale::ZhCn, "assistant_new_document") => "新文档",
         (Locale::ZhCn, "assistant_probe_readiness") => "连接测试",
         (Locale::ZhCn, "assistant_probe_model") => "模型能力探测",
@@ -304,11 +346,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_write_automatic_notice") => "自动写回：变更立即写入文档，助手页为每项变更提供撤销。",
         (Locale::ZhCn, "assistant_write_confirm_each_notice") => "自动写回已关闭：Assistant 在每次写入前暂停，在助手页列出变更等你接受或拒绝。接受前不会写入文档，过期的确认不会写入。",
         (Locale::ZhCn, "assistant_write_mode_unsaved") => "尚未保存，点击保存后生效。",
-        (Locale::ZhCn, "projection_metadata") => "元数据",
-        (Locale::ZhCn, "projection_markdown") => "Markdown 正文",
-        (Locale::ZhCn, "projection_transcript") => "转录文本",
-        (Locale::ZhCn, "projection_speaker_segments") => "说话人片段",
-        (Locale::ZhCn, "projection_complete") => "完整文档",
         (Locale::ZhCn, "capability_yes") => "支持",
         (Locale::ZhCn, "capability_no") => "不支持",
         (Locale::ZhCn, "capability_unknown") => "未知",
@@ -448,35 +485,50 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "no_selection_hint") => "Choose a project on the left",
         (Locale::EnUs, "project_detail") => "Project details",
         (Locale::EnUs, "close_detail") => "Close detail",
-        (Locale::EnUs, "catalog_description") => "Catalog, installation state, and download tasks",
+        (Locale::EnUs, "models_ready") => {
+            "Speech recognition and speaker diarization models are ready"
+        }
+        (Locale::EnUs, "models_asr_not_ready") => {
+            "The speech recognition model is not ready. Download one below or choose one in Settings."
+        }
+        (Locale::EnUs, "models_diarization_not_ready") => {
+            "The speaker diarization model is not ready. Download one below or choose one in Settings."
+        }
+        (Locale::EnUs, "models_not_ready") => {
+            "Speech recognition and speaker diarization models are not ready. Download them below or choose them in Settings."
+        }
         (Locale::EnUs, "download") => "Download",
         (Locale::EnUs, "downloaded") => "Downloaded",
         (Locale::EnUs, "not_downloaded") => "Not downloaded",
-        (Locale::EnUs, "model_size") => "Weight size",
-        (Locale::EnUs, "vram_estimate") => "VRAM estimate",
-        (Locale::EnUs, "applicable_backends") => "Applicable backends",
+        (Locale::EnUs, "download_queued") => "Queued",
+        (Locale::EnUs, "downloading") => "Downloading",
+        (Locale::EnUs, "download_paused") => "Paused",
+        (Locale::EnUs, "verifying") => "Verifying",
+        (Locale::EnUs, "download_waiting") => "Waiting to start",
+        (Locale::EnUs, "download_verifying") => "Checking the downloaded files",
         (Locale::EnUs, "no_models") => "No models are available in the catalog.",
-        (Locale::EnUs, "model_task") => "Task",
         (Locale::EnUs, "task_asr") => "Speech recognition",
         (Locale::EnUs, "task_diarization") => "Speaker diarization",
-        (Locale::EnUs, "catalog_status") => "Catalog status",
-        (Locale::EnUs, "catalog_ready") => "Downloadable",
-        (Locale::EnUs, "catalog_candidate_source") => "Candidate source, not installable",
-        (Locale::EnUs, "catalog_requires_native_adapter") => "Needs a native adapter",
-        (Locale::EnUs, "model_license") => "License",
+        (Locale::EnUs, "catalog_candidate_source") => {
+            "The source is not verified yet, so it cannot be downloaded"
+        }
+        (Locale::EnUs, "catalog_requires_native_adapter") => {
+            "Needs a native adapter before it can be downloaded"
+        }
+        (Locale::EnUs, "catalog_unavailable") => "Not available for download yet",
         (Locale::EnUs, "model_source") => "Source",
-        (Locale::EnUs, "model_checksum") => "Checksum",
         (Locale::EnUs, "show_model_details") => "Show details",
         (Locale::EnUs, "hide_model_details") => "Hide details",
         (Locale::EnUs, "declared_checksums") => "Checksums in the catalog",
+        (Locale::EnUs, "model_failure_detail") => "Failure details",
         (Locale::EnUs, "probe_backends") => "Backend checks",
         (Locale::EnUs, "probe_artifacts") => "Artifact checksums",
         (Locale::EnUs, "expected_checksum") => "expected",
         (Locale::EnUs, "no_probe_record") => "No probe record yet",
         (Locale::EnUs, "probe_passed") => "passed",
         (Locale::EnUs, "probe_failed") => "failed",
-        (Locale::EnUs, "probe_kind_download") => "after download",
-        (Locale::EnUs, "probe_kind_reprobe") => "re-probe",
+        (Locale::EnUs, "probe_kind_download") => "Post-download check",
+        (Locale::EnUs, "probe_kind_reprobe") => "Re-probe",
         (Locale::EnUs, "backend_not_registered") => "not checked: no backend probe registered",
         (Locale::EnUs, "checksum_matched") => "matches",
         (Locale::EnUs, "checksum_archive_matched") => "archive matches",
@@ -578,8 +630,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
             "Backends, models, compute device, and interface language"
         }
         (Locale::EnUs, "saved_automatically") => "Settings are saved automatically after selection",
-        (Locale::EnUs, "models_count") => "models",
-        (Locale::EnUs, "download_queue") => "Download tasks",
         (Locale::EnUs, "pause") => "Pause",
         (Locale::EnUs, "resume") => "Resume",
         (Locale::EnUs, "empty_request") => "Type a request before sending it.",
@@ -631,17 +681,19 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_scene_partition") => "Partition",
         (Locale::EnUs, "assistant_scene_extract") => "Extract",
         (Locale::EnUs, "assistant_scene_move") => "Move tree",
-        (Locale::EnUs, "assistant_authorized_document") => "Authorized document",
+        (Locale::EnUs, "assistant_scene_ask_description") => "Answers questions from the selected documents and cites the evidence; nothing is changed.",
+        (Locale::EnUs, "assistant_scene_organize_description") => "Refines the title, tags and summary you ask for; the transcript stays as recorded.",
+        (Locale::EnUs, "assistant_scene_partition_description") => "Splits the document into topic sub-documents that together cover the whole transcript.",
+        (Locale::EnUs, "assistant_scene_extract_description") => "Pulls only the passages that match your request into sub-documents; the rest stays as it is.",
+        (Locale::EnUs, "assistant_scene_move_description") => "Moves a document or reorders it among its siblings as you ask; content is unchanged.",
         (Locale::EnUs, "assistant_current_document") => "Current document only",
         (Locale::EnUs, "assistant_all_visible_documents") => "All visible documents",
         (Locale::EnUs, "assistant_no_document") => "No document selected",
-        (Locale::EnUs, "assistant_projection") => "Sent projection",
-        (Locale::EnUs, "assistant_connection") => "Connection",
+        (Locale::EnUs, "assistant_no_connection") => "No connection",
         (Locale::EnUs, "assistant_local_connection") => "Local connection",
         (Locale::EnUs, "assistant_remote_connection") => "Remote connection",
         (Locale::EnUs, "assistant_scope_notice") => "Only the explicitly selected document is sent; audio, credentials, local paths, and other documents stay local.",
         (Locale::EnUs, "assistant_all_visible_scope_notice") => "All documents visible in the current workspace are sent; audio, credentials, and local paths stay local.",
-        (Locale::EnUs, "assistant_idle") => "Idle",
         (Locale::EnUs, "assistant_running") => "Assistant is running",
         (Locale::EnUs, "assistant_cancelling") => "Cancelling",
         (Locale::EnUs, "assistant_completed") => "Assistant task completed",
@@ -650,32 +702,66 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_awaiting_confirmation") => "Awaiting write confirmation",
         (Locale::EnUs, "assistant_no_answer") => "This task returned no text answer.",
         (Locale::EnUs, "assistant_evidence") => "Evidence segments",
-        (Locale::EnUs, "assistant_no_evidence") => "None",
-        (Locale::EnUs, "assistant_model_route") => "Requested/resolved model",
+        (Locale::EnUs, "assistant_model_route") => "Model",
         (Locale::EnUs, "assistant_usage") => "Input/output/total tokens",
         (Locale::EnUs, "assistant_diagnostics") => "Execution diagnostics",
-        (Locale::EnUs, "assistant_warning") => "Warning",
-        (Locale::EnUs, "assistant_mutation") => "Mutation",
-        (Locale::EnUs, "assistant_affected") => "Affected documents",
-        (Locale::EnUs, "assistant_uncovered") => "Uncovered segments",
-        (Locale::EnUs, "assistant_undo") => "Undo mutation",
+        (Locale::EnUs, "assistant_undo") => "Undo",
         (Locale::EnUs, "assistant_undoing") => "Undoing",
+        (Locale::EnUs, "assistant_receipt_written") => "Change written",
         (Locale::EnUs, "assistant_undone") => "Undone",
         (Locale::EnUs, "assistant_pending") => "Write confirmation pending",
-        (Locale::EnUs, "assistant_pending_queue") => "Queued confirmations",
         (Locale::EnUs, "assistant_pending_paused") => "The run paused before this write: accepting writes it, rejecting discards it.",
         (Locale::EnUs, "assistant_accepting") => "Writing…",
         (Locale::EnUs, "assistant_rejecting") => "Rejecting…",
         (Locale::EnUs, "assistant_retry") => "Retry",
-        (Locale::EnUs, "assistant_field_diff") => "Field differences",
-        (Locale::EnUs, "assistant_tree_change") => "Tree changes",
-        (Locale::EnUs, "assistant_range") => "Semantic ranges and evidence",
+        (Locale::EnUs, "assistant_open_settings") => "Open Assistant settings",
+        (Locale::EnUs, "assistant_error_unknown") => "The Assistant task did not finish",
+        (Locale::EnUs, "assistant_error_authentication") => "The API key is invalid or has expired",
+        (Locale::EnUs, "assistant_error_authentication_hint") => "Update the API key in Assistant settings, then try again.",
+        (Locale::EnUs, "assistant_error_credential_file") => "The API key could not be read from its file",
+        (Locale::EnUs, "assistant_error_credential_file_hint") => "Make sure the key file exists and holds the key, or enter the key in Assistant settings.",
+        (Locale::EnUs, "assistant_error_connection") => "The Assistant connection is not set up",
+        (Locale::EnUs, "assistant_error_connection_hint") => "Choose or complete a connection in Assistant settings.",
+        (Locale::EnUs, "assistant_error_disabled") => "The Assistant is turned off",
+        (Locale::EnUs, "assistant_error_disabled_hint") => "Turn it on in Assistant settings, then send again.",
+        (Locale::EnUs, "assistant_error_timeout") => "The model took too long to respond",
+        (Locale::EnUs, "assistant_error_timeout_hint") => "Try again later; if it keeps timing out, raise the timeout in Assistant settings.",
+        (Locale::EnUs, "assistant_error_rate_limited") => "The model service is limiting requests",
+        (Locale::EnUs, "assistant_error_rate_limited_hint") => "Wait a moment, then try again.",
+        (Locale::EnUs, "assistant_error_provider_response") => "The model service did not respond properly",
+        (Locale::EnUs, "assistant_error_provider_response_hint") => "Check that the connection URL is reachable and the model is available, then try again.",
+        (Locale::EnUs, "assistant_error_model_unsupported") => "This model lacks what the Assistant needs",
+        (Locale::EnUs, "assistant_error_model_unsupported_hint") => "Choose a model with tool calling in Assistant settings.",
+        (Locale::EnUs, "assistant_error_context_unknown") => "The model rejected the request and the connection has no context limit",
+        (Locale::EnUs, "assistant_error_context_unknown_hint") => "Enter the model's context token limit in Assistant settings.",
+        (Locale::EnUs, "assistant_error_context_exceeded") => "The content exceeds the model's context limit",
+        (Locale::EnUs, "assistant_error_context_exceeded_hint") => "Narrow the document scope, or choose a model with a larger context in Assistant settings.",
+        (Locale::EnUs, "assistant_error_step_limit") => "The task reached its step limit and stopped",
+        (Locale::EnUs, "assistant_error_step_limit_hint") => "Split the request into smaller ones, or raise the maximum tool rounds in Assistant settings.",
+        (Locale::EnUs, "assistant_error_invalid_change") => "The model proposed an invalid change",
+        (Locale::EnUs, "assistant_error_invalid_change_hint") => "Try again, or rephrase the request.",
+        (Locale::EnUs, "assistant_error_out_of_scope") => "The document is outside this request's scope",
+        (Locale::EnUs, "assistant_error_out_of_scope_hint") => "Select the document to work on, or widen the scope to all visible documents.",
+        (Locale::EnUs, "assistant_error_document_changed") => "The document was changed or removed elsewhere",
+        (Locale::EnUs, "assistant_error_document_changed_hint") => "Run the task again to read the latest version.",
+        (Locale::EnUs, "assistant_error_tree_rule") => "The project tree cannot change this way",
+        (Locale::EnUs, "assistant_error_tree_rule_hint") => "The tree has at most three levels, a parent and its children share one recording, and a document cannot move under itself.",
+        (Locale::EnUs, "assistant_error_write_failed") => "The document could not be written",
+        (Locale::EnUs, "assistant_error_write_failed_hint") => "This change was not written; try again.",
+        (Locale::EnUs, "assistant_error_expired") => "The confirmation expired",
+        (Locale::EnUs, "assistant_error_expired_hint") => "Run the task again for a new confirmation.",
+        (Locale::EnUs, "assistant_error_unavailable") => "The Assistant service is unavailable",
+        (Locale::EnUs, "assistant_error_unavailable_hint") => "Try again later; if it stays unavailable, restart MeetNote.",
+        (Locale::EnUs, "assistant_error_interrupted") => "The task stopped unexpectedly",
+        (Locale::EnUs, "assistant_error_interrupted_hint") => "Try again.",
+        (Locale::EnUs, "assistant_error_cancelled") => "The task was cancelled",
+        (Locale::EnUs, "assistant_error_cancelled_hint") => "Changes already written are kept.",
+        (Locale::EnUs, "assistant_range") => "Transcript",
         (Locale::EnUs, "assistant_accept") => "Accept and write",
         (Locale::EnUs, "assistant_reject") => "Reject",
         (Locale::EnUs, "assistant_rejected") => "This write was rejected.",
         (Locale::EnUs, "assistant_expired") => "Confirmation expired; run the task again.",
-        (Locale::EnUs, "assistant_deleted") => "deleted",
-        (Locale::EnUs, "assistant_tree_root") => "top level",
+        (Locale::EnUs, "assistant_tree_root") => "to the top level",
         (Locale::EnUs, "assistant_new_document") => "new document",
         (Locale::EnUs, "assistant_probe_readiness") => "connection test",
         (Locale::EnUs, "assistant_probe_model") => "model probe",
@@ -686,11 +772,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_write_automatic_notice") => "Automatic write-back: changes are written at once, and the Assistant page offers an undo for each.",
         (Locale::EnUs, "assistant_write_confirm_each_notice") => "Automatic write-back is off: the Assistant pauses before every write and lists it on the Assistant page for you to accept or reject. Nothing is written until you accept, and an expired confirmation is never written.",
         (Locale::EnUs, "assistant_write_mode_unsaved") => "Not saved yet; takes effect after Save.",
-        (Locale::EnUs, "projection_metadata") => "Metadata",
-        (Locale::EnUs, "projection_markdown") => "Markdown body",
-        (Locale::EnUs, "projection_transcript") => "Transcript",
-        (Locale::EnUs, "projection_speaker_segments") => "Speaker segments",
-        (Locale::EnUs, "projection_complete") => "Complete document",
         (Locale::EnUs, "capability_yes") => "yes",
         (Locale::EnUs, "capability_no") => "no",
         (Locale::EnUs, "capability_unknown") => "unknown",
@@ -1007,10 +1088,32 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
             let (position, total) = value.split_once('|').unwrap_or((value, value));
             format!("Review {position} of {total}")
         }
+        (Locale::ZhCn, "assistant_document_count") => format!("{value} 篇文档"),
+        (Locale::EnUs, "assistant_document_count") => match value {
+            "1" => "1 document".into(),
+            _ => format!("{value} documents"),
+        },
         (Locale::ZhCn, "assistant_receipts") => format!("已写入 {value} 项变更，可逐项撤销"),
         (Locale::EnUs, "assistant_receipts") => {
             format!("{value} writes applied; each can be undone")
         }
+        (Locale::ZhCn, "assistant_quoted") => format!("「{value}」"),
+        (Locale::EnUs, "assistant_quoted") => format!("“{value}”"),
+        (Locale::ZhCn, "assistant_receipt_created") => format!("已新建{value}"),
+        (Locale::EnUs, "assistant_receipt_created") => format!("Created {value}"),
+        (Locale::ZhCn, "assistant_receipt_updated") => format!("已更新{value}"),
+        (Locale::EnUs, "assistant_receipt_updated") => format!("Updated {value}"),
+        (Locale::ZhCn, "assistant_receipt_deleted") => format!("已删除{value}"),
+        (Locale::EnUs, "assistant_receipt_deleted") => format!("Deleted {value}"),
+        (Locale::ZhCn, "assistant_uncovered_count") => format!("{value} 段转写未纳入"),
+        (Locale::EnUs, "assistant_uncovered_count") => match value {
+            "1" => "1 transcript segment left out".into(),
+            _ => format!("{value} transcript segments left out"),
+        },
+        (Locale::ZhCn, "assistant_pending_affects") => format!("将修改{value}"),
+        (Locale::EnUs, "assistant_pending_affects") => format!("Changes {value}"),
+        (Locale::ZhCn, "assistant_tree_under") => format!("{value}下"),
+        (Locale::EnUs, "assistant_tree_under") => format!("under {value}"),
         (Locale::ZhCn, "assistant_pending_expires") => format!("{value} 过期"),
         (Locale::EnUs, "assistant_pending_expires") => format!("Expires {value}"),
         (Locale::ZhCn, "assistant_pending_overflow") => format!(
@@ -1033,6 +1136,14 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
 /// is merged into.
 pub fn message_pair(locale: Locale, key: &str, first: &str, second: &str) -> String {
     match (locale, key) {
+        (Locale::ZhCn, "assistant_tree_moved") => format!("{first}移到{second}"),
+        (Locale::EnUs, "assistant_tree_moved") => format!("Moves {first} {second}"),
+        (Locale::ZhCn, "assistant_tree_reordered") => {
+            format!("{first}调整到同级第 {second} 位")
+        }
+        (Locale::EnUs, "assistant_tree_reordered") => {
+            format!("Moves {first} to position {second} among its siblings")
+        }
         (Locale::ZhCn, "merge_document_speaker_title") => {
             format!("将「{first}」合并到「{second}」？")
         }
@@ -1359,31 +1470,58 @@ pub fn model_failure_reason(locale: Locale, failure: &ModelFailure) -> String {
     }
 }
 
-/// The distinct SHA-256 values a catalog entry declares, in short form: the
-/// first in full detail is one expansion away on the card.
-pub fn declared_checksums(locale: Locale, checksums: &[&str]) -> String {
-    match (locale, checksums) {
-        (_, []) => text(locale, "checksum_not_declared").into(),
-        (_, [checksum]) => format!("{}…", short_checksum(checksum)),
-        (Locale::ZhCn, [first, ..]) => {
-            format!("{}… 等 {} 个", short_checksum(first), checksums.len())
-        }
-        (Locale::EnUs, [first, rest @ ..]) => {
-            format!("{}… and {} more", short_checksum(first), rest.len())
-        }
+/// What failed, in a few words: a backend's load check, the check of the
+/// files against the catalog, or the download. A re-probe downloads
+/// nothing, so its other failures are failed checks too.
+pub fn model_failure_headline(
+    locale: Locale,
+    operation: ModelOperation,
+    failure: &ModelFailure,
+) -> &'static str {
+    use ModelFailure as Failure;
+    match (locale, failure, operation) {
+        (Locale::ZhCn, Failure::BackendProbe { .. }, _) => "加载检查未通过",
+        (Locale::EnUs, Failure::BackendProbe { .. }, _) => "Load check failed",
+        (Locale::ZhCn, Failure::SizeMismatch { .. } | Failure::ChecksumMismatch { .. }, _)
+        | (Locale::ZhCn, _, ModelOperation::Reprobe) => "校验未通过",
+        (Locale::EnUs, Failure::SizeMismatch { .. } | Failure::ChecksumMismatch { .. }, _)
+        | (Locale::EnUs, _, ModelOperation::Reprobe) => "Verification failed",
+        (Locale::ZhCn, _, ModelOperation::Download) => "下载失败",
+        (Locale::EnUs, _, ModelOperation::Download) => "Download failed",
     }
 }
 
-/// The last failed download or re-probe: the operation, when it failed and
-/// why.
-pub fn model_failure(locale: Locale, record: &ModelFailureRecord) -> String {
-    let time = crate::components::utc_time(record.failed_at_ms);
-    let reason = model_failure_reason(locale, &record.reason);
-    match (locale, record.operation) {
-        (Locale::ZhCn, ModelOperation::Download) => format!("下载失败（{time}）：{reason}"),
-        (Locale::ZhCn, ModelOperation::Reprobe) => format!("重新校验失败（{time}）：{reason}"),
-        (Locale::EnUs, ModelOperation::Download) => format!("Download failed ({time}): {reason}"),
-        (Locale::EnUs, ModelOperation::Reprobe) => format!("Re-probe failed ({time}): {reason}"),
+/// Why a model failed, in plain words per reason kind; the paths and the
+/// backend's own message are left to `model_failure_reason`.
+pub fn model_failure_explanation(locale: Locale, failure: &ModelFailure) -> String {
+    use ModelFailure as Failure;
+    match (locale, failure) {
+        (Locale::ZhCn, Failure::UnsupportedSource { .. }) => "这个来源不支持直接下载".into(),
+        (Locale::EnUs, Failure::UnsupportedSource { .. }) => {
+            "This source cannot be downloaded directly".into()
+        }
+        (Locale::ZhCn, Failure::Network { .. }) => "网络连接出错，可稍后重试".into(),
+        (Locale::EnUs, Failure::Network { .. }) => "The connection failed; try again later".into(),
+        (Locale::ZhCn, Failure::Io { .. }) => "无法读写模型文件".into(),
+        (Locale::EnUs, Failure::Io { .. }) => "The model files could not be read or written".into(),
+        (Locale::ZhCn, Failure::SizeMismatch { .. }) => "文件大小与目录记录不符".into(),
+        (Locale::EnUs, Failure::SizeMismatch { .. }) => {
+            "A file's size does not match the catalog".into()
+        }
+        (Locale::ZhCn, Failure::ChecksumMismatch { .. }) => "文件内容与目录记录不符".into(),
+        (Locale::EnUs, Failure::ChecksumMismatch { .. }) => {
+            "A file's contents do not match the catalog".into()
+        }
+        (Locale::ZhCn, Failure::Archive { .. }) => "下载的压缩包无法解压".into(),
+        (Locale::EnUs, Failure::Archive { .. }) => {
+            "The downloaded archive could not be unpacked".into()
+        }
+        (Locale::ZhCn, Failure::BackendProbe { backend_id, .. }) => {
+            format!("{backend_id} 无法加载这个模型")
+        }
+        (Locale::EnUs, Failure::BackendProbe { backend_id, .. }) => {
+            format!("{backend_id} could not load this model")
+        }
     }
 }
 
@@ -1417,7 +1555,15 @@ pub fn backend_check(locale: Locale, check: &BackendCheck) -> String {
     }
 }
 
-/// The outcome, kind and time of a model's last probe.
+/// A model's estimated VRAM, `size` already formatted.
+pub fn model_vram(locale: Locale, size: &str) -> String {
+    match locale {
+        Locale::ZhCn => format!("显存约 {size}"),
+        Locale::EnUs => format!("~{size} VRAM"),
+    }
+}
+
+/// The kind, outcome and time of a model's last probe.
 pub fn probe_summary(locale: Locale, record: &ProbeRecord) -> String {
     let outcome = text(
         locale,
@@ -1436,8 +1582,8 @@ pub fn probe_summary(locale: Locale, record: &ProbeRecord) -> String {
     );
     let time = crate::components::utc_time(record.probed_at_ms);
     match locale {
-        Locale::ZhCn => format!("最近校验：{outcome} · {kind} · {time}"),
-        Locale::EnUs => format!("Last probe: {outcome} · {kind} · {time}"),
+        Locale::ZhCn => format!("{kind}{outcome} · {time}"),
+        Locale::EnUs => format!("{kind} {outcome} · {time}"),
     }
 }
 
@@ -1451,6 +1597,50 @@ pub fn probe_record_error(locale: Locale, error: &ProbeRecordError) -> String {
         Locale::EnUs => {
             format!("Cannot read the probe record {path}: {reason}. The next probe replaces it.")
         }
+    }
+}
+
+/// How many of a model family's models are downloaded.
+pub fn model_family_installed(locale: Locale, installed: usize, total: usize) -> String {
+    match locale {
+        Locale::ZhCn => format!("已下载 {installed} / {total}"),
+        Locale::EnUs => format!("{installed} of {total} downloaded"),
+    }
+}
+
+/// Which of a download's files is downloading, when it has several.
+pub fn download_artifact(locale: Locale, index: usize, count: usize) -> String {
+    match locale {
+        Locale::ZhCn => format!("文件 {index}/{count}"),
+        Locale::EnUs => format!("File {index} of {count}"),
+    }
+}
+
+/// The time a download has left: seconds under a minute, then minutes and
+/// hours rounded to the minute.
+pub fn download_eta(locale: Locale, seconds: u64) -> String {
+    if seconds < 60 {
+        return match locale {
+            Locale::ZhCn => format!("约 {seconds} 秒"),
+            Locale::EnUs => format!("about {seconds} s left"),
+        };
+    }
+    let minutes = (seconds + 30) / 60;
+    match (locale, minutes / 60, minutes % 60) {
+        (Locale::ZhCn, 0, minutes) => format!("约 {minutes} 分钟"),
+        (Locale::ZhCn, hours, 0) => format!("约 {hours} 小时"),
+        (Locale::ZhCn, hours, minutes) => format!("约 {hours} 小时 {minutes} 分钟"),
+        (Locale::EnUs, 0, minutes) => format!("about {minutes} min left"),
+        (Locale::EnUs, hours, 0) => format!("about {hours} h left"),
+        (Locale::EnUs, hours, minutes) => format!("about {hours} h {minutes} min left"),
+    }
+}
+
+/// A queued download the manager starts again after a dropped connection.
+pub fn download_retrying(locale: Locale, attempt: u32) -> String {
+    match locale {
+        Locale::ZhCn => format!("连接中断，正在第 {attempt} 次重试"),
+        Locale::EnUs => format!("Connection lost, retrying (attempt {attempt})"),
     }
 }
 
@@ -1822,8 +2012,8 @@ mod tests {
     #[test]
     fn every_model_failure_and_probe_result_reads_in_both_locales() {
         use models::{
-            BackendCheck, ChecksumResult, ModelFailure, ModelFailureRecord, ModelOperation,
-            ProbeOutcome, ProbeRecord, ProbeRecordError,
+            BackendCheck, ChecksumResult, ModelFailure, ModelOperation, ProbeOutcome, ProbeRecord,
+            ProbeRecordError,
         };
         let failures = [
             (
@@ -1889,28 +2079,47 @@ mod tests {
             );
         }
 
-        // The failed operation and its time head the reason.
-        let (reason, _) = &failures[6];
-        let record = |operation| ModelFailureRecord {
-            operation,
-            failed_at_ms: 1_788_000_000_000,
-            revision: None,
-            reason: reason.clone(),
-        };
-        let [download, reprobe] = [ModelOperation::Download, ModelOperation::Reprobe]
-            .map(|operation| model_failure(Locale::ZhCn, &record(operation)));
-        assert_ne!(download, reprobe, "the operation is named");
-        for sentence in [&download, &reprobe] {
-            assert!(sentence.contains("2026-08-29 10:40 UTC"), "{sentence}");
-            assert!(
-                sentence.ends_with(&model_failure_reason(Locale::ZhCn, reason)),
-                "{sentence}"
-            );
+        // A failure heads its banner with what failed: the download, the
+        // check of its files, or a backend's load check; a re-probe never
+        // fails as a download.
+        let mut explanations = std::collections::BTreeSet::new();
+        for (failure, named) in &failures {
+            let expected = match failure {
+                ModelFailure::BackendProbe { .. } => ["加载检查未通过"; 2],
+                ModelFailure::SizeMismatch { .. } | ModelFailure::ChecksumMismatch { .. } => {
+                    ["校验未通过"; 2]
+                }
+                _ => ["下载失败", "校验未通过"],
+            };
+            for (operation, headline) in [ModelOperation::Download, ModelOperation::Reprobe]
+                .into_iter()
+                .zip(expected)
+            {
+                assert_eq!(
+                    model_failure_headline(Locale::ZhCn, operation, failure),
+                    headline,
+                    "{failure:?} {operation:?}"
+                );
+                assert_localized(
+                    headline,
+                    model_failure_headline(Locale::EnUs, operation, failure),
+                );
+            }
+            // Plain words for each kind, without the paths or the backend's
+            // own message.
+            let chinese = model_failure_explanation(Locale::ZhCn, failure);
+            let english = model_failure_explanation(Locale::EnUs, failure);
+            assert_localized(&chinese, &english);
+            assert!(explanations.insert(chinese.clone()), "{chinese}");
+            for fact in named {
+                for sentence in [&chinese, &english] {
+                    // Only the backend is named.
+                    let named = *fact == "sherpa-onnx";
+                    assert_eq!(sentence.contains(fact), named, "{sentence} and {fact}");
+                }
+            }
         }
-        assert_localized(
-            &download,
-            &model_failure(Locale::EnUs, &record(ModelOperation::Download)),
-        );
+        let (reason, _) = &failures[6];
 
         let checksums = [
             ChecksumResult::Matched,
