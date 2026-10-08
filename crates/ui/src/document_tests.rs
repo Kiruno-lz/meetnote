@@ -839,3 +839,165 @@ fn every_editor_control_carries_its_label_in_the_current_locale(cx: &mut TestApp
         "a locale change relabels the editor"
     );
 }
+
+/// A processing job of a document that the test drives: the contexts of
+/// its transcription and diarization jobs emit the events the page
+/// follows, and `outcome` ends it.
+struct DrivenJob {
+    transcription: runtime::JobContext,
+    diarization: runtime::JobContext,
+    outcome: futures::channel::oneshot::Sender<Result<DocumentState, contracts::BackendError>>,
+}
+
+/// Starts following a driven processing job of `id`, as `process_selected`
+/// does once the workspace has started it.
+fn drive_processing(cx: &mut VisualTestContext, view: &View, id: &str) -> DrivenJob {
+    let jobs = runtime::JobRuntime::with_max_concurrency(2);
+    let (transcription, asr_events) = jobs.create_job();
+    let (diarization, diarization_events) = jobs.create_job();
+    let (outcome, result) = futures::channel::oneshot::channel();
+    let job = application::ProjectProcessingJob {
+        future: Box::pin(async move {
+            result.await.unwrap_or_else(|_| {
+                Err(contracts::BackendError {
+                    code: contracts::BackendErrorCode::Cancelled,
+                    message: "dropped".into(),
+                })
+            })
+        }),
+        asr_context: transcription.clone(),
+        diarization_context: diarization.clone(),
+        asr_events,
+        diarization_events,
+    };
+    let document = ProjectId::new(id);
+    view.update(cx, |root, cx| {
+        root.ui.begin_processing(document);
+        root.ui.notice = i18n::message(i18n::Locale::ZhCn, "processing", "New");
+        root.cancel_contexts = Some((transcription.clone(), diarization.clone()));
+        cx.notify();
+        cx.spawn(async move |this, cx| RootView::follow_processing(this, job, cx).await)
+            .detach();
+    });
+    cx.run_until_parked();
+    DrivenJob {
+        transcription,
+        diarization,
+        outcome,
+    }
+}
+
+fn phase(cx: &mut VisualTestContext, view: &View) -> Option<String> {
+    view.read_with(cx, |root, _| {
+        root.ui
+            .progress
+            .as_ref()
+            .map(|progress| progress.phase(root.ui.locale))
+    })
+}
+
+#[gpui::test]
+fn processing_progress_shows_in_the_header_and_the_tree_not_the_notice(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    root.put(processed("weekly", "产品周会"), "# 产品周会\n");
+    let mut new = DocumentState::new(ProjectId::new("new"), "New", "new.wav");
+    new.hierarchy.sibling_order = 1;
+    root.put(new.clone(), "# New\n");
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "new");
+    assert!(cx.debug_bounds("processing-progress").is_none());
+
+    let job = drive_processing(cx, &view, "new");
+    let starting = view.read_with(cx, |root, _| root.ui.notice.clone());
+    // Before either job reports, the bar sweeps under "preparing".
+    let page = rendered(cx, "meetings-page");
+    let header_progress = rendered(cx, "processing-progress");
+    assert!(within(header_progress, page));
+    assert!(
+        header_progress.bottom() <= rendered(cx, "meeting-content").top(),
+        "the progress heads the document"
+    );
+    assert!(within(
+        rendered(cx, "processing-indicator-new"),
+        rendered(cx, "project-row-new")
+    ));
+    assert!(cx.debug_bounds("processing-indicator-weekly").is_none());
+    assert_eq!(phase(cx, &view).as_deref(), Some("正在准备……"));
+
+    job.transcription.started();
+    job.diarization.started();
+    job.transcription.report(runtime::Progress {
+        completed: 3,
+        total: Some(10),
+    });
+    wait_for(cx, &view, |root| {
+        root.ui.progress.as_ref().is_some_and(|progress| {
+            progress.transcription
+                == crate::state::StageProgress::Running {
+                    completed: 3,
+                    total: Some(10),
+                }
+        })
+    });
+    assert_eq!(
+        phase(cx, &view).as_deref(),
+        Some("正在转录 3/10 · 等待说话人分离")
+    );
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.progress.as_ref().unwrap().percent()),
+        Some(15.)
+    );
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        starting,
+        "a progress tick leaves the notice alone"
+    );
+
+    // Another document shows no progress, and cannot start a second job.
+    select_row(cx, &view, "weekly");
+    assert!(cx.debug_bounds("processing-progress").is_none());
+    rendered(cx, "processing-indicator-new");
+    select_row(cx, &view, "new");
+
+    // The outcome ends the progress and writes the notice.
+    job.transcription.completed();
+    job.diarization.completed();
+    let mut finished = new.clone();
+    finished.content.title = "New".into();
+    job.outcome.send(Ok(finished)).ok();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.progress, None);
+        assert_eq!(
+            root.ui.notice,
+            i18n::message(i18n::Locale::ZhCn, "finished", "New")
+        );
+    });
+    assert!(cx.debug_bounds("processing-progress").is_none());
+    assert!(cx.debug_bounds("processing-indicator-new").is_none());
+}
+
+#[gpui::test]
+fn a_cancelled_job_notes_the_cancellation_not_a_failure(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    root.put(
+        DocumentState::new(ProjectId::new("new"), "New", "new.wav"),
+        "# New\n",
+    );
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "new");
+    let job = drive_processing(cx, &view, "new");
+    job.transcription.cancel();
+    job.outcome
+        .send(Err(contracts::BackendError {
+            code: contracts::BackendErrorCode::Cancelled,
+            message: "cancelled".into(),
+        }))
+        .ok();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        i18n::message(i18n::Locale::ZhCn, "cancelled", "New")
+    );
+}

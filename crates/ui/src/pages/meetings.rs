@@ -1,17 +1,25 @@
 use crate::{
     components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
-    controls::{tree, Button, RadioGroup, Scrollbar, Tree, TreeItem},
+    controls::{tree, Button, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
     speakers::{document_speakers, DocumentSpeaker},
-    state::{self, ContentMode},
+    state::{self, ContentMode, ProcessingProgress},
     theme::{self, Tokens},
 };
 use domain::{DocumentState, ProjectStatus};
-use gpui::{div, prelude::*, px, AnyElement, Context, IntoElement, Pixels};
+use gpui::{
+    div, percentage, prelude::*, px, svg, Animation, AnimationExt as _, AnyElement, Context,
+    ElementId, IntoElement, Pixels, Transformation,
+};
+use std::time::Duration;
 
 /// The tallest the issue list grows before it scrolls.
 const ISSUE_LIST_HEIGHT: Pixels = px(168.);
+/// The widest the processing progress grows.
+const PROGRESS_WIDTH: Pixels = px(360.);
+/// One turn of the processing spinner.
+const SPIN: Duration = Duration::from_millis(1_000);
 /// The width of the document status select.
 const STATUS_SELECT_WIDTH: Pixels = px(240.);
 /// The name column of a speaker row.
@@ -69,7 +77,8 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
     } else {
         for (project, depth) in rows {
             let selected = root.ui.selected_project.as_ref() == Some(project.id());
-            let display_status = if selected && root.ui.processing {
+            let processing = root.ui.processing_document() == Some(project.id());
+            let display_status = if processing {
                 ProjectStatus::Processing
             } else {
                 project.processing_status()
@@ -173,7 +182,17 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                                     tokens.sidebar
                                 },
                             )),
-                    ),
+                    )
+                    .children(processing.then(|| {
+                        let id = project.id().as_str().to_string();
+                        div()
+                            .debug_selector(move || format!("processing-indicator-{id}"))
+                            .ml(tokens.spacing.xs)
+                            .child(spinner(
+                                format!("processing-spinner-{}", project.id().as_str()),
+                                &tokens,
+                            ))
+                    })),
             )
             .child(status_line(
                 status_label(root.ui.locale, display_status),
@@ -256,8 +275,10 @@ fn main_panel(
 ) -> gpui::Div {
     let locale = root.ui.locale;
     let tokens = *theme::tokens(cx);
+    let processing_here =
+        project.is_some_and(|project| root.ui.processing_document() == Some(project.id()));
     let display_status = project.map(|project| {
-        if root.ui.processing {
+        if processing_here {
             ProjectStatus::Processing
         } else {
             project.processing_status()
@@ -276,14 +297,9 @@ fn main_panel(
     if let Some(project) = project {
         let ready = project.processing_status() == ProjectStatus::Ready;
         let audio_problem = root.audio.problem(project.id());
-        let process_label = tr(
-            locale,
-            if root.ui.processing {
-                "cancel"
-            } else {
-                "process"
-            },
-        );
+        let process_label = tr(locale, if processing_here { "cancel" } else { "process" });
+        // One foreground job at a time; another document's is under way.
+        let busy_elsewhere = root.ui.processing && !processing_here;
         let mode = root.ui.content_mode;
         let scroll = root.scroll.meeting_content.clone();
         let mut content = div()
@@ -384,7 +400,10 @@ fn main_panel(
                             .primary()
                             .compact()
                             // Missing audio cannot be processed; relink it.
-                            .disabled(!root.ui.processing && root.audio.missing(project.id()))
+                            .disabled(
+                                busy_elsewhere
+                                    || (!processing_here && root.audio.missing(project.id())),
+                            )
                             .on_click(cx.listener(RootView::process_or_cancel)),
                     )
                     .children(audio_problem.map(|_| {
@@ -404,6 +423,9 @@ fn main_panel(
                             .on_click(cx.listener(RootView::open_detail)),
                     ),
             );
+        if let Some(progress) = root.ui.progress.as_ref().filter(|_| processing_here) {
+            panel = panel.child(processing_progress(progress, locale, &tokens));
+        }
         // Summary and Edit always; the speaker-labelled original once
         // processed.
         let mut controls = RadioGroup::new("content-mode", tr(locale, "content_mode"))
@@ -471,6 +493,50 @@ fn main_panel(
                 state::model_status(&root.installation, locale)
             )),
     )
+}
+
+/// Where the foreground processing of the shown document is: its phase
+/// over a thin bar, which sweeps until a stage knows its extent.
+fn processing_progress(
+    progress: &ProcessingProgress,
+    locale: i18n::Locale,
+    tokens: &Tokens,
+) -> AnyElement {
+    let percent = progress.percent();
+    div()
+        .debug_selector(|| "processing-progress".into())
+        .flex_shrink_0()
+        .max_w(PROGRESS_WIDTH)
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.xs)
+        .child(
+            div()
+                .text_xs()
+                .text_color(tokens.text_muted)
+                .child(progress.phase(locale)),
+        )
+        .child(
+            ProgressBar::new("processing-progress-bar", tr(locale, "processing_progress"))
+                .value(percent.unwrap_or(0.))
+                .indeterminate(percent.is_none()),
+        )
+        .into_any_element()
+}
+
+/// A turning loader icon; still under reduced motion.
+fn spinner(id: impl Into<ElementId>, tokens: &Tokens) -> AnyElement {
+    let icon = svg()
+        .path("icons/loader-circle.svg")
+        .size(px(14.))
+        .text_color(tokens.text_muted);
+    if tokens.motion.layout.is_zero() {
+        return icon.into_any_element();
+    }
+    icon.with_animation(id, Animation::new(SPIN).repeat(), |icon, turn| {
+        icon.with_transformation(Transformation::rotate(percentage(turn)))
+    })
+    .into_any_element()
 }
 
 /// The speakers of the document above its transcript, each with its

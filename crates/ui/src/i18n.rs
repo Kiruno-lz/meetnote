@@ -131,6 +131,17 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "processing") => "处理中",
         (Locale::ZhCn, "failed") => "失败",
         (Locale::ZhCn, "ready_to_process") => "等待处理",
+        (Locale::ZhCn, "processing_progress") => "处理进度",
+        (Locale::ZhCn, "processing_preparing") => "正在准备……",
+        (Locale::ZhCn, "transcribing") => "正在转录",
+        (Locale::ZhCn, "transcription_done") => "转录完成",
+        (Locale::ZhCn, "transcription_failed") => "转录失败",
+        (Locale::ZhCn, "transcription_cancelled") => "转录已取消",
+        (Locale::ZhCn, "diarizing") => "正在分离说话人",
+        (Locale::ZhCn, "diarization_waiting") => "等待说话人分离",
+        (Locale::ZhCn, "diarization_done") => "说话人分离完成",
+        (Locale::ZhCn, "diarization_failed") => "说话人分离失败",
+        (Locale::ZhCn, "diarization_cancelled") => "说话人分离已取消",
         (Locale::ZhCn, "models_active") => "下载中",
         (Locale::ZhCn, "model_status") => "模型状态",
         (Locale::ZhCn, "ask_notice") => "助手输入已就绪；不会保存对话历史。",
@@ -467,6 +478,17 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "processing") => "Processing",
         (Locale::EnUs, "failed") => "Failed",
         (Locale::EnUs, "ready_to_process") => "Ready to process",
+        (Locale::EnUs, "processing_progress") => "Processing progress",
+        (Locale::EnUs, "processing_preparing") => "Preparing…",
+        (Locale::EnUs, "transcribing") => "Transcribing",
+        (Locale::EnUs, "transcription_done") => "Transcribed",
+        (Locale::EnUs, "transcription_failed") => "Transcription failed",
+        (Locale::EnUs, "transcription_cancelled") => "Transcription cancelled",
+        (Locale::EnUs, "diarizing") => "Identifying speakers",
+        (Locale::EnUs, "diarization_waiting") => "Waiting to identify speakers",
+        (Locale::EnUs, "diarization_done") => "Speakers identified",
+        (Locale::EnUs, "diarization_failed") => "Speaker identification failed",
+        (Locale::EnUs, "diarization_cancelled") => "Speaker identification cancelled",
         (Locale::EnUs, "models_active") => "Downloads active",
         (Locale::EnUs, "model_status") => "Model status",
         (Locale::EnUs, "ask_notice") => {
@@ -860,28 +882,10 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::EnUs, "diarization_model_required") => {
             format!("Select an installed diarization model for {value} first.")
         }
-        (Locale::ZhCn, "job_started") => format!("{value} 已开始……"),
-        (Locale::EnUs, "job_started") => format!("{value} started…"),
-        (Locale::ZhCn, "job_completed") => format!("{value} 已完成……"),
-        (Locale::EnUs, "job_completed") => format!("{value} completed…"),
-        (Locale::ZhCn, "job_cancelled") => format!("{value} 已取消……"),
-        (Locale::EnUs, "job_cancelled") => format!("{value} cancelled…"),
-        (Locale::ZhCn, "job_failed") => {
-            let mut parts = value.splitn(2, '|');
-            format!(
-                "{} 失败：{}",
-                parts.next().unwrap_or("Job"),
-                parts.next().unwrap_or(value)
-            )
-        }
-        (Locale::EnUs, "job_failed") => {
-            let mut parts = value.splitn(2, '|');
-            format!(
-                "{} failed: {}",
-                parts.next().unwrap_or("Job"),
-                parts.next().unwrap_or(value)
-            )
-        }
+        (Locale::ZhCn, "transcribing_count") => format!("正在转录 {value}"),
+        (Locale::EnUs, "transcribing_count") => format!("Transcribing {value}"),
+        (Locale::ZhCn, "diarizing_count") => format!("正在分离说话人 {value}"),
+        (Locale::EnUs, "diarizing_count") => format!("Identifying speakers {value}"),
         (Locale::ZhCn, "job_progress_total") => {
             let mut parts = value.splitn(3, '|');
             format!(
