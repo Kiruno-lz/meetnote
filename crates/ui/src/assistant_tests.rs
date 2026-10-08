@@ -472,6 +472,39 @@ fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
 }
 
 #[gpui::test]
+fn a_scene_tab_selects_and_explains_its_scene_and_leaves_focus_in_the_prompt(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, _) = open_assistant(cx, FakeAssistantUiService::default());
+    assert!(shown(cx, "assistant-scene-selected-ask".into()));
+    assert!(shown(cx, "assistant-scene-description-ask".into()));
+    let tabs = rendered(cx, "assistant-scene-group");
+    let description = rendered(cx, "assistant-scene-description-ask");
+    assert!(
+        description.top() >= tabs.bottom() && description.left() == tabs.left(),
+        "the explanation sits under the tabs"
+    );
+
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    focus_field(cx, &prompt);
+    click_selector(cx, "assistant-scene-organize");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.assistant.scene),
+        contracts::AgentScene::Organize
+    );
+    assert!(shown(cx, "assistant-scene-selected-organize".into()));
+    assert!(!shown(cx, "assistant-scene-selected-ask".into()));
+    assert!(shown(cx, "assistant-scene-description-organize".into()));
+    assert!(!shown(cx, "assistant-scene-description-ask".into()));
+    assert!(
+        cx.update(|window, cx| {
+            gpui::Focusable::focus_handle(prompt.read(cx), cx).contains_focused(window, cx)
+        }),
+        "a press on a tab leaves focus in the prompt"
+    );
+}
+
+#[gpui::test]
 fn the_scope_and_its_context_share_one_line_above_the_privacy_note(cx: &mut TestAppContext) {
     let (_view, cx, _) = open_assistant(cx, FakeAssistantUiService::default());
     cx.run_until_parked();

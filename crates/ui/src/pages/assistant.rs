@@ -4,12 +4,14 @@ use crate::{
         AssistantTaskState, AssistantUiError, PendingReviewState,
     },
     controller::RootView,
-    controls::{Button, RadioGroup, Region, Scrollbar},
+    controls::{Button, NavEntry, NavList, RadioGroup, Region, Scrollbar},
     i18n::{text as tr, Locale},
     theme::{self, BlurLevel, Tokens},
 };
 use contracts::AgentScene;
-use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Pixels, SharedString};
+use gpui::{
+    div, prelude::*, px, Context, FocusHandle, IntoElement, MouseButton, Pixels, SharedString,
+};
 
 pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
     let tokens = *theme::tokens(cx);
@@ -159,28 +161,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(tr(root.ui.locale, "assistant")),
         )
-        .child(
-            RadioGroup::new("assistant-scene", tr(root.ui.locale, "assistant_scene"))
-                .debug_selector(|| "assistant-scene-group".into())
-                .flex()
-                .flex_wrap()
-                .gap_2()
-                .options(
-                    [
-                        AgentScene::Ask,
-                        AgentScene::Organize,
-                        AgentScene::Partition,
-                        AgentScene::Extract,
-                        AgentScene::Move,
-                    ]
-                    .map(|scene| {
-                        (
-                            scene == root.assistant.scene,
-                            scene_button(scene, root.ui.locale, cx),
-                        )
-                    }),
-                ),
-        )
+        .child(scenes(root, &tokens, cx))
         .child(
             div()
                 .flex()
@@ -288,13 +269,88 @@ fn scope_button(scope: AssistantScopeMode, locale: Locale, cx: &mut Context<Root
         .on_click(cx.listener(move |root, _, _, cx| root.select_assistant_scope(scope, cx)))
 }
 
-fn scene_button(scene: AgentScene, locale: Locale, cx: &mut Context<RootView>) -> Button {
-    Button::new(
-        format!("assistant-scene-{}", scene.skill_id()),
-        tr(locale, scene_key(scene)),
-    )
-    .debug_selector(move || format!("assistant-scene-{}", scene.skill_id()))
-    .on_click(cx.listener(move |root, _, _, cx| root.select_assistant_scene(scene, cx)))
+/// The scenes in tab order.
+pub(crate) const SCENES: [AgentScene; 5] = [
+    AgentScene::Ask,
+    AgentScene::Organize,
+    AgentScene::Partition,
+    AgentScene::Extract,
+    AgentScene::Move,
+];
+
+/// The scene tabs, quieter than the send button, with what the selected
+/// scene does underneath.
+fn scenes(root: &RootView, tokens: &Tokens, cx: &mut Context<RootView>) -> gpui::Div {
+    let locale = root.ui.locale;
+    let current = root.assistant.scene;
+    let focus = &root.assistant_scene_focus;
+    div()
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.xs)
+        .child(
+            NavList::new("assistant-scene", tr(locale, "assistant_scene"))
+                .debug_selector(|| "assistant-scene-group".into())
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(tokens.spacing.xs)
+                .children(SCENES.iter().zip(focus).map(|(&scene, focus)| {
+                    scene_tab(scene, scene == current, focus, locale, tokens, cx)
+                })),
+        )
+        .child(
+            div()
+                .debug_selector(move || {
+                    format!("assistant-scene-description-{}", current.skill_id())
+                })
+                .px(tokens.spacing.md)
+                .text_sm()
+                .text_color(tokens.text_muted)
+                .child(tr(locale, scene_description_key(current))),
+        )
+}
+
+/// A scene's tab. A press selects the scene and leaves focus where it was,
+/// so typing in the prompt goes on.
+fn scene_tab(
+    scene: AgentScene,
+    selected: bool,
+    focus: &FocusHandle,
+    locale: Locale,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> NavEntry {
+    let id = scene.skill_id();
+    let label = tr(locale, scene_key(scene));
+    NavEntry::new(format!("assistant-scene-{id}"), label, focus)
+        .debug_selector(move || format!("assistant-scene-{id}"))
+        .selected(selected)
+        .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+        .on_click(cx.listener(move |root, _, _, cx| root.select_assistant_scene(scene, cx)))
+        .child(
+            div()
+                .when(selected, |label| {
+                    label.debug_selector(move || format!("assistant-scene-selected-{id}"))
+                })
+                .text_color(if selected {
+                    tokens.text
+                } else {
+                    tokens.text_muted
+                })
+                .child(label),
+        )
+}
+
+/// One sentence on what a scene does with the documents in scope.
+fn scene_description_key(scene: AgentScene) -> &'static str {
+    match scene {
+        AgentScene::Ask => "assistant_scene_ask_description",
+        AgentScene::Organize => "assistant_scene_organize_description",
+        AgentScene::Partition => "assistant_scene_partition_description",
+        AgentScene::Extract => "assistant_scene_extract_description",
+        AgentScene::Move => "assistant_scene_move_description",
+    }
 }
 
 fn scene_key(scene: AgentScene) -> &'static str {

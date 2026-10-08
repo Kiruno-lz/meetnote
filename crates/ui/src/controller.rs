@@ -537,6 +537,8 @@ pub(crate) struct RootView {
     pub(crate) detail_trigger: FocusHandle,
     /// The awaiting review's card on the Assistant page.
     pub(crate) review_focus: FocusHandle,
+    /// The Assistant page's scene tabs, in `pages::assistant::SCENES` order.
+    pub(crate) assistant_scene_focus: [FocusHandle; 5],
     /// Moves focus to the awaiting review on the next render.
     review_focus_request: Option<ReviewFocus>,
     /// Scanner issues of the documents directory, as the last project-list
@@ -725,6 +727,7 @@ impl RootView {
             detail_focus: cx.focus_handle(),
             detail_trigger: cx.focus_handle(),
             review_focus: cx.focus_handle(),
+            assistant_scene_focus: std::array::from_fn(|_| cx.focus_handle()),
             review_focus_request: None,
             document_issues: Vec::new(),
             editor,
