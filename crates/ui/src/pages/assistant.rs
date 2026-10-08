@@ -496,15 +496,6 @@ fn revision_text(revision: Option<u64>) -> String {
     revision.map_or_else(|| "—".into(), |revision| format!("r{revision}"))
 }
 
-fn info_line(label: &'static str, value: String, tokens: &Tokens) -> gpui::Div {
-    div()
-        .flex()
-        .gap_2()
-        .text_sm()
-        .child(div().text_color(tokens.text_muted).child(label))
-        .child(value)
-}
-
 /// The task label's selector, for tests to find the state the page shows.
 fn task_selector(task: &AssistantTaskState) -> &'static str {
     match task {
@@ -569,8 +560,9 @@ fn render_request(request: String, tokens: &Tokens) -> gpui::AnyElement {
         .into_any_element()
 }
 
-/// The run's answer, evidence, model route, usage, diagnostics and every
-/// warning it returned.
+/// The run's answer and every warning it returned, with what the run
+/// reported about itself (evidence, model, tokens, diagnostics) in small
+/// print underneath.
 fn render_result(
     result: AssistantRunResult,
     warnings: Vec<AssistantUiError>,
@@ -581,46 +573,7 @@ fn render_result(
         .answer
         .clone()
         .unwrap_or_else(|| tr(locale, "assistant_no_answer").into());
-    let evidence = if result.evidence_segment_ids.is_empty() {
-        tr(locale, "assistant_no_evidence").into()
-    } else {
-        result.evidence_segment_ids.join(", ")
-    };
-    let model_route = format!(
-        "{} → {}",
-        result.requested_model.as_deref().unwrap_or("—"),
-        result.resolved_model.as_deref().unwrap_or("—")
-    );
-    let usage = result
-        .usage
-        .map(|usage| {
-            format!(
-                "{} / {} / {} · USD {}",
-                usage.input_tokens,
-                usage.output_tokens,
-                usage.total_tokens,
-                usage
-                    .cost_microusd
-                    .map(|cost| format!("{:.6}", cost as f64 / 1_000_000.0))
-                    .unwrap_or_else(|| "—".into())
-            )
-        })
-        .unwrap_or_else(|| "—".into());
-    let diagnostics = result
-        .diagnostics
-        .as_ref()
-        .map(|diagnostics| {
-            format!(
-                "{} · tools={} · retries={} · segments={} · input={}B · {}ms",
-                diagnostics.path,
-                diagnostics.tool_rounds,
-                diagnostics.validation_retries,
-                diagnostics.input_segments,
-                diagnostics.input_bytes,
-                diagnostics.elapsed_ms,
-            )
-        })
-        .unwrap_or_else(|| "—".into());
+    let details = result_details(locale, &result);
     let tokens = *theme::tokens(cx);
 
     div()
@@ -631,31 +584,83 @@ fn render_result(
         .p_4()
         .flex()
         .flex_col()
-        .gap_2()
-        .child(div().text_lg().child(answer))
-        .child(info_line(
-            tr(locale, "assistant_evidence"),
-            evidence,
-            &tokens,
-        ))
-        .child(info_line(
-            tr(locale, "assistant_model_route"),
-            model_route,
-            &tokens,
-        ))
-        .child(info_line(tr(locale, "assistant_usage"), usage, &tokens))
-        .child(info_line(
-            tr(locale, "assistant_diagnostics"),
-            diagnostics,
-            &tokens,
-        ))
+        .gap_3()
+        .child(div().text_base().child(answer))
         .children(
             warnings
                 .into_iter()
                 .enumerate()
                 .map(|(index, warning)| render_warning(index, warning, locale, &tokens)),
         )
+        .when(!details.is_empty(), |card| {
+            card.child(
+                div()
+                    .debug_selector(|| "assistant-result-details".into())
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .text_xs()
+                    .text_color(tokens.text_subtle)
+                    .children(details.into_iter().map(|(label, value)| {
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(div().flex_shrink_0().child(label))
+                            .child(div().min_w_0().text_color(tokens.text_muted).child(value))
+                    })),
+            )
+        })
         .into_any_element()
+}
+
+/// What the run reported about itself, each with its label; what it
+/// did not report is left out rather than shown as a dash.
+fn result_details(locale: Locale, result: &AssistantRunResult) -> Vec<(&'static str, String)> {
+    let mut details = Vec::new();
+    if !result.evidence_segment_ids.is_empty() {
+        details.push((
+            tr(locale, "assistant_evidence"),
+            result.evidence_segment_ids.join(", "),
+        ));
+    }
+    let model = match (
+        result.requested_model.as_deref(),
+        result.resolved_model.as_deref(),
+    ) {
+        (Some(requested), Some(resolved)) if requested != resolved => {
+            Some(format!("{requested} → {resolved}"))
+        }
+        (Some(model), _) | (None, Some(model)) => Some(model.to_owned()),
+        (None, None) => None,
+    };
+    if let Some(model) = model {
+        details.push((tr(locale, "assistant_model_route"), model));
+    }
+    if let Some(usage) = result.usage {
+        let mut text = format!(
+            "{} / {} / {}",
+            usage.input_tokens, usage.output_tokens, usage.total_tokens
+        );
+        if let Some(cost) = usage.cost_microusd {
+            text.push_str(&format!(" · USD {:.6}", cost as f64 / 1_000_000.0));
+        }
+        details.push((tr(locale, "assistant_usage"), text));
+    }
+    if let Some(diagnostics) = &result.diagnostics {
+        details.push((
+            tr(locale, "assistant_diagnostics"),
+            format!(
+                "{} · tools={} · retries={} · segments={} · input={}B · {}ms",
+                diagnostics.path,
+                diagnostics.tool_rounds,
+                diagnostics.validation_retries,
+                diagnostics.input_segments,
+                diagnostics.input_bytes,
+                diagnostics.elapsed_ms,
+            ),
+        ));
+    }
+    details
 }
 
 /// Every write the run applied, each with its own undo entry; kept after
@@ -1788,6 +1793,57 @@ mod tests {
             range_text(Locale::EnUs, &range, &pending_titles),
             "Transcript seg-014 – seg-020 → “决策与行动项”"
         );
+    }
+
+    #[test]
+    fn run_details_leave_out_what_the_run_did_not_report() {
+        let mut result = AssistantRunResult {
+            answer: Some("answer".into()),
+            warning: None,
+            warnings: Vec::new(),
+            evidence_segment_ids: Vec::new(),
+            usage: None,
+            requested_model: None,
+            resolved_model: None,
+            mutation: None,
+            mutations: Vec::new(),
+            pending: None,
+            pending_reviews: Vec::new(),
+            diagnostics: None,
+        };
+        assert!(
+            result_details(Locale::EnUs, &result).is_empty(),
+            "no dashes for nothing"
+        );
+
+        result.evidence_segment_ids = vec!["seg-001".into(), "seg-014".into()];
+        result.requested_model = Some("assistant-default".into());
+        result.resolved_model = Some("assistant-default".into());
+        result.usage = Some(crate::assistant_ui::AssistantUsage {
+            input_tokens: 1_840,
+            output_tokens: 260,
+            total_tokens: 2_100,
+            cost_microusd: None,
+        });
+        assert_eq!(
+            result_details(Locale::EnUs, &result),
+            [
+                ("Evidence segments", "seg-001, seg-014".to_owned()),
+                ("Model", "assistant-default".to_owned()),
+                ("Input/output/total tokens", "1840 / 260 / 2100".to_owned()),
+            ]
+        );
+
+        result.resolved_model = Some("gpt-x".into());
+        result.usage = result
+            .usage
+            .map(|usage| crate::assistant_ui::AssistantUsage {
+                cost_microusd: Some(25),
+                ..usage
+            });
+        let details = result_details(Locale::EnUs, &result);
+        assert_eq!(details[1].1, "assistant-default → gpt-x");
+        assert_eq!(details[2].1, "1840 / 260 / 2100 · USD 0.000025");
     }
 
     #[test]
