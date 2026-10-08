@@ -63,7 +63,16 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "empty_meetings") => "导入音频以创建项目。",
         (Locale::ZhCn, "project_detail") => "项目详情",
         (Locale::ZhCn, "close_detail") => "关闭详情",
-        (Locale::ZhCn, "catalog_description") => "模型目录、安装状态和下载任务",
+        (Locale::ZhCn, "models_ready") => "语音识别和说话人分离模型均已就绪",
+        (Locale::ZhCn, "models_asr_not_ready") => {
+            "语音识别模型尚未就绪，可在下方下载或到设置中选择"
+        }
+        (Locale::ZhCn, "models_diarization_not_ready") => {
+            "说话人分离模型尚未就绪，可在下方下载或到设置中选择"
+        }
+        (Locale::ZhCn, "models_not_ready") => {
+            "语音识别和说话人分离模型尚未就绪，可在下方下载或到设置中选择"
+        }
         (Locale::ZhCn, "download") => "下载",
         (Locale::ZhCn, "downloaded") => "已下载",
         (Locale::ZhCn, "not_downloaded") => "未下载",
@@ -172,8 +181,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "runtime_description") => "控制本地推理使用的计算设备",
         (Locale::ZhCn, "settings_description") => "后端、模型、运行设备和界面语言",
         (Locale::ZhCn, "saved_automatically") => "设置会在选择后自动保存",
-        (Locale::ZhCn, "models_count") => "个模型",
-        (Locale::ZhCn, "download_queue") => "下载任务",
         (Locale::ZhCn, "pause") => "暂停",
         (Locale::ZhCn, "resume") => "继续",
         (Locale::ZhCn, "empty_request") => "发送前请输入内容。",
@@ -399,7 +406,18 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "empty_meetings") => "Import audio to create a project.",
         (Locale::EnUs, "project_detail") => "PROJECT DETAIL",
         (Locale::EnUs, "close_detail") => "Close detail",
-        (Locale::EnUs, "catalog_description") => "Catalog, installation state, and download tasks",
+        (Locale::EnUs, "models_ready") => {
+            "Speech recognition and speaker diarization models are ready"
+        }
+        (Locale::EnUs, "models_asr_not_ready") => {
+            "The speech recognition model is not ready. Download one below or choose one in Settings."
+        }
+        (Locale::EnUs, "models_diarization_not_ready") => {
+            "The speaker diarization model is not ready. Download one below or choose one in Settings."
+        }
+        (Locale::EnUs, "models_not_ready") => {
+            "Speech recognition and speaker diarization models are not ready. Download them below or choose them in Settings."
+        }
         (Locale::EnUs, "download") => "Download",
         (Locale::EnUs, "downloaded") => "Downloaded",
         (Locale::EnUs, "not_downloaded") => "Not downloaded",
@@ -524,8 +542,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
             "Backends, models, compute device, and interface language"
         }
         (Locale::EnUs, "saved_automatically") => "Settings are saved automatically after selection",
-        (Locale::EnUs, "models_count") => "models",
-        (Locale::EnUs, "download_queue") => "Download tasks",
         (Locale::EnUs, "pause") => "Pause",
         (Locale::EnUs, "resume") => "Resume",
         (Locale::EnUs, "empty_request") => "Type a request before sending it.",
@@ -1442,6 +1458,14 @@ pub fn probe_record_error(locale: Locale, error: &ProbeRecordError) -> String {
         Locale::EnUs => {
             format!("Cannot read the probe record {path}: {reason}. The next probe replaces it.")
         }
+    }
+}
+
+/// How many of a model family's models are downloaded.
+pub fn model_family_installed(locale: Locale, installed: usize, total: usize) -> String {
+    match locale {
+        Locale::ZhCn => format!("已下载 {installed} / {total}"),
+        Locale::EnUs => format!("{installed} of {total} downloaded"),
     }
 }
 

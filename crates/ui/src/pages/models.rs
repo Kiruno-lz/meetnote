@@ -60,8 +60,12 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         for (family, entries) in groups {
             let expanded = root.ui.expanded_model_families.contains(&family);
             let family_for_click = family.clone();
-            let model_count = entries.len();
             let locale = root.ui.locale;
+            let states = entries
+                .iter()
+                .map(|entry| entry.install_state)
+                .collect::<Vec<_>>();
+            let (summary, complete) = family_summary(locale, &states);
             let downloads = &downloads;
             let cards = entries
                 .into_iter()
@@ -81,33 +85,53 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                     Collapsible::new(format!("model-family-{family}"), family.clone())
                         .debug_selector(|| format!("model-family-{family}"))
                         .open(expanded)
-                        .p_4()
+                        .px(tokens.spacing.lg)
+                        .py(tokens.spacing.md)
                         .flex()
                         .items_center()
                         .justify_between()
+                        .gap(tokens.spacing.md)
                         .on_toggle(cx.listener(move |this, _, _, cx| {
                             this.toggle_model_family(family_for_click.clone(), cx)
                         }))
                         .child(
                             div()
+                                .min_w_0()
                                 .flex()
                                 .items_center()
-                                .gap_2()
-                                .child(if expanded { "▾" } else { "▸" })
-                                .child(div().text_lg().child(family.clone())),
+                                .gap(tokens.spacing.sm)
+                                .child(div().text_color(tokens.text_muted).child(if expanded {
+                                    "▾"
+                                } else {
+                                    "▸"
+                                }))
+                                .child(
+                                    div()
+                                        .text_lg()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(family.clone()),
+                                ),
                         )
-                        .child(div().text_sm().text_color(tokens.text_muted).child(format!(
-                            "{} {}",
-                            model_count,
-                            tr(locale, "models_count")
-                        )))
+                        .child({
+                            let selector = format!("model-family-summary-{family}");
+                            div()
+                                .debug_selector(move || selector.clone())
+                                .flex_none()
+                                .text_sm()
+                                .text_color(if complete {
+                                    tokens.success
+                                } else {
+                                    tokens.text_muted
+                                })
+                                .child(summary)
+                        })
                         .content(
                             div()
-                                .px_4()
-                                .pb_4()
+                                .px(tokens.spacing.lg)
+                                .pb(tokens.spacing.lg)
                                 .flex()
                                 .flex_col()
-                                .gap_3()
+                                .gap(tokens.spacing.md)
                                 .children(cards),
                         ),
                 );
@@ -133,10 +157,11 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         )
         .child(
             div()
+                .debug_selector(|| "models-readiness".into())
                 .flex_shrink_0()
                 .text_sm()
                 .text_color(tokens.text_muted)
-                .child(tr(root.ui.locale, "catalog_description")),
+                .child(readiness_text(&root.installation, root.ui.locale)),
         )
         // The scrollbar stays outside the fade.
         .child(
@@ -155,6 +180,42 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .text_color(tokens.text_muted)
                 .child(root.ui.notice.clone()),
         )
+}
+
+/// Whether the default models can process audio, and if not which are
+/// missing and where to get them.
+pub(crate) fn readiness_text(
+    installation: &application::InstallationState,
+    locale: Locale,
+) -> &'static str {
+    tr(
+        locale,
+        readiness_key(
+            installation.default_asr_ready,
+            installation.default_diarization_ready,
+        ),
+    )
+}
+
+fn readiness_key(asr_ready: bool, diarization_ready: bool) -> &'static str {
+    match (asr_ready, diarization_ready) {
+        (true, true) => "models_ready",
+        (false, true) => "models_asr_not_ready",
+        (true, false) => "models_diarization_not_ready",
+        (false, false) => "models_not_ready",
+    }
+}
+
+/// How many of a family's models are downloaded, and whether all are.
+pub(crate) fn family_summary(locale: Locale, states: &[ModelInstallState]) -> (String, bool) {
+    let installed = states
+        .iter()
+        .filter(|state| **state == ModelInstallState::Installed)
+        .count();
+    (
+        i18n::model_family_installed(locale, installed, states.len()),
+        !states.is_empty() && installed == states.len(),
+    )
 }
 
 /// A catalog model's card: its name with the install status and its one
@@ -1024,6 +1085,68 @@ mod tests {
             artifact_count: 2,
             eta_seconds: Some(9),
             retry_count: 0,
+        }
+    }
+
+    #[test]
+    fn the_readiness_line_names_the_default_models_that_are_not_ready() {
+        let mut sentences = std::collections::BTreeSet::new();
+        for (asr, diarization, chinese) in [
+            (true, true, "语音识别和说话人分离模型均已就绪"),
+            (
+                false,
+                true,
+                "语音识别模型尚未就绪，可在下方下载或到设置中选择",
+            ),
+            (
+                true,
+                false,
+                "说话人分离模型尚未就绪，可在下方下载或到设置中选择",
+            ),
+            (
+                false,
+                false,
+                "语音识别和说话人分离模型尚未就绪，可在下方下载或到设置中选择",
+            ),
+        ] {
+            let installation = application::InstallationState {
+                default_asr_ready: asr,
+                default_diarization_ready: diarization,
+                ..Default::default()
+            };
+            assert_eq!(readiness_text(&installation, Locale::ZhCn), chinese);
+            let english = readiness_text(&installation, Locale::EnUs);
+            assert!(english.is_ascii() && sentences.insert(english), "{english}");
+        }
+    }
+
+    #[test]
+    fn a_family_counts_its_downloaded_models_and_is_complete_once_all_are() {
+        use ModelInstallState::{Installed, Missing, Partial};
+        for (states, chinese, english, complete) in [
+            (&[Installed][..], "已下载 1 / 1", "1 of 1 downloaded", true),
+            (
+                &[Installed, Partial],
+                "已下载 1 / 2",
+                "1 of 2 downloaded",
+                false,
+            ),
+            (
+                &[Missing, Missing],
+                "已下载 0 / 2",
+                "0 of 2 downloaded",
+                false,
+            ),
+            (&[], "已下载 0 / 0", "0 of 0 downloaded", false),
+        ] {
+            assert_eq!(
+                family_summary(Locale::ZhCn, states),
+                (chinese.to_string(), complete)
+            );
+            assert_eq!(
+                family_summary(Locale::EnUs, states),
+                (english.to_string(), complete)
+            );
         }
     }
 

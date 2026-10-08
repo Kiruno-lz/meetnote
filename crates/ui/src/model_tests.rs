@@ -14,7 +14,7 @@
 
 use crate::controller::{ModelService, ReprobeWait};
 use crate::document_tests::{leak, rendered, within, View};
-use crate::pages::models::{model_facts, FactRow, ModelFacts};
+use crate::pages::models::{family_summary, model_facts, readiness_text, FactRow, ModelFacts};
 use crate::route::Route;
 use crate::tests::{
     assert_ui_responsive_while_held, click_selector, desktop_services, hold_a_worker_alone,
@@ -603,6 +603,65 @@ fn a_running_download_shows_its_progress_with_pause_or_resume_and_cancel_in_the_
             ("cancel", DownloadId(8)),
             ("pause", DownloadId(7)),
             ("resume", DownloadId(8)),
+        ]
+    );
+}
+
+#[gpui::test]
+fn the_page_says_whether_the_default_models_are_ready_and_each_family_what_is_downloaded(
+    cx: &mut TestAppContext,
+) {
+    let models = FakeModels::new(catalog(vec![
+        bundle_asr(),
+        native_diarization(),
+        candidate_asr(),
+    ]));
+    let state = published(vec![
+        availability(bundle_asr(), ModelInstallState::Installed),
+        availability(native_diarization(), ModelInstallState::Partial),
+        availability(candidate_asr(), ModelInstallState::Missing),
+    ]);
+    state.lock().unwrap().default_asr_ready = true;
+    let (view, cx) = open_models(cx, models, &state, test_settings());
+
+    // The line under the title answers whether audio can be processed.
+    let page = rendered(cx, "models-page");
+    let readiness = rendered(cx, "models-readiness");
+    assert!(within(readiness, page));
+    assert_eq!(
+        view.read_with(cx, |root, _| readiness_text(
+            &root.installation,
+            root.ui.locale
+        )),
+        "说话人分离模型尚未就绪，可在下方下载或到设置中选择"
+    );
+
+    // Each family header ends with how many of its models are downloaded.
+    for family in ["a-bundle", "b-native", "c-candidate"] {
+        let header = rendered(cx, leak(format!("model-family-{family}")));
+        let summary = rendered(cx, leak(format!("model-family-summary-{family}")));
+        assert!(
+            within(summary, header) && summary.left() > header.center().x,
+            "{family}: the summary ends the header"
+        );
+    }
+    let summaries = view.read_with(cx, |root, _| {
+        ["a-bundle", "b-native"].map(|family| {
+            let states = root
+                .installation
+                .catalog
+                .iter()
+                .filter(|entry| entry.model.model_family == family)
+                .map(|entry| entry.install_state)
+                .collect::<Vec<_>>();
+            family_summary(root.ui.locale, &states)
+        })
+    });
+    assert_eq!(
+        summaries,
+        [
+            ("已下载 1 / 1".to_string(), true),
+            ("已下载 0 / 1".to_string(), false)
         ]
     );
 }
