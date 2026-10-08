@@ -97,13 +97,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 root.ui.locale,
                 &tokens,
             )
-        }))
-        .child(
-            div()
-                .text_xs()
-                .text_color(tokens.text_subtle)
-                .child(root.ui.notice.clone()),
-        );
+        }));
     let input_bar = div()
         .flex()
         .flex_col()

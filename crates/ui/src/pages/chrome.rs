@@ -5,10 +5,10 @@
 
 use crate::{
     controller::RootView,
-    controls::{sidebar::SidebarPanel, window::DragStrip, Button, NavEntry, NavList},
-    i18n::text as tr,
+    controls::{sidebar::SidebarPanel, window::DragStrip, Button, NavEntry, NavList, Toast},
+    i18n::{text as tr, Locale},
     route::Route,
-    theme,
+    state, theme,
 };
 use gpui::{
     div, point, prelude::*, px, size, AnyElement, Context, FocusHandle, IntoElement, Pixels, Point,
@@ -50,8 +50,14 @@ pub(crate) fn shell(
     if folding && secondary {
         window.request_animation_frame();
     }
+    let toast = root
+        .ui
+        .toast()
+        .cloned()
+        .map(|toast| notice_toast(toast, root.ui.locale, cx));
     let plane = div()
         .debug_selector(|| "content-plane".into())
+        .relative()
         .flex_1()
         .min_w_0()
         .min_h_0()
@@ -67,7 +73,8 @@ pub(crate) fn shell(
             }
         })
         .child(div().flex_1().min_w_0().h_full().flex().child(body))
-        .children(detail);
+        .children(detail)
+        .children(toast);
     let mut frame = div()
         .debug_selector(|| "inner-frame".into())
         .flex_1()
@@ -208,6 +215,34 @@ fn rail(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
                 .on_click(cx.listener(RootView::import_audio)),
         )
         .child(div().h(tokens.spacing.sm))
+}
+
+/// The latest notice's toast, centered at the top of the content plane,
+/// clear of the Assistant's input bar at its bottom.
+fn notice_toast(toast: state::Toast, locale: Locale, cx: &mut Context<RootView>) -> gpui::Div {
+    let tokens = *theme::tokens(cx);
+    let generation = toast.generation;
+    let mut card = Toast::new(
+        ("notice-toast", generation),
+        state::toast_text(&toast.notice).to_string(),
+        toast.tone,
+    )
+    .leaving(toast.leaving);
+    if !toast.tone.fades() {
+        card = card.on_close(
+            tr(locale, "dismiss_notice"),
+            cx.listener(move |this, _, _, cx| this.dismiss_toast(generation, cx)),
+        );
+    }
+    div()
+        .absolute()
+        .top(tokens.spacing.md)
+        .left_0()
+        .right_0()
+        .px(tokens.spacing.lg)
+        .flex()
+        .justify_center()
+        .child(card)
 }
 
 fn secondary_sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> AnyElement {

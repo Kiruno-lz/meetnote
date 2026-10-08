@@ -21,6 +21,8 @@
 //!   items with the arrow keys and moves the selected item with Option and
 //!   the arrows.
 //! - `Region`: a labelled group that holds focus.
+//! - `Toast`: a frosted card showing one notice, with its tone's icon and,
+//!   when it stays until closed, a close button.
 //! - `Separator` and `Scrollbar`: a hairline divider and a scroll area's
 //!   scrollbar; neither is focusable, so neither takes a label.
 //! - `window`: the window's first layer, which moves focus on Tab, cycles
@@ -43,6 +45,7 @@ mod separator;
 pub(crate) mod sidebar;
 mod text_area;
 mod text_field;
+mod toast;
 pub(crate) mod tree;
 pub(crate) mod window;
 
@@ -60,12 +63,13 @@ pub(crate) use text_area::TextArea;
 #[cfg(test)]
 pub(crate) use text_field::FieldInput;
 pub(crate) use text_field::{TextField, TextFieldEvent};
+pub(crate) use toast::Toast;
 pub(crate) use tree::{Tree, TreeItem, TreeShift, TreeStep};
 
 use crate::theme::Tokens;
 use gpui::{
     canvas, div, prelude::*, px, Animation, AnimationExt as _, AnyElement, BoxShadow, Div,
-    FocusHandle, Pixels, Window,
+    ElementId, FocusHandle, Pixels, Window,
 };
 use std::time::Duration;
 
@@ -141,7 +145,12 @@ impl KeyboardArrival {
 /// overlay's entrance changes only its opacity and position, never its size
 /// or blur radius, so no blur kernel or texture is rebuilt per frame. The
 /// motion tokens are zero under reduced motion, which shows it at once.
-fn entrance(id: &'static str, element: Div, duration: Duration, rise: Pixels) -> AnyElement {
+fn entrance(
+    id: impl Into<ElementId>,
+    element: Div,
+    duration: Duration,
+    rise: Pixels,
+) -> AnyElement {
     if duration.is_zero() {
         return element.into_any_element();
     }
@@ -590,9 +599,10 @@ mod tests {
             }
         }
         // Button, Collapsible, ConfirmDialog, Dropdown, NavEntry, NavList,
-        // ProgressBar, Region, TextArea, TextField's plain and secret
-        // constructors, Tree and TreeItem.
-        assert_eq!(constructors, 15, "a wrapper constructor was added or lost");
+        // ProgressBar, RadioGroup, Region, SidebarPanel, TextArea,
+        // TextField's plain and secret constructors, Toast, Tree and
+        // TreeItem.
+        assert_eq!(constructors, 16, "a wrapper constructor was added or lost");
         assert!(
             unnamed.is_empty(),
             "constructors without a name: {unnamed:#?}"

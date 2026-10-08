@@ -13,7 +13,7 @@ use crate::{
     i18n, pages,
     route::Route,
     speakers::{document_speakers, NameEntry, NameRows, SpeakerConfirmation, SpeakerProfiles},
-    state::{ContentMode, UiState},
+    state::{ContentMode, NoticeChange, NoticeTone, UiState, TOAST_LIFETIME},
     theme,
 };
 use application::{
@@ -741,6 +741,8 @@ impl RootView {
             documents_root_switch: DocumentsRootSwitch::default(),
             model_reprobes: Default::default(),
         };
+        // Every update that sets a notice opens its toast.
+        cx.observe_self(Self::take_up_notice).detach();
         // The tree and the Speaker Library stay empty until they load on
         // workers.
         this.reload_projects(cx);
@@ -1378,7 +1380,12 @@ impl RootView {
                 (message, true)
             }
         };
-        self.ui.notice = message.clone();
+        let tone = if failed {
+            NoticeTone::Error
+        } else {
+            NoticeTone::Success
+        };
+        self.ui.set_notice(tone, message.clone());
         self.documents_root_switch.status = Some((message, failed));
         cx.notify();
     }
@@ -3598,7 +3605,10 @@ impl RootView {
                         this.reload_projects(cx);
                     }
                     Err(error) => {
-                        this.ui.notice = i18n::audio_source_error(locale, &error);
+                        this.ui.set_notice(
+                            NoticeTone::Error,
+                            i18n::audio_source_error(locale, &error),
+                        );
                         if let AudioSourceError::RevisionConflict {
                             document_id,
                             expected,
@@ -4364,6 +4374,51 @@ fn stage_selection<'a>(options: &'a [SelectOption], saved: Option<&'a str>) -> O
     saved
         .filter(|saved| SelectOption::position(options, Some(saved)).is_some())
         .or_else(|| options.first().map(SelectOption::value))
+}
+
+/// The toast of the latest notice. Its timers end only the toast they
+/// were started for, so a newer notice needs none of them cancelled.
+impl RootView {
+    /// Takes up a notice set since the last update: a toast that opens
+    /// fades after `TOAST_LIFETIME` unless its tone keeps it, and a cleared
+    /// notice closes its toast.
+    fn take_up_notice(&mut self, cx: &mut Context<Self>) {
+        match self.ui.take_up_notice() {
+            Some(NoticeChange::Opened { generation, tone }) if tone.fades() => {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(TOAST_LIFETIME).await;
+                    this.update(cx, |this, cx| this.dismiss_toast(generation, cx))
+                        .ok();
+                })
+                .detach();
+            }
+            Some(NoticeChange::Cleared(generation)) => self.dismiss_toast(generation, cx),
+            _ => {}
+        }
+    }
+
+    /// Fades out the toast of `generation`, then removes it and clears its
+    /// notice.
+    pub(crate) fn dismiss_toast(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if !self.ui.toast_leave(generation) {
+            return;
+        }
+        let fade = theme::tokens(cx).motion.menu;
+        if fade.is_zero() {
+            self.ui.toast_remove(generation);
+        } else {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(fade).await;
+                this.update(cx, |this, cx| {
+                    this.ui.toast_remove(generation);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        cx.notify();
+    }
 }
 
 impl Render for RootView {
