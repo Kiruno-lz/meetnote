@@ -50,6 +50,11 @@ pub enum Overlay {
     /// On Settings: keyboard focus on the theme select, reached with Tab
     /// from the Settings entry.
     FocusedSelect,
+    /// The toast of a notice that fades: an import that succeeded.
+    SuccessToast,
+    /// The toast of a notice that stays until closed: an import that
+    /// failed.
+    ErrorToast,
 }
 
 /// A receipt of the fixture run: `document` moved from `revision` to the
@@ -338,6 +343,18 @@ impl MainWindow {
                     .scroll_to_top_of_item(crate::pages::assistant::RECEIPTS_ITEM);
                 cx.notify();
             }
+            Overlay::SuccessToast => {
+                root.ui.notice = crate::i18n::message(root.ui.locale, "imported", "产品周会");
+                cx.notify();
+            }
+            Overlay::ErrorToast => {
+                root.ui.notice = crate::i18n::message(
+                    root.ui.locale,
+                    "import_failed",
+                    "无法解码 weekly-sync.m4a：不支持的编码",
+                );
+                cx.notify();
+            }
             Overlay::WorkspaceBusy => {
                 let busy = application::DocumentsRootError::WorkspaceBusy {
                     job_ids: vec![runtime::JobId(1), runtime::JobId(2)],
@@ -392,6 +409,10 @@ impl MainWindow {
             }
             Overlay::MissingAudio(_) => {
                 root.ui.detail_open = false;
+                cx.notify();
+            }
+            Overlay::SuccessToast | Overlay::ErrorToast => {
+                root.ui.notice.clear();
                 cx.notify();
             }
             Overlay::WorkspaceBusy => {
