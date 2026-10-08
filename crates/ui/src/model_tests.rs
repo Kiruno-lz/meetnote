@@ -1,8 +1,9 @@
 //! L2: the Models route's diagnosis of each catalog model — its name, status
-//! and one action in the header row; task, size, VRAM, backends, license,
-//! source and checksum; the latest probe record; a failed download or probe
-//! with its localized reason and retry; an unreadable probe record — and the
-//! re-probe of an installed model.
+//! and one action in the header row; task, size, VRAM, backends, license and
+//! the source's short form, with the full source and checksums in its
+//! details; the latest probe record; a failed download or probe with its
+//! localized reason and retry; an unreadable probe record — and the re-probe
+//! of an installed model.
 //!
 //! Most tests render installation states they build, as
 //! `InstallationService` would publish them, through a probe that returns
@@ -390,7 +391,7 @@ fn assert_in_header(cx: &mut VisualTestContext, name: &str, model_id: &str) {
 }
 
 #[gpui::test]
-fn every_card_leads_with_its_name_status_and_action_over_one_quiet_line_of_facts(
+fn every_card_leads_with_its_name_status_and_action_over_quiet_facts_and_its_source(
     cx: &mut TestAppContext,
 ) {
     let models = [bundle_asr(), native_diarization(), candidate_asr()];
@@ -416,22 +417,23 @@ fn every_card_leads_with_its_name_status_and_action_over_one_quiet_line_of_facts
             "facts",
             "license",
             "source",
-            "checksum",
             "details-toggle",
         ] {
             let fact = rendered(cx, selector(name, &model.id));
             assert!(within(fact, card), "{name} of {} is on its card", model.id);
         }
+        // Checksums wait in the details.
+        assert!(!shown(cx, "checksum", &model.id));
         let facts = facts(cx, &view, &model.id);
         assert_eq!(facts.license, model.license);
-        assert_eq!(facts.source, model.source, "the full source, faded");
+        assert_eq!(facts.source_url, model.source, "the full source in details");
         assert!(
             !facts.summary.contains(':') && !facts.summary.contains('：'),
             "facts read without labels: {}",
             facts.summary
         );
     }
-    // The long source fades inside the card instead of widening it.
+    // The card names where a model comes from by host and project.
     let card = rendered(cx, "model-card-bundle-asr");
     assert!(within(rendered(cx, "model-source-bundle-asr"), card));
 
@@ -441,13 +443,13 @@ fn every_card_leads_with_its_name_status_and_action_over_one_quiet_line_of_facts
         "语音识别 · 78 MiB · 显存约 1.0 GiB · sherpa-onnx, whisper-rs"
     );
     assert_eq!(bundle.unavailable, None, "a ready model downloads");
-    assert_eq!(bundle.checksum, "da92b3db5218…", "one archive checksum");
+    assert_eq!(bundle.source, "github.com/k2-fsa/sherpa-onnx");
     let native = facts(cx, &view, "native-diarization");
     assert_eq!(
         native.summary,
         "说话人分离 · 78 MiB · 显存约 1.0 GiB · diarization-native"
     );
-    assert_eq!(native.checksum, "038b971741ed… 等 3 个");
+    assert_eq!(native.source, "models.example");
     let candidate = facts(cx, &view, "candidate-asr");
     assert_eq!(
         candidate.summary, "语音识别 · 显存约 1.0 GiB · sherpa-onnx",
@@ -457,7 +459,6 @@ fn every_card_leads_with_its_name_status_and_action_over_one_quiet_line_of_facts
         candidate.unavailable.as_deref(),
         Some("来源尚未验证，暂不可下载")
     );
-    assert_eq!(candidate.checksum, "未声明");
     assert!(shown(cx, "unavailable", "candidate-asr"));
     assert!(!shown(cx, "unavailable", "bundle-asr"));
     // Only ready models that are missing offer a download, in one column.
@@ -472,9 +473,15 @@ fn every_card_leads_with_its_name_status_and_action_over_one_quiet_line_of_facts
         (second.left(), second.size.width)
     );
 
-    // The full checksums are one expansion away, collapsed at first.
+    // The full source and checksums are one expansion away, collapsed at
+    // first.
     assert!(!shown(cx, "declared", "native-diarization-0"));
+    assert!(!shown(cx, "source-url", "native-diarization"));
     click_selector(cx, "model-details-toggle-native-diarization");
+    assert!(within(
+        rendered(cx, "model-source-url-native-diarization"),
+        rendered(cx, "model-card-native-diarization")
+    ));
     assert_eq!(
         native.declared,
         [
@@ -500,7 +507,8 @@ fn every_card_leads_with_its_name_status_and_action_over_one_quiet_line_of_facts
     );
     click_selector(cx, "model-details-toggle-native-diarization");
     assert!(
-        !shown(cx, "declared", "native-diarization-0"),
+        !shown(cx, "declared", "native-diarization-0")
+            && !shown(cx, "source-url", "native-diarization"),
         "collapsed again"
     );
     assert_eq!(candidate.declared, [row("model.bin", "未声明")]);

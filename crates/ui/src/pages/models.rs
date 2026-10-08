@@ -319,16 +319,6 @@ fn model_card(
                 )),
         )
         .child(
-            div()
-                .debug_selector(marked("checksum"))
-                .flex_shrink_0()
-                .child(format!(
-                    "{} {}",
-                    tr(locale, "model_checksum"),
-                    facts.checksum
-                )),
-        )
-        .child(
             Button::new(format!("model-details-{model_id}"), details_label)
                 .debug_selector(marked("details-toggle"))
                 .ghost()
@@ -388,7 +378,14 @@ fn model_card(
     });
 
     let details = expanded.then(|| {
-        let mut details = div().flex().flex_col().gap(tokens.spacing.sm);
+        let mut details = div().flex().flex_col().gap(tokens.spacing.sm).child(
+            detail_text(
+                tr(locale, "model_source"),
+                facts.source_url.clone(),
+                &tokens,
+            )
+            .debug_selector(marked("source-url")),
+        );
         let artifacts = match &facts.probe {
             Some(probe) => {
                 details = details.child(fact_rows(
@@ -479,6 +476,17 @@ fn notice(tokens: &Tokens) -> gpui::Div {
         .flex()
         .items_center()
         .gap_3()
+}
+
+/// A titled text of a card's details, wrapped to the card's width.
+fn detail_text(title: &'static str, text: String, tokens: &Tokens) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .text_xs()
+        .child(div().text_color(tokens.accent_text).child(title))
+        .child(div().min_w_0().child(text))
 }
 
 /// A titled list of a card's details, each row named `<prefix>-<index>`.
@@ -617,10 +625,10 @@ pub(crate) struct ModelFacts {
     /// Task, size, VRAM and backends, each only when the catalog names it.
     pub(crate) summary: String,
     pub(crate) license: String,
-    /// The full source; the card fades its tail.
+    /// The source's host and, for a code or model hub, its project.
     pub(crate) source: String,
-    /// The declared checksums in short form.
-    pub(crate) checksum: String,
+    /// The full source, in the details.
+    pub(crate) source_url: String,
     /// Each artifact's full declared checksum.
     pub(crate) declared: Vec<FactRow>,
     pub(crate) probe: Option<ProbeFacts>,
@@ -638,21 +646,11 @@ pub(crate) struct ModelFacts {
 pub(crate) fn model_facts(entry: &ModelAvailability, locale: Locale) -> ModelFacts {
     let model = &entry.model;
     let declared = declared_checksums(model);
-    let distinct = declared
-        .iter()
-        .fold(Vec::new(), |mut distinct, (_, checksum)| {
-            if let Some(checksum) = checksum {
-                if !distinct.contains(&checksum.as_str()) {
-                    distinct.push(checksum.as_str());
-                }
-            }
-            distinct
-        });
     ModelFacts {
         summary: fact_summary(model, locale),
         license: model.license.clone(),
-        source: model.source.clone(),
-        checksum: i18n::declared_checksums(locale, &distinct),
+        source: short_source(&model.source),
+        source_url: model.source.clone(),
         declared: declared
             .iter()
             .map(|(filename, checksum)| FactRow {
@@ -711,6 +709,46 @@ fn fact_summary(model: &ModelCatalogEntry, locale: Locale) -> String {
         facts.push(model.candidate_backends.join(", "));
     }
     facts.join(FACT_SEPARATOR)
+}
+
+/// Where a model comes from, as a reader names it: the host, and on GitHub
+/// and Hugging Face the owner and project too. A source that is not an
+/// HTTP URL is shown as it is.
+pub(crate) fn short_source(source: &str) -> String {
+    let address = ["https://", "http://"].into_iter().find_map(|scheme| {
+        source
+            .get(..scheme.len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case(scheme))
+            .map(|_| &source[scheme.len()..])
+    });
+    let Some(address) = address else {
+        return source.into();
+    };
+    let address = address.split(['?', '#']).next().unwrap_or_default();
+    let mut segments = address.split('/');
+    let authority = segments.next().unwrap_or_default();
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    if host.is_empty() {
+        return source.into();
+    }
+    let project = match host {
+        "github.com" | "huggingface.co" => 2,
+        _ => 0,
+    };
+    std::iter::once(host)
+        .chain(
+            segments
+                .filter(|segment| !segment.is_empty())
+                .take(project)
+                .map(|segment| segment.trim_end_matches(".git")),
+        )
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Each artifact file and the SHA-256 the catalog declares for it, as the
@@ -793,5 +831,58 @@ pub(crate) fn card_action(
             }
         }
         ModelInstallState::Missing | ModelInstallState::Partial => CardAction::None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_source_reads_as_its_host_and_for_hubs_its_owner_and_project() {
+        for (source, short) in [
+            (
+                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/\
+                 sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2",
+                "github.com/k2-fsa/sherpa-onnx",
+            ),
+            (
+                "https://github.com/k2-fsa/sherpa-onnx.git",
+                "github.com/k2-fsa/sherpa-onnx",
+            ),
+            ("https://github.com/k2-fsa", "github.com/k2-fsa"),
+            (
+                "https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f",
+                "huggingface.co/avencera/speakrs-models",
+            ),
+            (
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+                "huggingface.co/ggerganov/whisper.cpp",
+            ),
+            (
+                "HTTPS://HuggingFace.co/pyannote/speaker-diarization-3.1?download=1#top",
+                "huggingface.co/pyannote/speaker-diarization-3.1",
+            ),
+            // Any other host stands alone, without credentials or `www.`.
+            (
+                "https://www.models.example/bundle-asr/model.bin?token=1",
+                "models.example",
+            ),
+            (
+                "http://reader@mirror.example:8080/models/a.bin",
+                "mirror.example:8080",
+            ),
+        ] {
+            assert_eq!(short_source(source), short, "{source}");
+        }
+        // What is not an HTTP URL is shown as it is.
+        for source in [
+            "local/fixture.bin",
+            "ftp://mirror.example/a.bin",
+            "https://",
+            "",
+        ] {
+            assert_eq!(short_source(source), source);
+        }
     }
 }

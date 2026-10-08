@@ -75,7 +75,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "catalog_requires_native_adapter") => "需要原生适配后才能使用，暂不可下载",
         (Locale::ZhCn, "catalog_unavailable") => "暂不可下载",
         (Locale::ZhCn, "model_source") => "来源",
-        (Locale::ZhCn, "model_checksum") => "校验和",
         (Locale::ZhCn, "show_model_details") => "展开详情",
         (Locale::ZhCn, "hide_model_details") => "收起详情",
         (Locale::ZhCn, "declared_checksums") => "目录声明的校验和",
@@ -409,7 +408,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         }
         (Locale::EnUs, "catalog_unavailable") => "Not available for download yet",
         (Locale::EnUs, "model_source") => "Source",
-        (Locale::EnUs, "model_checksum") => "Checksum",
         (Locale::EnUs, "show_model_details") => "Show details",
         (Locale::EnUs, "hide_model_details") => "Hide details",
         (Locale::EnUs, "declared_checksums") => "Checksums in the catalog",
@@ -1301,21 +1299,6 @@ pub fn model_failure_reason(locale: Locale, failure: &ModelFailure) -> String {
                 message,
             },
         ) => format!("Backend {backend_id} rejected the model: {message}"),
-    }
-}
-
-/// The distinct SHA-256 values a catalog entry declares, in short form: the
-/// first in full detail is one expansion away on the card.
-pub fn declared_checksums(locale: Locale, checksums: &[&str]) -> String {
-    match (locale, checksums) {
-        (_, []) => text(locale, "checksum_not_declared").into(),
-        (_, [checksum]) => format!("{}…", short_checksum(checksum)),
-        (Locale::ZhCn, [first, ..]) => {
-            format!("{}… 等 {} 个", short_checksum(first), checksums.len())
-        }
-        (Locale::EnUs, [first, rest @ ..]) => {
-            format!("{}… and {} more", short_checksum(first), rest.len())
-        }
     }
 }
 
