@@ -68,6 +68,10 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "processing_empty_hint") => "完成后，这里会显示带说话人的逐字稿",
         (Locale::ZhCn, "audio_missing_title") => "找不到音频文件",
         (Locale::ZhCn, "audio_missing_hint") => "重新关联音频后即可处理",
+        (Locale::ZhCn, "models_missing_asr") => "需要先安装语音识别模型",
+        (Locale::ZhCn, "models_missing_diarization") => "需要先安装说话人分离模型",
+        (Locale::ZhCn, "models_missing_both") => "需要先安装语音识别和说话人分离模型",
+        (Locale::ZhCn, "go_to_models") => "前往模型",
         (Locale::ZhCn, "no_projects_title") => "还没有项目",
         (Locale::ZhCn, "no_projects_hint") => "导入一段录音，开始整理",
         (Locale::ZhCn, "no_selection_title") => "未选择项目",
@@ -156,7 +160,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "model_status") => "模型状态",
         (Locale::ZhCn, "ask_notice") => "助手输入已就绪；不会保存对话历史。",
         (Locale::ZhCn, "choose_audio") => "选择音频",
-        (Locale::ZhCn, "missing") => "缺失",
         (Locale::ZhCn, "interface_description") => "界面偏好与本地化选项",
         (Locale::ZhCn, "transcription_description") => "选择语音识别后端、模型和转录语言",
         (Locale::ZhCn, "speaker_description") => "选择说话人分离后端、模型和人数提示",
@@ -427,6 +430,14 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         }
         (Locale::EnUs, "audio_missing_title") => "Audio file not found",
         (Locale::EnUs, "audio_missing_hint") => "Relink the audio to process it",
+        (Locale::EnUs, "models_missing_asr") => "Install a speech recognition model first",
+        (Locale::EnUs, "models_missing_diarization") => {
+            "Install a speaker diarization model first"
+        }
+        (Locale::EnUs, "models_missing_both") => {
+            "Install the speech recognition and speaker diarization models first"
+        }
+        (Locale::EnUs, "go_to_models") => "Go to Models",
         (Locale::EnUs, "no_projects_title") => "No projects yet",
         (Locale::EnUs, "no_projects_hint") => "Import a recording to get started",
         (Locale::EnUs, "no_selection_title") => "No project selected",
@@ -517,7 +528,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
             "Assistant input is ready; no conversation history is stored."
         }
         (Locale::EnUs, "choose_audio") => "Choose audio",
-        (Locale::EnUs, "missing") => "Missing",
         (Locale::EnUs, "interface_description") => "Interface preferences and localization",
         (Locale::EnUs, "transcription_description") => {
             "Choose the speech recognition backend, model, and language"

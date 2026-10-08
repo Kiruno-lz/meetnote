@@ -396,14 +396,6 @@ pub(crate) fn document_meta(document: &DocumentState, locale: i18n::Locale) -> S
     parts.join(" · ")
 }
 
-pub(crate) fn backend_ids(descriptors: &[application::BackendDescriptor]) -> String {
-    descriptors
-        .iter()
-        .map(|descriptor| descriptor.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{

@@ -1075,7 +1075,12 @@ fn assert_centered_empty_state(cx: &mut VisualTestContext, action: Option<&'stat
         "the empty state is centered: {empty:?} in {region:?}"
     );
     assert!(empty.size.height < region.size.height / 2., "and compact");
-    for selector in ["empty-process", "empty-relink-audio", "empty-import-audio"] {
+    for selector in [
+        "empty-process",
+        "empty-relink-audio",
+        "empty-go-to-models",
+        "empty-import-audio",
+    ] {
         let shown = cx.debug_bounds(selector);
         if Some(selector) == action {
             assert!(within(shown.expect("the action is shown"), empty));
@@ -1104,10 +1109,30 @@ fn an_unprocessed_document_offers_its_next_step_in_place(cx: &mut TestAppContext
     let (view, cx, _changes) = open_on(cx, &root);
 
     select_row(cx, &view, "present");
-    wait_for(cx, &view, |root| !root.audio.pending());
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    cx.run_until_parked();
+    // The test settings choose backends without models.
+    assert_centered_empty_state(cx, Some("empty-go-to-models"));
+    let before = view.read_with(cx, |root, _| root.ui.notice.clone());
+    click_selector(cx, "process-project");
+    assert!(
+        !view.read_with(cx, |root, _| root.ui.processing),
+        "processing waits for the models"
+    );
+    assert_eq!(view.read_with(cx, |root, _| root.ui.notice.clone()), before);
+
+    // With the default models ready, the document can be processed.
+    view.update(cx, |root, cx| {
+        root.settings_draft.asr_backend_id = None;
+        root.settings_draft.diarization_backend_id = None;
+        root.installation.default_asr_ready = true;
+        root.installation.default_diarization_ready = true;
+        cx.notify();
+    });
     cx.run_until_parked();
     assert_centered_empty_state(cx, Some("empty-process"));
-    let before = view.read_with(cx, |root, _| root.ui.notice.clone());
     click_selector(cx, "empty-process");
     wait_for(cx, &view, |root| {
         !root.ui.processing && root.ui.notice != before

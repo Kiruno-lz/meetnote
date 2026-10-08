@@ -291,17 +291,68 @@ struct NavigationTarget {
     project: Option<ProjectId>,
 }
 
-/// The default models' readiness for the Meetings status line.
-pub fn model_status(
+/// Which models processing would run with are not installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct MissingModels {
+    pub(crate) transcription: bool,
+    pub(crate) diarization: bool,
+}
+
+impl MissingModels {
+    pub(crate) fn any(self) -> bool {
+        self.transcription || self.diarization
+    }
+
+    /// The sentence that names what to install.
+    pub(crate) fn hint_key(self) -> Option<&'static str> {
+        match (self.transcription, self.diarization) {
+            (true, true) => Some("models_missing_both"),
+            (true, false) => Some("models_missing_asr"),
+            (false, true) => Some("models_missing_diarization"),
+            (false, false) => None,
+        }
+    }
+}
+
+/// The models processing would run with that are not installed, as the
+/// installation service last found them: the model `settings` choose for a
+/// stage, else its default. A backend chosen without a model cannot run; a
+/// chosen model outside the catalog is taken as installed. Nothing is
+/// missing before the first probe lands.
+pub(crate) fn missing_models(
     installation: &application::InstallationState,
-    locale: super::i18n::Locale,
-) -> String {
-    let label = |ready| super::i18n::text(locale, if ready { "ready" } else { "missing" });
-    format!(
-        "ASR {} / DIA {}",
-        label(installation.default_asr_ready),
-        label(installation.default_diarization_ready)
-    )
+    settings: &settings::AppSettings,
+    defaults: (&contracts::ModelRef, &contracts::ModelRef),
+) -> MissingModels {
+    if installation.catalog.is_empty() {
+        return MissingModels::default();
+    }
+    let missing = |backend: Option<&String>,
+                   chosen: Option<&contracts::ModelRef>,
+                   default: &contracts::ModelRef,
+                   default_ready: bool| match (backend, chosen) {
+        (Some(_), None) => true,
+        (_, Some(model)) if model != default => installation
+            .catalog
+            .iter()
+            .find(|entry| entry.model.id == model.model_id)
+            .is_some_and(|entry| entry.install_state != models::ModelInstallState::Installed),
+        _ => !default_ready,
+    };
+    MissingModels {
+        transcription: missing(
+            settings.asr_backend_id.as_ref(),
+            settings.asr_model.as_ref(),
+            defaults.0,
+            installation.default_asr_ready,
+        ),
+        diarization: missing(
+            settings.diarization_backend_id.as_ref(),
+            settings.diarization_model.as_ref(),
+            defaults.1,
+            installation.default_diarization_ready,
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -379,6 +430,110 @@ mod tests {
             &JobEvent::Completed { job_id: JobId(2) },
         );
         assert_eq!(job.percent(), Some(100.));
+    }
+
+    fn installation(installed: &[&str]) -> application::InstallationState {
+        let catalog = models::ModelCatalog::from_path(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../resources/models/catalog.json"),
+        )
+        .unwrap();
+        application::InstallationState {
+            catalog: catalog
+                .models
+                .into_iter()
+                .map(|model| models::ModelAvailability {
+                    install_state: if installed.contains(&model.id.as_str()) {
+                        models::ModelInstallState::Installed
+                    } else {
+                        models::ModelInstallState::Missing
+                    },
+                    model,
+                    artifact_paths: Vec::new(),
+                    probe: None,
+                    failure: None,
+                    record_error: None,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn model(id: &str) -> contracts::ModelRef {
+        contracts::ModelRef {
+            backend_id: "backend".into(),
+            model_id: id.into(),
+            revision: None,
+            artifact_path: format!("models/{id}"),
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn processing_needs_the_chosen_or_default_models_installed() {
+        let catalog = installation(&[]).catalog;
+        let task_model = |task: &str| {
+            catalog
+                .iter()
+                .find(|entry| entry.model.task == task)
+                .map(|entry| entry.model.id.clone())
+                .unwrap()
+        };
+        let (asr, diarization) = (task_model("asr"), task_model("diarization"));
+        let defaults = (model("default-asr"), model("default-diarization"));
+        let defaults = (&defaults.0, &defaults.1);
+        let missing = |transcription, diarization| MissingModels {
+            transcription,
+            diarization,
+        };
+        // No backend chosen: processing runs the defaults.
+        let settings = settings::AppSettings {
+            asr_backend_id: None,
+            diarization_backend_id: None,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            missing_models(&Default::default(), &settings, defaults),
+            missing(false, false),
+            "nothing is known before the first probe"
+        );
+        let mut probed = installation(&[]);
+        assert_eq!(
+            missing_models(&probed, &settings, defaults),
+            missing(true, true)
+        );
+        probed.default_asr_ready = true;
+        probed.default_diarization_ready = true;
+        assert_eq!(
+            missing_models(&probed, &settings, defaults),
+            missing(false, false)
+        );
+
+        // Chosen catalog models count as they are installed.
+        let mut chosen = settings.clone();
+        chosen.asr_backend_id = Some("backend".into());
+        chosen.asr_model = Some(model(&asr));
+        chosen.diarization_backend_id = Some("backend".into());
+        chosen.diarization_model = Some(model(&diarization));
+        let installed_asr = installation(&[asr.as_str()]);
+        assert_eq!(
+            missing_models(&installed_asr, &chosen, defaults),
+            missing(false, true)
+        );
+        // A chosen backend without a model, and a model outside the catalog.
+        chosen.asr_model = None;
+        chosen.diarization_model = Some(model("custom"));
+        assert_eq!(
+            missing_models(&installed_asr, &chosen, defaults),
+            missing(true, false)
+        );
+        assert_eq!(missing(true, true).hint_key(), Some("models_missing_both"));
+        assert_eq!(
+            missing(false, true).hint_key(),
+            Some("models_missing_diarization")
+        );
+        assert_eq!(missing(false, false).hint_key(), None);
     }
 
     #[test]

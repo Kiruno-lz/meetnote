@@ -266,6 +266,34 @@ fn the_meetings_route_shows_the_tree_content_and_process_button(cx: &mut TestApp
     );
 }
 
+/// The fixture's models are not installed: the action waits, a short
+/// sentence beside it says why and leads to Models. The status line under
+/// the page shows only the notice, and nothing once the notice is empty.
+#[gpui::test]
+fn missing_models_lead_to_the_models_page_from_the_header(cx: &mut TestAppContext) {
+    let (window, cx, page) = open_route(cx, Route::Meetings);
+    let process = visible(cx, "process-project");
+    let hint = visible(cx, "models-required");
+    assert!(within(hint, page));
+    assert!(
+        hint.left() >= process.right() || hint.top() >= process.bottom(),
+        "the hint follows the action: {hint:?} after {process:?}"
+    );
+    assert!(within(visible(cx, "go-to-models"), hint));
+    visible(cx, "meetings-notice");
+
+    // Selecting a document clears the notice, and the line with it.
+    let row = visible(cx, leak(format!("project-row-{}", DOCUMENT_IDS[0])));
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("meetings-notice").is_none());
+
+    let go = visible(cx, "go-to-models");
+    cx.simulate_click(go.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Models);
+}
+
 /// The content views are the segments of one control: adjacent segments
 /// inset in a track one control tall.
 #[gpui::test]
@@ -718,9 +746,10 @@ fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
     expected.extend([
         // The tree is one stop, on its selected row.
         leak(format!("project-row-{}", DOCUMENT_IDS[0])),
-        // The Detail toggle beside the title, then the actions under it.
+        // The Detail toggle beside the title, then the actions under it:
+        // without models, processing waits and the hint leads to Models.
         "open-project-detail",
-        "process-project",
+        "go-to-models",
         "content-mode-summary",
         "content-mode-original",
         "content-mode-edit",

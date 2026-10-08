@@ -1,13 +1,14 @@
 use crate::{
     components::{
-        backend_ids, document_meta, empty_state, ordered_projects, status_label, timestamp,
-        DragGhost, ProjectDrag,
+        document_meta, empty_state, ordered_projects, status_label, timestamp, DragGhost,
+        ProjectDrag,
     },
     controller::RootView,
     controls::{tree, Button, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
+    route::Route,
     speakers::{document_speakers, transcript_turns, DocumentSpeaker},
-    state::{self, ContentMode, ProcessingProgress},
+    state::{self, ContentMode, MissingModels, ProcessingProgress},
     theme::{self, Tokens},
 };
 use domain::{DocumentState, ProjectStatus};
@@ -390,25 +391,25 @@ fn main_panel(
             &tokens,
         )));
     }
-    panel.child(
+    panel.children((!root.ui.notice.is_empty()).then(|| {
         div()
+            .debug_selector(|| "meetings-notice".into())
             .flex_shrink_0()
             .border_t_1()
             .border_color(tokens.hairline)
             .pt_3()
             .text_xs()
             .text_color(tokens.text_muted)
-            .child(format!(
-                "{}   •   ASR: {}   •   DIA: {}",
-                root.ui.notice,
-                backend_ids(&root.inventory.asr),
-                backend_ids(&root.inventory.diarization)
-            ))
-            .child(format!(
-                "{}: {}",
-                tr(locale, "models"),
-                state::model_status(&root.installation, locale)
-            )),
+            .child(root.ui.notice.clone())
+    }))
+}
+
+/// The models processing would run with that are not installed.
+fn missing(root: &RootView) -> MissingModels {
+    state::missing_models(
+        &root.installation,
+        &root.settings_draft,
+        (&root.services.asr_model, &root.services.diarization_model),
     )
 }
 
@@ -457,6 +458,20 @@ fn unprocessed_state(
             tokens,
         );
     }
+    if let Some(hint) = missing(root).hint_key() {
+        return empty_state(
+            "icons/cpu.svg",
+            tr(locale, "transcript_empty_title"),
+            tr(locale, hint),
+            Some(
+                Button::new("empty-go-to-models", tr(locale, "go_to_models"))
+                    .debug_selector(|| "empty-go-to-models".into())
+                    .primary()
+                    .on_click(cx.listener(|this, _, _, cx| this.navigate(Route::Models, cx))),
+            ),
+            tokens,
+        );
+    }
     empty_state(
         "icons/file.svg",
         tr(locale, "transcript_empty_title"),
@@ -496,6 +511,14 @@ fn document_header(
         "process"
     };
     let detail_open = root.ui.detail_open;
+    let missing = missing(root);
+    // The empty state in the content region explains an unprocessed
+    // document's missing models itself.
+    let empty_shown = root.ui.content_mode != ContentMode::Edit
+        && project.processing_status() != ProjectStatus::Ready;
+    let models_hint = missing
+        .hint_key()
+        .filter(|_| !processing_here && audio_problem.is_none() && !empty_shown);
     let chip = |selector: &'static str, fill, text, label: &'static str| {
         div()
             .debug_selector(move || selector.into())
@@ -532,8 +555,13 @@ fn document_header(
                 .debug_selector(|| "process-project".into())
                 .secondary()
                 .compact()
-                // Missing audio cannot be processed; relink it.
-                .disabled(busy_elsewhere || (!processing_here && root.audio.missing(project.id())))
+                // Missing audio or models cannot process; relink or
+                // install them.
+                .disabled(
+                    busy_elsewhere
+                        || (!processing_here
+                            && (root.audio.missing(project.id()) || missing.any())),
+                )
                 .on_click(cx.listener(RootView::process_or_cancel)),
         )
         .children(audio_problem.map(|_| {
@@ -591,7 +619,40 @@ fn document_header(
                 .text_color(tokens.text_muted)
                 .child(document_meta(project, locale)),
         )
-        .child(div().pt(tokens.spacing.xs).child(actions))
+        .child(
+            // The hint wraps under the actions beside an open Detail; the
+            // actions themselves stay on one line.
+            div()
+                .pt(tokens.spacing.xs)
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(tokens.spacing.sm)
+                .child(actions)
+                .children(models_hint.map(|hint| {
+                    div()
+                        .debug_selector(|| "models-required".into())
+                        .flex()
+                        .items_center()
+                        .gap(tokens.spacing.xs)
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(tokens.text_muted)
+                                .child(tr(locale, hint)),
+                        )
+                        .child(
+                            Button::new("go-to-models", tr(locale, "go_to_models"))
+                                .debug_selector(|| "go-to-models".into())
+                                .ghost()
+                                .compact()
+                                .text_color(tokens.accent_text)
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.navigate(Route::Models, cx)),
+                                ),
+                        )
+                })),
+        )
         .children(
             root.ui
                 .progress
