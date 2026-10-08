@@ -282,16 +282,16 @@ pub(crate) fn status_label(locale: i18n::Locale, status: ProjectStatus) -> &'sta
     i18n::status(locale, status)
 }
 
+/// A time or duration as a clock reads it: `m:ss`, or `h:mm:ss` from an
+/// hour on, in whole seconds rounded down.
 pub(crate) fn timestamp(milliseconds: u64) -> String {
     let seconds = milliseconds / 1_000;
-    let total_minutes = seconds / 60;
-    let hours = total_minutes / 60;
-    let minutes = total_minutes % 60;
-    let seconds = seconds % 60;
-    format!(
-        "{hours:02}:{minutes:02}:{seconds:02}.{:03}",
-        milliseconds % 1_000
-    )
+    let (hours, minutes, seconds) = (seconds / 3_600, seconds / 60 % 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
 }
 
 /// A Unix-millisecond instant as its minute in UTC, `2026-08-29 10:40 UTC`:
@@ -336,7 +336,7 @@ pub(crate) fn backend_ids(descriptors: &[application::BackendDescriptor]) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::{tree_move, tree_shift, utc_time, TreeMove, TreeShiftMove};
+    use super::{timestamp, tree_move, tree_shift, utc_time, TreeMove, TreeShiftMove};
     use crate::controls::{TreeShift, TreeStep};
     use domain::{DocumentState, ProjectId};
     use std::collections::BTreeSet;
@@ -500,6 +500,22 @@ mod tests {
                 before: false
             })
         );
+    }
+
+    #[test]
+    fn a_timestamp_reads_like_a_clock_in_whole_seconds() {
+        for (milliseconds, expected) in [
+            (0, "0:00"),
+            (999, "0:00"),
+            (42_999, "0:42"),
+            (95_000, "1:35"),
+            (599_000, "9:59"),
+            (3_599_999, "59:59"),
+            (3_600_000, "1:00:00"),
+            (36_005_000, "10:00:05"),
+        ] {
+            assert_eq!(timestamp(milliseconds), expected, "{milliseconds} ms");
+        }
     }
 
     #[test]

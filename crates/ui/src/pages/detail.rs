@@ -496,7 +496,7 @@ mod tests {
             ("detail_transcript_segments", "2"),
             ("detail_diarization_segments", "2"),
             ("detail_speakers", "2"),
-            ("detail_speech_duration", "00:01:35.000"),
+            ("detail_speech_duration", "1:35"),
             ("detail_characters", "22"),
             ("detail_provenance_gaps", "无"),
         ] {
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(value(&child_sections, "detail_depth"), Some("1"));
         assert_eq!(
             value(&child_sections, "detail_audio_range"),
-            Some("00:00:42.000 – 00:01:35.000")
+            Some("0:42 – 1:35")
         );
     }
 
