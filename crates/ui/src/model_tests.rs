@@ -655,6 +655,44 @@ fn a_running_download_shows_its_progress_with_pause_or_resume_and_cancel_in_the_
     );
 }
 
+/// The manager retains old terminal tasks before a later retry. A card
+/// must follow the active retry and send its controls to that task.
+#[gpui::test]
+fn a_retry_after_terminal_tasks_keeps_its_progress_and_controls_visible(cx: &mut TestAppContext) {
+    let models = FakeModels::new(catalog(vec![bundle_asr()]));
+    let state = published(vec![availability(bundle_asr(), ModelInstallState::Partial)]);
+    *models.downloads.lock().unwrap() = vec![
+        running(
+            1,
+            "bundle-asr",
+            DownloadState::Failed("connection lost".into()),
+        ),
+        running(2, "bundle-asr", DownloadState::Cancelled),
+        running(3, "bundle-asr", DownloadState::Completed),
+        running(4, "bundle-asr", DownloadState::Downloading),
+    ];
+    let (view, cx) = open_models(cx, models.clone(), &state, test_settings());
+    assert_in_header(cx, "pause", "bundle-asr");
+    assert!(shown(cx, "download-progress", "bundle-asr"));
+    assert!(!shown(cx, "download", "bundle-asr"));
+    click_selector(cx, "model-pause-bundle-asr");
+    click_selector(cx, "model-cancel-bundle-asr");
+    wait_for(cx, &view, |_| models.controls().len() == 2);
+    let mut controls = models.controls();
+    controls.sort();
+    assert_eq!(
+        controls,
+        [("cancel", DownloadId(4)), ("pause", DownloadId(4))]
+    );
+    models.downloads.lock().unwrap()[3].state = DownloadState::Paused;
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_in_header(cx, "resume", "bundle-asr");
+    click_selector(cx, "model-resume-bundle-asr");
+    wait_for(cx, &view, |_| models.controls().len() == 3);
+    assert!(models.controls().contains(&("resume", DownloadId(4))));
+}
+
 #[gpui::test]
 fn the_page_says_whether_the_default_models_are_ready_and_each_family_what_is_downloaded(
     cx: &mut TestAppContext,

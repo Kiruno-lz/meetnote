@@ -72,7 +72,11 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .map(|entry| {
                     let progress = downloads
                         .iter()
-                        .find(|progress| progress.model_id == entry.model.id)
+                        // Terminal tasks remain in download history. Match
+                        // the active retry before constructing its card.
+                        .find(|progress| {
+                            progress.model_id == entry.model.id && !progress.state.is_terminal()
+                        })
                         .cloned();
                     model_card(root, entry, progress, cx)
                 })
