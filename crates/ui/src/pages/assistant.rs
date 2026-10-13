@@ -438,7 +438,7 @@ fn context_parts(
 
 /// The context beside the scope: its parts and the write mode in muted
 /// text, separated by dots. The first part, a document title, fades out
-/// when it is too long.
+/// when it is too long; so does the connection name.
 fn context_line(
     parts: Vec<String>,
     write_mode: contracts::AgentWriteMode,
@@ -477,6 +477,15 @@ fn context_line(
             first,
             tokens.content,
         )));
+    }
+    if let Some(connection) = parts.next() {
+        line = line
+            .child(separator())
+            .child(div().min_w_0().child(theme::tail_faded_label(
+                "assistant-context-connection",
+                connection,
+                tokens.content,
+            )));
     }
     for part in parts {
         line = line
@@ -1452,15 +1461,15 @@ fn render_pending(
     .into_any_element()
 }
 
-/// A field's old or new value: the old one muted and struck through, the
-/// new one in full color, each marked by a thin bar in its semantic color.
+/// A field's complete old or new value: the old one muted and struck through,
+/// the new one in full color, each marked by a thin bar in its semantic color.
+/// Long changes scroll with the review so nothing is hidden before approval.
 fn diff_value(value: String, added: bool, tokens: &Tokens) -> gpui::Div {
     div()
         .border_l_2()
         .border_color(if added { tokens.success } else { tokens.danger })
         .pl(tokens.spacing.sm)
         .text_sm()
-        .line_clamp(4)
         .map(|value| {
             if added {
                 value.text_color(tokens.text)

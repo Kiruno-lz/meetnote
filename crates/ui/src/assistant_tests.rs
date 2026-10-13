@@ -528,6 +528,61 @@ fn a_review_shows_its_diff_and_lines_its_decisions_up_at_the_end(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn a_long_markdown_change_can_be_read_in_full_before_confirmation(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    let mut review = pending_review("long-review", u64::MAX);
+    review.field_diffs = vec![crate::assistant_ui::AssistantFieldDiff {
+        document_id: "first".into(),
+        field: "markdown".into(),
+        before: Some(
+            "The original meeting notes describe the decision and its owner in detail. "
+                .repeat(120),
+        ),
+        after: Some(
+            "The replacement meeting notes describe the revised decision and a new owner. "
+                .repeat(144),
+        ),
+    }];
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        pending_reviews: vec![review],
+        ..empty_result()
+    });
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    let before = rendered(cx, "assistant-diff-0-before");
+    let after = rendered(cx, "assistant-diff-0-after");
+    let line = gpui::px(20.);
+    assert!(
+        before.size.height >= line * 20. && after.size.height >= line * 24.,
+        "every proposed paragraph is available before approval: {before:?}, {after:?}"
+    );
+    assert!(
+        before.bottom() <= after.top(),
+        "old and new values do not overlap"
+    );
+    scroll_results_to_end(cx, &view);
+    let confirm = rendered(cx, "assistant-confirm");
+    assert!(within(
+        confirm,
+        rendered(cx, "assistant-pending-long-review")
+    ));
+    assert!(
+        confirm.bottom() <= rendered(cx, "assistant-input-bar").top(),
+        "scrolling through the full diff reveals its confirmation button"
+    );
+    assert_eq!(
+        assistant
+            .grants
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(operation, _)| *operation == "confirm")
+            .count(),
+        0
+    );
+}
+
+#[gpui::test]
 fn reviews_over_the_queue_limit_are_noticed_on_the_page(cx: &mut TestAppContext) {
     let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
     *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
@@ -754,6 +809,28 @@ fn the_scope_and_its_context_share_one_line_above_the_privacy_note(cx: &mut Test
     assert!(
         privacy.bottom() <= rendered(cx, "assistant-body").top(),
         "the results start below the context"
+    );
+}
+
+#[gpui::test]
+fn a_long_connection_name_keeps_the_write_mode_inside_the_context(cx: &mut TestAppContext) {
+    let settings = stored_key_settings();
+    let mut value = settings.snapshot().unwrap();
+    value.assistant.connections[0].name = "A private connection for this workspace ".repeat(12);
+    settings.update(value).unwrap();
+    let (_view, cx) = open_desktop_with(cx, Arc::new(FakeAssistantUiService::default()), settings);
+    cx.run_until_parked();
+    let context = rendered(cx, "assistant-context");
+    let mode = rendered(cx, "assistant-write-mode-automatic");
+    let page = rendered(cx, "assistant-page");
+    assert!(within(context, page), "the context stays inside the page");
+    assert!(
+        within(mode, context),
+        "a long connection name leaves the write policy readable: {mode:?} in {context:?}"
+    );
+    assert!(
+        rendered(cx, "assistant-privacy").top() >= context.bottom(),
+        "the context stays on one line above the privacy note"
     );
 }
 
