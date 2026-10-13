@@ -279,10 +279,18 @@ fn scanner_issues_list_path_and_reason_until_the_files_are_fixed(cx: &mut TestAp
         issue(&stray).message.contains("not a document package"),
         "{issues:#?}"
     );
-    // The panel heads the Meetings content plane, above the document.
+    // The panel heads the Meetings content plane, above the document, as
+    // one line until it is expanded.
     let page = rendered(cx, "meetings-page");
+    let folded = rendered(cx, "document-issues");
+    assert!(within(folded, page), "{folded:?} in {page:?}");
+    assert!(folded.bottom() <= rendered(cx, "meeting-content").top());
+    assert!(within(rendered(cx, "document-issues-toggle"), folded));
+    assert!(folded.size.height < px(48.), "one line: {folded:?}");
+    assert!(cx.debug_bounds("document-issue-0").is_none());
+    click_selector(cx, "document-issues-toggle");
     let panel = rendered(cx, "document-issues");
-    assert!(within(panel, page), "{panel:?} in {page:?}");
+    assert!(panel.size.height > folded.size.height);
     assert!(panel.bottom() <= rendered(cx, "meeting-content").top());
     for index in 0..2 {
         let entry = rendered(cx, leak(format!("document-issue-{index}")));
@@ -324,6 +332,7 @@ fn scanner_issues_read_in_the_ui_locale_and_keep_their_kind_after_a_move(cx: &mu
     std::fs::write(broken.join("state.json"), "{ not json").unwrap();
     std::fs::write(root.path().join("notes.txt"), "stray").unwrap();
     let (view, cx, _changes) = open_on(cx, &root);
+    click_selector(cx, "document-issues-toggle");
     for index in 0..2 {
         rendered(cx, leak(format!("document-issue-{index}")));
     }
@@ -430,7 +439,7 @@ fn detail_shows_revision_status_provenance_and_statistics(cx: &mut TestAppContex
             .map(|row| row.value.clone())
     };
     assert_eq!(value("detail_revision").as_deref(), Some("3"));
-    assert_eq!(value("detail_document_status").as_deref(), Some("review"));
+    assert_eq!(value("detail_document_status").as_deref(), Some("待复核"));
     assert_eq!(
         value("detail_asr").as_deref(),
         Some("whisper-rs · large-v3-turbo · r1")
@@ -838,4 +847,437 @@ fn every_editor_control_carries_its_label_in_the_current_locale(cx: &mut TestApp
         expected(i18n::Locale::EnUs),
         "a locale change relabels the editor"
     );
+}
+
+/// A processing job of a document that the test drives: the contexts of
+/// its transcription and diarization jobs emit the events the page
+/// follows, and `outcome` ends it.
+struct DrivenJob {
+    transcription: runtime::JobContext,
+    diarization: runtime::JobContext,
+    outcome: futures::channel::oneshot::Sender<Result<DocumentState, contracts::BackendError>>,
+}
+
+/// Starts following a driven processing job of `id`, as `process_selected`
+/// does once the workspace has started it.
+fn drive_processing(cx: &mut VisualTestContext, view: &View, id: &str) -> DrivenJob {
+    let jobs = runtime::JobRuntime::with_max_concurrency(2);
+    let (transcription, asr_events) = jobs.create_job();
+    let (diarization, diarization_events) = jobs.create_job();
+    let (outcome, result) = futures::channel::oneshot::channel();
+    let job = application::ProjectProcessingJob {
+        future: Box::pin(async move {
+            result.await.unwrap_or_else(|_| {
+                Err(contracts::BackendError {
+                    code: contracts::BackendErrorCode::Cancelled,
+                    message: "dropped".into(),
+                })
+            })
+        }),
+        asr_context: transcription.clone(),
+        diarization_context: diarization.clone(),
+        asr_events,
+        diarization_events,
+    };
+    let document = ProjectId::new(id);
+    view.update(cx, |root, cx| {
+        root.ui.begin_processing(document);
+        root.ui.notice = i18n::message(i18n::Locale::ZhCn, "processing", "New");
+        root.cancel_contexts = Some((transcription.clone(), diarization.clone()));
+        cx.notify();
+        cx.spawn(async move |this, cx| RootView::follow_processing(this, job, cx).await)
+            .detach();
+    });
+    cx.run_until_parked();
+    DrivenJob {
+        transcription,
+        diarization,
+        outcome,
+    }
+}
+
+fn phase(cx: &mut VisualTestContext, view: &View) -> Option<String> {
+    view.read_with(cx, |root, _| {
+        root.ui
+            .progress
+            .as_ref()
+            .map(|progress| progress.phase(root.ui.locale))
+    })
+}
+
+#[gpui::test]
+fn processing_progress_shows_in_the_header_and_the_tree_not_the_notice(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    root.put(processed("weekly", "产品周会"), "# 产品周会\n");
+    let mut new = DocumentState::new(ProjectId::new("new"), "New", "new.wav");
+    new.hierarchy.sibling_order = 1;
+    root.put(new.clone(), "# New\n");
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "new");
+    assert!(cx.debug_bounds("processing-progress").is_none());
+
+    let job = drive_processing(cx, &view, "new");
+    let starting = view.read_with(cx, |root, _| root.ui.notice.clone());
+    // Before either job reports, the bar sweeps under "preparing".
+    let page = rendered(cx, "meetings-page");
+    let header_progress = rendered(cx, "processing-progress");
+    assert!(within(header_progress, page));
+    assert!(
+        header_progress.bottom() <= rendered(cx, "meeting-content").top(),
+        "the progress heads the document"
+    );
+    assert!(within(
+        rendered(cx, "processing-indicator-new"),
+        rendered(cx, "project-row-new")
+    ));
+    assert!(cx.debug_bounds("processing-indicator-weekly").is_none());
+    assert_eq!(phase(cx, &view).as_deref(), Some("正在准备……"));
+
+    job.transcription.started();
+    job.diarization.started();
+    job.transcription.report(runtime::Progress {
+        completed: 3,
+        total: Some(10),
+    });
+    wait_for(cx, &view, |root| {
+        root.ui.progress.as_ref().is_some_and(|progress| {
+            progress.transcription
+                == crate::state::StageProgress::Running {
+                    completed: 3,
+                    total: Some(10),
+                }
+        })
+    });
+    assert_eq!(
+        phase(cx, &view).as_deref(),
+        Some("正在转录 3/10 · 等待说话人分离")
+    );
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.progress.as_ref().unwrap().percent()),
+        Some(15.)
+    );
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        starting,
+        "a progress tick leaves the notice alone"
+    );
+
+    // Another document shows no progress, and cannot start a second job.
+    select_row(cx, &view, "weekly");
+    assert!(cx.debug_bounds("processing-progress").is_none());
+    rendered(cx, "processing-indicator-new");
+    select_row(cx, &view, "new");
+
+    // The outcome ends the progress and writes the notice.
+    job.transcription.completed();
+    job.diarization.completed();
+    let mut finished = new.clone();
+    finished.content.title = "New".into();
+    job.outcome.send(Ok(finished)).ok();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.progress, None);
+        assert_eq!(
+            root.ui.notice,
+            i18n::message(i18n::Locale::ZhCn, "finished", "New")
+        );
+    });
+    assert!(cx.debug_bounds("processing-progress").is_none());
+    assert!(cx.debug_bounds("processing-indicator-new").is_none());
+}
+
+#[gpui::test]
+fn a_cancelled_job_notes_the_cancellation_not_a_failure(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    root.put(
+        DocumentState::new(ProjectId::new("new"), "New", "new.wav"),
+        "# New\n",
+    );
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "new");
+    let job = drive_processing(cx, &view, "new");
+    job.transcription.cancel();
+    job.outcome
+        .send(Err(contracts::BackendError {
+            code: contracts::BackendErrorCode::Cancelled,
+            message: "cancelled".into(),
+        }))
+        .ok();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        i18n::message(i18n::Locale::ZhCn, "cancelled", "New")
+    );
+}
+
+#[gpui::test]
+fn the_transcript_reads_as_turns_in_a_measured_column(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let mut weekly = processed("weekly", "产品周会");
+    let said = [
+        ("speaker-0", 0, 4_000, "先过一下页面"),
+        ("speaker-0", 4_000, 9_000, "然后看截图"),
+        ("speaker-1", 9_000, 12_000, "那就开始迁移"),
+    ];
+    weekly.results.transcript = said
+        .iter()
+        .enumerate()
+        .map(|(index, (_, start_ms, end_ms, text))| TranscriptSegment {
+            id: format!("t-{index}"),
+            start_ms: *start_ms,
+            end_ms: *end_ms,
+            text: (*text).into(),
+        })
+        .collect();
+    weekly.results.diarization = said
+        .iter()
+        .enumerate()
+        .map(
+            |(index, (speaker, start_ms, end_ms, _))| DiarizationSegment {
+                id: format!("d-{index}"),
+                speaker_id: (*speaker).into(),
+                speaker_profile_id: None,
+                speaker_label: None,
+                start_ms: *start_ms,
+                end_ms: *end_ms,
+                confidence: None,
+            },
+        )
+        .collect();
+    weekly.results.speaker_segments = domain::align_transcript_and_speakers(
+        &weekly.results.transcript,
+        &weekly.results.diarization,
+    );
+    root.put(weekly, "# 产品周会\n");
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+
+    // Two turns: speaker-0's two segments, then speaker-1's.
+    let content = rendered(cx, "meeting-content");
+    let turns = [0, 1].map(|index| rendered(cx, leak(format!("transcript-turn-{index}"))));
+    assert!(cx.debug_bounds("transcript-turn-2").is_none());
+    assert!(turns[0].bottom() <= turns[1].top());
+    for turn in turns {
+        assert!(within(turn, content));
+        assert!(
+            turn.size.width <= meetings::READING_WIDTH,
+            "the transcript keeps to the reading width: {turn:?}"
+        );
+    }
+    assert!(
+        content.size.width > meetings::READING_WIDTH,
+        "the column is narrower than the plane"
+    );
+}
+
+/// The empty state is one compact group centered in the content region.
+#[track_caller]
+fn assert_centered_empty_state(cx: &mut VisualTestContext, action: Option<&'static str>) {
+    let region = rendered(cx, "meeting-content");
+    let empty = rendered(cx, "document-empty");
+    assert!(within(empty, region));
+    assert!(
+        (empty.center().x - region.center().x).abs() < px(1.)
+            && (empty.center().y - region.center().y).abs() < px(1.),
+        "the empty state is centered: {empty:?} in {region:?}"
+    );
+    assert!(empty.size.height < region.size.height / 2., "and compact");
+    for selector in [
+        "empty-process",
+        "empty-relink-audio",
+        "empty-go-to-models",
+        "empty-import-audio",
+    ] {
+        let shown = cx.debug_bounds(selector);
+        if Some(selector) == action {
+            assert!(within(shown.expect("the action is shown"), empty));
+        } else {
+            assert!(shown.is_none(), "`{selector}` is not offered");
+        }
+    }
+}
+
+#[gpui::test]
+fn an_unprocessed_document_offers_its_next_step_in_place(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let audio = root.path().join("present.wav");
+    std::fs::write(&audio, b"audio").unwrap();
+    root.put(
+        DocumentState::new(
+            ProjectId::new("present"),
+            "Present",
+            audio.display().to_string(),
+        ),
+        "# Present\n",
+    );
+    let mut gone = DocumentState::new(ProjectId::new("gone"), "Gone", "gone.wav");
+    gone.hierarchy.sibling_order = 1;
+    root.put(gone, "# Gone\n");
+    let (view, cx, _changes) = open_on(cx, &root);
+
+    select_row(cx, &view, "present");
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    cx.run_until_parked();
+    // The test settings choose backends without models.
+    assert_centered_empty_state(cx, Some("empty-go-to-models"));
+    let before = view.read_with(cx, |root, _| root.ui.notice.clone());
+    click_selector(cx, "process-project");
+    assert!(
+        !view.read_with(cx, |root, _| root.ui.processing),
+        "processing waits for the models"
+    );
+    assert_eq!(view.read_with(cx, |root, _| root.ui.notice.clone()), before);
+
+    // With the default models ready, the document can be processed.
+    view.update(cx, |root, cx| {
+        root.settings_draft.asr_backend_id = None;
+        root.settings_draft.diarization_backend_id = None;
+        root.installation.default_asr_ready = true;
+        root.installation.default_diarization_ready = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_centered_empty_state(cx, Some("empty-process"));
+    click_selector(cx, "empty-process");
+    wait_for(cx, &view, |root| {
+        !root.ui.processing && root.ui.notice != before
+    });
+
+    // Missing audio is relinked first.
+    select_row(cx, &view, "gone");
+    wait_for(cx, &view, |root| {
+        root.audio.missing(&ProjectId::new("gone"))
+    });
+    cx.run_until_parked();
+    assert_centered_empty_state(cx, Some("empty-relink-audio"));
+
+    // While it is processed, the state says so and offers nothing.
+    view.update(cx, |root, cx| {
+        root.ui.begin_processing(ProjectId::new("gone"));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_centered_empty_state(cx, None);
+}
+
+#[gpui::test]
+fn an_empty_workspace_offers_to_import_audio(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let (_view, cx, _changes) = open_on(cx, &root);
+    assert_centered_empty_state(cx, Some("empty-import-audio"));
+}
+
+#[gpui::test]
+fn switching_from_a_transcript_to_an_imported_document_selects_summary(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "周会"), "# 周会\n");
+    let mut imported = DocumentState::new(ProjectId::new("new"), "新录音", "new.wav");
+    imported.hierarchy.sibling_order = 1;
+    documents.put(imported, "# 新录音\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+    rendered(cx, "transcript-turn-0");
+    select_row(cx, &view, "new");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "the imported document has no Original tab, so Summary must be selected"
+    );
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    rendered(cx, "document-empty");
+
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "history navigation also keeps a visible tab selected"
+    );
+}
+
+#[gpui::test]
+fn switching_documents_and_reading_modes_starts_at_the_top(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    for (index, id) in ["a", "b"].into_iter().enumerate() {
+        let mut document = processed(id, id);
+        document.hierarchy.sibling_order = index as u32;
+        document.content.summary = Some("一段很长的会议总结。\n".repeat(120));
+        documents.put(document, "# Meeting\n");
+    }
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    assert!(scroll.max_offset().y > px(200.));
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(scroll.offset().y, px(-200.));
+    select_row(cx, &view, "a");
+    assert_eq!(
+        scroll.offset().y,
+        px(-200.),
+        "selecting the current document keeps its reading position"
+    );
+    select_row(cx, &view, "b");
+    assert_eq!(
+        scroll.offset().y,
+        px(0.),
+        "another document opens at its beginning"
+    );
+
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        scroll.offset().y,
+        px(0.),
+        "history opens the document at its beginning"
+    );
+    click_selector(cx, "navigate-forward");
+
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("b"))
+    });
+    assert_eq!(scroll.offset().y, px(0.), "the editor opens at its title");
+}
+
+#[gpui::test]
+fn document_actions_fit_beside_detail_in_both_locales(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "产品周会"), "# 产品周会\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    select_row(cx, &view, "weekly");
+    wait_for(cx, &view, |root| {
+        root.audio.missing(&ProjectId::new("weekly"))
+    });
+    click_selector(cx, "open-project-detail");
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| root.set_locale(locale, cx));
+        cx.run_until_parked();
+        let page = rendered(cx, "meetings-page");
+        for selector in [
+            "document-status",
+            "audio-problem",
+            "process-project",
+            "relink-audio",
+        ] {
+            let control = rendered(cx, selector);
+            assert!(
+                within(control, page),
+                "{locale:?}: {selector} overflows the reading plane: {control:?} in {page:?}"
+            );
+        }
+    }
 }

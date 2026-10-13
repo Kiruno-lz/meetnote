@@ -13,7 +13,7 @@ use crate::{
     i18n, pages,
     route::Route,
     speakers::{document_speakers, NameEntry, NameRows, SpeakerConfirmation, SpeakerProfiles},
-    state::{ContentMode, NoticeChange, NoticeTone, UiState, TOAST_LIFETIME},
+    state::{ContentMode, NoticeChange, NoticeTone, Stage, UiState, TOAST_LIFETIME},
     theme,
 };
 use application::{
@@ -2230,7 +2230,7 @@ impl RootView {
             speakers
                 .iter()
                 .find(|speaker| speaker.id == id)
-                .map_or_else(|| id.to_string(), |speaker| speaker.name().to_string())
+                .map_or_else(|| id.to_string(), |speaker| speaker.name(self.ui.locale))
         };
         self.speaker_confirmation = Some(SpeakerConfirmation::MergeDocumentSpeaker {
             document_id,
@@ -2506,6 +2506,12 @@ impl RootView {
     }
 
     pub(crate) fn select_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
+        if self.ui.selected_project.as_ref() != Some(&project_id) {
+            self.scroll
+                .meeting_content
+                .set_offset(gpui::Point::default());
+            self.scroll.detail.set_offset(gpui::Point::default());
+        }
         self.ui.selected_project = Some(project_id);
         self.ui.remember_navigation();
         self.ui.notice.clear();
@@ -2527,7 +2533,14 @@ impl RootView {
     }
 
     pub(crate) fn travel(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let previous_document = self.ui.selected_project.clone();
         if self.ui.travel(forward) {
+            if self.ui.selected_project != previous_document {
+                self.scroll
+                    .meeting_content
+                    .set_offset(gpui::Point::default());
+                self.scroll.detail.set_offset(gpui::Point::default());
+            }
             self.sidebar_sizing
                 .update(cx, |state, _| state.reset_interaction());
             if self.ui.route == Route::Settings {
@@ -2583,8 +2596,17 @@ impl RootView {
         self.sync_locale(cx);
     }
 
-    pub(crate) fn open_detail(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.ui.selected_project.is_some() {
+    /// The header's Detail toggle: opens Detail, or closes it like its own
+    /// close button.
+    pub(crate) fn toggle_detail(
+        &mut self,
+        event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ui.detail_open {
+            self.close_detail(event, window, cx);
+        } else if self.ui.selected_project.is_some() {
             self.ui.detail_open = true;
             cx.notify();
         }
@@ -2605,7 +2627,24 @@ impl RootView {
         cx.notify();
     }
 
+    /// Shows or folds the path and reason of each scanner issue.
+    pub(crate) fn toggle_issues(&mut self, cx: &mut Context<Self>) {
+        self.ui.issues_expanded = !self.ui.issues_expanded;
+        cx.notify();
+    }
+
+    /// Shows or folds the rename and merge rows of the transcript's speakers.
+    pub(crate) fn toggle_speakers(&mut self, cx: &mut Context<Self>) {
+        self.ui.speakers_expanded = !self.ui.speakers_expanded;
+        cx.notify();
+    }
+
     pub(crate) fn set_content_mode(&mut self, mode: ContentMode, cx: &mut Context<Self>) {
+        if self.ui.content_mode != mode {
+            self.scroll
+                .meeting_content
+                .set_offset(gpui::Point::default());
+        }
         self.ui.content_mode = mode;
         cx.notify();
     }
@@ -4055,7 +4094,7 @@ impl RootView {
             cx.notify();
             return;
         };
-        self.ui.processing = true;
+        self.ui.begin_processing(project_id.clone());
         self.processing_cancel_requested = false;
         self.ui.notice = i18n::message(self.ui.locale, "processing", project.title());
         let workspace = self.services.workspace.clone();
@@ -4065,7 +4104,7 @@ impl RootView {
             (Some(_), Some(model)) => model,
             (Some(backend_id), None) => {
                 self.ui.notice = i18n::message(self.ui.locale, "asr_model_required", &backend_id);
-                self.ui.processing = false;
+                self.ui.end_processing();
                 cx.notify();
                 return;
             }
@@ -4078,7 +4117,7 @@ impl RootView {
             (Some(backend_id), None) => {
                 self.ui.notice =
                     i18n::message(self.ui.locale, "diarization_model_required", &backend_id);
-                self.ui.processing = false;
+                self.ui.end_processing();
                 cx.notify();
                 return;
             }
@@ -4106,7 +4145,7 @@ impl RootView {
                 Ok(job) => job,
                 Err(error) => {
                     this.update(cx, |this, cx| {
-                        this.ui.processing = false;
+                        this.ui.end_processing();
                         this.processing_cancel_requested = false;
                         this.ui.notice = i18n::message(this.ui.locale, "processing_failed", &error);
                         cx.notify();
@@ -4119,7 +4158,7 @@ impl RootView {
             let follow = this.update(cx, |this, cx| {
                 cx.notify();
                 if std::mem::take(&mut this.processing_cancel_requested) {
-                    this.ui.processing = false;
+                    this.ui.end_processing();
                     this.ui.notice = i18n::message(this.ui.locale, "cancelled", &title);
                     return false;
                 }
@@ -4138,9 +4177,9 @@ impl RootView {
         .detach();
     }
 
-    /// Shows a started job's events until it finishes, then reloads the
-    /// project list.
-    async fn follow_processing(
+    /// Shows a started job's progress until it finishes, then reloads the
+    /// project list and notes how it ended.
+    pub(crate) async fn follow_processing(
         this: gpui::WeakEntity<Self>,
         job: application::ProjectProcessingJob,
         cx: &mut gpui::AsyncApp,
@@ -4154,28 +4193,35 @@ impl RootView {
             futures::select! {
                 event = asr_next => {
                     if let Some(event) = event {
-                        this.update(cx, |this, cx| this.apply_job_event("ASR", event, cx)).ok();
+                        this.update(cx, |this, cx| this.apply_job_event(Stage::Transcription, event, cx)).ok();
                     }
                 }
                 event = diarization_next => {
                     if let Some(event) = event {
-                        this.update(cx, |this, cx| this.apply_job_event("DIA", event, cx)).ok();
+                        this.update(cx, |this, cx| this.apply_job_event(Stage::Diarization, event, cx)).ok();
                     }
                 }
                 result = processing_future => {
                     this.update(cx, |this, cx| {
-                        this.ui.processing = false;
+                        let title = this
+                            .ui
+                            .processing_document()
+                            .and_then(|id| this.projects.iter().find(|project| project.id() == id))
+                            .map(|project| project.title().to_string());
+                        this.ui.end_processing();
                         this.cancel_contexts = None;
                         this.reload_projects(cx);
-                        match result {
+                        let locale = this.ui.locale;
+                        this.ui.notice = match result {
                             Ok(project) => {
                                 this.ui.selected_project = Some(project.id().clone());
-                                this.ui.notice = i18n::message(this.ui.locale, "finished", project.title());
+                                i18n::message(locale, "finished", project.title())
                             }
-                            Err(error) => {
-                                this.ui.notice = i18n::message(this.ui.locale, "processing_failed", &error.message)
+                            Err(error) if error.code == contracts::BackendErrorCode::Cancelled => {
+                                i18n::message(locale, "cancelled", title.as_deref().unwrap_or_default())
                             }
-                        }
+                            Err(error) => i18n::message(locale, "processing_failed", &error.message),
+                        };
                         cx.notify();
                     }).ok();
                     break;
@@ -4213,28 +4259,13 @@ impl RootView {
         .detach();
     }
 
-    fn apply_job_event(&mut self, source: &str, event: JobEvent, cx: &mut Context<Self>) {
-        self.ui.notice = match event {
-            JobEvent::Started { .. } => i18n::message(self.ui.locale, "job_started", source),
-            JobEvent::Progress { progress, .. } => match progress.total {
-                Some(total) => i18n::message(
-                    self.ui.locale,
-                    "job_progress_total",
-                    &format!("{source}|{}|{total}", progress.completed),
-                ),
-                None => i18n::message(
-                    self.ui.locale,
-                    "job_progress",
-                    &format!("{source}|{}", progress.completed),
-                ),
-            },
-            JobEvent::Completed { .. } => i18n::message(self.ui.locale, "job_completed", source),
-            JobEvent::Failed { message, .. } => {
-                i18n::message(self.ui.locale, "job_failed", &format!("{source}|{message}"))
-            }
-            JobEvent::Cancelled { .. } => i18n::message(self.ui.locale, "job_cancelled", source),
-        };
-        cx.notify();
+    /// Shows `event` of `stage`'s job in the processing progress; the notice
+    /// waits for the job's outcome.
+    fn apply_job_event(&mut self, stage: Stage, event: JobEvent, cx: &mut Context<Self>) {
+        if let Some(progress) = self.ui.progress.as_mut() {
+            progress.apply(stage, &event);
+            cx.notify();
+        }
     }
 }
 
@@ -4496,6 +4527,15 @@ impl Render for RootView {
             .as_ref()
             .and_then(|id| self.projects.iter().find(|project| project.id() == id))
             .cloned();
+        // Original is offered only for processed documents, including after
+        // history navigation or an external update changes the selection.
+        if self.ui.content_mode == ContentMode::Original
+            && selected
+                .as_ref()
+                .is_some_and(|project| project.processing_status() != domain::ProjectStatus::Ready)
+        {
+            self.ui.content_mode = ContentMode::Summary;
+        }
         self.ensure_speaker_rows(selected.as_ref(), window, cx);
         self.ensure_profile_rows(window, cx);
         let body = match self.ui.route {

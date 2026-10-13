@@ -30,7 +30,7 @@ pub enum Overlay {
     /// notice of a save another writer's change refused.
     EditorConflict,
     /// On Meetings: the Original view of the selected document, its
-    /// speakers above the transcript.
+    /// speakers expanded above the transcript.
     OriginalSpeakers,
     /// On Settings: the form scrolled to the Speaker Library section.
     SpeakerLibrary,
@@ -44,8 +44,8 @@ pub enum Overlay {
     /// with its warnings and both receipts (the first undone), paused at the
     /// first of three reviews; the results scrolled to the receipts.
     AssistantReview,
-    /// On Meetings: keyboard focus on the Process button, reached with Tab
-    /// from the project tree.
+    /// On Meetings: keyboard focus on the document header's Detail toggle,
+    /// reached with Tab from the project tree.
     FocusedButton,
     /// On Settings: keyboard focus on the theme select, reached with Tab
     /// from the Settings entry.
@@ -308,7 +308,10 @@ impl MainWindow {
                 });
                 cx.notify();
             }
-            Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Original, cx),
+            Overlay::OriginalSpeakers => {
+                root.ui.speakers_expanded = true;
+                root.set_content_mode(ContentMode::Original, cx)
+            }
             Overlay::SpeakerLibrary => {
                 root.scroll
                     .settings
@@ -402,7 +405,10 @@ impl MainWindow {
                 root.document_conflict = None;
                 cx.notify();
             }
-            Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Summary, cx),
+            Overlay::OriginalSpeakers => {
+                root.ui.speakers_expanded = false;
+                root.set_content_mode(ContentMode::Summary, cx)
+            }
             Overlay::SpeakerLibrary => {
                 root.scroll.settings.set_offset(gpui::Point::default());
                 cx.notify();

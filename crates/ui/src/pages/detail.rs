@@ -2,12 +2,16 @@ use crate::{
     components::{empty_card, timestamp},
     controller::RootView,
     controls::{Button, Region, Scrollbar},
+    editor::status_label,
     i18n::{text as tr, Locale},
+    speakers::transcript_turns,
     theme::{self, Tokens},
 };
 use application::{AudioSourceError, AudioStatus};
 use domain::{document_result_statistics, DocumentState, ProvenanceGap};
-use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Pixels, ScrollHandle};
+use gpui::{
+    div, prelude::*, px, relative, Context, FocusHandle, IntoElement, Pixels, ScrollHandle,
+};
 
 const DETAIL_WIDTH: Pixels = px(400.);
 /// The label column of a Detail row.
@@ -36,18 +40,31 @@ pub(crate) fn render(
             let transcript = div()
                 .mt(tokens.spacing.lg)
                 .child(section_title(tr(locale, "detail_transcript"), &tokens))
-                .children(project.results.speaker_segments.iter().map(|segment| {
+                .children(transcript_turns(project, locale).into_iter().map(|turn| {
                     div()
                         .pt(tokens.spacing.sm)
-                        .child(div().text_xs().text_color(tokens.text_muted).child(format!(
-                                    "{}  {}",
-                                    timestamp(segment.start_ms),
-                                    segment
-                                        .speaker_label
-                                        .as_deref()
-                                        .unwrap_or(&segment.speaker_id)
-                                )))
-                        .child(div().text_sm().child(segment.text.clone()))
+                        .child(
+                            div()
+                                .flex()
+                                .gap(tokens.spacing.sm)
+                                .text_xs()
+                                .child(
+                                    div()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(tokens.speaker(turn.order))
+                                        .child(turn.name),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(tokens.text_muted)
+                                        .child(timestamp(turn.start_ms)),
+                                ),
+                        )
+                        .children(
+                            turn.paragraphs
+                                .into_iter()
+                                .map(|paragraph| div().text_sm().child(paragraph)),
+                        )
                 }));
             let body = div()
                 .id("detail-body")
@@ -79,6 +96,8 @@ pub(crate) fn render(
     Region::new("detail-panel", tr(locale, "project_detail"), focus)
         .debug_selector(|| "detail-panel".into())
         .w(DETAIL_WIDTH)
+        // Keep a reading plane beside Detail at the minimum window size.
+        .max_w(relative(0.5))
         .h_full()
         .flex_shrink_0()
         .p_5()
@@ -99,7 +118,7 @@ pub(crate) fn render(
                 .child(
                     div()
                         .text_sm()
-                        .text_color(tokens.accent_text)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(tr(locale, "project_detail")),
                 )
                 .child(
@@ -107,7 +126,7 @@ pub(crate) fn render(
                         .debug_selector(|| "close-detail".into())
                         .ghost()
                         .compact()
-                        .glyph("×")
+                        .icon("icons/close.svg")
                         .on_click(cx.listener(RootView::close_detail)),
                 ),
         )
@@ -117,19 +136,25 @@ pub(crate) fn render(
 fn section_title(title: &'static str, tokens: &Tokens) -> impl IntoElement {
     div()
         .pb(tokens.spacing.xs)
-        .border_b_1()
-        .border_color(tokens.hairline)
         .text_xs()
-        .text_color(tokens.accent_text)
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(tokens.text_muted)
         .child(title)
 }
 
 fn render_section(section: DetailSection, tokens: &Tokens) -> impl IntoElement {
     div()
-        .pt(tokens.spacing.md)
+        .pt(tokens.spacing.lg)
         .flex()
         .flex_col()
         .child(section_title(section.title, tokens))
+        .children(section.note.map(|note| {
+            div()
+                .pt(tokens.spacing.xs)
+                .text_sm()
+                .text_color(tokens.text_muted)
+                .child(note)
+        }))
         .children(section.rows.into_iter().map(|row| {
             let selector = format!(
                 "detail-{}",
@@ -148,7 +173,15 @@ fn render_section(section: DetailSection, tokens: &Tokens) -> impl IntoElement {
                         .text_color(tokens.text_muted)
                         .child(row.label),
                 )
-                .child(div().flex_1().min_w_0().child(row.value))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .when(row.technical, |value| {
+                            value.text_xs().text_color(tokens.text_muted)
+                        })
+                        .child(row.value),
+                )
         }))
 }
 
@@ -159,6 +192,8 @@ pub(crate) struct DetailRow {
     pub(crate) key: &'static str,
     pub(crate) label: &'static str,
     pub(crate) value: String,
+    /// An identifier or checksum, shown smaller and quieter.
+    pub(crate) technical: bool,
 }
 
 /// A titled group of Detail rows.
@@ -166,6 +201,8 @@ pub(crate) struct DetailRow {
 pub(crate) struct DetailSection {
     pub(crate) title: &'static str,
     pub(crate) rows: Vec<DetailRow>,
+    /// One line in place of rows that would say nothing.
+    pub(crate) note: Option<&'static str>,
 }
 
 /// The read-only facts Detail shows for `project`, whose tree is `projects`:
@@ -184,6 +221,7 @@ pub(crate) fn detail_sections(
         key,
         label: tr(locale, key),
         value,
+        technical: false,
     };
     let known = |value: Option<&str>| {
         value
@@ -264,10 +302,13 @@ pub(crate) fn detail_sections(
             ),
             row("detail_device", known(Some(&record.runtime.device))),
             row("detail_language", known(record.runtime.language.as_deref())),
-            row(
-                "detail_input_checksum",
-                known(record.input_audio_checksum.as_deref()),
-            ),
+            DetailRow {
+                technical: true,
+                ..row(
+                    "detail_input_checksum",
+                    known(record.input_audio_checksum.as_deref()),
+                )
+            },
         ],
     };
     if let Some(error) = &project.processing.last_error {
@@ -289,43 +330,24 @@ pub(crate) fn detail_sections(
             })
     };
 
-    vec![
+    let technical = |key, value| DetailRow {
+        technical: true,
+        ..row(key, value)
+    };
+    let section = |title, rows| DetailSection {
+        title: text(title),
+        rows,
+        note: None,
+    };
+    let results = if statistics.transcript_segments == 0 && statistics.diarization_segments == 0 {
         DetailSection {
-            title: text("detail_identity"),
-            rows: vec![
-                row("detail_title", project.title().to_string()),
-                row("detail_id", project.id().to_string()),
-            ],
-        },
-        DetailSection {
-            title: text("detail_source"),
-            rows: source,
-        },
-        DetailSection {
-            title: text("detail_hierarchy"),
-            rows: vec![
-                row("detail_parent", parent),
-                row("detail_depth", project.hierarchy.depth.to_string()),
-                row("detail_children", children.to_string()),
-            ],
-        },
-        DetailSection {
-            title: text("detail_state"),
-            rows: vec![
-                row(
-                    "detail_document_status",
-                    project.document_status.value.clone(),
-                ),
-                row("detail_revision", project.revision().to_string()),
-            ],
-        },
-        DetailSection {
-            title: text("detail_processing"),
-            rows: processing,
-        },
-        DetailSection {
-            title: text("detail_statistics"),
-            rows: vec![
+            note: Some(text("detail_no_results")),
+            ..section("detail_statistics", Vec::new())
+        }
+    } else {
+        section(
+            "detail_statistics",
+            vec![
                 row(
                     "detail_transcript_segments",
                     statistics.transcript_segments.to_string(),
@@ -346,7 +368,38 @@ pub(crate) fn detail_sections(
                 row("detail_words", statistics.transcript_words.to_string()),
                 row("detail_provenance_gaps", gaps),
             ],
-        },
+        )
+    };
+
+    vec![
+        section(
+            "detail_identity",
+            vec![
+                row("detail_title", project.title().to_string()),
+                technical("detail_id", project.id().to_string()),
+            ],
+        ),
+        section("detail_source", source),
+        section(
+            "detail_hierarchy",
+            vec![
+                row("detail_parent", parent),
+                row("detail_depth", project.hierarchy.depth.to_string()),
+                row("detail_children", children.to_string()),
+            ],
+        ),
+        section(
+            "detail_state",
+            vec![
+                row(
+                    "detail_document_status",
+                    status_label(&project.document_status.value, locale),
+                ),
+                technical("detail_revision", project.revision().to_string()),
+            ],
+        ),
+        section("detail_processing", processing),
+        results,
     ]
 }
 
@@ -486,7 +539,7 @@ mod tests {
             ("detail_parent", "无（根文档）"),
             ("detail_depth", "0"),
             ("detail_children", "1"),
-            ("detail_document_status", "review"),
+            ("detail_document_status", "待复核"),
             ("detail_revision", "7"),
             ("detail_asr", "whisper-rs · large-v3-turbo · r1"),
             ("detail_diarization", "sherpa-onnx · r2"),
@@ -496,7 +549,7 @@ mod tests {
             ("detail_transcript_segments", "2"),
             ("detail_diarization_segments", "2"),
             ("detail_speakers", "2"),
-            ("detail_speech_duration", "00:01:35.000"),
+            ("detail_speech_duration", "1:35"),
             ("detail_characters", "22"),
             ("detail_provenance_gaps", "无"),
         ] {
@@ -510,7 +563,7 @@ mod tests {
         assert_eq!(value(&child_sections, "detail_depth"), Some("1"));
         assert_eq!(
             value(&child_sections, "detail_audio_range"),
-            Some("00:00:42.000 – 00:01:35.000")
+            Some("0:42 – 1:35")
         );
     }
 
@@ -524,15 +577,38 @@ mod tests {
         );
         assert_eq!(value(&sections, "detail_asr"), None);
         assert_eq!(value(&sections, "detail_revision"), Some("0"));
-        assert_eq!(value(&sections, "detail_document_status"), Some("inbox"));
-        assert_eq!(
-            value(&sections, "detail_provenance_gaps"),
-            Some("No processing record")
-        );
+        assert_eq!(value(&sections, "detail_document_status"), Some("Inbox"));
+        // No results: one line in place of a column of zeros.
+        let statistics = sections
+            .iter()
+            .find(|section| section.title == "Result statistics")
+            .unwrap();
+        assert!(statistics.rows.is_empty(), "{statistics:?}");
+        assert_eq!(statistics.note, Some("Not processed yet"));
+        assert_eq!(value(&sections, "detail_provenance_gaps"), None);
 
         state.set_processing_error("model missing");
         let sections = detail_sections(&state, &[state.clone()], Locale::EnUs, None);
         assert_eq!(value(&sections, "detail_last_error"), Some("model missing"));
+    }
+
+    #[test]
+    fn technical_facts_are_marked_and_unknown_statuses_kept() {
+        let mut state = processed();
+        state.document_status.value = "客户跟进".into();
+        let sections = detail_sections(&state, &[state.clone()], Locale::ZhCn, None);
+        assert_eq!(value(&sections, "detail_document_status"), Some("客户跟进"));
+        let technical = sections
+            .iter()
+            .flat_map(|section| &section.rows)
+            .filter(|row| row.technical)
+            .map(|row| row.key)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            technical,
+            ["detail_id", "detail_revision", "detail_input_checksum"]
+        );
+        assert!(sections.iter().all(|section| section.note.is_none()));
     }
 
     #[test]

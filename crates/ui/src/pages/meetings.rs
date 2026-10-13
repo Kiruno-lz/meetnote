@@ -1,17 +1,39 @@
 use crate::{
-    components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
+    components::{
+        document_meta, empty_state, ordered_projects, row_indicator, status_label, timestamp,
+        tree_row_label, DragGhost, ProjectDrag, RowIndicator,
+    },
     controller::RootView,
-    controls::{tree, Button, RadioGroup, Scrollbar, Tree, TreeItem},
+    controls::{tree, Button, Collapsible, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
-    speakers::{document_speakers, DocumentSpeaker},
-    state::{self, ContentMode},
+    route::Route,
+    speakers::{document_speakers, transcript_turns, DocumentSpeaker},
+    state::{self, ContentMode, MissingModels, ProcessingProgress},
     theme::{self, Tokens},
 };
 use domain::{DocumentState, ProjectStatus};
-use gpui::{div, prelude::*, px, AnyElement, Context, IntoElement, Pixels};
+use gpui::{
+    div, percentage, prelude::*, px, relative, svg, Animation, AnimationExt as _, AnyElement,
+    Context, ElementId, IntoElement, Pixels, Transformation,
+};
+use std::time::Duration;
 
 /// The tallest the issue list grows before it scrolls.
 const ISSUE_LIST_HEIGHT: Pixels = px(168.);
+/// The group of a tree row, whose hover shows its drag handle.
+const ROW_GROUP: &str = "project-row";
+/// The drag handle's column in a tree row.
+const GRIP_WIDTH: Pixels = px(14.);
+/// The status dot at the end of a tree row.
+const STATUS_DOT: Pixels = px(6.);
+/// The widest a line of the summary or transcript runs.
+pub(crate) const READING_WIDTH: Pixels = px(680.);
+/// The line height of the reading column, relative to its text.
+const READING_LINE_HEIGHT: f32 = 1.7;
+/// The widest the processing progress grows.
+const PROGRESS_WIDTH: Pixels = px(360.);
+/// One turn of the processing spinner.
+const SPIN: Duration = Duration::from_millis(1_000);
 /// The width of the document status select.
 const STATUS_SELECT_WIDTH: Pixels = px(240.);
 /// The name column of a speaker row.
@@ -69,7 +91,8 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
     } else {
         for (project, depth) in rows {
             let selected = root.ui.selected_project.as_ref() == Some(project.id());
-            let display_status = if selected && root.ui.processing {
+            let processing = root.ui.processing_document() == Some(project.id());
+            let display_status = if processing {
                 ProjectStatus::Processing
             } else {
                 project.processing_status()
@@ -83,13 +106,28 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .iter()
                 .any(|child| child.hierarchy.parent_id.as_ref() == Some(project.id()));
             let expanded = root.ui.expanded_projects.contains(project.id());
+            let id = project.id().as_str().to_string();
+            let audio = root.audio.problem(project.id());
+            // The handle shows on the selected row and the one under the
+            // pointer; it is there to drag from either way.
             let drag_handle = div()
-                .id(format!("drag-{}", project.id().as_str()))
+                .id(format!("drag-{id}"))
                 .debug_selector(|| format!("drag-{}", project.id().as_str()))
-                .mr_2()
-                .cursor_pointer()
-                .text_color(tokens.text_muted)
-                .child("⋮⋮")
+                .flex_shrink_0()
+                .w(GRIP_WIDTH)
+                .flex()
+                .justify_center()
+                .cursor_grab()
+                .child(
+                    svg()
+                        .path("icons/ellipsis-vertical.svg")
+                        .size(px(14.))
+                        .text_color(tokens.text_muted),
+                )
+                .when(!selected, |grip| {
+                    grip.opacity(0.)
+                        .group_hover(ROW_GROUP, |style| style.opacity(1.))
+                })
                 .on_drag(
                     ProjectDrag {
                         project_id: drag_id,
@@ -104,8 +142,9 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
             let expand_handle = if has_children {
                 let expand_id = project.id().clone();
                 tree::disclosure(
-                    format!("expand-{}", project.id().as_str()),
+                    format!("expand-{id}"),
                     expanded,
+                    tokens.text_muted,
                     cx.listener(move |this, _, _, cx| this.toggle_project(expand_id.clone(), cx)),
                 )
                 .into_any_element()
@@ -115,30 +154,31 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
             let before_target = project.id().clone();
             let after_target = project.id().clone();
             let before_drop = div()
-                .id(format!("before-{}", project.id().as_str()))
+                .id(format!("before-{id}"))
                 .debug_selector(|| format!("before-{}", project.id().as_str()))
                 .h(px(5.))
                 .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
                     this.reorder_document(dragged.clone(), before_target.clone(), true, cx)
                 }));
             let after_drop = div()
-                .id(format!("after-{}", project.id().as_str()))
+                .id(format!("after-{id}"))
                 .debug_selector(|| format!("after-{}", project.id().as_str()))
                 .h(px(5.))
                 .on_drop(cx.listener(move |this, dragged: &ProjectDrag, _, cx| {
                     this.reorder_document(dragged.clone(), after_target.clone(), false, cx)
                 }));
             let row = TreeItem::new(
-                project.id().as_str().to_string(),
-                project.title().to_string(),
+                id.clone(),
+                tree_row_label(root.ui.locale, project.title(), display_status, audio),
                 &root.tree_focus,
             )
             .debug_selector(|| format!("project-row-{}", project.id().as_str()))
+            .group(ROW_GROUP)
             .depth(depth.into())
             .selected(selected)
             .expanded(has_children.then_some(expanded))
             .cursor_pointer()
-            .px(tokens.spacing.sm)
+            .px(tokens.spacing.xs)
             .py(tokens.spacing.xs)
             .ml(px((depth as f32) * 16.))
             .rounded(tokens.radius.sm)
@@ -153,38 +193,35 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 div()
                     .flex()
                     .items_center()
+                    .gap(tokens.spacing.xs)
                     .child(drag_handle)
                     .child(expand_handle)
                     .child(
                         div()
+                            .debug_selector({
+                                let id = id.clone();
+                                move || format!("project-title-{id}")
+                            })
                             .flex_1()
                             .min_w_0()
                             .text_sm()
                             .child(theme::tail_faded_label(
-                                format!("project-title-{}", project.id().as_str()),
-                                format!(
-                                    "{} {}",
-                                    if depth > 0 { "↳" } else { "◈" },
-                                    project.title()
-                                ),
+                                format!("project-title-{id}"),
+                                project.title().to_string(),
                                 if selected {
                                     tokens.selection
                                 } else {
                                     tokens.sidebar
                                 },
                             )),
-                    ),
-            )
-            .child(status_line(
-                status_label(root.ui.locale, display_status),
-                root.audio.problem(project.id()).map(|problem| {
-                    (
-                        format!("audio-indicator-{}", project.id().as_str()),
-                        tr(root.ui.locale, problem.label_key()),
                     )
-                }),
-                &tokens,
-            ))
+                    .child(row_end(
+                        &id,
+                        row_indicator(project.processing_status(), processing, audio),
+                        root.ui.locale,
+                        &tokens,
+                    )),
+            )
             .on_click(
                 cx.listener(move |this, _, _, cx| this.select_project(project_id.clone(), cx)),
             )
@@ -225,28 +262,55 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
         )
 }
 
-/// A tree row's processing status, and beside it the audio problem the
-/// last check found, if any, as `(selector, label)`.
-fn status_line(
-    status: &'static str,
-    audio_problem: Option<(String, &'static str)>,
-    tokens: &Tokens,
-) -> gpui::Div {
-    let line = div().mt_1().text_xs();
-    match audio_problem {
-        None => line.text_color(tokens.text_muted).child(status),
-        Some((selector, label)) => line
-            .flex()
-            .items_center()
-            .gap(tokens.spacing.sm)
-            .child(div().text_color(tokens.text_muted).child(status))
+/// The end of tree row `id`: a spinner, a warning, the word for a failure
+/// or a status dot, as `indicator` says.
+fn row_end(id: &str, indicator: RowIndicator, locale: i18n::Locale, tokens: &Tokens) -> AnyElement {
+    let dot = |color| {
+        let id = id.to_string();
+        div()
+            .debug_selector(move || format!("status-dot-{id}"))
+            .flex_shrink_0()
+            .size(STATUS_DOT)
+            .rounded_full()
+            .bg(color)
+    };
+    let end = div()
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(tokens.spacing.xs)
+        .pr(px(2.));
+    match indicator {
+        RowIndicator::Spinner => {
+            let selector = format!("processing-indicator-{id}");
+            end.debug_selector(move || selector.clone())
+                .child(spinner(format!("processing-spinner-{id}"), tokens))
+        }
+        RowIndicator::Audio => {
+            let selector = format!("audio-indicator-{id}");
+            end.debug_selector(move || selector.clone()).child(
+                svg()
+                    .path("icons/triangle-alert.svg")
+                    .size(px(14.))
+                    .text_color(tokens.warning_text),
+            )
+        }
+        RowIndicator::Failed => end
             .child(
                 div()
-                    .debug_selector(move || selector.clone())
-                    .text_color(tokens.warning_text)
-                    .child(label),
-            ),
+                    .text_xs()
+                    .text_color(tokens.danger)
+                    .child(status_label(locale, ProjectStatus::Failed)),
+            )
+            .child(dot(tokens.danger)),
+        RowIndicator::Dot(status) => end.child(dot(match status {
+            ProjectStatus::Ready => tokens.success,
+            ProjectStatus::Processing => tokens.warning,
+            ProjectStatus::Failed => tokens.danger,
+            ProjectStatus::Imported => tokens.text_subtle,
+        })),
     }
+    .into_any_element()
 }
 
 fn main_panel(
@@ -256,8 +320,10 @@ fn main_panel(
 ) -> gpui::Div {
     let locale = root.ui.locale;
     let tokens = *theme::tokens(cx);
+    let processing_here =
+        project.is_some_and(|project| root.ui.processing_document() == Some(project.id()));
     let display_status = project.map(|project| {
-        if root.ui.processing {
+        if processing_here {
             ProjectStatus::Processing
         } else {
             project.processing_status()
@@ -272,20 +338,13 @@ fn main_panel(
         .flex_col()
         .gap_4()
         .children(conflict_notice(root, &tokens, cx))
-        .children(issues_panel(root, &tokens));
+        .children(issues_panel(root, &tokens, cx));
     if let Some(project) = project {
         let ready = project.processing_status() == ProjectStatus::Ready;
-        let audio_problem = root.audio.problem(project.id());
-        let process_label = tr(
-            locale,
-            if root.ui.processing {
-                "cancel"
-            } else {
-                "process"
-            },
-        );
         let mode = root.ui.content_mode;
         let scroll = root.scroll.meeting_content.clone();
+        let empty = (mode != ContentMode::Edit && !ready)
+            .then(|| unprocessed_state(root, project, &tokens, cx));
         let mut content = div()
             .id("meeting-content")
             .debug_selector(|| "meeting-content".into())
@@ -297,121 +356,29 @@ fn main_panel(
             .bg(tokens.surface);
         content = match mode {
             ContentMode::Edit => content.child(editor_form(root, project, &tokens, cx)),
-            ContentMode::Summary if ready => content.child(
-                div().text_sm().child(
-                    project
-                        .content
-                        .summary
-                        .clone()
-                        .unwrap_or_else(|| tr(locale, "no_summary").into()),
-                ),
-            ),
+            ContentMode::Summary if ready => content.child(match &project.content.summary {
+                Some(summary) => reading(summary.clone()),
+                None => reading(tr(locale, "no_summary")).text_color(tokens.text_muted),
+            }),
             ContentMode::Original if ready => content
                 .child(speakers_panel(root, project, &tokens, cx))
-                .children(project.results.speaker_segments.iter().map(|segment| {
-                    div()
-                        .pb_3()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(tokens.accent_text)
-                                .child(format!(
-                                    "{}  {}",
-                                    timestamp(segment.start_ms),
-                                    segment
-                                        .speaker_label
-                                        .as_deref()
-                                        .unwrap_or(&segment.speaker_id)
-                                )),
-                        )
-                        .child(div().text_sm().child(segment.text.clone()))
-                })),
-            _ => content.child(
-                div()
-                    .text_color(tokens.text_muted)
-                    .child(tr(locale, "need_process")),
-            ),
+                .child(transcript(project, locale, &tokens)),
+            _ => content,
         };
-        panel = panel
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_2xl()
-                    .child(project.title().to_string()),
-            )
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_sm()
-                    .text_color(tokens.text_muted)
-                    .child(project.audio_path().to_string()),
-            )
-            // The status and actions wrap beside an open Detail rather than
-            // run past the content column.
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_3()
-                    .child(
-                        div()
-                            .px_3()
-                            .py_1()
-                            .rounded(tokens.radius.sm)
-                            .bg(tokens.status(display_status.unwrap_or(ProjectStatus::Imported)))
-                            .text_sm()
-                            .child(status_label(
-                                locale,
-                                display_status.unwrap_or(ProjectStatus::Imported),
-                            )),
-                    )
-                    .children(audio_problem.map(|problem| {
-                        div()
-                            .debug_selector(|| "audio-problem".into())
-                            .px_3()
-                            .py_1()
-                            .rounded(tokens.radius.sm)
-                            .bg(tokens.warning_surface)
-                            .text_color(tokens.warning_text)
-                            .text_sm()
-                            .child(tr(locale, problem.label_key()))
-                    }))
-                    .child(
-                        Button::new("process-project", process_label)
-                            .debug_selector(|| "process-project".into())
-                            .primary()
-                            .compact()
-                            // Missing audio cannot be processed; relink it.
-                            .disabled(!root.ui.processing && root.audio.missing(project.id()))
-                            .on_click(cx.listener(RootView::process_or_cancel)),
-                    )
-                    .children(audio_problem.map(|_| {
-                        Button::new("relink-audio", tr(locale, "relink_audio"))
-                            .debug_selector(|| "relink-audio".into())
-                            .secondary()
-                            .compact()
-                            .disabled(root.audio.relinking.is_some())
-                            .on_click(cx.listener(RootView::relink_audio))
-                    }))
-                    .child(
-                        Button::new("open-project-detail", tr(locale, "open_detail"))
-                            .debug_selector(|| "open-project-detail".into())
-                            .focus_handle(&root.detail_trigger)
-                            .secondary()
-                            .compact()
-                            .on_click(cx.listener(RootView::open_detail)),
-                    ),
-            );
+        panel = panel.child(document_header(
+            root,
+            project,
+            display_status.unwrap_or(ProjectStatus::Imported),
+            &tokens,
+            cx,
+        ));
         // Summary and Edit always; the speaker-labelled original once
         // processed.
         let mut controls = RadioGroup::new("content-mode", tr(locale, "content_mode"))
             .debug_selector(|| "content-mode-group".into())
+            .segmented()
             .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap_2()
+            .self_start()
             .option(
                 mode == ContentMode::Summary,
                 crate::components::mode_button(tr(locale, "summary"), ContentMode::Summary, cx),
@@ -427,9 +394,10 @@ fn main_panel(
             crate::components::mode_button(tr(locale, "edit"), ContentMode::Edit, cx),
         );
         panel = panel.child(controls);
-        // The scrollbar stays outside the fade.
-        panel = panel.child(
-            div()
+        panel = panel.child(match empty {
+            Some(empty) => empty_region(empty),
+            // The scrollbar stays outside the fade.
+            None => div()
                 .relative()
                 .flex_1()
                 .min_h_0()
@@ -437,39 +405,381 @@ fn main_panel(
                     theme::scroll_faded(&scroll, tokens.surface, content).rounded(tokens.radius.md),
                 )
                 .child(Scrollbar::vertical("meeting-content-scrollbar", &scroll)),
-        );
+        });
+    } else if root.projects.is_empty() {
+        panel = panel.child(empty_region(empty_state(
+            "icons/inbox.svg",
+            tr(locale, "no_projects_title"),
+            tr(locale, "no_projects_hint"),
+            Some(
+                Button::new("empty-import-audio", tr(locale, "import_audio"))
+                    .debug_selector(|| "empty-import-audio".into())
+                    .primary()
+                    .on_click(cx.listener(RootView::import_audio)),
+            ),
+            &tokens,
+        )));
     } else {
-        panel = panel
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .text_2xl()
-                    .child(tr(locale, "meetings")),
-            )
-            .child(crate::components::empty_card(
-                tr(locale, "empty_meetings"),
-                &tokens,
-            ));
+        panel = panel.child(empty_region(empty_state(
+            "icons/file.svg",
+            tr(locale, "no_selection_title"),
+            tr(locale, "no_selection_hint"),
+            None,
+            &tokens,
+        )));
     }
-    panel.child(
-        div()
-            .flex_shrink_0()
-            .border_t_1()
-            .border_color(tokens.hairline)
-            .pt_3()
-            .text_xs()
-            .text_color(tokens.text_muted)
-            .child(format!(
-                "ASR: {}   •   DIA: {}",
-                backend_ids(&root.inventory.asr),
-                backend_ids(&root.inventory.diarization)
-            ))
-            .child(format!(
-                "{}: {}",
-                tr(locale, "models"),
-                state::model_status(&root.installation, locale)
-            )),
+    panel
+}
+
+/// The models processing would run with that are not installed.
+fn missing(root: &RootView) -> MissingModels {
+    state::missing_models(
+        &root.installation,
+        &root.settings_draft,
+        (&root.services.asr_model, &root.services.diarization_model),
     )
+}
+
+/// The content region holding a centered empty state.
+fn empty_region(empty: gpui::Div) -> gpui::Div {
+    div()
+        .debug_selector(|| "meeting-content".into())
+        .flex_1()
+        .min_h_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(empty.debug_selector(|| "document-empty".into()))
+}
+
+/// What an unprocessed document shows in place of its summary: that it is
+/// being processed, or the one step that processes it.
+fn unprocessed_state(
+    root: &RootView,
+    project: &DocumentState,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> gpui::Div {
+    let locale = root.ui.locale;
+    if root.ui.processing_document() == Some(project.id()) {
+        return empty_state(
+            "icons/loader-circle.svg",
+            tr(locale, "processing_empty_title"),
+            tr(locale, "processing_empty_hint"),
+            None,
+            tokens,
+        );
+    }
+    if root.audio.missing(project.id()) {
+        return empty_state(
+            "icons/triangle-alert.svg",
+            tr(locale, "audio_missing_title"),
+            tr(locale, "audio_missing_hint"),
+            Some(
+                Button::new("empty-relink-audio", tr(locale, "relink_audio"))
+                    .debug_selector(|| "empty-relink-audio".into())
+                    .primary()
+                    .disabled(root.audio.relinking.is_some())
+                    .on_click(cx.listener(RootView::relink_audio)),
+            ),
+            tokens,
+        );
+    }
+    if let Some(hint) = missing(root).hint_key() {
+        return empty_state(
+            "icons/cpu.svg",
+            tr(locale, "transcript_empty_title"),
+            tr(locale, hint),
+            Some(
+                Button::new("empty-go-to-models", tr(locale, "go_to_models"))
+                    .debug_selector(|| "empty-go-to-models".into())
+                    .primary()
+                    .on_click(cx.listener(|this, _, _, cx| this.navigate(Route::Models, cx))),
+            ),
+            tokens,
+        );
+    }
+    empty_state(
+        "icons/file.svg",
+        tr(locale, "transcript_empty_title"),
+        tr(locale, "transcript_empty_hint"),
+        Some(
+            Button::new("empty-process", tr(locale, "process"))
+                .debug_selector(|| "empty-process".into())
+                .primary()
+                // One foreground job at a time.
+                .disabled(root.ui.processing)
+                .on_click(cx.listener(RootView::process_selected)),
+        ),
+        tokens,
+    )
+}
+
+/// The document's header: its title with the Detail toggle at the right,
+/// the file line, then its status and actions on one line, and the
+/// progress of its processing while that runs.
+fn document_header(
+    root: &RootView,
+    project: &DocumentState,
+    status: ProjectStatus,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> AnyElement {
+    let locale = root.ui.locale;
+    let processing_here = root.ui.processing_document() == Some(project.id());
+    // One foreground job at a time; another document's is under way.
+    let busy_elsewhere = root.ui.processing && !processing_here;
+    let audio_problem = root.audio.problem(project.id());
+    let process_label = if processing_here {
+        "cancel"
+    } else if project.processing_status() == ProjectStatus::Ready {
+        "reprocess"
+    } else {
+        "process"
+    };
+    let detail_open = root.ui.detail_open;
+    let missing = missing(root);
+    // The empty state in the content region explains an unprocessed
+    // document's missing models itself.
+    let empty_shown = root.ui.content_mode != ContentMode::Edit
+        && project.processing_status() != ProjectStatus::Ready;
+    let models_hint = missing
+        .hint_key()
+        .filter(|_| !processing_here && audio_problem.is_none() && !empty_shown);
+    let chip = |selector: &'static str, fill, text, label: &'static str| {
+        div()
+            .debug_selector(move || selector.into())
+            .flex_shrink_0()
+            .px(tokens.spacing.sm)
+            .py(px(2.))
+            .rounded(tokens.radius.sm)
+            .bg(fill)
+            .text_color(text)
+            .text_xs()
+            .child(label)
+    };
+    let actions = div()
+        .min_w_0()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(tokens.spacing.sm)
+        .child(chip(
+            "document-status",
+            tokens.status(status),
+            tokens.text,
+            status_label(locale, status),
+        ))
+        .children(audio_problem.map(|problem| {
+            chip(
+                "audio-problem",
+                tokens.warning_surface,
+                tokens.warning_text,
+                tr(locale, problem.label_key()),
+            )
+        }))
+        .child(
+            Button::new("process-project", tr(locale, process_label))
+                .debug_selector(|| "process-project".into())
+                .secondary()
+                .compact()
+                // Missing audio or models cannot process; relink or
+                // install them.
+                .disabled(
+                    busy_elsewhere
+                        || (!processing_here
+                            && (root.audio.missing(project.id()) || missing.any())),
+                )
+                .on_click(cx.listener(RootView::process_or_cancel)),
+        )
+        .children(audio_problem.map(|_| {
+            Button::new("relink-audio", tr(locale, "relink_audio"))
+                .debug_selector(|| "relink-audio".into())
+                .secondary()
+                .compact()
+                .disabled(root.audio.relinking.is_some())
+                .on_click(cx.listener(RootView::relink_audio))
+        }));
+    div()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.sm)
+        .child(
+            div()
+                .flex()
+                .items_start()
+                .gap(tokens.spacing.md)
+                .child(
+                    div()
+                        .debug_selector(|| "document-title".into())
+                        .flex_1()
+                        .min_w_0()
+                        .text_2xl()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(project.title().to_string()),
+                )
+                .child(
+                    Button::new(
+                        "open-project-detail",
+                        tr(
+                            locale,
+                            if detail_open {
+                                "hide_detail"
+                            } else {
+                                "show_detail"
+                            },
+                        ),
+                    )
+                    .debug_selector(|| "open-project-detail".into())
+                    .focus_handle(&root.detail_trigger)
+                    .ghost()
+                    .compact()
+                    .icon("icons/panel-right.svg")
+                    .when(detail_open, |toggle| toggle.bg(tokens.selection))
+                    .on_click(cx.listener(RootView::toggle_detail)),
+                ),
+        )
+        .child(
+            div()
+                .debug_selector(|| "document-meta".into())
+                .text_sm()
+                .text_color(tokens.text_muted)
+                .child(document_meta(project, locale)),
+        )
+        .child(
+            // Actions and the models hint wrap inside the reading plane
+            // beside an open Detail, without clipping their labels.
+            div()
+                .pt(tokens.spacing.xs)
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap(tokens.spacing.sm)
+                .child(actions)
+                .children(models_hint.map(|hint| {
+                    div()
+                        .debug_selector(|| "models-required".into())
+                        .flex()
+                        .items_center()
+                        .gap(tokens.spacing.xs)
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(tokens.text_muted)
+                                .child(tr(locale, hint)),
+                        )
+                        .child(
+                            Button::new("go-to-models", tr(locale, "go_to_models"))
+                                .debug_selector(|| "go-to-models".into())
+                                .ghost()
+                                .compact()
+                                .text_color(tokens.accent_text)
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.navigate(Route::Models, cx)),
+                                ),
+                        )
+                })),
+        )
+        .children(
+            root.ui
+                .progress
+                .as_ref()
+                .filter(|_| processing_here)
+                .map(|progress| processing_progress(progress, locale, tokens)),
+        )
+        .into_any_element()
+}
+
+/// Prose of the reading column: a measured width and an open line height.
+fn reading(text: impl IntoElement) -> gpui::Div {
+    div()
+        .max_w(READING_WIDTH)
+        .text_sm()
+        .line_height(relative(READING_LINE_HEIGHT))
+        .child(text)
+}
+
+/// The speaker-labelled transcript as turns: each speaker's name in its
+/// color over the paragraphs it says, with a quiet start time.
+fn transcript(project: &DocumentState, locale: i18n::Locale, tokens: &Tokens) -> gpui::Div {
+    div().flex().flex_col().gap(tokens.spacing.lg).children(
+        transcript_turns(project, locale)
+            .into_iter()
+            .enumerate()
+            .map(|(index, turn)| {
+                div()
+                    .debug_selector(move || format!("transcript-turn-{index}"))
+                    .max_w(READING_WIDTH)
+                    .flex()
+                    .flex_col()
+                    .gap(tokens.spacing.xs)
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(tokens.spacing.sm)
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(tokens.speaker(turn.order))
+                                    .child(turn.name),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(tokens.text_muted)
+                                    .child(timestamp(turn.start_ms)),
+                            ),
+                    )
+                    .children(turn.paragraphs.into_iter().map(reading))
+            }),
+    )
+}
+
+/// Where the foreground processing of the shown document is: its phase
+/// over a thin bar, which sweeps until a stage knows its extent.
+fn processing_progress(
+    progress: &ProcessingProgress,
+    locale: i18n::Locale,
+    tokens: &Tokens,
+) -> AnyElement {
+    let percent = progress.percent();
+    div()
+        .debug_selector(|| "processing-progress".into())
+        .flex_shrink_0()
+        .max_w(PROGRESS_WIDTH)
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.xs)
+        .child(
+            div()
+                .text_xs()
+                .text_color(tokens.text_muted)
+                .child(progress.phase(locale)),
+        )
+        .child(
+            ProgressBar::new("processing-progress-bar", tr(locale, "processing_progress"))
+                .value(percent.unwrap_or(0.))
+                .indeterminate(percent.is_none()),
+        )
+        .into_any_element()
+}
+
+/// A turning loader icon; still under reduced motion.
+fn spinner(id: impl Into<ElementId>, tokens: &Tokens) -> AnyElement {
+    let icon = svg()
+        .path("icons/loader-circle.svg")
+        .size(px(14.))
+        .text_color(tokens.text_muted);
+    if tokens.motion.layout.is_zero() {
+        return icon.into_any_element();
+    }
+    icon.with_animation(id, Animation::new(SPIN).repeat(), |icon, turn| {
+        icon.with_transformation(Transformation::rotate(percentage(turn)))
+    })
+    .into_any_element()
 }
 
 /// The speakers of the document above its transcript, each with its
@@ -489,16 +799,60 @@ fn speakers_panel(
         .as_ref()
         .filter(|rows| &rows.key().0 == project.id());
     let speakers = document_speakers(project);
+    let expanded = root.ui.speakers_expanded;
+    let summary = i18n::message(locale, "speakers_summary", &speakers.len().to_string());
+    let names = speakers
+        .iter()
+        .map(|speaker| speaker.name(locale))
+        .collect::<Vec<_>>()
+        .join(match locale {
+            i18n::Locale::ZhCn => "、",
+            i18n::Locale::EnUs => ", ",
+        });
+    let header = Collapsible::new("document-speakers-toggle", summary.clone())
+        .debug_selector(|| "document-speakers-toggle".into())
+        .open(expanded)
+        .on_toggle(cx.listener(|this, _, _, cx| this.toggle_speakers(cx)))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(tokens.spacing.sm)
+        .py(tokens.spacing.xs)
+        .rounded(tokens.radius.sm)
+        .child(
+            svg()
+                .path(if expanded {
+                    "icons/chevron-down.svg"
+                } else {
+                    "icons/chevron-right.svg"
+                })
+                .size(px(12.))
+                .text_color(tokens.text_muted),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_sm()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(summary),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .text_sm()
+                .text_color(tokens.text_muted)
+                .child(theme::tail_faded_label(
+                    "document-speaker-names",
+                    names,
+                    tokens.surface,
+                )),
+        );
     let mut panel = div()
-        .debug_selector(|| "document-speakers".into())
-        .mb(tokens.spacing.lg)
-        .pb(tokens.spacing.md)
-        .border_b_1()
-        .border_color(tokens.hairline)
         .flex()
         .flex_col()
         .gap(tokens.spacing.sm)
-        .child(div().text_sm().child(tr(locale, "speakers")))
+        .pt(tokens.spacing.xs)
         .child(
             div()
                 .text_xs()
@@ -534,7 +888,7 @@ fn speakers_panel(
                         .flex_col()
                         .child(div().text_sm().child(theme::tail_faded_label(
                             format!("speaker-label-{}", speaker.id),
-                            speaker.name().to_string(),
+                            speaker.name(locale),
                             tokens.surface,
                         )))
                         .child(
@@ -574,17 +928,19 @@ fn speakers_panel(
                 })),
         );
     }
-    panel.into_any_element()
+    div()
+        .debug_selector(|| "document-speakers".into())
+        .mb(tokens.spacing.lg)
+        .pb(tokens.spacing.sm)
+        .border_b_1()
+        .border_color(tokens.hairline)
+        .child(header.content(panel))
+        .into_any_element()
 }
 
-/// The quiet line under a speaker's name: its segment count, after its id
-/// when a label is shown above.
+/// The quiet line under a speaker's name: its segment count.
 fn speaker_facts(speaker: &DocumentSpeaker, locale: i18n::Locale) -> String {
-    let segments = i18n::message(locale, "speaker_segments", &speaker.segments.to_string());
-    match speaker.label {
-        Some(_) => format!("{} · {segments}", speaker.id),
-        None => segments,
-    }
+    i18n::message(locale, "speaker_segments", &speaker.segments.to_string())
 }
 
 /// A fixed-width wrapper that `selector` marks for tests; the control
@@ -657,12 +1013,65 @@ pub(crate) fn issue_sentence(issue: &application::DocumentIssue, locale: i18n::L
     )
 }
 
-/// The scanner's issues of the documents directory, each with its path and
-/// reason, as the last reload read them. Nothing when there are none.
-fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
+/// The scanner's issues of the documents directory as the last reload read
+/// them: one line with their count, which expands to each path and reason.
+/// Nothing when there are none.
+fn issues_panel(
+    root: &RootView,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> Option<AnyElement> {
     if root.document_issues.is_empty() {
         return None;
     }
+    let locale = root.ui.locale;
+    let expanded = root.ui.issues_expanded;
+    let summary = i18n::message(
+        locale,
+        "document_issues",
+        &root.document_issues.len().to_string(),
+    );
+    let header = Collapsible::new("document-issues-toggle", summary.clone())
+        .debug_selector(|| "document-issues-toggle".into())
+        .open(expanded)
+        .on_toggle(cx.listener(|this, _, _, cx| this.toggle_issues(cx)))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(tokens.spacing.sm)
+        .child(
+            svg()
+                .path("icons/triangle-alert.svg")
+                .size(px(14.))
+                .text_color(tokens.warning_text),
+        )
+        .child(div().flex_1().min_w_0().text_sm().child(summary))
+        .child(
+            div()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .gap(tokens.spacing.xs)
+                .text_xs()
+                .child(tr(
+                    locale,
+                    if expanded {
+                        "hide_issues"
+                    } else {
+                        "show_issues"
+                    },
+                ))
+                .child(
+                    svg()
+                        .path(if expanded {
+                            "icons/chevron-up.svg"
+                        } else {
+                            "icons/chevron-down.svg"
+                        })
+                        .size(px(12.))
+                        .text_color(tokens.warning_text),
+                ),
+        );
     let scroll = root.scroll.document_issues.clone();
     let list = div()
         .id("document-issue-list")
@@ -686,7 +1095,7 @@ fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
                             div()
                                 .text_sm()
                                 .text_color(tokens.text)
-                                .child(issue_sentence(issue, root.ui.locale)),
+                                .child(issue_sentence(issue, locale)),
                         )
                 }),
         );
@@ -694,24 +1103,20 @@ fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
         div()
             .debug_selector(|| "document-issues".into())
             .flex_shrink_0()
-            .p_3()
+            .px(tokens.spacing.md)
+            .py(tokens.spacing.sm)
             .rounded(tokens.radius.sm)
             .bg(tokens.warning_surface)
             .text_color(tokens.warning_text)
-            .flex()
-            .flex_col()
-            .gap(tokens.spacing.sm)
-            .child(div().text_sm().child(i18n::message(
-                root.ui.locale,
-                "document_issues",
-                &root.document_issues.len().to_string(),
-            )))
-            // The scrollbar stays outside the fade.
             .child(
-                div()
-                    .relative()
-                    .child(theme::scroll_faded(&scroll, tokens.warning_surface, list))
-                    .child(Scrollbar::vertical("document-issues-scrollbar", &scroll)),
+                header.content(
+                    // The scrollbar stays outside the fade.
+                    div()
+                        .relative()
+                        .mt(tokens.spacing.sm)
+                        .child(theme::scroll_faded(&scroll, tokens.warning_surface, list))
+                        .child(Scrollbar::vertical("document-issues-scrollbar", &scroll)),
+                ),
             )
             .into_any_element(),
     )

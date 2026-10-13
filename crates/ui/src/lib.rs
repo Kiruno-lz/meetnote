@@ -1421,8 +1421,8 @@ mod tests {
         view.update(cx, |root, cx| {
             let document = DocumentState::new(ProjectId::new("first"), "First", "first.wav");
             root.ui.selected_project = Some(document.id().clone());
+            root.ui.begin_processing(document.id().clone());
             root.projects = vec![document];
-            root.ui.processing = true;
             root.cancel_contexts = Some((asr.clone(), diarization.clone()));
             root.follow_download(events, cx);
             root.navigate(route::Route::Meetings, cx);

@@ -23,6 +23,8 @@ enum Variant {
     Secondary,
     Ghost,
     Danger,
+    /// A segment of a segmented control.
+    Segment,
 }
 
 #[derive(IntoElement)]
@@ -30,7 +32,6 @@ pub(crate) struct Button {
     id: ElementId,
     base: gpui_base::Button,
     label: SharedString,
-    glyph: Option<SharedString>,
     icon: Option<SharedString>,
     leading: bool,
     variant: Variant,
@@ -51,7 +52,6 @@ impl Button {
             base: gpui_base::Button::new(id.clone()),
             id,
             label: label.into(),
-            glyph: None,
             icon: None,
             leading: false,
             variant: Variant::Secondary,
@@ -100,15 +100,18 @@ impl Button {
         self
     }
 
-    /// Narrower side padding, for buttons in rows of controls.
-    pub(crate) fn compact(mut self) -> Self {
-        self.compact = true;
+    /// One segment of a segmented control: raised on a hairline while
+    /// `selected`, muted text on the track otherwise; a radio button checked
+    /// while selected for assistive technology.
+    pub(super) fn segment(mut self, selected: bool) -> Self {
+        self.variant = Variant::Segment;
+        self.choice = Some(selected);
         self
     }
 
-    /// Shows `glyph` in place of the label, which still names the button.
-    pub(crate) fn glyph(mut self, glyph: impl Into<SharedString>) -> Self {
-        self.glyph = Some(glyph.into());
+    /// Narrower side padding, for buttons in rows of controls.
+    pub(crate) fn compact(mut self) -> Self {
+        self.compact = true;
         self
     }
 
@@ -183,11 +186,27 @@ impl InteractiveElement for Button {
 impl RenderOnce for Button {
     fn render(mut self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = *theme::tokens(cx);
+        let segment = self.variant == Variant::Segment;
+        let selected = self.choice == Some(true);
         let colors = match self.variant {
             Variant::Primary => tokens.button.primary,
             Variant::Secondary => tokens.button.secondary,
             Variant::Ghost => tokens.button.ghost,
             Variant::Danger => tokens.button.danger,
+            Variant::Segment => {
+                let mut colors = tokens.button.ghost;
+                if selected {
+                    colors.fill = tokens.raised;
+                    colors.hover = tokens.raised;
+                    colors.pressed = tokens.raised;
+                    colors.text = tokens.text;
+                } else {
+                    colors.hover = tokens.wash;
+                    colors.pressed = tokens.wash;
+                    colors.text = tokens.text_muted;
+                }
+                colors
+            }
         };
         let (fill, text) = if self.disabled {
             (colors.disabled, tokens.button.disabled_text)
@@ -203,7 +222,7 @@ impl RenderOnce for Button {
                 .clone()
         });
         let ring = !self.disabled && keyboard_focused(&focus, window);
-        let named_by_tooltip = self.glyph.is_some() || (self.icon.is_some() && !self.leading);
+        let named_by_tooltip = self.icon.is_some() && !self.leading;
         // The caller's styles apply over the button's own.
         let caller = std::mem::take(self.base.style());
         let mut button = self
@@ -233,6 +252,13 @@ impl RenderOnce for Button {
                 button.min_w(tokens.control_height.md)
             })
             .rounded(tokens.radius.sm)
+            .when(segment, |button| {
+                button.border_1().border_color(if selected {
+                    tokens.hairline
+                } else {
+                    gpui::transparent_black()
+                })
+            })
             .cursor_default()
             .bg(fill)
             .text_color(text)
@@ -258,7 +284,11 @@ impl RenderOnce for Button {
                         content.justify_center()
                     }
                 })
-                .text_size(tokens.font_size.md)
+                .text_size(if segment {
+                    tokens.font_size.sm
+                } else {
+                    tokens.font_size.md
+                })
                 .child(
                     div()
                         .flex_none()
@@ -270,7 +300,7 @@ impl RenderOnce for Button {
                             Some(path) => content
                                 .child(gpui::svg().path(path).size(gpui::px(18.)).text_color(text))
                                 .when(self.leading, |content| content.child(self.label)),
-                            None => content.child(self.glyph.unwrap_or(self.label)),
+                            None => content.child(self.label),
                         }),
                 ),
         );
@@ -351,11 +381,11 @@ mod tests {
     }
 
     #[test]
-    fn the_label_names_the_button_even_behind_a_glyph() {
+    fn the_label_names_the_button_even_behind_an_icon() {
         assert_eq!(Button::new("save", "Save").accessibility_label(), "Save");
         assert_eq!(
             Button::new("close", "Close detail")
-                .glyph("×")
+                .icon("icons/close.svg")
                 .accessibility_label(),
             "Close detail"
         );
@@ -373,6 +403,12 @@ mod tests {
                 choice.accessibility_role(),
                 (Role::RadioButton, Some(selected))
             );
+            let segment = Button::new("summary", "Summary").segment(selected);
+            assert_eq!(
+                segment.accessibility_role(),
+                (Role::RadioButton, Some(selected))
+            );
+            assert_eq!(segment.variant, Variant::Segment);
             let variant = if selected {
                 Variant::Primary
             } else {

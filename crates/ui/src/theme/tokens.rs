@@ -171,6 +171,9 @@ pub(crate) struct Tokens {
     pub(crate) warning_text: Hsla,
     pub(crate) success: Hsla,
     pub(crate) status: StatusColors,
+    /// Speaker names in a transcript, assigned in speaking order; legible
+    /// on `surface` and `raised`.
+    pub(crate) speakers: [Hsla; SPEAKER_COLORS],
     pub(crate) button: Buttons,
     /// The ring around a control that has keyboard focus.
     pub(crate) focus_ring: Hsla,
@@ -187,6 +190,9 @@ pub(crate) struct Tokens {
     pub(crate) font_size: FontSize,
     pub(crate) motion: Motion,
 }
+
+/// How many speaker colors a palette has before they repeat.
+pub(crate) const SPEAKER_COLORS: usize = 6;
 
 /// The alpha of `sheet_frost`.
 const SHEET_FROST_ALPHA: f32 = 0.5;
@@ -254,6 +260,11 @@ impl Tokens {
             ProjectStatus::Ready => self.status.ready,
             ProjectStatus::Failed => self.status.failed,
         }
+    }
+
+    /// The color of the speaker who speaks `order`-th in a document.
+    pub(crate) fn speaker(&self, order: usize) -> Hsla {
+        self.speakers[order % SPEAKER_COLORS]
     }
 
     /// The fill the window root paints under everything: clear under
@@ -366,6 +377,14 @@ fn dark() -> Tokens {
             ready: hex(0x166534),
             failed: hex(0x991b1b),
         },
+        speakers: [
+            hex(0x7dd3fc),
+            hex(0xc4b5fd),
+            hex(0x86efac),
+            hex(0xfcd34d),
+            hex(0xf9a8d4),
+            hex(0x5eead4),
+        ],
         button: buttons(ButtonPalette {
             primary: [hex(0xf9f9f9), hex(0xf5f5f5), hex(0xe4e4e4)],
             primary_text: hex(0x161616),
@@ -427,6 +446,14 @@ fn light() -> Tokens {
             ready: hex(0xbbf7d0),
             failed: hex(0xfecaca),
         },
+        speakers: [
+            hex(0x0369a1),
+            hex(0x6d28d9),
+            hex(0x166534),
+            hex(0x92400e),
+            hex(0xbe185d),
+            hex(0x0f766e),
+        ],
         button: buttons(ButtonPalette {
             primary: [hex(0x161616), hex(0x252525), hex(0x090909)],
             primary_text: hex(0xf9f9f9),
@@ -604,6 +631,32 @@ mod tests {
                     "{mode:?} text on {status:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn speaker_colors_are_distinct_and_legible_where_transcripts_are_read() {
+        for mode in MODES {
+            let tokens = Tokens::new(mode, Material::Opaque, false);
+            for (index, color) in tokens.speakers.iter().enumerate() {
+                for (plane, background) in [("surface", tokens.surface), ("raised", tokens.raised)]
+                {
+                    assert!(
+                        ratio(*color, background) >= 4.5,
+                        "{mode:?} speaker {index} on {plane}"
+                    );
+                }
+                assert!(
+                    !tokens.speakers[index + 1..].contains(color),
+                    "{mode:?} speaker {index} repeats"
+                );
+                assert_eq!(tokens.speaker(index), *color);
+            }
+            assert_eq!(
+                tokens.speaker(SPEAKER_COLORS),
+                tokens.speaker(0),
+                "the palette repeats after its last color"
+            );
         }
     }
 
