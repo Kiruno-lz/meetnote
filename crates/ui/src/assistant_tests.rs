@@ -583,6 +583,58 @@ fn a_long_markdown_change_can_be_read_in_full_before_confirmation(cx: &mut TestA
 }
 
 #[gpui::test]
+fn tab_reveals_a_long_reviews_confirm_button_above_the_prompt(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    let mut review = pending_review("keyboard-review", u64::MAX);
+    review.field_diffs = vec![crate::assistant_ui::AssistantFieldDiff {
+        document_id: "first".into(),
+        field: "markdown".into(),
+        before: None,
+        after: Some(
+            "The revised meeting notes describe the decision and its owner in detail. ".repeat(144),
+        ),
+    }];
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        pending_reviews: vec![review],
+        ..empty_result()
+    });
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    for size in [
+        gpui::size(gpui::px(1920.), gpui::px(1080.)),
+        crate::pages::chrome::MIN_WINDOW_SIZE,
+    ] {
+        cx.simulate_resize(size);
+        let scroll = view.read_with(cx, |root, _| root.scroll.assistant_results.clone());
+        scroll.set_offset(gpui::Point::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+        assert!(
+            rendered(cx, "assistant-confirm").top() > rendered(cx, "assistant-results").bottom(),
+            "the long review puts its decisions below the initial viewport"
+        );
+        let focus = view.read_with(cx, |root, _| root.review_focus.clone());
+        cx.update(|window, cx| focus.focus(window, cx));
+        cx.simulate_keystrokes("tab tab");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+        let confirm = rendered(cx, "assistant-confirm");
+        let ring = rendered(cx, "focus-ring");
+        assert!(
+            within(ring, confirm),
+            "Tab reaches the confirmation button: {ring:?} in {confirm:?}"
+        );
+        let bar = rendered(cx, "assistant-input-bar");
+        assert!(
+            confirm.bottom() <= bar.top(),
+            "keyboard reveal leaves the decision clear of the floating prompt: {confirm:?} above {bar:?}"
+        );
+        assert!(within(confirm, rendered(cx, "assistant-results")));
+    }
+}
+
+#[gpui::test]
 fn reviews_over_the_queue_limit_are_noticed_on_the_page(cx: &mut TestAppContext) {
     let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
     *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
@@ -643,8 +695,8 @@ fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
         "the last card ends above the bar: {last:?} and {bar:?}"
     );
     assert!(
-        results.top() < bar.top() && results.bottom() <= bar.bottom(),
-        "the results run under the bar but end with it: {results:?} and {bar:?}"
+        results.top() < bar.top() && results.bottom() <= bar.top(),
+        "the results viewport ends above the bar: {results:?} and {bar:?}"
     );
 }
 
