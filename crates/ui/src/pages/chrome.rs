@@ -5,10 +5,14 @@
 
 use crate::{
     controller::RootView,
-    controls::{sidebar::SidebarPanel, window::DragStrip, Button, NavEntry, NavList},
-    i18n::text as tr,
+    controls::{
+        sidebar::SidebarPanel,
+        window::{DragStrip, Shortcut},
+        Button, NavEntry, NavList, Toast,
+    },
+    i18n::{text as tr, Locale},
     route::Route,
-    theme,
+    state, theme,
 };
 use gpui::{
     div, point, prelude::*, px, size, AnyElement, Context, FocusHandle, IntoElement, Pixels, Point,
@@ -45,13 +49,20 @@ pub(crate) fn shell(
 ) -> gpui::Div {
     let tokens = *theme::tokens(cx);
     let secondary = matches!(root.ui.route, Route::Meetings | Route::Settings);
-    let folding = root.sidebar_sizing.read(cx).folding();
+    let now = cx.background_executor().now();
+    let folding = root.sidebar_sizing.read(cx).folding(now);
     let show_sidebar = secondary && (root.ui.sidebar_open || folding);
     if folding && secondary {
         window.request_animation_frame();
     }
+    let toast = root
+        .ui
+        .toast()
+        .cloned()
+        .map(|toast| notice_toast(toast, root.ui.locale, cx));
     let plane = div()
         .debug_selector(|| "content-plane".into())
+        .relative()
         .flex_1()
         .min_w_0()
         .min_h_0()
@@ -67,7 +78,8 @@ pub(crate) fn shell(
             }
         })
         .child(div().flex_1().min_w_0().h_full().flex().child(body))
-        .children(detail);
+        .children(detail)
+        .children(toast);
     let mut frame = div()
         .debug_selector(|| "inner-frame".into())
         .flex_1()
@@ -129,6 +141,7 @@ fn toolbar(root: &mut RootView, secondary: bool, cx: &mut Context<RootView>) -> 
                 .ghost()
                 .compact()
                 .icon("icons/arrow-left.svg")
+                .shortcut(Shortcut::Back.keys())
                 .disabled(!root.ui.can_go_back())
                 .on_click(cx.listener(|this, _, _, cx| this.travel(false, cx))),
         )
@@ -138,6 +151,7 @@ fn toolbar(root: &mut RootView, secondary: bool, cx: &mut Context<RootView>) -> 
                 .ghost()
                 .compact()
                 .icon("icons/arrow-right.svg")
+                .shortcut(Shortcut::Forward.keys())
                 .disabled(!root.ui.can_go_forward())
                 .on_click(cx.listener(|this, _, _, cx| this.travel(true, cx))),
         )
@@ -147,18 +161,9 @@ fn toolbar(root: &mut RootView, secondary: bool, cx: &mut Context<RootView>) -> 
                 .ghost()
                 .compact()
                 .icon("icons/panel-left.svg")
+                .shortcut(Shortcut::ToggleSidebar.keys())
                 .disabled(!secondary)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    if this.ui.sidebar_open && this.tree_focus.contains_focused(window, cx) {
-                        this.nav_focus[1].focus(window, cx);
-                    }
-                    this.ui.sidebar_open = !this.ui.sidebar_open;
-                    let duration = theme::tokens(cx).motion.layout;
-                    this.sidebar_sizing.update(cx, |state, _| {
-                        state.set_open(this.ui.sidebar_open, duration)
-                    });
-                    cx.notify();
-                })),
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_sidebar(window, cx))),
         )
         .child(drag_strip("titlebar-drag-content").flex_1())
 }
@@ -178,6 +183,7 @@ fn rail(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
             nav_entry(
                 tr(locale, key),
                 *route,
+                Shortcut::Entry(index).keys(),
                 *route == current,
                 &focus[index],
                 (
@@ -203,11 +209,40 @@ fn rail(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
                 .debug_selector(|| "import-audio".into())
                 .ghost()
                 .icon("icons/plus.svg")
+                .shortcut(Shortcut::ImportAudio.keys())
                 .w(px(44.))
                 .h(px(44.))
                 .on_click(cx.listener(RootView::import_audio)),
         )
         .child(div().h(tokens.spacing.sm))
+}
+
+/// The latest notice's toast, centered at the top of the content plane,
+/// clear of the Assistant's input bar at its bottom.
+fn notice_toast(toast: state::Toast, locale: Locale, cx: &mut Context<RootView>) -> gpui::Div {
+    let tokens = *theme::tokens(cx);
+    let generation = toast.generation;
+    let mut card = Toast::new(
+        ("notice-toast", generation),
+        state::toast_text(&toast.notice).to_string(),
+        toast.tone,
+    )
+    .leaving(toast.leaving);
+    if !toast.tone.fades() {
+        card = card.on_close(
+            tr(locale, "dismiss_notice"),
+            cx.listener(move |this, _, _, cx| this.dismiss_toast(generation, cx)),
+        );
+    }
+    div()
+        .absolute()
+        .top(tokens.spacing.md)
+        .left_0()
+        .right_0()
+        .px(tokens.spacing.lg)
+        .flex()
+        .justify_center()
+        .child(card)
 }
 
 fn secondary_sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> AnyElement {
@@ -265,6 +300,7 @@ fn secondary_sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> AnyElem
 fn nav_entry(
     label: &'static str,
     route: Route,
+    shortcut: &'static str,
     active: bool,
     focus: &FocusHandle,
     beside: (Option<&FocusHandle>, Option<&FocusHandle>),
@@ -288,6 +324,7 @@ fn nav_entry(
     NavEntry::new(format!("nav-{route:?}"), label, focus)
         .debug_selector(move || format!("nav-{route:?}"))
         .icon_only()
+        .shortcut(shortcut)
         .selected(active)
         .beside(beside.0, beside.1)
         .on_click(cx.listener(move |this, _, _, cx| this.navigate(route, cx)))

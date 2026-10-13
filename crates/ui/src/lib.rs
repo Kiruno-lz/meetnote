@@ -14,6 +14,8 @@ mod model_tests;
 mod pages;
 mod route;
 #[cfg(test)]
+mod shell_tests;
+#[cfg(test)]
 mod source_files;
 #[cfg(test)]
 mod speaker_tests;
@@ -1295,6 +1297,9 @@ mod tests {
         let route = view.read_with(cx, |root, _| root.ui.route);
         assert_ne!(route, route::Route::Models);
         click_selector(cx, "nav-Models");
+        assert_eq!(view.read_with(cx, |root, _| root.ui.route), route);
+        // Nor do the window's shortcuts reach past it.
+        cx.simulate_keystrokes("cmd-3");
         assert_eq!(view.read_with(cx, |root, _| root.ui.route), route);
         assert!(cx.debug_bounds("confirm-dialog").is_some());
 
