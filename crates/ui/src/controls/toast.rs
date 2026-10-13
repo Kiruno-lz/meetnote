@@ -3,16 +3,17 @@
 //! alert for assistive technology and takes the presses on it. Information
 //! and success fade on their own, are a status, and let presses through to
 //! what lies under them, so a passing confirmation never blocks the next
-//! click. The card drops into place as it fades in and rises as it fades
+//! click. Long messages scroll within the card; its close button stays
+//! outside that scroll area. The card drops into place as it fades in and rises as it fades
 //! out, changing only its opacity and position; under reduced motion it
 //! shows and goes at once.
 
-use super::{entrance, Button};
+use super::{entrance, Button, Scrollbar};
 use crate::state::NoticeTone;
 use crate::theme::{self, BlurLevel};
 use gpui::{
     div, prelude::*, px, Animation, AnimationExt as _, App, ClickEvent, ElementId, Pixels, Role,
-    SharedString, Window,
+    ScrollHandle, SharedString, Window,
 };
 use std::sync::Arc;
 
@@ -20,6 +21,8 @@ use std::sync::Arc;
 const DROP: Pixels = px(8.);
 /// The widest card; a longer notice wraps.
 const MAX_WIDTH: Pixels = px(480.);
+/// Feedback leaves the page readable even when a service returns many lines.
+const MAX_MESSAGE_HEIGHT: Pixels = px(160.);
 const ICON_SIZE: Pixels = px(16.);
 
 type CloseHandler = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
@@ -81,8 +84,12 @@ impl Toast {
 }
 
 impl RenderOnce for Toast {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = *theme::tokens(cx);
+        let scroll = window
+            .use_keyed_state(self.id.clone(), cx, |_, _| ScrollHandle::new())
+            .read(cx)
+            .clone();
         let (icon, color) = match self.tone {
             NoticeTone::Info => ("icons/info.svg", tokens.text_muted),
             NoticeTone::Success => ("icons/circle-check.svg", tokens.success),
@@ -118,7 +125,26 @@ impl RenderOnce for Toast {
                     .size(ICON_SIZE)
                     .text_color(color),
             )
-            .child(div().flex_1().min_w_0().child(self.label))
+            .child(
+                div()
+                    .id(ElementId::NamedChild(
+                        Arc::new(self.id.clone()),
+                        "message".into(),
+                    ))
+                    .debug_selector(|| "notice-toast-message".into())
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .max_h(MAX_MESSAGE_HEIGHT)
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .child(
+                        div()
+                            .debug_selector(|| "notice-toast-text".into())
+                            .child(self.label),
+                    )
+                    .child(Scrollbar::vertical("notice-toast-scrollbar", &scroll)),
+            )
             .children(self.close.map(|(label, handler)| {
                 Button::new("notice-toast-close", label)
                     .debug_selector(|| "notice-toast-close".into())

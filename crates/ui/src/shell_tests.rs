@@ -160,3 +160,69 @@ fn a_new_notice_replaces_the_toast_and_a_repeated_one_opens_it_again(cx: &mut Te
     advance(cx, fade);
     assert!(toast(cx).is_none(), "a cleared notice closes the toast");
 }
+
+#[gpui::test]
+fn a_long_error_keeps_its_close_button_inside_the_window(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    cx.update(|_, cx| {
+        theme::install_for_test(
+            theme::Tokens::new(theme::Mode::Light, theme::Material::Opaque, true),
+            cx,
+        )
+    });
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    set_notice(
+        cx,
+        &view,
+        i18n::message(
+            Locale::ZhCn,
+            "import_failed",
+            &"无法读取文件，请检查路径。\n".repeat(60),
+        ),
+    );
+    let plane = cx.debug_bounds("content-plane").unwrap();
+    let close = cx.debug_bounds("notice-toast-close").unwrap();
+    assert!(
+        close.bottom() < plane.bottom(),
+        "the error remains dismissible: {close:?} in {plane:?}"
+    );
+    let shown = toast(cx).unwrap();
+    assert!(
+        shown.size.height <= plane.size.height / 2.,
+        "feedback leaves the underlying page readable: {shown:?}"
+    );
+    let message = cx.debug_bounds("notice-toast-message").unwrap();
+    let before = cx.debug_bounds("notice-toast-text").unwrap();
+    assert!(
+        before.size.height > message.size.height,
+        "the whole error is retained"
+    );
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: message.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.), px(-600.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    draw(cx);
+    let after = cx.debug_bounds("notice-toast-text").unwrap();
+    assert!(
+        after.top() < before.top(),
+        "the rest of the error can be read"
+    );
+    draw(cx);
+    assert_eq!(
+        cx.debug_bounds("notice-toast-text").unwrap(),
+        after,
+        "scrolling survives a redraw"
+    );
+    assert_eq!(
+        cx.debug_bounds("notice-toast-close").unwrap(),
+        close,
+        "closing stays in place"
+    );
+    click_selector(cx, "notice-toast-close");
+    let fade = fade(cx);
+    advance(cx, fade);
+    assert!(toast(cx).is_none(), "the scrolled error can be dismissed");
+}
