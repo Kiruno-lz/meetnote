@@ -1170,3 +1170,84 @@ fn an_empty_workspace_offers_to_import_audio(cx: &mut TestAppContext) {
     let (_view, cx, _changes) = open_on(cx, &root);
     assert_centered_empty_state(cx, Some("empty-import-audio"));
 }
+
+#[gpui::test]
+fn switching_from_a_transcript_to_an_imported_document_selects_summary(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "周会"), "# 周会\n");
+    let mut imported = DocumentState::new(ProjectId::new("new"), "新录音", "new.wav");
+    imported.hierarchy.sibling_order = 1;
+    documents.put(imported, "# 新录音\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+    rendered(cx, "transcript-turn-0");
+    select_row(cx, &view, "new");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "the imported document has no Original tab, so Summary must be selected"
+    );
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    rendered(cx, "document-empty");
+
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "history navigation also keeps a visible tab selected"
+    );
+}
+
+#[gpui::test]
+fn switching_documents_and_reading_modes_starts_at_the_top(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    for (index, id) in ["a", "b"].into_iter().enumerate() {
+        let mut document = processed(id, id);
+        document.hierarchy.sibling_order = index as u32;
+        document.content.summary = Some("一段很长的会议总结。\n".repeat(120));
+        documents.put(document, "# Meeting\n");
+    }
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    assert!(scroll.max_offset().y > px(200.));
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(scroll.offset().y, px(-200.));
+    select_row(cx, &view, "a");
+    assert_eq!(
+        scroll.offset().y,
+        px(-200.),
+        "selecting the current document keeps its reading position"
+    );
+    select_row(cx, &view, "b");
+    assert_eq!(
+        scroll.offset().y,
+        px(0.),
+        "another document opens at its beginning"
+    );
+
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        scroll.offset().y,
+        px(0.),
+        "history opens the document at its beginning"
+    );
+    click_selector(cx, "navigate-forward");
+
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("b"))
+    });
+    assert_eq!(scroll.offset().y, px(0.), "the editor opens at its title");
+}

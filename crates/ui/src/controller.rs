@@ -2493,6 +2493,12 @@ impl RootView {
     }
 
     pub(crate) fn select_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
+        if self.ui.selected_project.as_ref() != Some(&project_id) {
+            self.scroll
+                .meeting_content
+                .set_offset(gpui::Point::default());
+            self.scroll.detail.set_offset(gpui::Point::default());
+        }
         self.ui.selected_project = Some(project_id);
         self.ui.remember_navigation();
         self.ui.notice.clear();
@@ -2514,7 +2520,14 @@ impl RootView {
     }
 
     pub(crate) fn travel(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let previous_document = self.ui.selected_project.clone();
         if self.ui.travel(forward) {
+            if self.ui.selected_project != previous_document {
+                self.scroll
+                    .meeting_content
+                    .set_offset(gpui::Point::default());
+                self.scroll.detail.set_offset(gpui::Point::default());
+            }
             self.sidebar_sizing
                 .update(cx, |state, _| state.reset_interaction());
             if self.ui.route == Route::Settings {
@@ -2578,6 +2591,11 @@ impl RootView {
     }
 
     pub(crate) fn set_content_mode(&mut self, mode: ContentMode, cx: &mut Context<Self>) {
+        if self.ui.content_mode != mode {
+            self.scroll
+                .meeting_content
+                .set_offset(gpui::Point::default());
+        }
         self.ui.content_mode = mode;
         cx.notify();
     }
@@ -4407,6 +4425,15 @@ impl Render for RootView {
             .as_ref()
             .and_then(|id| self.projects.iter().find(|project| project.id() == id))
             .cloned();
+        // Original is offered only for processed documents, including after
+        // history navigation or an external update changes the selection.
+        if self.ui.content_mode == ContentMode::Original
+            && selected
+                .as_ref()
+                .is_some_and(|project| project.processing_status() != domain::ProjectStatus::Ready)
+        {
+            self.ui.content_mode = ContentMode::Summary;
+        }
         self.ensure_speaker_rows(selected.as_ref(), window, cx);
         self.ensure_profile_rows(window, cx);
         let body = match self.ui.route {
