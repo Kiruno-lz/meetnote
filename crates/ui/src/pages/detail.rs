@@ -9,7 +9,9 @@ use crate::{
 };
 use application::{AudioSourceError, AudioStatus};
 use domain::{document_result_statistics, DocumentState, ProvenanceGap};
-use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Pixels, ScrollHandle};
+use gpui::{
+    div, prelude::*, px, relative, Context, FocusHandle, IntoElement, Pixels, ScrollHandle,
+};
 
 const DETAIL_WIDTH: Pixels = px(400.);
 /// The label column of a Detail row.
@@ -94,6 +96,8 @@ pub(crate) fn render(
     Region::new("detail-panel", tr(locale, "project_detail"), focus)
         .debug_selector(|| "detail-panel".into())
         .w(DETAIL_WIDTH)
+        // Keep a reading plane beside Detail at the minimum window size.
+        .max_w(relative(0.5))
         .h_full()
         .flex_shrink_0()
         .p_5()

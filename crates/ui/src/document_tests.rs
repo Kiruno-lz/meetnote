@@ -1251,3 +1251,33 @@ fn switching_documents_and_reading_modes_starts_at_the_top(cx: &mut TestAppConte
     });
     assert_eq!(scroll.offset().y, px(0.), "the editor opens at its title");
 }
+
+#[gpui::test]
+fn document_actions_fit_beside_detail_in_both_locales(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "产品周会"), "# 产品周会\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    select_row(cx, &view, "weekly");
+    wait_for(cx, &view, |root| {
+        root.audio.missing(&ProjectId::new("weekly"))
+    });
+    click_selector(cx, "open-project-detail");
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| root.set_locale(locale, cx));
+        cx.run_until_parked();
+        let page = rendered(cx, "meetings-page");
+        for selector in [
+            "document-status",
+            "audio-problem",
+            "process-project",
+            "relink-audio",
+        ] {
+            let control = rendered(cx, selector);
+            assert!(
+                within(control, page),
+                "{locale:?}: {selector} overflows the reading plane: {control:?} in {page:?}"
+            );
+        }
+    }
+}

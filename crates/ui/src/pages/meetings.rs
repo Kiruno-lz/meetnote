@@ -569,8 +569,9 @@ fn document_header(
             .child(label)
     };
     let actions = div()
-        .flex_shrink_0()
+        .min_w_0()
         .flex()
+        .flex_wrap()
         .items_center()
         .gap(tokens.spacing.sm)
         .child(chip(
@@ -657,8 +658,8 @@ fn document_header(
                 .child(document_meta(project, locale)),
         )
         .child(
-            // The hint wraps under the actions beside an open Detail; the
-            // actions themselves stay on one line.
+            // Actions and the models hint wrap inside the reading plane
+            // beside an open Detail, without clipping their labels.
             div()
                 .pt(tokens.spacing.xs)
                 .flex()
