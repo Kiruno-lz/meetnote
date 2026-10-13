@@ -1012,6 +1012,144 @@ fn a_cancelled_job_notes_the_cancellation_not_a_failure(cx: &mut TestAppContext)
 }
 
 #[gpui::test]
+fn background_processing_preserves_the_document_being_edited(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(
+        DocumentState::new(ProjectId::new("a"), "A", "a.wav"),
+        "# A\n",
+    );
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    b.content.summary = Some("继续阅读与整理另一份会议记录。\n".repeat(120));
+    documents.put(b, "# B\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(1180.), px(600.)));
+    select_row(cx, &view, "a");
+    let job = drive_processing(cx, &view, "a");
+    job.transcription.started();
+    job.diarization.started();
+
+    // Processing A remains gated while the user reads and edits B.
+    select_row(cx, &view, "b");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(scroll.offset().y, px(-200.));
+    open_editor(cx, &view, "b");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    retype(cx, &title, "B 的未保存修改");
+    retype_area(cx, &body, "继续整理这份记录");
+    scroll.set_offset(point(px(0.), px(-150.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let position = scroll.offset();
+    assert!(position.y < px(0.), "the editor is scrolled");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let before = documents.package_bytes("b");
+
+    // Persist A as the workspace job does, then release its outcome.
+    let mut finished = processed("a", "A");
+    finished.schema.revision = documents.revision("a");
+    finished.content.summary = Some("A 的处理结果".into());
+    documents.external_save(finished);
+    let finished = documents.read("a").state;
+    job.transcription.completed();
+    job.diarization.completed();
+    job.outcome.send(Ok(finished)).unwrap();
+    wait_for(cx, &view, |root| {
+        !root.ui.processing
+            && root.projects.iter().any(|project| {
+                project.id().as_str() == "a"
+                    && project.content.summary.as_deref() == Some("A 的处理结果")
+            })
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.selected_project,
+            Some(ProjectId::new("b")),
+            "finishing A must not replace B"
+        );
+        assert_eq!(root.ui.content_mode, crate::state::ContentMode::Edit);
+        assert_eq!(root.editor.shown(), Some(&ProjectId::new("b")));
+        assert_eq!(
+            root.ui.toast().map(|toast| toast.notice.as_str()),
+            Some("已完成 A")
+        );
+    });
+    assert_eq!(scroll.offset(), position, "B keeps its reading position");
+    assert_eq!(field_value(cx, &title), "B 的未保存修改");
+    assert_eq!(area_value(cx, &body), "继续整理这份记录");
+    assert_eq!(
+        documents.package_bytes("b"),
+        before,
+        "completion does not save B's draft"
+    );
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        focus,
+        "typing focus stays in B"
+    );
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    click_selector(cx, "navigate-forward");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("b"))
+    );
+    assert_eq!(field_value(cx, &title), "B 的未保存修改");
+}
+
+#[gpui::test]
+fn background_processing_refreshes_the_document_when_it_is_still_selected(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(
+        DocumentState::new(ProjectId::new("a"), "A", "a.wav"),
+        "# A\n",
+    );
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let job = drive_processing(cx, &view, "a");
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    let mut finished = processed("a", "A");
+    finished.schema.revision = documents.revision("a");
+    finished.content.summary = Some("新的处理结果".into());
+    documents.external_save(finished);
+    let finished = documents.read("a").state;
+    job.transcription.completed();
+    job.diarization.completed();
+    job.outcome.send(Ok(finished)).unwrap();
+    wait_for(cx, &view, |root| {
+        !root.ui.processing
+            && root.projects.iter().any(|project| {
+                project.id().as_str() == "a"
+                    && project.content.summary.as_deref() == Some("新的处理结果")
+            })
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    rendered(cx, "content-mode-original");
+    assert!(
+        cx.debug_bounds("document-empty").is_none(),
+        "the processed content replaces the empty state"
+    );
+    assert_eq!(
+        view.read_with(cx, |root, _| root
+            .ui
+            .toast()
+            .map(|toast| toast.notice.clone())),
+        Some("已完成 A".into())
+    );
+}
+
+#[gpui::test]
 fn the_transcript_reads_as_turns_in_a_measured_column(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();
     let mut weekly = processed("weekly", "产品周会");

@@ -4213,10 +4213,7 @@ impl RootView {
                         this.reload_projects(cx);
                         let locale = this.ui.locale;
                         this.ui.notice = match result {
-                            Ok(project) => {
-                                this.ui.selected_project = Some(project.id().clone());
-                                i18n::message(locale, "finished", project.title())
-                            }
+                            Ok(project) => i18n::message(locale, "finished", project.title()),
                             Err(error) if error.code == contracts::BackendErrorCode::Cancelled => {
                                 i18n::message(locale, "cancelled", title.as_deref().unwrap_or_default())
                             }
