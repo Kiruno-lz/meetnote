@@ -757,6 +757,28 @@ fn the_scope_and_its_context_share_one_line_above_the_privacy_note(cx: &mut Test
     );
 }
 
+#[gpui::test]
+fn a_long_connection_name_keeps_the_write_mode_inside_the_context(cx: &mut TestAppContext) {
+    let settings = stored_key_settings();
+    let mut value = settings.snapshot().unwrap();
+    value.assistant.connections[0].name = "A private connection for this workspace ".repeat(12);
+    settings.update(value).unwrap();
+    let (_view, cx) = open_desktop_with(cx, Arc::new(FakeAssistantUiService::default()), settings);
+    cx.run_until_parked();
+    let context = rendered(cx, "assistant-context");
+    let mode = rendered(cx, "assistant-write-mode-automatic");
+    let page = rendered(cx, "assistant-page");
+    assert!(within(context, page), "the context stays inside the page");
+    assert!(
+        within(mode, context),
+        "a long connection name leaves the write policy readable: {mode:?} in {context:?}"
+    );
+    assert!(
+        rendered(cx, "assistant-privacy").top() >= context.bottom(),
+        "the context stays on one line above the privacy note"
+    );
+}
+
 /// Opens Settings at its Assistant section.
 fn open_assistant_settings(cx: &mut VisualTestContext, view: &View) {
     view.update(cx, |root, cx| {
