@@ -44,7 +44,7 @@ use settings::{
     AssistantSettings, CredentialUpdate, LlmProtocol, MaterialPreference, SettingsService,
     ThemePreference,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -568,6 +568,8 @@ pub(crate) struct RootView {
     pub(crate) audio: AudioCheck,
     /// The Workspace section's documents-root switch.
     pub(crate) documents_root_switch: DocumentsRootSwitch,
+    /// Models whose download task is being created off the UI thread.
+    pub(crate) model_download_starts: BTreeSet<String>,
     /// The models the Models page shows re-probing.
     pub(crate) model_reprobes: BTreeMap<String, ReprobeWait>,
 }
@@ -739,6 +741,7 @@ impl RootView {
             speaker_confirmation: None,
             audio: AudioCheck::default(),
             documents_root_switch: DocumentsRootSwitch::default(),
+            model_download_starts: Default::default(),
             model_reprobes: Default::default(),
         };
         // The tree and the Speaker Library stay empty until they load on
@@ -3768,11 +3771,16 @@ impl RootView {
 
     /// Starts the download off the main thread and follows its progress.
     pub(crate) fn download_model(&mut self, model_id: String, cx: &mut Context<Self>) {
+        if !self.model_download_starts.insert(model_id.clone()) {
+            return;
+        }
+        cx.notify();
         let models = self.services.model_manager.clone();
         cx.spawn(async move |this, cx| {
             let id = model_id.clone();
             let started = runtime::spawn_blocking(move || models.start(&id)).await;
             this.update(cx, |this, cx| {
+                this.model_download_starts.remove(&model_id);
                 match started {
                     Ok(task) => {
                         this.ui.notice =

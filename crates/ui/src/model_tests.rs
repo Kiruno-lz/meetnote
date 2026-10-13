@@ -227,6 +227,8 @@ struct FakeModels {
     downloads: Mutex<Vec<DownloadProgress>>,
     controls: Mutex<Vec<(&'static str, DownloadId)>>,
     starts: Mutex<Vec<String>>,
+    start_gate: Gate,
+    fail_start: Mutex<bool>,
     reprobes: Mutex<Vec<String>>,
     gate: Gate,
     finish: Mutex<Option<oneshot::Sender<Result<ProbeRecord, ModelManagerError>>>>,
@@ -273,6 +275,10 @@ impl ModelService for FakeModels {
 
     fn start(&self, model_id: &str) -> Result<DownloadTask, ModelManagerError> {
         self.starts.lock().unwrap().push(model_id.into());
+        self.start_gate.pass();
+        if *self.fail_start.lock().unwrap() {
+            return Err(ModelManagerError::ModelNotFound(model_id.into()));
+        }
         let (sender, updates) = futures::channel::mpsc::unbounded();
         sender
             .unbounded_send(DownloadEvent::Updated(DownloadProgress {
@@ -525,6 +531,48 @@ fn every_card_leads_with_its_name_status_and_action_over_quiet_facts_and_its_sou
         "collapsed again"
     );
     assert_eq!(candidate.declared, [row("model.bin", "未声明")]);
+}
+
+/// Starting a download persists its task on a worker. Two quick presses
+/// must remain one request, with feedback on the card before IO completes.
+#[gpui::test]
+fn a_download_start_is_visible_and_single_flight_until_the_worker_returns(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let models = FakeModels::new(catalog(vec![bundle_asr()]));
+    let state = published(vec![availability(bundle_asr(), ModelInstallState::Missing)]);
+    let (view, cx) = open_models(cx, models.clone(), &state, test_settings());
+    let mut pending_visible = Vec::new();
+    for fail in [false, true] {
+        *models.fail_start.lock().unwrap() = fail;
+        models.start_gate.arm();
+        click_selector(cx, "model-download-bundle-asr");
+        wait_for(cx, &view, |_| models.start_gate.counts().0 > 0);
+        pending_visible.push(shown(cx, "starting", "bundle-asr"));
+        // The disabled button rejects another pointer click. The controller
+        // also guards a repeated command, independent of render timing.
+        if shown(cx, "starting", "bundle-asr") {
+            assert_in_header(cx, "starting", "bundle-asr");
+            click_selector(cx, "model-starting-bundle-asr");
+        }
+        view.update(cx, |root, cx| root.download_model("bundle-asr".into(), cx));
+        models.start_gate.release();
+        let expected = if fail { "下载失败" } else { "已安装" };
+        wait_for(cx, &view, |root| root.ui.notice.contains(expected));
+        assert!(
+            shown(cx, "download", "bundle-asr"),
+            "a completed or rejected start releases its button"
+        );
+    }
+    assert_eq!(
+        models.starts(),
+        ["bundle-asr", "bundle-asr"],
+        "each pair of commands starts only once"
+    );
+    assert_eq!(
+        pending_visible,
+        [true, true],
+        "the card reports the pending start on success and failure"
+    );
 }
 
 /// A download of `model_id` halfway through the first of its two files.
