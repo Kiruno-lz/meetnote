@@ -1461,15 +1461,15 @@ fn render_pending(
     .into_any_element()
 }
 
-/// A field's old or new value: the old one muted and struck through, the
-/// new one in full color, each marked by a thin bar in its semantic color.
+/// A field's complete old or new value: the old one muted and struck through,
+/// the new one in full color, each marked by a thin bar in its semantic color.
+/// Long changes scroll with the review so nothing is hidden before approval.
 fn diff_value(value: String, added: bool, tokens: &Tokens) -> gpui::Div {
     div()
         .border_l_2()
         .border_color(if added { tokens.success } else { tokens.danger })
         .pl(tokens.spacing.sm)
         .text_sm()
-        .line_clamp(4)
         .map(|value| {
             if added {
                 value.text_color(tokens.text)
