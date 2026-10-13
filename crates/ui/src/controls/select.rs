@@ -5,7 +5,8 @@
 //! Enter or Space opens it or confirms, Esc dismisses it) and the focus transfer
 //! between the trigger and the menu. This entity owns the options, the
 //! selection, the open state and the keyboard highlight, and paints the
-//! trigger and a frosted menu (`BlurLevel::Menu`) below it.
+//! trigger, which ends in a chevron, and a frosted menu (`BlurLevel::Menu`)
+//! below it that checks the selected option.
 //!
 //! The menu closes on a confirmation, on Esc and on a press outside it, and
 //! focus returns to the trigger; a press on another focusable element then
@@ -31,6 +32,10 @@ const MENU_OFFSET: Pixels = px(4.);
 const MENU_MARGIN: Pixels = px(8.);
 /// How far the menu rises into place as it fades in.
 const MENU_RISE: Pixels = px(4.);
+/// The trigger's chevron and the check beside the selected option.
+const ICON_SIZE: Pixels = px(14.);
+const CHEVRON_ICON: &str = "icons/chevron-down.svg";
+const CHECK_ICON: &str = "icons/check.svg";
 
 /// One choice of a `Dropdown`.
 #[derive(Debug, Clone, PartialEq)]
@@ -319,11 +324,12 @@ impl Dropdown {
                     )),
             )
             .child(
-                div()
+                gpui::svg()
+                    .debug_selector(|| "select-chevron".into())
+                    .path(CHEVRON_ICON)
+                    .size(ICON_SIZE)
                     .flex_none()
-                    .text_xs()
-                    .text_color(if open { tokens.text } else { tokens.text_muted })
-                    .child(if open { "▴" } else { "▾" }),
+                    .text_color(if open { tokens.text } else { tokens.text_muted }),
             )
             // The trigger row fills the root inside its 1px border; the menu
             // aligns with the border's outer edge.
@@ -423,22 +429,31 @@ impl Dropdown {
             .when(highlighted, |row| {
                 row.bg(tokens.selection).aria_active_descendant()
             })
+            // Every row keeps the check's column, so the labels align.
+            .child(div().size(ICON_SIZE).flex_none().when(selected, |column| {
+                column.child(
+                    gpui::svg()
+                        .debug_selector(|| "select-check".into())
+                        .path(CHECK_ICON)
+                        .size_full()
+                        .text_color(tokens.accent_text),
+                )
+            }))
             .child(
                 div()
-                    .w(px(14.))
-                    .flex_none()
-                    .text_color(tokens.accent_text)
-                    .child(if selected { "✓" } else { "" }),
+                    .debug_selector(move || format!("select-option-label-{index}"))
+                    .flex_1()
+                    .min_w_0()
+                    .child(theme::tail_faded_label(
+                        ("select-option-label", index),
+                        option.label.clone(),
+                        if highlighted {
+                            tokens.selection
+                        } else {
+                            tokens.float
+                        },
+                    )),
             )
-            .child(div().flex_1().min_w_0().child(theme::tail_faded_label(
-                ("select-option-label", index),
-                option.label.clone(),
-                if highlighted {
-                    tokens.selection
-                } else {
-                    tokens.float
-                },
-            )))
             .children(option.detail.clone().map(|detail| {
                 div()
                     .flex_none()
@@ -515,6 +530,8 @@ impl Render for Dropdown {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::{Material, Mode};
+    use gpui::{size, AssetSource as _, Entity, Render, TestAppContext, VisualTestContext};
 
     fn options(disabled: &[bool]) -> Vec<SelectOption> {
         disabled
@@ -566,5 +583,107 @@ mod tests {
         assert_eq!(SelectOption::position(&options, Some("CPU")), Some(1));
         assert_eq!(SelectOption::position(&options, Some("Metal")), None);
         assert_eq!(SelectOption::position(&options, None), None);
+    }
+
+    #[test]
+    fn the_select_icons_are_bundled() {
+        for path in [CHEVRON_ICON, CHECK_ICON] {
+            let asset = gpui_component_assets::Assets
+                .load(path)
+                .unwrap_or_else(|error| panic!("{path}: {error}"));
+            assert!(
+                asset.is_some_and(|asset| !asset.is_empty()),
+                "missing icon: {path}"
+            );
+        }
+    }
+
+    struct Harness {
+        select: Entity<Dropdown>,
+    }
+
+    impl Render for Harness {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div().p(px(40.)).w(px(360.)).child(
+                div()
+                    .debug_selector(|| "select-root".into())
+                    .child(self.select.clone()),
+            )
+        }
+    }
+
+    #[track_caller]
+    fn bounds(cx: &mut VisualTestContext, selector: String) -> Bounds<Pixels> {
+        let selector: &'static str = Box::leak(selector.into_boxed_str());
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("`{selector}` is not rendered"))
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| window.draw(cx).clear());
+    }
+
+    #[gpui::test]
+    fn the_trigger_ends_in_a_chevron_and_the_menu_checks_the_selection(cx: &mut TestAppContext) {
+        // Reduced motion shows the menu in place at once.
+        let tokens = Tokens::new(Mode::Dark, Material::Glass, true);
+        cx.update(|cx| theme::install_for_test(tokens, cx));
+        let (harness, cx) = cx.add_window_view(|_, cx| Harness {
+            select: cx.new(|cx| {
+                Dropdown::new(
+                    "Theme",
+                    "Choose a theme",
+                    ["System", "Light", "Dark"].map(SelectOption::text).to_vec(),
+                    Some("Light"),
+                    cx,
+                )
+            }),
+        });
+        draw(cx);
+        let trigger = bounds(cx, "select-root".into());
+        let chevron = bounds(cx, "select-chevron".into());
+        assert_eq!(chevron.size, size(ICON_SIZE, ICON_SIZE));
+        assert_eq!(
+            chevron.center().y,
+            trigger.center().y,
+            "the chevron is centered on the trigger"
+        );
+        assert_eq!(
+            chevron.right(),
+            trigger.right() - px(1.) - tokens.spacing.md,
+            "the chevron ends at the trigger's padding"
+        );
+        assert!(cx.debug_bounds("select-check").is_none(), "closed");
+
+        let select = harness.read_with(cx, |harness, _| harness.select.clone());
+        select.update(cx, |select, cx| select.open_menu(cx));
+        draw(cx);
+        let row = bounds(cx, "select-option-1".into());
+        let check = bounds(cx, "select-check".into());
+        assert_eq!(check.size, size(ICON_SIZE, ICON_SIZE));
+        assert_eq!(check.left(), row.left() + tokens.spacing.sm);
+        assert_eq!(
+            check.center().y,
+            row.center().y,
+            "the check marks the selected row"
+        );
+        for index in 0..3 {
+            assert_eq!(
+                bounds(cx, format!("select-option-label-{index}")).left(),
+                check.right() + tokens.spacing.sm,
+                "every label starts past the check column: {index}"
+            );
+        }
+
+        select.update(cx, |select, cx| {
+            select.choose(2, cx);
+            select.open_menu(cx);
+        });
+        draw(cx);
+        assert_eq!(
+            bounds(cx, "select-check".into()).center().y,
+            bounds(cx, "select-option-2".into()).center().y,
+            "the check follows the selection"
+        );
     }
 }
