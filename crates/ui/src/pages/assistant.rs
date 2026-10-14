@@ -63,16 +63,15 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
     let retry = root.assistant.retry_prompt().is_some();
     let review_focus = root.review_focus.clone();
     let scroll = root.scroll.assistant_results.clone();
-    // Results, diffs and pending cards stay on the opaque plane and scroll
-    // under the frosted input bar, ending with it; the padding lets the
-    // last card clear it.
+    // Results, diffs and pending cards scroll on the opaque plane above
+    // the input bar. Reserve its space outside the viewport so keyboard
+    // focus and pointer scrolling reveal the same visible area.
     let results = div()
         .id("assistant-results")
         .debug_selector(|| "assistant-results".into())
         .size_full()
         .overflow_y_scroll()
         .track_scroll(&scroll)
-        .pb(input_bar_height(&tokens, status) + tokens.spacing.md)
         .flex()
         .flex_col()
         .gap_3()
@@ -235,9 +234,9 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .relative()
                 .flex_1()
                 .min_h_0()
-                // The results end at the bar's bottom edge, so nothing
-                // scrolls into view below the bar.
-                .pb(tokens.spacing.xl)
+                // Keep the bar and its gap outside the scroll viewport;
+                // the status line grows upward from the same bottom edge.
+                .pb(tokens.spacing.xl + input_bar_height(&tokens, status) + tokens.spacing.md)
                 .child(
                     div()
                         .relative()
