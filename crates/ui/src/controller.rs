@@ -4020,7 +4020,14 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         if self.ui.processing {
-            self.cancel_processing(event, window, cx);
+            if self
+                .ui
+                .selected_project
+                .as_ref()
+                .is_some_and(|id| self.ui.is_processing_document(id))
+            {
+                self.cancel_processing(event, window, cx);
+            }
         } else {
             self.process_selected(event, window, cx);
         }
@@ -4074,7 +4081,7 @@ impl RootView {
             cx.notify();
             return;
         };
-        self.ui.processing = true;
+        self.ui.begin_processing(project_id.clone());
         self.processing_cancel_requested = false;
         self.ui.notice = i18n::message(self.ui.locale, "processing", project.title());
         let workspace = self.services.workspace.clone();
@@ -4084,7 +4091,7 @@ impl RootView {
             (Some(_), Some(model)) => model,
             (Some(backend_id), None) => {
                 self.ui.notice = i18n::message(self.ui.locale, "asr_model_required", &backend_id);
-                self.ui.processing = false;
+                self.ui.finish_processing();
                 cx.notify();
                 return;
             }
@@ -4097,7 +4104,7 @@ impl RootView {
             (Some(backend_id), None) => {
                 self.ui.notice =
                     i18n::message(self.ui.locale, "diarization_model_required", &backend_id);
-                self.ui.processing = false;
+                self.ui.finish_processing();
                 cx.notify();
                 return;
             }
@@ -4125,7 +4132,7 @@ impl RootView {
                 Ok(job) => job,
                 Err(error) => {
                     this.update(cx, |this, cx| {
-                        this.ui.processing = false;
+                        this.ui.finish_processing();
                         this.processing_cancel_requested = false;
                         this.ui.notice = i18n::message(this.ui.locale, "processing_failed", &error);
                         cx.notify();
@@ -4138,7 +4145,7 @@ impl RootView {
             let follow = this.update(cx, |this, cx| {
                 cx.notify();
                 if std::mem::take(&mut this.processing_cancel_requested) {
-                    this.ui.processing = false;
+                    this.ui.finish_processing();
                     this.ui.notice = i18n::message(this.ui.locale, "cancelled", &title);
                     return false;
                 }
@@ -4183,7 +4190,7 @@ impl RootView {
                 }
                 result = processing_future => {
                     this.update(cx, |this, cx| {
-                        this.ui.processing = false;
+                        this.ui.finish_processing();
                         this.cancel_contexts = None;
                         this.reload_projects(cx);
                         match result {
