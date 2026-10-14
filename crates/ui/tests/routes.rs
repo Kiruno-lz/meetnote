@@ -213,7 +213,7 @@ fn page_in_content_plane(cx: &mut VisualTestContext, route: Route) -> Bounds<Pix
 }
 
 #[gpui::test]
-fn the_assistant_route_floats_the_input_bar_over_the_results(cx: &mut TestAppContext) {
+fn the_assistant_route_keeps_results_clear_of_the_floating_input_bar(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Assistant);
     let body = visible(cx, "assistant-body");
     let results = scroll_content(cx, "assistant-results", body);
@@ -229,11 +229,11 @@ fn the_assistant_route_floats_the_input_bar_over_the_results(cx: &mut TestAppCon
         prompt.right() <= send.left(),
         "send sits right of the prompt"
     );
-    // The results fill the body, bar included, so they scroll under it; the
-    // bar floats above the body's bottom edge.
+    // The scroll viewport ends above the bar, so pointer and keyboard
+    // navigation both keep the final result visible.
     assert!(
-        results.top() < bar.top() && results.bottom() >= bar.bottom(),
-        "the results run under the bar: {results:?} and {bar:?}"
+        results.top() < bar.top() && results.bottom() < bar.top(),
+        "the results stay above the bar: {results:?} and {bar:?}"
     );
     assert!(
         bar.bottom() < body.bottom() && body.bottom() == page.bottom(),
