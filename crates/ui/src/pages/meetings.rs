@@ -728,6 +728,30 @@ fn editor_form(
 ) -> AnyElement {
     let locale = root.ui.locale;
     let editor = &root.editor;
+    if let Some(error) = editor.read_errors.get(project.id()) {
+        return div()
+            .debug_selector(|| "document-editor-read-failed".into())
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(tokens.spacing.md)
+            .child(
+                div()
+                    .w_full()
+                    .text_sm()
+                    .text_color(tokens.warning_text)
+                    .child(error.clone()),
+            )
+            .child(
+                Button::new("retry-document-read", tr(locale, "retry_document_read"))
+                    .debug_selector(|| "retry-document-read".into())
+                    .secondary()
+                    .compact()
+                    .on_click(cx.listener(RootView::retry_document_read)),
+            )
+            .into_any_element();
+    }
     if editor.shown() != Some(project.id()) {
         return div()
             .debug_selector(|| "document-editor-loading".into())
