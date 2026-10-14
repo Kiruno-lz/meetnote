@@ -41,6 +41,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "toggle_sidebar") => "折叠或展开侧边栏",
         (Locale::ZhCn, "resize_sidebar") => "调整侧边栏宽度",
         (Locale::ZhCn, "navigation") => "导航",
+        (Locale::ZhCn, "dismiss_notice") => "关闭提示",
         (Locale::ZhCn, "local_intelligence") => "本地语音资料整理",
         (Locale::ZhCn, "ask_library") => "询问你的语音库",
         (Locale::ZhCn, "ask_placeholder") => "询问你的录音……",
@@ -141,7 +142,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "ready_to_process") => "等待处理",
         (Locale::ZhCn, "models_active") => "下载中",
         (Locale::ZhCn, "model_status") => "模型状态",
-        (Locale::ZhCn, "ask_notice") => "助手输入已就绪；不会保存对话历史。",
         (Locale::ZhCn, "choose_audio") => "选择音频",
         (Locale::ZhCn, "missing") => "缺失",
         (Locale::ZhCn, "interface_description") => "界面偏好与本地化选项",
@@ -411,6 +411,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "toggle_sidebar") => "Toggle sidebar",
         (Locale::EnUs, "resize_sidebar") => "Resize sidebar",
         (Locale::EnUs, "navigation") => "Navigation",
+        (Locale::EnUs, "dismiss_notice") => "Dismiss",
         (Locale::EnUs, "local_intelligence") => "local voice library",
         (Locale::EnUs, "ask_library") => "Ask your voice library",
         (Locale::EnUs, "ask_placeholder") => "Ask about your recordings…",
@@ -521,9 +522,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "ready_to_process") => "Ready to process",
         (Locale::EnUs, "models_active") => "Downloads active",
         (Locale::EnUs, "model_status") => "Model status",
-        (Locale::EnUs, "ask_notice") => {
-            "Assistant input is ready; no conversation history is stored."
-        }
         (Locale::EnUs, "choose_audio") => "Choose audio",
         (Locale::EnUs, "missing") => "Missing",
         (Locale::EnUs, "interface_description") => "Interface preferences and localization",

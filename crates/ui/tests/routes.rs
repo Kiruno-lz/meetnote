@@ -743,6 +743,46 @@ fn tab_traverses_the_settings_route_in_order(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn tab_starts_at_the_first_entry_when_no_control_has_focus(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    assert!(
+        cx.update(|gpui_window, cx| window.root_holds_focus(gpui_window, cx)),
+        "no control has focus at launch: the window root holds it"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        focused_control(cx, &SIDEBAR_STOPS),
+        Some("nav-Assistant"),
+        "Tab with nothing focused"
+    );
+
+    // The focused field leaves with its route.
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    window_navigate(cx, &window, Route::Models);
+    assert!(
+        cx.update(|gpui_window, cx| window.root_holds_focus(gpui_window, cx)),
+        "focus returns to the root with the field gone"
+    );
+    cx.simulate_keystrokes("tab");
+    // With history to go back to, the toolbar's Back comes first.
+    let stops = [&["navigate-back"], SIDEBAR_STOPS.as_slice()].concat();
+    assert_eq!(
+        focused_control(cx, &stops),
+        Some("navigate-back"),
+        "Tab from a control the route no longer shows"
+    );
+}
+
+/// Opens `route` the way a shortcut or history would, leaving focus where
+/// it was.
+fn window_navigate(cx: &mut VisualTestContext, window: &MainWindow, route: Route) {
+    cx.update(|_, cx| window.navigate(route, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+}
+
+#[gpui::test]
 fn the_ring_shows_for_keyboard_focus_only(cx: &mut TestAppContext) {
     let (_window, cx, _) = open_route(cx, Route::Assistant);
     assert!(ring(cx).is_none(), "a press on an entry shows no ring");
@@ -971,6 +1011,13 @@ fn ctrl_tab_leaves_a_text_area_that_takes_tab(cx: &mut TestAppContext) {
     assert_eq!(height(cx), Some(summary), "Ctrl-Shift-Tab moves back");
 }
 
+/// Runs the sidebar fold for `milliseconds` of the test clock, then draws.
+fn fold_for(cx: &mut VisualTestContext, milliseconds: u64) {
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(milliseconds));
+    cx.update(|window, cx| window.draw(cx).clear());
+}
+
 #[gpui::test]
 fn project_sidebar_collapses_without_hiding_the_icon_rail(cx: &mut TestAppContext) {
     let (window, cx) = open_window(cx);
@@ -985,15 +1032,13 @@ fn project_sidebar_collapses_without_hiding_the_icon_rail(cx: &mut TestAppContex
     let toggle = visible(cx, "toggle-sidebar");
     cx.simulate_click(toggle.center(), Modifiers::none());
     cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert!(cx.debug_bounds("project-sidebar").is_none());
     assert_eq!(visible(cx, "navigation-rail"), rail);
     assert!(visible(cx, "content-plane").size.width > plane.size.width);
     cx.simulate_click(toggle.center(), Modifiers::none());
     cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert_eq!(visible(cx, "project-sidebar"), sidebar);
 }
 
@@ -1016,6 +1061,122 @@ fn toolbar_back_forward_and_new_navigation_follow_history(cx: &mut TestAppContex
     click_entry(cx, &window, Route::Models);
     click(cx, "navigate-forward");
     assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Models);
+}
+
+/// Rests the pointer on `selector` for `rest` of the test clock, then
+/// draws.
+fn rest_on(cx: &mut VisualTestContext, selector: &'static str, rest: std::time::Duration) {
+    let bounds = visible(cx, selector);
+    cx.simulate_mouse_move(bounds.center(), None, Modifiers::none());
+    cx.executor().advance_clock(rest);
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+}
+
+#[gpui::test]
+fn every_icon_only_control_names_itself_in_a_tooltip(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Meetings);
+    let delay = std::time::Duration::from_millis(500);
+    for selector in [
+        "nav-Assistant",
+        "nav-Meetings",
+        "nav-Models",
+        "nav-Settings",
+        "import-audio",
+        "navigate-back",
+        "navigate-forward",
+        "toggle-sidebar",
+    ] {
+        // Off every control, so each rest starts its own delay.
+        let plane = visible(cx, "content-plane");
+        cx.simulate_mouse_move(plane.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        rest_on(cx, selector, delay - std::time::Duration::from_millis(1));
+        assert!(
+            cx.debug_bounds("tooltip").is_none(),
+            "{selector}: no tooltip before the pointer rests"
+        );
+        rest_on(cx, selector, delay);
+        let pointer = visible(cx, selector).center();
+        let tooltip = visible(cx, "tooltip");
+        // Below the pointer, or above it where the window ends.
+        let beside = tooltip.left() > pointer.x
+            && tooltip.left() < pointer.x + gpui::px(24.)
+            && (tooltip.top() > pointer.y && tooltip.top() < pointer.y + gpui::px(32.)
+                || tooltip.bottom() < pointer.y && tooltip.bottom() > pointer.y - gpui::px(32.));
+        assert!(
+            beside,
+            "{selector}: the tooltip sits beside the pointer: {tooltip:?} {pointer:?}"
+        );
+    }
+    let plane = visible(cx, "content-plane");
+    cx.simulate_mouse_move(plane.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert!(
+        cx.debug_bounds("tooltip").is_none(),
+        "leaving the control hides it"
+    );
+}
+
+#[gpui::test]
+fn shortcuts_open_routes_travel_fold_the_sidebar_and_import(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    let route = |cx: &mut VisualTestContext| cx.update(|_, cx| window.route(cx));
+    assert!(
+        cx.update(|gpui_window, cx| window.root_holds_focus(gpui_window, cx)),
+        "the shortcuts work before any control has focus"
+    );
+    for (keys, expected) in [
+        ("cmd-2", Route::Meetings),
+        ("cmd-3", Route::Models),
+        ("cmd-4", Route::Settings),
+        ("cmd-1", Route::Assistant),
+        ("cmd-,", Route::Settings),
+    ] {
+        cx.simulate_keystrokes(keys);
+        assert_eq!(route(cx), expected, "{keys}");
+    }
+    cx.simulate_keystrokes("cmd-[");
+    assert_eq!(route(cx), Route::Assistant, "⌘[ goes back");
+    cx.simulate_keystrokes("cmd-]");
+    assert_eq!(route(cx), Route::Settings, "⌘] goes forward");
+
+    cx.simulate_keystrokes("cmd-2");
+    cx.update(|window, cx| window.draw(cx).clear());
+    let sidebar = visible(cx, "project-sidebar");
+    cx.simulate_keystrokes("ctrl-cmd-s");
+    fold_for(cx, 350);
+    assert!(
+        cx.debug_bounds("project-sidebar").is_none(),
+        "⌃⌘S folds the sidebar"
+    );
+    cx.simulate_keystrokes("ctrl-cmd-s");
+    fold_for(cx, 350);
+    assert_eq!(visible(cx, "project-sidebar"), sidebar, "and unfolds it");
+
+    assert!(!cx.cx.did_prompt_for_paths());
+    cx.simulate_keystrokes("cmd-o");
+    assert!(
+        cx.cx.did_prompt_for_paths(),
+        "⌘O asks for the audio to import"
+    );
+}
+
+#[gpui::test]
+fn shortcuts_pass_by_a_focused_field(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    click_entry(cx, &window, Route::Assistant);
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    cx.simulate_input("周会");
+    let field = cx.update(|window, cx| window.focused(cx));
+    assert!(field.is_some(), "the press focuses the field");
+    cx.simulate_keystrokes("cmd-[");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    cx.simulate_keystrokes("cmd-1");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Assistant);
 }
 
 #[gpui::test]
@@ -1057,6 +1218,8 @@ fn dragging_the_sidebar_divider_resizes_and_clamps_then_returns(cx: &mut TestApp
         visible(cx, "project-sidebar").size.width > gpui::px(360.),
         "the release starts from the resisted width"
     );
+    // The rebound is a GPUI animation on the wall clock; the wait only has
+    // to outlast it.
     std::thread::sleep(std::time::Duration::from_millis(350));
     cx.update(|window, cx| window.draw(cx).clear());
     assert_eq!(visible(cx, "project-sidebar").size.width, gpui::px(360.));
@@ -1079,8 +1242,7 @@ fn settings_categories_reveal_their_sections_and_collapse(cx: &mut TestAppContex
     let toggle = visible(cx, "toggle-sidebar");
     cx.simulate_click(toggle.center(), Modifiers::none());
     cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert!(cx.debug_bounds("settings-sidebar").is_none());
     assert!(cx.debug_bounds("navigation-rail").is_some());
 }
@@ -1142,8 +1304,7 @@ fn sidebar_fold_keeps_content_stable_and_can_reverse_mid_animation(cx: &mut Test
         cx.debug_bounds("project-sidebar").is_some(),
         "the sidebar must remain while folding"
     );
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 100);
     let partial = rendered(cx, "project-sidebar").size.width;
     assert!(
         partial > gpui::px(0.) && partial < original.size.width,
@@ -1163,8 +1324,7 @@ fn sidebar_fold_keeps_content_stable_and_can_reverse_mid_animation(cx: &mut Test
         (reversed - partial).abs() < gpui::px(12.),
         "reversal must begin at the current width: {partial:?} -> {reversed:?}"
     );
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert_eq!(
         visible(cx, "project-sidebar").size.width,
         original.size.width

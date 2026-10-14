@@ -181,14 +181,6 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .child(theme::scroll_faded(&scroll, tokens.content, content))
                 .child(Scrollbar::vertical("models-scrollbar", &scroll)),
         )
-        .child(
-            div()
-                .flex_shrink_0()
-                .pt_2()
-                .text_xs()
-                .text_color(tokens.text_muted)
-                .child(root.ui.notice.clone()),
-        )
 }
 
 /// Whether the default models can process audio, and if not which are
