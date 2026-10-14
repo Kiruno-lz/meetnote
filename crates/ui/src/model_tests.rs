@@ -544,6 +544,69 @@ fn running(id: u64, model_id: &str, state: DownloadState) -> DownloadProgress {
 }
 
 #[gpui::test]
+fn retry_controls_follow_the_current_download_after_terminal_history(cx: &mut TestAppContext) {
+    let models = FakeModels::new(catalog(vec![bundle_asr(), native_diarization()]));
+    *models.downloads.lock().unwrap() = vec![
+        running(
+            1,
+            "bundle-asr",
+            DownloadState::Failed("connection lost".into()),
+        ),
+        running(2, "bundle-asr", DownloadState::Cancelled),
+        running(3, "native-diarization", DownloadState::Completed),
+        running(8, "native-diarization", DownloadState::Paused),
+        running(7, "bundle-asr", DownloadState::Downloading),
+    ];
+    let state = published(vec![
+        availability(bundle_asr(), ModelInstallState::Partial),
+        failed_download(),
+    ]);
+    let (view, cx) = open_models(cx, models.clone(), &state, test_settings());
+
+    assert_in_header(cx, "pause", "bundle-asr");
+    assert_in_header(cx, "resume", "native-diarization");
+    for model_id in ["bundle-asr", "native-diarization"] {
+        assert!(shown(cx, "download-progress", model_id));
+        assert!(!shown(cx, "download", model_id) && !shown(cx, "retry", model_id));
+        assert!(
+            !shown(cx, "failure", model_id),
+            "the new attempt supersedes its failure"
+        );
+    }
+    click_selector(cx, "model-pause-bundle-asr");
+    click_selector(cx, "model-resume-native-diarization");
+    click_selector(cx, "model-cancel-native-diarization");
+    wait_for(cx, &view, |_| models.controls().len() == 3);
+    let mut controls = models.controls();
+    controls.sort();
+    assert_eq!(
+        controls,
+        [
+            ("cancel", DownloadId(8)),
+            ("pause", DownloadId(7)),
+            ("resume", DownloadId(8)),
+        ]
+    );
+
+    // Cancelling the new attempt leaves only history; its controls must
+    // disappear and the original failure can offer retry again.
+    for download in models.downloads.lock().unwrap().iter_mut() {
+        if !download.state.is_terminal() {
+            download.state = DownloadState::Cancelled;
+        }
+    }
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(shown(cx, "download", "bundle-asr"));
+    assert!(shown(cx, "retry", "native-diarization"));
+    assert!(shown(cx, "failure", "native-diarization"));
+    for model_id in ["bundle-asr", "native-diarization"] {
+        assert!(!shown(cx, "download-progress", model_id));
+        assert!(!shown(cx, "cancel", model_id));
+    }
+}
+
+#[gpui::test]
 fn a_running_download_shows_its_progress_with_pause_or_resume_and_cancel_in_the_action_column(
     cx: &mut TestAppContext,
 ) {
