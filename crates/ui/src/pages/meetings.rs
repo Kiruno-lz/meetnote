@@ -460,8 +460,7 @@ fn main_panel(
             .text_xs()
             .text_color(tokens.text_muted)
             .child(format!(
-                "{}   •   ASR: {}   •   DIA: {}",
-                root.ui.notice,
+                "ASR: {}   •   DIA: {}",
                 backend_ids(&root.inventory.asr),
                 backend_ids(&root.inventory.diarization)
             ))

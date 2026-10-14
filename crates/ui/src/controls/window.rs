@@ -1,21 +1,71 @@
 //! The window's first layer and its chrome. `root` paints the window's base
-//! fill in the UI font and text color, and moves keyboard focus on Tab and
-//! Shift-Tab (Ctrl-Tab and Ctrl-Shift-Tab too, which leave a text area that
-//! takes Tab for indenting). Focus inside a gpui-base focus trap, such as an
+//! fill in the UI font and text color, and holds keyboard focus whenever no
+//! control does, as a Mac window does: at launch, and once the control that
+//! had it is no longer drawn. Keys then always reach the root, which moves
+//! focus on Tab and Shift-Tab (Ctrl-Tab and Ctrl-Shift-Tab too, which leave
+//! a text area that takes Tab for indenting) and runs the window's
+//! shortcuts (`Shortcut`). Focus inside a gpui-base focus trap, such as an
 //! open dialog's, cycles through the trap's tab stops and never reaches the
-//! page behind it. A control that keyboard focus moves to is scrolled into
-//! view in the scroll area that holds it. `DragStrip` is a titlebar strip
-//! that drags the window.
+//! page behind it, and no shortcut runs. A control that keyboard focus
+//! moves to is scrolled into view in the scroll area that holds it.
+//! `DragStrip` is a titlebar strip that drags the window.
 
 use crate::theme;
 use gpui::{
-    actions, div, prelude::*, px, App, Bounds, Div, ElementId, FocusHandle, Global, Interactivity,
-    IntoElement, KeyBinding, MouseButton, MouseMoveEvent, Pixels, ScrollHandle, Stateful,
-    StyleRefinement, Window, WindowControlArea,
+    actions, div, prelude::*, px, Action, App, Bounds, Div, ElementId, FocusHandle, Global,
+    Interactivity, IntoElement, KeyBinding, MouseButton, MouseMoveEvent, Pixels, ScrollHandle,
+    Stateful, StyleRefinement, Window, WindowControlArea,
 };
 use gpui_base::actions::Confirm;
+use std::rc::Rc;
 
-actions!(meetnote_window, [FocusNext, FocusPrevious]);
+actions!(
+    meetnote_window,
+    [
+        FocusNext,
+        FocusPrevious,
+        OpenEntry1,
+        OpenEntry2,
+        OpenEntry3,
+        OpenEntry4,
+        OpenSettings,
+        NavigateBack,
+        NavigateForward,
+        ToggleSidebar,
+        ImportAudio,
+    ]
+);
+
+/// A window shortcut, bound in the root's key context. A focused control
+/// that binds the same keys comes first: a multi-line field outdents with
+/// ⌘[, and a field with no use for it passes it on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Shortcut {
+    /// Opens the rail's entry at this index, of the first four.
+    Entry(usize),
+    Settings,
+    Back,
+    Forward,
+    ToggleSidebar,
+    ImportAudio,
+}
+
+impl Shortcut {
+    /// The keystroke, in gpui's key binding syntax.
+    pub(crate) fn keys(self) -> &'static str {
+        match self {
+            Self::Entry(index) => ["cmd-1", "cmd-2", "cmd-3", "cmd-4"][index],
+            Self::Settings => "cmd-,",
+            Self::Back => "cmd-[",
+            Self::Forward => "cmd-]",
+            Self::ToggleSidebar => "ctrl-cmd-s",
+            Self::ImportAudio => "cmd-o",
+        }
+    }
+}
+
+/// What a shortcut runs.
+type ShortcutHandler = Rc<dyn Fn(&Shortcut, &mut Window, &mut App)>;
 
 const KEY_CONTEXT: &str = "MeetNoteWindow";
 /// The key context of gpui-base's select root, which `Dropdown` renders.
@@ -26,18 +76,42 @@ const REVEAL_MARGIN: Pixels = px(24.);
 
 /// Installs gpui-base's key bindings (inputs, selects, dialogs), the tree's
 /// moves and the window's own: Tab moves focus (inputs bind Tab themselves,
-/// closer to the focus), and Space opens a select or chooses in its menu
-/// like Enter.
+/// closer to the focus), the shortcuts, and Space opens a select or chooses
+/// in its menu like Enter.
 pub(crate) fn init(cx: &mut App) {
     gpui_base::init(cx);
     super::tree::init(cx);
+    let window = Some(KEY_CONTEXT);
     cx.bind_keys([
-        KeyBinding::new("tab", FocusNext, Some(KEY_CONTEXT)),
-        KeyBinding::new("shift-tab", FocusPrevious, Some(KEY_CONTEXT)),
-        KeyBinding::new("ctrl-tab", FocusNext, Some(KEY_CONTEXT)),
-        KeyBinding::new("ctrl-shift-tab", FocusPrevious, Some(KEY_CONTEXT)),
+        KeyBinding::new("tab", FocusNext, window),
+        KeyBinding::new("shift-tab", FocusPrevious, window),
+        KeyBinding::new("ctrl-tab", FocusNext, window),
+        KeyBinding::new("ctrl-shift-tab", FocusPrevious, window),
+        KeyBinding::new(Shortcut::Entry(0).keys(), OpenEntry1, window),
+        KeyBinding::new(Shortcut::Entry(1).keys(), OpenEntry2, window),
+        KeyBinding::new(Shortcut::Entry(2).keys(), OpenEntry3, window),
+        KeyBinding::new(Shortcut::Entry(3).keys(), OpenEntry4, window),
+        KeyBinding::new(Shortcut::Settings.keys(), OpenSettings, window),
+        KeyBinding::new(Shortcut::Back.keys(), NavigateBack, window),
+        KeyBinding::new(Shortcut::Forward.keys(), NavigateForward, window),
+        KeyBinding::new(Shortcut::ToggleSidebar.keys(), ToggleSidebar, window),
+        KeyBinding::new(Shortcut::ImportAudio.keys(), ImportAudio, window),
         KeyBinding::new("space", Confirm { secondary: false }, Some(SELECT_CONTEXT)),
     ]);
+}
+
+/// Runs `shortcut` for its action `A`, unless a focus trap (an open
+/// dialog) holds the keyboard.
+fn shortcut<A: Action>(
+    run: &ShortcutHandler,
+    shortcut: Shortcut,
+) -> impl Fn(&A, &mut Window, &mut App) + 'static {
+    let run = run.clone();
+    move |_, window, cx| {
+        if gpui_base::active_focus_trap(window, cx).is_none() {
+            run(&shortcut, window, cx);
+        }
+    }
 }
 
 /// Prepares a new window for `root`: rem-based sizes follow the body font
@@ -49,15 +123,47 @@ pub(crate) fn attach(window: &mut Window, cx: &App) {
     gpui_base::install_window_hit_test_forwarder(window);
 }
 
-/// `content` as the window's root element. The frame's scroll areas
-/// register themselves again as they render.
-pub(crate) fn root(content: impl IntoElement, cx: &mut App) -> Div {
+/// `content` as the window's root element, which holds focus through
+/// `focus` whenever no control does and runs `on_shortcut` for the window's
+/// shortcuts. The frame's scroll areas register themselves again as they
+/// render.
+pub(crate) fn root(
+    content: impl IntoElement,
+    focus: &FocusHandle,
+    on_shortcut: impl Fn(&Shortcut, &mut Window, &mut App) + 'static,
+    window: &mut Window,
+    cx: &mut App,
+) -> Div {
     cx.default_global::<FocusReveal>().areas.clear();
+    // Once this frame is drawn: focus that left every drawn control, or
+    // never reached one, returns to the root. Focus moved since this frame
+    // started drawing, such as to a menu opening, waits for the next frame.
+    let held = focus.clone();
+    let drawn_with = window.focused(cx);
+    window.defer(cx, move |window, cx| {
+        if window.focused(cx) == drawn_with && !held.contains_focused(window, cx) {
+            held.focus(window, cx);
+        }
+    });
     let tokens = theme::tokens(cx);
+    let run: ShortcutHandler = Rc::new(on_shortcut);
     div()
         .key_context(KEY_CONTEXT)
+        .track_focus(focus)
+        // A press on no control leaves focus where it is; the root only
+        // takes focus that no control holds.
+        .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
         .on_action(|_: &FocusNext, window, cx| move_focus(true, window, cx))
         .on_action(|_: &FocusPrevious, window, cx| move_focus(false, window, cx))
+        .on_action(shortcut::<OpenEntry1>(&run, Shortcut::Entry(0)))
+        .on_action(shortcut::<OpenEntry2>(&run, Shortcut::Entry(1)))
+        .on_action(shortcut::<OpenEntry3>(&run, Shortcut::Entry(2)))
+        .on_action(shortcut::<OpenEntry4>(&run, Shortcut::Entry(3)))
+        .on_action(shortcut::<OpenSettings>(&run, Shortcut::Settings))
+        .on_action(shortcut::<NavigateBack>(&run, Shortcut::Back))
+        .on_action(shortcut::<NavigateForward>(&run, Shortcut::Forward))
+        .on_action(shortcut::<ToggleSidebar>(&run, Shortcut::ToggleSidebar))
+        .on_action(shortcut::<ImportAudio>(&run, Shortcut::ImportAudio))
         .relative()
         .size_full()
         .font_family(tokens.font_family)

@@ -13,7 +13,7 @@ use crate::{
     i18n, pages,
     route::Route,
     speakers::{document_speakers, NameEntry, NameRows, SpeakerConfirmation, SpeakerProfiles},
-    state::{ContentMode, UiState},
+    state::{ContentMode, NoticeChange, NoticeTone, UiState, TOAST_LIFETIME},
     theme,
 };
 use application::{
@@ -523,6 +523,8 @@ pub(crate) struct RootView {
     /// What held focus before the open dialog took it; closing the dialog
     /// returns focus there.
     dialog_return: Option<FocusHandle>,
+    /// The window root's, which holds focus whenever no control does.
+    pub(crate) window_focus: FocusHandle,
     /// The sidebar entries, in `pages::chrome::ENTRIES` order.
     pub(crate) nav_focus: [FocusHandle; 4],
     pub(crate) sidebar_sizing: Entity<controls::sidebar::SidebarSizing>,
@@ -720,6 +722,7 @@ impl RootView {
             scroll: ScrollAreas::default(),
             dialog_focus: cx.focus_handle(),
             dialog_return: None,
+            window_focus: cx.focus_handle(),
             nav_focus: std::array::from_fn(|_| cx.focus_handle()),
             sidebar_sizing: cx.new(|_| controls::sidebar::SidebarSizing::default()),
             tree_focus: cx.focus_handle(),
@@ -744,6 +747,8 @@ impl RootView {
             documents_root_switch: DocumentsRootSwitch::default(),
             model_reprobes: Default::default(),
         };
+        // Every update that sets a notice opens its toast.
+        cx.observe_self(Self::take_up_notice).detach();
         // The tree and the Speaker Library stay empty until they load on
         // workers.
         this.reload_projects(cx);
@@ -1381,7 +1386,12 @@ impl RootView {
                 (message, true)
             }
         };
-        self.ui.notice = message.clone();
+        let tone = if failed {
+            NoticeTone::Error
+        } else {
+            NoticeTone::Success
+        };
+        self.ui.set_notice(tone, message.clone());
         self.documents_root_switch.status = Some((message, failed));
         cx.notify();
     }
@@ -2525,6 +2535,42 @@ impl RootView {
         }
     }
 
+    /// Folds the Meetings or Settings sidebar closed or open; the other
+    /// routes have none. Focus in the folding project tree moves to the
+    /// Meetings entry.
+    pub(crate) fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.ui.route, Route::Meetings | Route::Settings) {
+            return;
+        }
+        if self.ui.sidebar_open && self.tree_focus.contains_focused(window, cx) {
+            self.nav_focus[1].focus(window, cx);
+        }
+        self.ui.sidebar_open = !self.ui.sidebar_open;
+        let (open, duration) = (self.ui.sidebar_open, theme::tokens(cx).motion.layout);
+        let now = cx.background_executor().now();
+        self.sidebar_sizing
+            .update(cx, |state, _| state.set_open(open, duration, now));
+        cx.notify();
+    }
+
+    /// Runs a window shortcut as its control in the shell would.
+    fn run_shortcut(
+        &mut self,
+        shortcut: &controls::window::Shortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use controls::window::Shortcut;
+        match *shortcut {
+            Shortcut::Entry(index) => self.navigate(pages::chrome::ENTRIES[index].0, cx),
+            Shortcut::Settings => self.navigate(Route::Settings, cx),
+            Shortcut::Back => self.travel(false, cx),
+            Shortcut::Forward => self.travel(true, cx),
+            Shortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
+            Shortcut::ImportAudio => self.import_audio(&ClickEvent::default(), window, cx),
+        }
+    }
+
     pub(crate) fn set_locale(&mut self, locale: i18n::Locale, cx: &mut Context<Self>) {
         self.persist_field_with_notice(
             move |settings| settings.ui_locale = locale.code().into(),
@@ -3615,7 +3661,10 @@ impl RootView {
                         this.reload_projects(cx);
                     }
                     Err(error) => {
-                        this.ui.notice = i18n::audio_source_error(locale, &error);
+                        this.ui.set_notice(
+                            NoticeTone::Error,
+                            i18n::audio_source_error(locale, &error),
+                        );
                         if let AudioSourceError::RevisionConflict {
                             document_id,
                             expected,
@@ -4383,6 +4432,51 @@ fn stage_selection<'a>(options: &'a [SelectOption], saved: Option<&'a str>) -> O
         .or_else(|| options.first().map(SelectOption::value))
 }
 
+/// The toast of the latest notice. Its timers end only the toast they
+/// were started for, so a newer notice needs none of them cancelled.
+impl RootView {
+    /// Takes up a notice set since the last update: a toast that opens
+    /// fades after `TOAST_LIFETIME` unless its tone keeps it, and a cleared
+    /// notice closes its toast.
+    fn take_up_notice(&mut self, cx: &mut Context<Self>) {
+        match self.ui.take_up_notice() {
+            Some(NoticeChange::Opened { generation, tone }) if tone.fades() => {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(TOAST_LIFETIME).await;
+                    this.update(cx, |this, cx| this.dismiss_toast(generation, cx))
+                        .ok();
+                })
+                .detach();
+            }
+            Some(NoticeChange::Cleared(generation)) => self.dismiss_toast(generation, cx),
+            _ => {}
+        }
+    }
+
+    /// Fades out the toast of `generation`, then removes it and clears its
+    /// notice.
+    pub(crate) fn dismiss_toast(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if !self.ui.toast_leave(generation) {
+            return;
+        }
+        let fade = theme::tokens(cx).motion.menu;
+        if fade.is_zero() {
+            self.ui.toast_remove(generation);
+        } else {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(fade).await;
+                this.update(cx, |this, cx| {
+                    this.ui.toast_remove(generation);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+}
+
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.focus_awaiting_review(window, cx);
@@ -4421,7 +4515,8 @@ impl Render for RootView {
         let shell = pages::chrome::shell(self, body, detail, window, cx)
             .children(self.speaker_library_dialog(cx))
             .children(self.speaker_confirmation_dialog(cx));
-        controls::window::root(shell, cx)
+        let focus = self.window_focus.clone();
+        controls::window::root(shell, &focus, cx.listener(Self::run_shortcut), window, cx)
     }
 }
 
@@ -4442,7 +4537,9 @@ impl RootView {
         let take = match request {
             ReviewFocus::Decision => true,
             ReviewFocus::Expiry => {
-                window.focused(cx).is_none() || self.review_focus.contains_focused(window, cx)
+                self.window_focus.is_focused(window)
+                    || window.focused(cx).is_none()
+                    || self.review_focus.contains_focused(window, cx)
             }
         };
         if take {

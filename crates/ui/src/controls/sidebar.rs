@@ -1,5 +1,7 @@
 //! A sidebar divider with pointer capture, a hover glow and resisted limits.
 //! Width is window-local UI state; it never enters Workspace persistence.
+//! The fold runs on the executor's clock (`BackgroundExecutor::now`), which
+//! GPUI's tests advance by hand.
 
 use crate::theme;
 use gpui::{
@@ -35,8 +37,13 @@ struct Fold {
 }
 
 impl Fold {
-    fn value(&self) -> f32 {
-        let progress = (self.started.elapsed().as_secs_f32() / self.duration.as_secs_f32()).min(1.);
+    fn running(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.started) < self.duration
+    }
+
+    fn value(&self, now: Instant) -> f32 {
+        let elapsed = now.saturating_duration_since(self.started);
+        let progress = (elapsed.as_secs_f32() / self.duration.as_secs_f32()).min(1.);
         self.from + (self.to - self.from) * (1. - (1. - progress).powi(3))
     }
 }
@@ -57,23 +64,24 @@ impl Default for SidebarSizing {
 }
 
 impl SidebarSizing {
-    pub(crate) fn folding(&self) -> bool {
-        self.fold
-            .as_ref()
-            .is_some_and(|fold| fold.started.elapsed() < fold.duration)
+    /// Whether the fold is still running at `now`.
+    pub(crate) fn folding(&self, now: Instant) -> bool {
+        self.fold.as_ref().is_some_and(|fold| fold.running(now))
     }
 
-    fn visible_fraction(&self, open: bool) -> f32 {
+    fn visible_fraction(&self, open: bool, now: Instant) -> f32 {
         self.fold
             .as_ref()
-            .map_or(if open { 1. } else { 0. }, Fold::value)
+            .map_or(if open { 1. } else { 0. }, |fold| fold.value(now))
     }
 
-    pub(crate) fn set_open(&mut self, open: bool, duration: Duration) {
-        let from = self.visible_fraction(!open);
+    /// Folds the sidebar open or closed over `duration` from `now`,
+    /// starting from where a fold still running has reached.
+    pub(crate) fn set_open(&mut self, open: bool, duration: Duration, now: Instant) {
+        let from = self.visible_fraction(!open, now);
         self.reset_interaction();
         self.fold = (!duration.is_zero()).then(|| Fold {
-            started: Instant::now(),
+            started: now,
             duration,
             from,
             to: if open { 1. } else { 0. },
@@ -170,6 +178,7 @@ impl SidebarPanel {
 impl RenderOnce for SidebarPanel {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = *theme::tokens(cx);
+        let now = cx.background_executor().now();
         let state = self.sizing.clone();
         state.update(cx, |state, _| {
             state.maximum = MAX_WIDTH.min((self.available - MIN_CONTENT_WIDTH).max(MIN_WIDTH));
@@ -177,8 +186,8 @@ impl RenderOnce for SidebarPanel {
         });
         let sizing = state.read(cx);
         let dragging = sizing.drag.is_some();
-        let fraction = sizing.visible_fraction(self.open);
-        let glow = (sizing.hovered || dragging) && !sizing.folding();
+        let fraction = sizing.visible_fraction(self.open, now);
+        let glow = (sizing.hovered || dragging) && !sizing.folding(now);
         let (width, bounce, generation) = (
             sizing.width + sizing.overshoot,
             sizing.bounce,
