@@ -959,3 +959,47 @@ fn processing_completion_refreshes_the_still_selected_document(cx: &mut TestAppC
     );
     rendered(cx, "content-mode-original");
 }
+
+#[gpui::test]
+fn a_failed_document_read_waits_for_retry_and_recovers_restored_files(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let before = documents.package_bytes("a");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    // An external editor moves the package between list loading and Edit.
+    std::fs::remove_file(documents.path().join("a/state.json")).unwrap();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.ui.notice.contains("state.json") && root.editor.loading.is_empty()
+    });
+    cx.run_until_parked();
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    cx.run_until_parked();
+    assert!(within(
+        rendered(cx, "retry-document-read"),
+        rendered(cx, "meeting-content")
+    ));
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    assert!(
+        notice.contains("state.json"),
+        "the failed read keeps its source path"
+    );
+    assert!(cx.debug_bounds("document-editor-loading").is_none());
+    assert!(view.read_with(cx, |root, _| root.editor.shown().is_none()));
+    std::fs::write(documents.path().join("a/state.json"), &before[0]).unwrap();
+    // Redrawing after the file returns does not silently restart a read.
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |root, _| root.editor.shown().is_none()));
+    rendered(cx, "retry-document-read");
+    click_selector(cx, "retry-document-read");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("a"))
+    });
+    cx.run_until_parked();
+    let (title, _, _, body) = editor_fields(cx, &view);
+    assert_eq!(field_value(cx, &title), "A");
+    assert_eq!(area_value(cx, &body), "# A\n");
+    assert_eq!(documents.package_bytes("a"), before);
+}

@@ -2618,6 +2618,7 @@ impl RootView {
             return;
         };
         if self.editor.loading.contains(&document_id)
+            || self.editor.read_errors.contains_key(&document_id)
             || self
                 .editor
                 .show(&document_id, &self.projects, self.ui.locale, cx)
@@ -2630,6 +2631,7 @@ impl RootView {
     /// Reads `document_id` (state and Markdown body) on a worker and makes it
     /// the document's draft, replacing any edits.
     fn load_document_draft(&mut self, document_id: ProjectId, cx: &mut Context<Self>) {
+        self.editor.read_errors.remove(&document_id);
         self.editor.loading.insert(document_id.clone());
         let commands = self.services.workspace.document_commands();
         let read_id = document_id.clone();
@@ -2649,13 +2651,23 @@ impl RootView {
                     Ok(DocumentCommandResult::Document(Some(record))) => {
                         this.show_loaded_draft(&record, cx)
                     }
-                    Ok(_) => this.ui.notice = i18n::text(this.ui.locale, "project_missing").into(),
+                    Ok(_) => {
+                        let message = i18n::text(this.ui.locale, "project_missing").to_string();
+                        this.editor
+                            .read_errors
+                            .insert(document_id.clone(), message.clone());
+                        this.ui.notice = message;
+                    }
                     Err(error) => {
-                        this.ui.notice = i18n::message(
+                        let message = i18n::message(
                             this.ui.locale,
                             "document_read_failed",
                             &error.to_string(),
-                        )
+                        );
+                        this.editor
+                            .read_errors
+                            .insert(document_id.clone(), message.clone());
+                        this.ui.notice = message;
                     }
                 }
                 cx.notify();
@@ -2663,6 +2675,21 @@ impl RootView {
             .ok();
         })
         .detach();
+    }
+
+    /// Retries the selected document's failed read, leaving other drafts intact.
+    pub(crate) fn retry_document_read(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.ui.selected_project.clone() {
+            if self.editor.read_errors.contains_key(&id) {
+                self.load_document_draft(id, cx);
+                cx.notify();
+            }
+        }
     }
 
     /// Makes `record` its document's draft, shown when it is selected.
