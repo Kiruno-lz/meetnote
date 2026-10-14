@@ -528,6 +528,83 @@ fn a_review_shows_its_diff_and_lines_its_decisions_up_at_the_end(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn long_review_text_can_be_read_in_full_before_a_write(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    let mut review = pending_review("full-diff-review", u64::MAX);
+    review.field_diffs = vec![crate::assistant_ui::AssistantFieldDiff {
+        document_id: "first".into(),
+        field: "markdown".into(),
+        before: Some(
+            "The original meeting notes describe the decision and its owner in detail. "
+                .repeat(120),
+        ),
+        after: Some(
+            "The replacement meeting notes describe the revised decision and a new owner. "
+                .repeat(144),
+        ),
+    }];
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        pending_reviews: vec![review],
+        ..empty_result()
+    });
+    *assistant.confirm_result.lock().unwrap() = Some(confirmed("full-diff-write"));
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    for size in [
+        gpui::size(gpui::px(1180.), gpui::px(760.)),
+        crate::pages::chrome::MIN_WINDOW_SIZE,
+    ] {
+        cx.simulate_resize(size);
+        let scroll = view.read_with(cx, |root, _| root.scroll.assistant_results.clone());
+        scroll.set_offset(gpui::Point::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+        let before = rendered(cx, "assistant-diff-0-before");
+        let after = rendered(cx, "assistant-diff-0-after");
+        assert!(
+            before.size.height >= gpui::px(20.) * 20. && after.size.height >= gpui::px(20.) * 24.,
+            "the complete old and new prose can be read before approving: {before:?}, {after:?}"
+        );
+        assert!(
+            before.bottom() <= after.top(),
+            "old and new values read in order"
+        );
+        let results = rendered(cx, "assistant-results");
+        for value in [before, after] {
+            assert!(
+                value.left() >= results.left() && value.right() <= results.right(),
+                "the full text wraps inside the results viewport: {value:?} in {results:?}"
+            );
+        }
+        assert!(
+            rendered(cx, "assistant-confirm").top() > results.bottom(),
+            "approval follows the complete diff beyond the initial viewport"
+        );
+        scroll_results_to_end(cx, &view);
+        let confirm = rendered(cx, "assistant-confirm");
+        assert!(within(confirm, rendered(cx, "assistant-results")));
+        assert!(
+            confirm.bottom() <= rendered(cx, "assistant-input-bar").top(),
+            "scrolling through the full review reveals the decision above the prompt"
+        );
+        assert!(within(
+            rendered(cx, "assistant-input-bar"),
+            rendered(cx, "assistant-page")
+        ));
+        assert!(
+            assistant.grants_for("confirm").is_empty(),
+            "reading never approves a write"
+        );
+    }
+    click_selector(cx, "assistant-confirm");
+    wait_for(cx, &view, |root| {
+        root.assistant.task == AssistantTaskState::Completed
+    });
+    assert_eq!(assistant.grants_for("confirm").len(), 1);
+    assert!(shown(cx, "assistant-receipt-full-diff-write".into()));
+}
+
+#[gpui::test]
 fn tab_reveals_review_controls_after_long_results_above_the_prompt(cx: &mut TestAppContext) {
     let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
     let mut review = pending_review("keyboard-review", u64::MAX);
