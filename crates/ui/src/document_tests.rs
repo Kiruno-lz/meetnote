@@ -839,3 +839,123 @@ fn every_editor_control_carries_its_label_in_the_current_locale(cx: &mut TestApp
         "a locale change relabels the editor"
     );
 }
+
+/// Real runtime events with a gated processing outcome; no model inference.
+fn pending_processing(
+    cx: &mut VisualTestContext,
+    view: &View,
+) -> futures::channel::oneshot::Sender<Result<DocumentState, contracts::BackendError>> {
+    let jobs = runtime::JobRuntime::default();
+    let (asr_context, asr_events) = jobs.create_job();
+    let (diarization_context, diarization_events) = jobs.create_job();
+    let (outcome, result) = futures::channel::oneshot::channel();
+    let job = application::ProjectProcessingJob {
+        future: Box::pin(async move { result.await.unwrap() }),
+        asr_context: asr_context.clone(),
+        diarization_context: diarization_context.clone(),
+        asr_events,
+        diarization_events,
+    };
+    view.update(cx, |root, cx| {
+        root.ui.processing = true;
+        root.cancel_contexts = Some((asr_context, diarization_context));
+        cx.notify();
+        cx.spawn(async move |this, cx| RootView::follow_processing(this, job, cx).await)
+            .detach();
+    });
+    cx.run_until_parked();
+    outcome
+}
+
+#[gpui::test]
+fn processing_completion_keeps_another_documents_draft_focus_and_history(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    b.content.summary = Some("继续整理会议记录。\n".repeat(120));
+    documents.put(b, "# B\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(1180.), px(600.)));
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    select_row(cx, &view, "b");
+    open_editor(cx, &view, "b");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    retype(cx, &title, "B 未保存的标题");
+    retype_area(cx, &body, "继续编辑 B");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    scroll.set_offset(point(px(0.), px(-100.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let position = scroll.offset();
+    assert!(position.y < px(0.));
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let before = documents.package_bytes("b");
+    let mut finished = documents.read("a").state;
+    finished.content.summary = Some("A 的新结果".into());
+    documents.external_save(finished);
+    outcome.send(Ok(documents.read("a").state)).unwrap();
+    wait_for(cx, &view, |root| {
+        !root.ui.processing
+            && root.projects.iter().any(|p| {
+                p.id().as_str() == "a" && p.content.summary.as_deref() == Some("A 的新结果")
+            })
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.selected_project,
+            Some(ProjectId::new("b")),
+            "A must not replace B"
+        );
+        assert_eq!(root.editor.shown(), Some(&ProjectId::new("b")));
+        assert_eq!(root.ui.content_mode, crate::state::ContentMode::Edit);
+        assert_eq!(root.ui.notice, "已完成 A");
+    });
+    assert_eq!(scroll.offset(), position);
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(field_value(cx, &title), "B 未保存的标题");
+    assert_eq!(area_value(cx, &body), "继续编辑 B");
+    assert_eq!(documents.package_bytes("b"), before);
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    click_selector(cx, "navigate-forward");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("b"))
+    );
+    assert_eq!(field_value(cx, &title), "B 未保存的标题");
+}
+
+#[gpui::test]
+fn processing_completion_refreshes_the_still_selected_document(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(
+        DocumentState::new(ProjectId::new("a"), "A", "a.wav"),
+        "# A\n",
+    );
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    let mut finished = processed("a", "A");
+    finished.schema.revision = documents.revision("a");
+    documents.external_save(finished);
+    outcome.send(Ok(documents.read("a").state)).unwrap();
+    wait_for(cx, &view, |root| {
+        !root.ui.processing
+            && root.projects.iter().any(|p| {
+                p.id().as_str() == "a" && p.processing_status() == domain::ProjectStatus::Ready
+            })
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    rendered(cx, "content-mode-original");
+}

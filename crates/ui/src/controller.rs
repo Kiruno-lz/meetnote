@@ -4083,7 +4083,7 @@ impl RootView {
 
     /// Shows a started job's events until it finishes, then reloads the
     /// project list.
-    async fn follow_processing(
+    pub(crate) async fn follow_processing(
         this: gpui::WeakEntity<Self>,
         job: application::ProjectProcessingJob,
         cx: &mut gpui::AsyncApp,
@@ -4112,7 +4112,6 @@ impl RootView {
                         this.reload_projects(cx);
                         match result {
                             Ok(project) => {
-                                this.ui.selected_project = Some(project.id().clone());
                                 this.ui.notice = i18n::message(this.ui.locale, "finished", project.title());
                             }
                             Err(error) => {
