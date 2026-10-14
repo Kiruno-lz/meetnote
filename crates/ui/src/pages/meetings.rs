@@ -69,11 +69,8 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
     } else {
         for (project, depth) in rows {
             let selected = root.ui.selected_project.as_ref() == Some(project.id());
-            let display_status = if selected && root.ui.processing {
-                ProjectStatus::Processing
-            } else {
-                project.processing_status()
-            };
+            let display_status = root.ui.processing_status(&project);
+            let status_selector = format!("project-status-{}-{:?}", project.id(), display_status);
             let project_id = project.id().clone();
             let drag_id = project.id().clone();
             let drag_title = project.title().to_string();
@@ -175,16 +172,19 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                             )),
                     ),
             )
-            .child(status_line(
-                status_label(root.ui.locale, display_status),
-                root.audio.problem(project.id()).map(|problem| {
-                    (
-                        format!("audio-indicator-{}", project.id().as_str()),
-                        tr(root.ui.locale, problem.label_key()),
-                    )
-                }),
-                &tokens,
-            ))
+            .child(
+                status_line(
+                    status_label(root.ui.locale, display_status),
+                    root.audio.problem(project.id()).map(|problem| {
+                        (
+                            format!("audio-indicator-{}", project.id().as_str()),
+                            tr(root.ui.locale, problem.label_key()),
+                        )
+                    }),
+                    &tokens,
+                )
+                .debug_selector(move || status_selector.clone()),
+            )
             .on_click(
                 cx.listener(move |this, _, _, cx| this.select_project(project_id.clone(), cx)),
             )
@@ -256,13 +256,7 @@ fn main_panel(
 ) -> gpui::Div {
     let locale = root.ui.locale;
     let tokens = *theme::tokens(cx);
-    let display_status = project.map(|project| {
-        if root.ui.processing {
-            ProjectStatus::Processing
-        } else {
-            project.processing_status()
-        }
-    });
+    let display_status = project.map(|project| root.ui.processing_status(project));
     let mut panel = div()
         .flex_1()
         .min_w_0()
@@ -276,14 +270,8 @@ fn main_panel(
     if let Some(project) = project {
         let ready = project.processing_status() == ProjectStatus::Ready;
         let audio_problem = root.audio.problem(project.id());
-        let process_label = tr(
-            locale,
-            if root.ui.processing {
-                "cancel"
-            } else {
-                "process"
-            },
-        );
+        let processing_here = root.ui.is_processing_document(project.id());
+        let process_label = tr(locale, if processing_here { "cancel" } else { "process" });
         let mode = root.ui.content_mode;
         let scroll = root.scroll.meeting_content.clone();
         let mut content = div()
@@ -360,6 +348,12 @@ fn main_panel(
                             .px_3()
                             .py_1()
                             .rounded(tokens.radius.sm)
+                            .debug_selector(move || {
+                                format!(
+                                    "document-status-{:?}",
+                                    display_status.unwrap_or(ProjectStatus::Imported)
+                                )
+                            })
                             .bg(tokens.status(display_status.unwrap_or(ProjectStatus::Imported)))
                             .text_sm()
                             .child(status_label(
@@ -384,7 +378,10 @@ fn main_panel(
                             .primary()
                             .compact()
                             // Missing audio cannot be processed; relink it.
-                            .disabled(!root.ui.processing && root.audio.missing(project.id()))
+                            .disabled(
+                                (root.ui.processing && !processing_here)
+                                    || (!root.ui.processing && root.audio.missing(project.id())),
+                            )
                             .on_click(cx.listener(RootView::process_or_cancel)),
                     )
                     .children(audio_problem.map(|_| {

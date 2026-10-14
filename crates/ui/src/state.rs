@@ -27,6 +27,8 @@ pub struct UiState {
     pub expanded_model_details: BTreeSet<String>,
     pub notice: String,
     pub processing: bool,
+    /// The document owned by the one active processing task.
+    pub(crate) processing_project: Option<ProjectId>,
 }
 
 impl UiState {
@@ -50,6 +52,29 @@ impl UiState {
             expanded_model_details: BTreeSet::new(),
             notice: super::i18n::text(locale, "ask_notice").into(),
             processing: false,
+            processing_project: None,
+        }
+    }
+
+    pub(crate) fn begin_processing(&mut self, document_id: ProjectId) {
+        self.processing = true;
+        self.processing_project = Some(document_id);
+    }
+
+    pub(crate) fn finish_processing(&mut self) {
+        self.processing = false;
+        self.processing_project = None;
+    }
+
+    pub(crate) fn is_processing_document(&self, document_id: &ProjectId) -> bool {
+        self.processing && self.processing_project.as_ref() == Some(document_id)
+    }
+
+    pub(crate) fn processing_status(&self, document: &DocumentState) -> domain::ProjectStatus {
+        if self.is_processing_document(document.id()) {
+            domain::ProjectStatus::Processing
+        } else {
+            document.processing_status()
         }
     }
 

@@ -1025,6 +1025,7 @@ mod tests {
         assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-start");
         // The fixture has no model, so the job fails and processing ends.
         wait_for(cx, &view, |root| !root.ui.processing);
+        assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_none()));
         std::fs::remove_dir_all(directory).ok();
     }
 
@@ -1201,6 +1202,7 @@ mod tests {
         );
         view.read_with(cx, |root, _| {
             assert!(root.cancel_contexts.is_none());
+            assert!(root.ui.processing_project.is_none());
             assert_eq!(
                 root.ui.notice,
                 i18n::message(i18n::Locale::ZhCn, "cancelled", "First")

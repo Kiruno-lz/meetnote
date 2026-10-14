@@ -857,7 +857,8 @@ fn pending_processing(
         diarization_events,
     };
     view.update(cx, |root, cx| {
-        root.ui.processing = true;
+        root.ui
+            .begin_processing(root.ui.selected_project.clone().unwrap());
         root.cancel_contexts = Some((asr_context, diarization_context));
         cx.notify();
         cx.spawn(async move |this, cx| RootView::follow_processing(this, job, cx).await)
@@ -912,6 +913,7 @@ fn processing_completion_keeps_another_documents_draft_focus_and_history(cx: &mu
         assert_eq!(root.editor.shown(), Some(&ProjectId::new("b")));
         assert_eq!(root.ui.content_mode, crate::state::ContentMode::Edit);
         assert_eq!(root.ui.notice, "已完成 A");
+        assert!(root.ui.processing_project.is_none());
     });
     assert_eq!(scroll.offset(), position);
     assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
@@ -958,4 +960,72 @@ fn processing_completion_refreshes_the_still_selected_document(cx: &mut TestAppC
         Some(ProjectId::new("a"))
     );
     rendered(cx, "content-mode-original");
+}
+
+#[gpui::test]
+fn processing_status_and_cancel_belong_to_the_running_document(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    documents.put(b, "# B\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    select_row(cx, &view, "b");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    cx.run_until_parked();
+    rendered(cx, "project-status-a-Processing");
+    rendered(cx, "project-status-b-Ready");
+    rendered(cx, "document-status-Ready");
+    let contexts = view.read_with(cx, |root, _| root.cancel_contexts.clone().unwrap());
+    click_selector(cx, "process-project");
+    assert!(
+        !contexts.0.is_cancelled() && !contexts.1.is_cancelled(),
+        "B must not cancel A"
+    );
+    select_row(cx, &view, "a");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    cx.run_until_parked();
+    rendered(cx, "document-status-Processing");
+    click_selector(cx, "process-project");
+    assert!(
+        contexts.0.is_cancelled() && contexts.1.is_cancelled(),
+        "A can still be cancelled: {:?}",
+        view.read_with(cx, |root, _| (
+            root.ui.selected_project.clone(),
+            root.ui.processing_project.clone(),
+            root.ui.notice.clone()
+        ))
+    );
+    outcome
+        .send(Err(contracts::BackendError {
+            code: contracts::BackendErrorCode::Cancelled,
+            message: "cancelled".into(),
+        }))
+        .unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    rendered(cx, "project-status-a-Ready");
+    assert!(cx.debug_bounds("project-status-a-Processing").is_none());
+    assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_none()));
+}
+
+#[gpui::test]
+fn processing_failure_clears_the_document_identity(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    outcome
+        .send(Err(contracts::BackendError {
+            code: contracts::BackendErrorCode::InferenceFailed,
+            message: "fixture failure".into(),
+        }))
+        .unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    rendered(cx, "project-status-a-Ready");
+    assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_none()));
 }
