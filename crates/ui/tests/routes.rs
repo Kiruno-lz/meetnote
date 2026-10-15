@@ -1480,3 +1480,25 @@ fn first_use_fixtures_reach_settings_and_import_at_minimum_size(cx: &mut TestApp
     cx.update(|_, cx| window.close_overlay(Overlay::AssistantImport, cx));
     wait_for(cx, |cx| cx.debug_bounds("assistant-first-import").is_none());
 }
+
+#[gpui::test]
+fn imported_audio_fixture_opens_the_existing_project_at_minimum_size(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.update(|_, cx| window.open_overlay(Overlay::AssistantImported, cx));
+    cx.run_until_parked();
+    let action = rendered(cx, "assistant-first-project");
+    assert!(within(action, rendered(cx, "assistant-results")));
+    assert!(action.bottom() <= rendered(cx, "assistant-input-bar").top());
+    cx.simulate_click(action.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    visible(cx, "process-project");
+    cx.update(|_, cx| {
+        window.close_overlay(Overlay::AssistantImported, cx);
+        window.navigate(Route::Assistant, cx);
+    });
+    wait_for(cx, |cx| {
+        cx.debug_bounds("assistant-first-project").is_none()
+    });
+}

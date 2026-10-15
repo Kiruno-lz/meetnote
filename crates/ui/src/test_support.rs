@@ -25,6 +25,8 @@ pub enum Overlay {
     AssistantSetup,
     /// On Assistant: the connection is configured and the workspace is empty.
     AssistantImport,
+    /// On Assistant: a selected imported recording, before audio processing.
+    AssistantImported,
     /// The Settings theme select with its menu open.
     ThemeSelect,
     /// The Speaker Library migration question.
@@ -276,6 +278,19 @@ impl MainWindow {
                 root.ui.selected_project = None;
                 cx.notify();
             }
+            Overlay::AssistantImported => {
+                // UI projection only: keep the fixture document's identity and
+                // audio, with its processing facts cleared in memory.
+                if let Some(document) = root
+                    .projects
+                    .iter_mut()
+                    .find(|document| Some(document.id()) == root.ui.selected_project.as_ref())
+                {
+                    document.processing = Default::default();
+                    document.results = Default::default();
+                }
+                cx.notify();
+            }
             Overlay::EmptyWorkspace => {
                 root.projects.clear();
                 root.ui.selected_project = None;
@@ -425,7 +440,9 @@ impl MainWindow {
                 );
                 cx.notify();
             }
-            Overlay::EmptyWorkspace | Overlay::AssistantImport => root.reload_projects(cx),
+            Overlay::EmptyWorkspace | Overlay::AssistantImport | Overlay::AssistantImported => {
+                root.reload_projects(cx)
+            }
             Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
                 if let Some(selectors) = &root.settings_selectors {
