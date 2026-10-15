@@ -1157,6 +1157,79 @@ fn retype(cx: &mut VisualTestContext, field: &Field, text: &str) {
 }
 
 #[gpui::test]
+fn probing_an_edited_target_requires_the_same_explicit_key_as_saving(cx: &mut TestAppContext) {
+    let settings = stored_key_settings();
+    let before = settings.snapshot().unwrap();
+    let assistant = Arc::new(FakeAssistantUiService {
+        settings: Some(settings.clone()),
+        ..Default::default()
+    });
+    let (view, cx) = open_desktop_with(cx, assistant.clone(), settings.clone());
+    open_assistant_settings(cx, &view);
+    let (base_url, key) = view.read_with(cx, |root, _| {
+        (
+            root.assistant_inputs.base_url.clone(),
+            root.assistant_inputs.api_key.clone(),
+        )
+    });
+    retype(cx, &base_url, "http://127.0.0.1:4011");
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| {
+        root.assistant.diagnostic.is_some() || root.settings_error.is_some()
+    });
+    assert!(
+        assistant.probe_calls.lock().unwrap().is_empty(),
+        "a draft target cannot receive a stored key before it is explicitly entered"
+    );
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings_error.as_ref().unwrap().code,
+            SETTINGS_CREDENTIAL_TARGET_CONFLICT
+        )
+    });
+    assert!(shown(cx, "assistant-credential-target-conflict".into()));
+    assert_eq!(
+        settings.snapshot().unwrap(),
+        before,
+        "a refused probe never saves the form"
+    );
+
+    // Entering the same key again is an explicit decision, just as it is for Save.
+    retype(cx, &key, STORED_KEY);
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    assert!(!shown(cx, "assistant-credential-target-conflict".into()));
+    let profiles = assistant.probe_profiles.lock().unwrap();
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0].base_url, "http://127.0.0.1:4011");
+    assert_eq!(profiles[0].api_key.as_deref(), Some(STORED_KEY));
+    assert_eq!(
+        settings.snapshot().unwrap(),
+        before,
+        "testing the explicitly entered draft still does not save it"
+    );
+}
+
+#[gpui::test]
+fn probing_a_budget_edit_keeps_the_existing_credential(cx: &mut TestAppContext) {
+    let settings = stored_key_settings();
+    let assistant = Arc::new(FakeAssistantUiService {
+        settings: Some(settings.clone()),
+        ..Default::default()
+    });
+    let (view, cx) = open_desktop_with(cx, assistant.clone(), settings);
+    open_assistant_settings(cx, &view);
+    let timeout = view.read_with(cx, |root, _| root.assistant_inputs.timeout_ms.clone());
+    retype(cx, &timeout, "60000");
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    let profiles = assistant.probe_profiles.lock().unwrap();
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0].timeout_ms, 60000);
+    assert_eq!(profiles[0].api_key.as_deref(), Some(STORED_KEY));
+}
+
+#[gpui::test]
 fn an_endpoint_changed_without_the_key_is_refused_next_to_the_key_field(cx: &mut TestAppContext) {
     let settings = stored_key_settings();
     let assistant = Arc::new(FakeAssistantUiService {

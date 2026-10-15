@@ -74,6 +74,7 @@ mod tests {
             Arc<Mutex<std::collections::VecDeque<Result<ConnectionDiagnostic, AssistantUiError>>>>,
         /// The kind of every probe.
         pub(crate) probe_calls: Arc<Mutex<Vec<ConnectionProbeKind>>>,
+        pub(crate) probe_profiles: Arc<Mutex<Vec<settings::AssistantConnectionProfile>>>,
         pub(crate) probe_cancellations: Arc<Mutex<Vec<AssistantCancellation>>>,
         /// Holds each probe until released, when set.
         pub(crate) probe_gate: Option<Gate>,
@@ -136,6 +137,7 @@ mod tests {
             kind: ConnectionProbeKind,
             cancellation: AssistantCancellation,
         ) -> Result<ConnectionDiagnostic, AssistantUiError> {
+            self.probe_profiles.lock().unwrap().push(profile.clone());
             self.probe_cancellations.lock().unwrap().push(cancellation);
             self.probe_calls.lock().unwrap().push(kind);
             if let Some(gate) = &self.probe_gate {
