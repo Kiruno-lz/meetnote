@@ -523,6 +523,8 @@ pub(crate) struct RootView {
     pub(crate) projects_loaded: bool,
     /// The latest list read failure; the last successful snapshot stays shown.
     pub(crate) projects_error: Option<String>,
+    /// The locale in which the last list failure's notice was opened.
+    projects_error_locale: i18n::Locale,
     /// The open Speaker Library migration question, if any.
     pub(crate) speaker_library_prompt: Option<SpeakerLibraryPrompt>,
     pub(crate) scroll: ScrollAreas,
@@ -750,6 +752,7 @@ impl RootView {
             documents_root_generation: 0,
             projects_loaded: false,
             projects_error: None,
+            projects_error_locale: locale,
             speaker_library_prompt: None,
             scroll: ScrollAreas::default(),
             dialog_focus: cx.focus_handle(),
@@ -880,10 +883,21 @@ impl RootView {
                     self.projects = snapshot.documents;
                     self.document_issues = snapshot.issues;
                     if let Some(error) = self.projects_error.take() {
-                        if self.ui.notice
-                            == i18n::message(self.ui.locale, "documents_load_failed", &error)
-                        {
+                        let old_notice = i18n::message(
+                            self.projects_error_locale,
+                            "documents_load_failed",
+                            &error,
+                        );
+                        if self.ui.notice == old_notice {
                             self.ui.notice.clear();
+                        }
+                        if let Some(generation) = self
+                            .ui
+                            .toast()
+                            .filter(|toast| toast.notice == old_notice)
+                            .map(|toast| toast.generation)
+                        {
+                            self.dismiss_toast(generation, cx);
                         }
                     }
                     if !self.projects_loaded || self.ui.selected_project.is_none() {
@@ -892,6 +906,7 @@ impl RootView {
                     self.check_selected_audio(cx);
                 }
                 Err(error) => {
+                    self.projects_error_locale = self.ui.locale;
                     self.ui.notice = i18n::message(self.ui.locale, "documents_load_failed", &error);
                     self.projects_error = Some(error);
                 }
