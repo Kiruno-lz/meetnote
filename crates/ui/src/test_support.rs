@@ -19,6 +19,8 @@ pub use crate::route::Route;
 /// An overlay the tests open over a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
+    /// On Meetings: a loaded workspace with no documents.
+    EmptyWorkspace,
     /// The Settings theme select with its menu open.
     ThemeSelect,
     /// The Speaker Library migration question.
@@ -258,6 +260,13 @@ impl MainWindow {
             return;
         }
         self.view.update(cx, |root, cx| match overlay {
+            Overlay::EmptyWorkspace => {
+                root.projects.clear();
+                root.ui.selected_project = None;
+                root.ui.detail_open = false;
+                root.editor.discard_all();
+                cx.notify();
+            }
             Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
                 let select = root
@@ -380,6 +389,7 @@ impl MainWindow {
             return;
         }
         self.view.update(cx, |root, cx| match overlay {
+            Overlay::EmptyWorkspace => root.reload_projects(cx),
             Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
                 if let Some(selectors) = &root.settings_selectors {

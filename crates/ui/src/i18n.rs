@@ -61,7 +61,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "original") => "原始文",
         (Locale::ZhCn, "no_summary") => "还没有总结。可以使用助手整理这个项目。",
         (Locale::ZhCn, "need_process") => "请先处理项目以生成带 speaker 的转录。",
-        (Locale::ZhCn, "empty_meetings") => "导入音频以创建项目。",
+        (Locale::ZhCn, "empty_meetings_title") => "从一段音频开始",
+        (Locale::ZhCn, "empty_meetings") => "导入录音，转录后即可阅读和整理。",
         (Locale::ZhCn, "project_detail") => "项目详情",
         (Locale::ZhCn, "close_detail") => "关闭详情",
         (Locale::ZhCn, "models_ready") => "语音识别和说话人分离模型均已就绪",
@@ -441,7 +442,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "need_process") => {
             "Run processing to generate a speaker-labelled transcript."
         }
-        (Locale::EnUs, "empty_meetings") => "Import audio to create a project.",
+        (Locale::EnUs, "empty_meetings_title") => "Start with a recording",
+        (Locale::EnUs, "empty_meetings") => "Import audio to transcribe, read and organize.",
         (Locale::EnUs, "project_detail") => "PROJECT DETAIL",
         (Locale::EnUs, "close_detail") => "Close detail",
         (Locale::EnUs, "models_ready") => {
