@@ -427,13 +427,14 @@ fn open_with_library<'a>(
     );
     services.speaker_library = crate::speaker_library_at(library);
     let (view, cx) = open_desktop_on(cx, services.clone());
-    view.update(cx, |root, cx| {
-        root.navigate(Route::Settings, cx);
-        root.scroll
-            .settings
-            .scroll_to_top_of_item(crate::pages::settings::SPEAKER_LIBRARY_SECTION);
-    });
+    view.update(cx, |root, cx| root.navigate(Route::Settings, cx));
     cx.run_until_parked();
+    // Select the section after Settings has laid out, as a user does.
+    click_selector(cx, "settings-section-5");
+    assert!(
+        rendered(cx, "speaker-library-section").top() >= rendered(cx, "settings-scroll").top(),
+        "the library begins inside the scroll viewport"
+    );
     (view, cx, services)
 }
 

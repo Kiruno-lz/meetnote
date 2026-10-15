@@ -104,6 +104,8 @@ pub(crate) fn setting_control_row(
     control: gpui::AnyElement,
     tokens: &Tokens,
 ) -> impl IntoElement {
+    let label = label.into();
+    let debug_label = label.clone();
     div()
         .min_h(px(52.))
         .flex()
@@ -112,11 +114,12 @@ pub(crate) fn setting_control_row(
         .text_sm()
         .child(
             div()
+                .debug_selector(move || format!("setting-label-{debug_label}"))
                 .w(SETTING_LABEL_WIDTH)
                 .min_w(px(110.))
                 .flex_shrink(1.)
                 .text_color(tokens.text)
-                .child(label.into()),
+                .child(label),
         )
         .child(
             div()
