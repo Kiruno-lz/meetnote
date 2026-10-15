@@ -1918,11 +1918,11 @@ impl RootView {
         }
         let generation = self.begin_projects_reload();
         let root_generation = self.documents_root_generation;
-        let workspace = self.services.workspace.clone();
+        let documents = self.services.workspace.documents().frozen();
         cx.spawn(async move |this, cx| {
             let imported = runtime::spawn_blocking(move || {
-                let project = workspace.import_audio(path.display().to_string())?;
-                Ok::<_, String>((project, workspace.document_snapshot()))
+                let project = documents.import_audio(path.display().to_string())?;
+                Ok::<_, String>((project, documents.snapshot()))
             })
             .await;
             this.update(cx, |this, cx| {
