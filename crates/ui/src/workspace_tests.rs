@@ -60,6 +60,17 @@ impl Workspace {
     }
 
     fn with_read_gate(read_gate: Option<&crate::tests::Gate>) -> Self {
+        Self::with_gates(read_gate, None)
+    }
+
+    fn with_save_gates(old: &crate::tests::Gate, new: &crate::tests::Gate) -> Self {
+        Self::with_gates(None, Some((old, new)))
+    }
+
+    fn with_gates(
+        read_gate: Option<&crate::tests::Gate>,
+        save_gates: Option<(&crate::tests::Gate, &crate::tests::Gate)>,
+    ) -> Self {
         let old = DocumentsRoot::new();
         let new = DocumentsRoot::new();
         let models = temp_directory();
@@ -77,19 +88,25 @@ impl Workspace {
                 Arc::new(SherpaOnnxDiarizationBackend::default()),
             )
             .with_job_runtime(jobs.clone()),
-            DocumentService::new(match read_gate {
-                Some(gate) => crate::document_tests::gated_read_repository(old.repository(), gate),
-                None => Arc::new(old.repository()),
+            DocumentService::new(match (read_gate, save_gates) {
+                (Some(gate), _) => {
+                    crate::document_tests::gated_read_repository(old.repository(), gate)
+                }
+                (_, Some((gate, _))) => {
+                    crate::document_tests::gated_save_repository(old.repository(), gate)
+                }
+                _ => Arc::new(old.repository()),
             }),
         )
-        .with_documents_root(application::DocumentsRoot::new(
-            old.path(),
-            &models,
-            |root: &Path| {
-                FileDocumentRepository::open(root)
-                    .map(|repository| Arc::new(repository) as Arc<dyn DocumentRepository>)
-            },
-        ));
+        .with_documents_root(application::DocumentsRoot::new(old.path(), &models, {
+            let gate = save_gates.map(|(_, gate)| gate.clone());
+            move |root: &Path| {
+                FileDocumentRepository::open(root).map(|repository| match &gate {
+                    Some(gate) => crate::document_tests::gated_save_repository(repository, gate),
+                    None => Arc::new(repository) as Arc<dyn DocumentRepository>,
+                })
+            }
+        }));
         Self {
             old,
             new,
@@ -448,6 +465,162 @@ fn a_rolled_back_workspace_restarts_reads_and_keeps_its_existing_drafts(cx: &mut
         view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits.body),
         "# Fresh\n"
     );
+}
+
+/// Edits the real document fields and starts their revision-checked save.
+fn edit_and_save(cx: &mut VisualTestContext, view: &View, title: &str) {
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, view, |root| root.editor.shown().is_some());
+    let field = view.read_with(cx, |root, _| root.editor.title.clone());
+    focus_field(cx, &field);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input(title);
+    click_selector(cx, "save-document");
+}
+
+fn late_save_keeps_the_new_workspace(cx: &mut TestAppContext, same_id: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let old_gate = crate::tests::Gate::default();
+    let new_gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_save_gates(&old_gate, &new_gate);
+    put(&fixture.old, "shared", "Old");
+    // A different ID makes the old command's final read fail without
+    // repository pinning; the same ID would return a different document.
+    let new_id = if same_id { "shared" } else { "new" };
+    put(&fixture.new, new_id, "New");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    old_gate.arm();
+    edit_and_save(cx, &view, "Saved in old workspace");
+    wait_for(cx, &view, |_| old_gate.counts().0 == 1);
+    let old_bytes = fixture.old.package_bytes("shared");
+    assert_eq!(
+        fixture.old.read("shared").state.title(),
+        "Saved in old workspace"
+    );
+
+    choose(cx, &view, fixture.new.path());
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "New")
+            && !root.audio.pending()
+    });
+    assert_eq!(fixture.root(), fixture.new.path());
+    assert!(
+        view.read_with(cx, |root, _| root.editor.saving.is_none()),
+        "a save in the previous workspace must not disable this workspace's save"
+    );
+    new_gate.arm();
+    edit_and_save(cx, &view, "Saved in new workspace");
+    wait_for(cx, &view, |_| new_gate.counts().0 == 1);
+    // Settle the new root's real watcher before observing the old callback.
+    wait_for_watcher(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "Saved in new workspace")
+            && !root.audio.pending()
+    });
+    let draft = view.read_with(cx, |root, cx| root.editor.current(cx).unwrap());
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let new_bytes = fixture.new.package_bytes(new_id);
+    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = completed.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    old_gate.release();
+    wait_for(cx, &view, |_| completed.get());
+    cx.run_until_parked();
+    view.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.editor.saving,
+            Some(ProjectId::new(new_id)),
+            "the old completion must not finish the new save"
+        );
+        let current = root.editor.current(cx).unwrap();
+        assert_eq!(current.revision, draft.revision);
+        assert_eq!(current.base, draft.base);
+        assert_eq!(current.edits, draft.edits);
+        assert_eq!(root.ui.notice, notice);
+        assert!(root.document_conflict.is_none());
+    });
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(fixture.old.package_bytes("shared"), old_bytes);
+    assert_eq!(fixture.new.package_bytes(new_id), new_bytes);
+    new_gate.release();
+    wait_for(cx, &view, |root| root.editor.saving.is_none());
+    view.read_with(cx, |root, cx| {
+        let current = root.editor.current(cx).unwrap();
+        assert_eq!(current.revision, fixture.new.revision(new_id));
+        assert_eq!(current.base.title, "Saved in new workspace");
+        assert_eq!(current.edits, draft.edits);
+        assert_eq!(
+            root.ui.notice,
+            i18n::message(root.ui.locale, "document_saved", "Saved in new workspace")
+        );
+    });
+}
+
+#[gpui::test]
+fn a_new_workspace_can_save_while_the_old_save_finishes(cx: &mut TestAppContext) {
+    late_save_keeps_the_new_workspace(cx, true);
+}
+
+#[gpui::test]
+fn an_old_save_cannot_finish_a_different_documents_new_workspace_save(cx: &mut TestAppContext) {
+    late_save_keeps_the_new_workspace(cx, false);
+}
+
+#[gpui::test]
+fn a_save_in_a_rolled_back_workspace_still_rebases_its_draft(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_save_gates(&gate, &crate::tests::Gate::default());
+    put(&fixture.old, "shared", "Old");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    gate.arm();
+    edit_and_save(cx, &view, "Saved before rollback");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    let saved_revision = fixture.old.revision("shared");
+    let field = view.read_with(cx, |root, _| root.editor.title.clone());
+    focus_field(cx, &field);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Keep typing during save");
+    let mut external = fixture.settings.snapshot().unwrap();
+    external.expected_speakers = Some(3);
+    fixture.settings.update(external).unwrap();
+    choose(cx, &view, fixture.new.path());
+    assert!(switch_status(cx, &view).unwrap().1);
+    assert_eq!(fixture.root(), fixture.old.path());
+    assert_eq!(
+        view.read_with(cx, |root, _| root.editor.saving.clone()),
+        Some(ProjectId::new("shared"))
+    );
+    gate.release();
+    wait_for(cx, &view, |root| root.editor.saving.is_none());
+    view.read_with(cx, |root, cx| {
+        let current = root.editor.current(cx).unwrap();
+        assert_eq!(current.revision, saved_revision);
+        assert_eq!(current.base.title, "Saved before rollback");
+        assert_eq!(current.edits.title, "Keep typing during save");
+    });
+    click_selector(cx, "save-document");
+    wait_for(cx, &view, |root| root.editor.saving.is_none());
+    assert_eq!(
+        fixture.old.read("shared").state.title(),
+        "Keep typing during save"
+    );
+    assert_eq!(fixture.old.revision("shared"), saved_revision + 1);
+    assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
 }
 
 #[gpui::test]

@@ -513,8 +513,11 @@ pub(crate) struct RootView {
     /// The latest project-list reload; an older one that finishes later is
     /// dropped.
     projects_generation: u64,
-    /// The documents-root subscription lifecycle; ordinary list reloads
-    /// do not invalidate document reads.
+    /// The repository subscription lifecycle, including a rolled-back
+    /// switch; ordinary list reloads do not invalidate document reads.
+    documents_repository_generation: u64,
+    /// A different root discards drafts and their pending saves. A switch
+    /// rolled back to the same root still accepts its completed save.
     documents_root_generation: u64,
     /// Whether the initial project-list request has completed.
     pub(crate) projects_loaded: bool,
@@ -743,6 +746,7 @@ impl RootView {
             pending_expiry: None,
             installation: InstallationState::default(),
             projects_generation: 0,
+            documents_repository_generation: 0,
             documents_root_generation: 0,
             projects_loaded: false,
             projects_error: None,
@@ -1443,11 +1447,13 @@ impl RootView {
     /// audio check, document speaker controls and the Assistant's results,
     /// reviews and undo entries.
     fn follow_documents_root(&mut self, root_changed: bool, cx: &mut Context<Self>) {
-        self.documents_root_generation += 1;
+        self.documents_repository_generation += 1;
         // A successful rollback also replaced the repository. Retain its
         // drafts, but let reads from the restored root start again.
         self.editor.loading.clear();
         if root_changed {
+            self.documents_root_generation += 1;
+            self.editor.saving = None;
             self.projects.clear();
             self.document_issues.clear();
             self.projects_error = None;
@@ -2680,7 +2686,7 @@ impl RootView {
     /// the document's draft, replacing any edits.
     fn load_document_draft(&mut self, document_id: ProjectId, cx: &mut Context<Self>) {
         let previous_error = self.editor.read_errors.remove(&document_id);
-        let generation = self.documents_root_generation;
+        let generation = self.documents_repository_generation;
         self.editor.loading.insert(document_id.clone());
         let commands = self.services.workspace.document_commands();
         let read_id = document_id.clone();
@@ -2695,7 +2701,7 @@ impl RootView {
             })
             .await;
             this.update(cx, |this, cx| {
-                if generation != this.documents_root_generation {
+                if generation != this.documents_repository_generation {
                     cx.notify();
                     return;
                 }
@@ -2782,6 +2788,7 @@ impl RootView {
                 return;
             }
         };
+        let generation = self.documents_root_generation;
         let document_id = draft.document_id;
         self.editor.saving = Some(document_id.clone());
         cx.notify();
@@ -2797,6 +2804,10 @@ impl RootView {
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || commands.execute(envelope)).await;
             this.update(cx, |this, cx| {
+                if generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 this.editor.saving = None;
                 match result {
                     Ok(DocumentCommandResult::Updated(record)) => {
