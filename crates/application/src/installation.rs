@@ -227,7 +227,14 @@ fn probe_installation(
         .unwrap_or_default();
     InstallationState {
         catalog: model_manager.browse(None, None),
-        default_asr_ready: Path::new(&query.asr_model.artifact_path).is_file(),
+        default_asr_ready: Path::new(&query.asr_model.artifact_path).is_file()
+            || (!query.asr_model.artifacts.is_empty()
+                && Path::new(&query.asr_model.artifact_path).is_dir()
+                && query.asr_model.artifacts.iter().all(|artifact| {
+                    Path::new(&query.asr_model.artifact_path)
+                        .join(&artifact.filename)
+                        .is_file()
+                })),
         default_diarization_ready: Path::new(&query.diarization_model.artifact_path).is_dir(),
         stage_root: query.stage_root.clone(),
         stage_files,
@@ -376,6 +383,40 @@ mod tests {
         assert!(state.stage_installed(&query.diarization_model, &segmentation));
         assert!(!state.stage_installed(&query.diarization_model, &embedding));
         assert!(!state.stage_installed(&query.asr_model, &segmentation));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_default_asr_bundle_is_available_only_when_its_declared_files_are_present() {
+        let root = temp_root("asr-bundle");
+        let bundle = root.join("asr-bundle");
+        fs_write(&bundle.join("model.onnx"));
+        fs_write(&bundle.join("tokens.txt"));
+        let mut asr_model = model_ref("fake", &bundle);
+        asr_model.artifacts = ["model.onnx", "tokens.txt"]
+            .map(|filename| contracts::ModelArtifactRef {
+                filename: filename.into(),
+                expected_sha256: None,
+                archive_member: None,
+            })
+            .to_vec();
+        let service =
+            InstallationService::new(ModelManager::new(catalog(vec![]), root.join("models")));
+        let query = InstallationQuery {
+            asr_model,
+            diarization_model: model_ref("fake", &root.join("dia")),
+            stage_root: None,
+            stage_files: BTreeSet::new(),
+        };
+        assert!(
+            service.probe(&query).default_asr_ready,
+            "an ASR bundle uses a directory"
+        );
+        std::fs::remove_file(bundle.join("tokens.txt")).unwrap();
+        assert!(
+            !service.probe(&query).default_asr_ready,
+            "a partial bundle is unavailable"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
