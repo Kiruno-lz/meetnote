@@ -1725,6 +1725,256 @@ fn hold_workspace_switch(
     });
 }
 
+/// The UI accepts these actions before their worker can register a shared
+/// job. The fake Assistant only observes admission/dispatch; the actual
+/// directory switch and settings write use the fixture's real files.
+#[gpui::test]
+fn an_accepted_assistant_run_keeps_its_workspace_until_its_failure_returns(
+    cx: &mut TestAppContext,
+) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = assistant_switch_fixture(&crate::tests::Gate::default());
+    let assistant = Arc::new(FakeAssistantUiService {
+        run_gate: Some(gate.clone()),
+        ..Default::default()
+    });
+    assistant
+        .run_errors
+        .lock()
+        .unwrap()
+        .push_back(crate::assistant_ui::AssistantUiError {
+            code: "PROVIDER_TIMEOUT".into(),
+            message: "timed out".into(),
+            retryable: true,
+        });
+    let (view, cx) = open_assistant_workspace(cx, &fixture, assistant.clone());
+    let field = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    focus_field(cx, &field);
+    cx.simulate_input("keep this task on the old workspace");
+    let settings_before = std::fs::read(&fixture.settings_path).unwrap();
+    gate.arm();
+    view.update_in(cx, |root, window, cx| {
+        root.assistant_action(&gpui::ClickEvent::default(), window, cx);
+        assert!(
+            root.assistant_busy(),
+            "the real UI entry must accept the run"
+        );
+        assert!(fixture.jobs.list().unwrap().is_empty());
+        root.choose_documents_root(fixture.new.path().into(), cx);
+        assert!(
+            !root.documents_root_switch.switching,
+            "an accepted Assistant run must keep its workspace before worker registration"
+        );
+    });
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    view.update(cx, |root, cx| root.navigate(Route::Settings, cx));
+    cx.run_until_parked();
+    assert!(!cx.cx.did_prompt_for_paths());
+    click_selector(cx, "choose-documents-root");
+    assert!(
+        !cx.cx.did_prompt_for_paths(),
+        "the busy button stays disabled"
+    );
+    view.update_in(cx, |root, window, cx| {
+        root.choose_documents_root_directory(&gpui::ClickEvent::default(), window, cx)
+    });
+    assert!(
+        !cx.cx.did_prompt_for_paths(),
+        "a stale activation opens no chooser"
+    );
+    assert_eq!(fixture.root(), fixture.old.path());
+    assert_eq!(
+        std::fs::read(&fixture.settings_path).unwrap(),
+        settings_before
+    );
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.notice,
+            i18n::text(root.ui.locale, "documents_root_operation_pending")
+        );
+    });
+    gate.release();
+    wait_for(cx, &view, |root| !root.assistant_busy());
+    // Cancellation is also still in flight until its outcome arrives.
+    assistant
+        .run_errors
+        .lock()
+        .unwrap()
+        .push_back(crate::assistant_ui::AssistantUiError {
+            code: "TASK_CANCELLED".into(),
+            message: "cancelled".into(),
+            retryable: true,
+        });
+    gate.arm();
+    view.update_in(cx, |root, window, cx| {
+        root.retry_assistant_run(&gpui::ClickEvent::default(), window, cx);
+        assert!(root.assistant_busy());
+        root.cancel_assistant(&gpui::ClickEvent::default(), window, cx);
+        assert!(matches!(
+            root.assistant.task,
+            crate::assistant_ui::AssistantTaskState::Cancelling { .. }
+        ));
+        root.choose_documents_root(fixture.new.path().into(), cx);
+        assert!(!root.documents_root_switch.switching);
+    });
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    gate.release();
+    wait_for(cx, &view, |root| !root.assistant_busy());
+    assert!(view.read_with(cx, |root, _| root.assistant.task
+        == crate::assistant_ui::AssistantTaskState::Cancelled));
+    choose(cx, &view, fixture.new.path());
+    assert_eq!(fixture.root(), fixture.new.path());
+    assert_eq!(
+        fixture.saved_documents_root(),
+        fixture.new.path().display().to_string()
+    );
+}
+
+#[gpui::test]
+fn an_accepted_assistant_confirmation_keeps_its_workspace_until_it_returns(
+    cx: &mut TestAppContext,
+) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = assistant_switch_fixture(&crate::tests::Gate::default());
+    let assistant = Arc::new(FakeAssistantUiService {
+        decision_gate: Some(gate.clone()),
+        ..Default::default()
+    });
+    *assistant.run_result.lock().unwrap() = Some(review_with_undo());
+    *assistant.confirm_result.lock().unwrap() = Some(empty_result());
+    let (view, cx) = open_assistant_workspace(cx, &fixture, assistant.clone());
+    send_workspace_prompt(cx, &view, "review");
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    assert!(!view.read_with(cx, |root, _| root.assistant_busy()));
+    gate.arm();
+    view.update_in(cx, |root, window, cx| {
+        root.accept_assistant_pending(&gpui::ClickEvent::default(), window, cx);
+        assert!(root.assistant.decision_in_flight());
+        assert!(fixture.jobs.list().unwrap().is_empty());
+        root.choose_documents_root(fixture.new.path().into(), cx);
+        assert!(
+            !root.documents_root_switch.switching,
+            "an accepted confirmation must keep its workspace before worker dispatch"
+        );
+    });
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    assert_eq!(fixture.root(), fixture.old.path());
+    gate.release();
+    wait_for(cx, &view, |root| !root.assistant_busy());
+    assert_eq!(assistant.grants_for("confirm"), [vec!["old".to_string()]]);
+    choose(cx, &view, fixture.new.path());
+    assert_eq!(fixture.root(), fixture.new.path());
+}
+
+#[gpui::test]
+fn an_accepted_assistant_undo_keeps_its_workspace_until_it_returns(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = assistant_switch_fixture(&crate::tests::Gate::default());
+    let assistant = Arc::new(FakeAssistantUiService {
+        decision_gate: Some(gate.clone()),
+        ..Default::default()
+    });
+    *assistant.run_result.lock().unwrap() = Some(review_with_undo());
+    let (view, cx) = open_assistant_workspace(cx, &fixture, assistant.clone());
+    send_workspace_prompt(cx, &view, "review");
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    gate.arm();
+    view.update(cx, |root, cx| {
+        root.undo_assistant_mutation_for("applied".into(), cx);
+        assert!(root.assistant.is_mutation_undo_in_flight("applied"));
+        assert!(fixture.jobs.list().unwrap().is_empty());
+        root.choose_documents_root(fixture.new.path().into(), cx);
+        assert!(
+            !root.documents_root_switch.switching,
+            "an accepted undo must keep its workspace before worker dispatch"
+        );
+    });
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    assert_eq!(fixture.root(), fixture.old.path());
+    gate.release();
+    wait_for(cx, &view, |root| !root.assistant_busy());
+    assert!(view.read_with(cx, |root, _| root.assistant.is_mutation_undone("applied")));
+    assert_eq!(assistant.grants_for("undo"), [vec!["old".to_string()]]);
+    // An awaiting review itself does not block a directory choice.
+    assert!(matches!(
+        view.read_with(cx, |root, _| root.assistant.pending.clone()),
+        Some(PendingReviewState::Awaiting(_))
+    ));
+    choose(cx, &view, fixture.new.path());
+    assert_eq!(fixture.root(), fixture.new.path());
+}
+
+#[gpui::test]
+fn accepted_processing_keeps_its_workspace_before_the_start_worker_runs(cx: &mut TestAppContext) {
+    let fixture = Workspace::new();
+    let audio = fixture.old.path().join("source.wav");
+    std::fs::write(&audio, AUDIO).unwrap();
+    fixture.old.put(
+        DocumentState::new(ProjectId::new("old"), "Old", audio.display().to_string()),
+        "# Old\n",
+    );
+    put(&fixture.new, "new", "New");
+    // Custom model references pass the UI catalog check and reach the real
+    // backend preflight on the worker, which reports their missing files.
+    let mut settings = fixture.settings.snapshot().unwrap();
+    let missing = |backend_id: &str| contracts::ModelRef {
+        backend_id: backend_id.into(),
+        model_id: "fixture".into(),
+        revision: None,
+        artifact_path: fixture
+            .models
+            .join(format!("unlisted-{backend_id}"))
+            .display()
+            .to_string(),
+        artifacts: Vec::new(),
+    };
+    settings.asr_backend_id = Some("whisper-rs".into());
+    settings.asr_model = Some(missing("whisper-rs"));
+    settings.diarization_backend_id = Some("sherpa-onnx".into());
+    settings.diarization_model = Some(missing("sherpa-onnx"));
+    fixture.settings.update(settings).unwrap();
+    let new_before = fixture.new.package_bytes("new");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update_in(cx, |root, window, cx| {
+        root.process_selected(&gpui::ClickEvent::default(), window, cx);
+        assert!(
+            root.ui.processing,
+            "the real UI entry must accept processing"
+        );
+        assert!(
+            fixture.jobs.list().unwrap().is_empty(),
+            "the host worker has not registered a job"
+        );
+        root.choose_documents_root(fixture.new.path().into(), cx);
+        assert!(
+            !root.documents_root_switch.switching,
+            "accepted processing must keep its workspace before worker registration"
+        );
+    });
+    wait_for(cx, &view, |root| !root.ui.processing);
+    assert_eq!(fixture.root(), fixture.old.path());
+    let failed = fixture.old.read("old");
+    assert_eq!(failed.state.title(), "Old");
+    assert_eq!(failed.markdown, "# Old\n");
+    assert_eq!(failed.state.source.audio_path, audio.display().to_string());
+    assert!(failed.state.results.transcript.is_empty());
+    assert!(failed
+        .state
+        .processing
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("model file does not exist")));
+    assert_eq!(fixture.new.package_bytes("new"), new_before);
+    choose(cx, &view, fixture.new.path());
+    assert_eq!(fixture.root(), fixture.new.path());
+}
+
 #[gpui::test]
 fn switching_workspaces_blocks_assistant_enter_send_and_retry(cx: &mut TestAppContext) {
     let _alone = crate::tests::hold_a_worker_alone();
