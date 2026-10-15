@@ -1547,6 +1547,163 @@ fn assistant_review_and_undo_resume_after_a_workspace_switch_rolls_back(cx: &mut
 }
 
 #[gpui::test]
+fn an_old_edit_cannot_be_saved_while_the_workspace_switch_is_returning(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let mut fixture = Workspace::new();
+    put(&fixture.old, "shared", "Old");
+    put(&fixture.new, "shared", "New");
+    let old_bytes = fixture.old.package_bytes("shared");
+    let new_bytes = fixture.new.package_bytes("shared");
+    fixture.settings = SettingsService::open(Arc::new(HeldSettingsSave {
+        inner: JsonSettingsRepository::open(&fixture.settings_path),
+        gate: gate.clone(),
+    }))
+    .unwrap();
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| root.editor.shown().is_some());
+    let title = view.read_with(cx, |root, _| root.editor.title.clone());
+    focus_field(cx, &title);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Keep this old workspace draft");
+    gate.arm();
+    view.update(cx, |root, cx| {
+        root.choose_documents_root(fixture.new.path().into(), cx)
+    });
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    assert_eq!(fixture.root(), fixture.new.path());
+    assert_eq!(
+        fixture.saved_documents_root(),
+        fixture.new.path().display().to_string()
+    );
+    view.read_with(cx, |root, cx| {
+        assert!(root.documents_root_switch.switching);
+        assert_eq!(root.projects[0].title(), "Old");
+        assert_eq!(
+            root.editor.current(cx).unwrap().edits.title,
+            "Keep this old workspace draft"
+        );
+    });
+    // Return to the still-visible old page while the real switch result
+    // is pending; the same-ID new package must not accept its old patch.
+    cx.simulate_keystrokes("cmd-2");
+    click_selector(cx, "save-document");
+    // An activation queued before the disabled render also reaches this
+    // entry point, so admission cannot rely on the button alone.
+    let saving = view.update_in(cx, |root, window, cx| {
+        root.save_document_draft(&gpui::ClickEvent::default(), window, cx);
+        root.editor.saving.clone()
+    });
+    assert!(saving.is_none());
+    wait_for(cx, &view, |root| root.editor.saving.is_none());
+    let after_attempt = fixture.new.package_bytes("shared");
+    gate.release();
+    wait_for(cx, &view, |root| !root.documents_root_switch.switching);
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.id().as_str() == "shared")
+            && !root.audio.pending()
+    });
+    assert_eq!(fixture.old.package_bytes("shared"), old_bytes);
+    assert!(
+        after_attempt == new_bytes,
+        "the old edit must not write to the new root during a pending switch"
+    );
+    assert_eq!(fixture.new.package_bytes("shared"), new_bytes);
+    assert_eq!(fixture.new.read("shared").state.title(), "New");
+}
+
+#[gpui::test]
+fn a_pending_root_choice_keeps_speaker_input_and_resumes_actions(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let mut fixture = Workspace::new();
+    fixture
+        .old
+        .put(crate::speaker_tests::two_speakers("shared"), "# Old\n");
+    let before = fixture.old.package_bytes("shared");
+    fixture.settings = SettingsService::open(Arc::new(HeldSettingsSave {
+        inner: JsonSettingsRepository::open(&fixture.settings_path),
+        gate: gate.clone(),
+    }))
+    .unwrap();
+    let replacement = fixture.models.join("replacement.wav");
+    std::fs::write(&replacement, AUDIO).unwrap();
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    click_selector(cx, "content-mode-original");
+    click_selector(cx, "speaker-name-speaker-1");
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Keep this name draft");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    gate.arm();
+    view.update(cx, |root, cx| {
+        root.choose_documents_root(fixture.old.path().into(), cx)
+    });
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    // Text input stays usable, but Enter must not dispatch its old record
+    // while the root choice has not finished returning to the UI.
+    cx.simulate_keystrokes("enter");
+    let speaker_pending = view.read_with(cx, |root, _| root.speaker_command.clone());
+    let relink_pending = view.update(cx, |root, cx| {
+        root.relink_audio_path(replacement.clone(), cx);
+        root.audio.relinking.clone()
+    });
+    let merge_pending = view.update_in(cx, |root, window, cx| {
+        root.ask_merge_document_speaker("speaker-1".into(), "speaker-0".into(), window, cx);
+        root.speaker_confirmation.is_some()
+    });
+    let during = fixture.old.package_bytes("shared");
+    let focus_during = cx.update(|window, cx| window.focused(cx));
+    gate.release();
+    wait_for(cx, &view, |root| {
+        !root.documents_root_switch.switching && !root.audio.pending()
+    });
+    assert!(
+        speaker_pending.is_none(),
+        "Enter must not start a speaker correction"
+    );
+    assert!(
+        relink_pending.is_none(),
+        "a queued file choice must not start a relink"
+    );
+    assert!(
+        !merge_pending,
+        "a queued merge choice must not open a review dialog"
+    );
+    assert_eq!(focus_during, focus);
+    assert!(
+        during == before,
+        "a pending root choice must keep package bytes"
+    );
+    assert_eq!(fixture.old.package_bytes("shared"), before);
+    // Choosing the current root retains the typed name and re-enables its
+    // ordinary Enter submission once the settings write has finished.
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    let saved = fixture.old.read("shared");
+    assert!(saved
+        .state
+        .results
+        .diarization
+        .iter()
+        .filter(|turn| turn.speaker_id == "speaker-1")
+        .all(|turn| turn.speaker_label.as_deref() == Some("Keep this name draft")));
+    assert_eq!(saved.state.revision(), 4);
+}
+
+#[gpui::test]
 fn a_switch_while_a_job_runs_names_the_busy_jobs_and_changes_nothing(cx: &mut TestAppContext) {
     let fixture = Workspace::new();
     put(&fixture.old, "old-doc", "Old");
