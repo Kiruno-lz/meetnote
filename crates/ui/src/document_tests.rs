@@ -2001,6 +2001,105 @@ fn an_initial_workspace_read_failure_does_not_claim_the_workspace_is_empty(
     rendered(cx, "assistant-first-import");
 }
 
+fn workspace_retry_after_locale_change(
+    cx: &mut TestAppContext,
+    first: i18n::Locale,
+    next: i18n::Locale,
+    newer_error: bool,
+) {
+    let documents = DocumentsRoot::new();
+    let repository = documents.repository();
+    let settings = test_settings();
+    let mut initial = settings.snapshot().unwrap();
+    initial.ui_locale = first.code().into();
+    settings.update(initial).unwrap();
+    let mut services = desktop_services(
+        Arc::new(FakeAssistantUiService::default()),
+        settings.clone(),
+    );
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(Arc::new(repository)),
+    );
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.installation.catalog.is_empty());
+    let old_toast = view.read_with(cx, |root, _| root.ui.toast().unwrap().notice.clone());
+    drop(unreadable);
+    // Use the same controller path as the Settings language control and
+    // wait for its actual settings write, not just the immediate relabel.
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Settings, cx);
+        root.set_locale(next, cx);
+    });
+    wait_for(cx, &view, |root| {
+        root.ui.notice == i18n::text(next, "language_changed")
+    });
+    assert_eq!(settings.snapshot().unwrap().ui_locale, next.code());
+    assert_eq!(view.read_with(cx, |root, _| root.ui.locale), next);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.toast().unwrap().notice.clone()),
+        old_toast
+    );
+    let expected_notice = if newer_error {
+        i18n::message(next, "document_read_failed", "another/state.json")
+    } else {
+        i18n::text(next, "language_changed").into()
+    };
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Meetings, cx);
+        if newer_error {
+            root.ui.notice = expected_notice.clone();
+        }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_selector(cx, "retry-workspace-read");
+    wait_for(cx, &view, |root| root.projects_error.is_none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.notice, expected_notice,
+            "a newer notice is retained"
+        );
+        if newer_error {
+            assert_eq!(root.ui.toast().unwrap().notice, expected_notice);
+        } else {
+            assert!(
+                root.ui.toast().is_none(),
+                "the recovered workspace must not retain its old-language error toast"
+            );
+        }
+    });
+    rendered(cx, "empty-import-audio");
+}
+
+#[gpui::test]
+fn workspace_retry_clears_the_chinese_error_after_settings_switches_to_english(
+    cx: &mut TestAppContext,
+) {
+    workspace_retry_after_locale_change(cx, i18n::Locale::ZhCn, i18n::Locale::EnUs, false);
+}
+
+#[gpui::test]
+fn workspace_retry_clears_the_english_error_after_settings_switches_to_chinese(
+    cx: &mut TestAppContext,
+) {
+    workspace_retry_after_locale_change(cx, i18n::Locale::EnUs, i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn workspace_retry_preserves_a_newer_error_after_settings_changes_language(
+    cx: &mut TestAppContext,
+) {
+    workspace_retry_after_locale_change(cx, i18n::Locale::ZhCn, i18n::Locale::EnUs, true);
+}
+
 #[gpui::test]
 fn a_successfully_read_empty_workspace_offers_import(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
