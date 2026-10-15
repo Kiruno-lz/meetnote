@@ -917,6 +917,14 @@ impl AssistantController {
         self.job_progress = None;
     }
 
+    /// A changed connection no longer owns the last probe or its feedback.
+    pub fn forget_probe(&mut self) {
+        self.request_probe_cancel();
+        self.diagnostic = None;
+        self.last_probe = None;
+        self.probe_cancelled = false;
+    }
+
     pub fn begin_probe(
         &mut self,
         kind: ConnectionProbeKind,
@@ -2139,6 +2147,19 @@ mod tests {
             context_window_tokens: None,
             message: "ready".into(),
         }
+    }
+
+    #[test]
+    fn forgetting_a_probe_cancels_it_and_drops_its_late_feedback() {
+        let mut controller = AssistantController::default();
+        let (id, token) = controller.begin_probe(ConnectionProbeKind::Model);
+        controller.forget_probe();
+        assert!(token.is_cancelled());
+        controller.finish_probe(id, Ok(ready_diagnostic(ConnectionProbeKind::Model)));
+        assert_eq!(controller.diagnostic, None);
+        assert_eq!(controller.probe_running, None);
+        assert!(!controller.probe_cancelled);
+        assert_eq!(controller.probe_to_retry(), None);
     }
 
     #[test]
