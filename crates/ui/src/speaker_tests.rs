@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 /// A processed document in which `speaker-0` says the first and the last
 /// segment and `speaker-1` the middle one.
-fn two_speakers(id: &str) -> DocumentState {
+pub(crate) fn two_speakers(id: &str) -> DocumentState {
     let mut state = processed(id, "产品周会");
     let turns = [
         ("speaker-0", 0, 4_000, "先过一下页面"),

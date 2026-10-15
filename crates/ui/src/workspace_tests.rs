@@ -623,6 +623,157 @@ fn a_save_in_a_rolled_back_workspace_still_rebases_its_draft(cx: &mut TestAppCon
     assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
 }
 
+fn rename_document_speaker(cx: &mut VisualTestContext, name: &str) {
+    click_selector(cx, "speaker-name-speaker-1");
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input(name);
+    click_selector(cx, "rename-speaker-speaker-1");
+}
+
+fn late_speaker_command_keeps_the_new_workspace(cx: &mut TestAppContext, merge: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let old_gate = crate::tests::Gate::default();
+    let new_gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_save_gates(&old_gate, &new_gate);
+    fixture
+        .old
+        .put(crate::speaker_tests::two_speakers("shared"), "# Old\n");
+    fixture
+        .new
+        .put(crate::speaker_tests::two_speakers("shared"), "# New\n");
+    let initial_revision = fixture.old.revision("shared");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    click_selector(cx, "content-mode-original");
+    old_gate.arm();
+    if merge {
+        click_selector(cx, "merge-speaker-speaker-1");
+        click_selector(cx, "select-option-0");
+        click_selector(cx, "dialog-confirm");
+    } else {
+        rename_document_speaker(cx, "Old name");
+    }
+    wait_for(cx, &view, |_| old_gate.counts().0 == 1);
+    let old_bytes = fixture.old.package_bytes("shared");
+    assert_eq!(fixture.old.revision("shared"), initial_revision + 1);
+    choose(cx, &view, fixture.new.path());
+    wait_for(cx, &view, |root| {
+        !root.projects.is_empty() && !root.audio.pending()
+    });
+    assert!(
+        view.read_with(cx, |root, _| root.speaker_command.is_none()),
+        "a previous workspace's correction must not disable the new workspace"
+    );
+    click_selector(cx, "content-mode-original");
+    new_gate.arm();
+    rename_document_speaker(cx, "New name");
+    wait_for(cx, &view, |_| new_gate.counts().0 == 1);
+    // Settle the actual watcher before observing only the old completion.
+    wait_for_watcher(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.revision() == initial_revision + 1)
+            && !root.audio.pending()
+    });
+    let new_bytes = fixture.new.package_bytes("shared");
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = completed.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    old_gate.release();
+    wait_for(cx, &view, |_| completed.get());
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.speaker_command,
+            Some(ProjectId::new("shared")),
+            "the old correction must not complete the new correction"
+        );
+        assert_eq!(root.ui.notice, notice);
+        assert!(root.document_conflict.is_none());
+        assert_eq!(root.ui.route, Route::Meetings);
+        assert_eq!(root.ui.selected_project, Some(ProjectId::new("shared")));
+    });
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(fixture.old.package_bytes("shared"), old_bytes);
+    assert_eq!(fixture.new.package_bytes("shared"), new_bytes);
+    new_gate.release();
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.notice,
+            i18n::message(root.ui.locale, "speaker_renamed", "New name")
+        );
+        assert!(root.document_conflict.is_none());
+    });
+    assert!(fixture
+        .new
+        .read("shared")
+        .state
+        .results
+        .diarization
+        .iter()
+        .any(|turn| {
+            turn.speaker_id == "speaker-1" && turn.speaker_label.as_deref() == Some("New name")
+        }));
+}
+
+#[gpui::test]
+fn a_late_speaker_rename_cannot_complete_a_new_workspaces_correction(cx: &mut TestAppContext) {
+    late_speaker_command_keeps_the_new_workspace(cx, false);
+}
+
+#[gpui::test]
+fn a_late_speaker_merge_cannot_complete_a_new_workspaces_correction(cx: &mut TestAppContext) {
+    late_speaker_command_keeps_the_new_workspace(cx, true);
+}
+
+#[gpui::test]
+fn a_speaker_correction_in_a_rolled_back_workspace_still_completes(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_save_gates(&gate, &crate::tests::Gate::default());
+    fixture
+        .old
+        .put(crate::speaker_tests::two_speakers("shared"), "# Old\n");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    click_selector(cx, "content-mode-original");
+    gate.arm();
+    rename_document_speaker(cx, "Still saved");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    let saved = fixture.old.package_bytes("shared");
+    let mut external = fixture.settings.snapshot().unwrap();
+    external.expected_speakers = Some(3);
+    fixture.settings.update(external).unwrap();
+    choose(cx, &view, fixture.new.path());
+    assert!(switch_status(cx, &view).unwrap().1);
+    assert_eq!(fixture.root(), fixture.old.path());
+    assert_eq!(
+        view.read_with(cx, |root, _| root.speaker_command.clone()),
+        Some(ProjectId::new("shared"))
+    );
+    gate.release();
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    assert_eq!(fixture.old.package_bytes("shared"), saved);
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.notice,
+            i18n::message(root.ui.locale, "speaker_renamed", "Still saved")
+        );
+        assert!(root.document_conflict.is_none());
+    });
+}
+
 #[gpui::test]
 fn a_switch_while_a_job_runs_names_the_busy_jobs_and_changes_nothing(cx: &mut TestAppContext) {
     let fixture = Workspace::new();

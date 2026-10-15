@@ -1465,6 +1465,7 @@ impl RootView {
             self.document_conflict = None;
             self.audio.clear();
             self.speaker_rows = None;
+            self.speaker_command = None;
             if matches!(
                 self.speaker_confirmation,
                 Some(SpeakerConfirmation::MergeDocumentSpeaker { .. })
@@ -2320,9 +2321,14 @@ impl RootView {
         self.speaker_command = Some(document_id.clone());
         cx.notify();
         let commands = self.services.workspace.document_commands();
+        let root_generation = self.documents_root_generation;
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || commands.execute(envelope)).await;
             this.update(cx, |this, cx| {
+                if root_generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 this.speaker_command = None;
                 match result {
                     Ok(_) => {
