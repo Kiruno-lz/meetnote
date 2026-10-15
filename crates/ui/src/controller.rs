@@ -3795,6 +3795,7 @@ impl RootView {
         self.audio.relinking = Some(document_id.clone());
         self.ui.notice = i18n::text(self.ui.locale, "relinking_audio").into();
         cx.notify();
+        let root_generation = self.documents_root_generation;
         let workspace = self.services.workspace.clone();
         let path = path.display().to_string();
         cx.spawn(async move |this, cx| {
@@ -3803,6 +3804,10 @@ impl RootView {
             })
             .await;
             this.update(cx, |this, cx| {
+                if root_generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 this.audio.relinking = None;
                 let locale = this.ui.locale;
                 match result {
