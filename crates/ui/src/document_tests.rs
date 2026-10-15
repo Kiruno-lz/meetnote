@@ -111,12 +111,13 @@ pub(crate) fn open_on<'a>(
         DocumentService::new(Arc::new(root.repository())),
     );
     let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.installation.catalog.is_empty());
     let (changes, receiver) = futures::channel::mpsc::unbounded();
     view.update(cx, |root, cx| {
         root.follow_document_changes(receiver, cx);
         root.navigate(Route::Meetings, cx);
     });
-    cx.run_until_parked();
+    wait_for(cx, &view, |root| !root.audio.pending());
     (view, cx, changes)
 }
 
@@ -141,7 +142,7 @@ pub(crate) fn select_row(cx: &mut VisualTestContext, view: &View, id: &str) {
     click_selector(cx, leak(format!("project-row-{id}")));
     let id = ProjectId::new(id);
     wait_for(cx, view, |root| {
-        root.ui.selected_project.as_ref() == Some(&id)
+        root.ui.selected_project.as_ref() == Some(&id) && !root.audio.pending()
     });
 }
 
@@ -151,6 +152,145 @@ fn open_editor(cx: &mut VisualTestContext, view: &View, id: &str) {
     let id = ProjectId::new(id);
     wait_for(cx, view, |root| root.editor.shown() == Some(&id));
     cx.run_until_parked();
+}
+
+#[gpui::test]
+fn unavailable_processing_models_offer_models_without_starting_or_reporting_an_error(
+    cx: &mut TestAppContext,
+) {
+    let root = DocumentsRoot::new();
+    let audio = root.path().join("first/recording.wav");
+    root.put(
+        DocumentState::new(
+            ProjectId::new("first"),
+            "First recording",
+            audio.display().to_string(),
+        ),
+        "",
+    );
+    std::fs::write(&audio, b"recording").unwrap();
+    let (view, cx, _changes) = open_on(cx, &root);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    let before = view.read_with(cx, |root, _| root.ui.notice.clone());
+    click_selector(cx, "process-project");
+    view.update_in(cx, |root, window, cx| {
+        root.process_selected(&gpui::ClickEvent::default(), window, cx);
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        before,
+        "missing setup is explained in place before a job starts"
+    );
+    assert!(!view.read_with(cx, |root, _| root.ui.processing));
+    assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_none()));
+    rendered(cx, "models-required");
+    click_selector(cx, "go-to-models");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Models);
+
+    // A model disappearing must never disable cancellation of a running job.
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Meetings, cx);
+        root.ui.begin_processing(ProjectId::new("first"));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("models-required").is_none());
+    click_selector(cx, "process-project");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        i18n::text(i18n::Locale::ZhCn, "cancellation_requested")
+    );
+}
+
+#[gpui::test]
+fn model_setup_actions_fit_beside_detail_at_the_minimum_window_size(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let audio = documents.path().join("first/recording.wav");
+    documents.put(
+        DocumentState::new(
+            ProjectId::new("first"),
+            "First",
+            audio.display().to_string(),
+        ),
+        "",
+    );
+    std::fs::write(&audio, b"recording").unwrap();
+    let mut ready = processed("second", "Second");
+    ready.source.audio_path = audio.display().to_string();
+    ready
+        .processing
+        .latest
+        .as_mut()
+        .unwrap()
+        .input_audio_checksum = None;
+    ready.hierarchy.sibling_order = 1;
+    documents.put(ready, "# Second\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    assert!(
+        view.read_with(cx, |root, _| root.document_issues.is_empty()),
+        "the source audio is a valid document attachment"
+    );
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    cx.run_until_parked();
+    click_selector(cx, "open-project-detail");
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let body = rendered(cx, "meeting-content");
+        let guidance = rendered(cx, "models-required");
+        let page = rendered(cx, "meetings-page");
+        let title = rendered(cx, "document-title");
+        let path = rendered(cx, "document-audio-path");
+        let actions = rendered(cx, "document-actions");
+        let modes = rendered(cx, "content-mode-group");
+        let issues = cx.debug_bounds("document-issues");
+        assert!(
+            body.size.width >= px(192.),
+            "Detail leaves a usable document column: {body:?}"
+        );
+        assert!(within(rendered(cx, "process-project"), page));
+        assert!(within(rendered(cx, "open-project-detail"), page));
+        assert!(
+            within(guidance, body),
+            "the unprocessed document explains its next step in the body: {guidance:?} in {body:?} ({locale:?}); page={page:?}, title={title:?}, path={path:?}, actions={actions:?}, modes={modes:?}, issues={issues:?}"
+        );
+        let action = rendered(cx, "go-to-models");
+        assert!(
+            within(action, body),
+            "the setup action fits the narrow body: {action:?} in {body:?}"
+        );
+        assert!(action.size.width >= px(48.) && action.size.height >= px(24.));
+    }
+
+    select_row(cx, &view, "second");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let page = rendered(cx, "meetings-page");
+        let guidance = rendered(cx, "models-required");
+        let action = rendered(cx, "go-to-models");
+        let body = rendered(cx, "meeting-content");
+        assert!(within(guidance, page) && within(action, page), "the ready document keeps its compact setup guidance inside the content plane: {guidance:?}, {action:?}, {page:?}");
+        assert!(action.size.width >= px(48.) && action.size.height >= px(24.));
+        assert!(
+            body.size.height >= px(96.),
+            "the ready document keeps room for readable content: {body:?} ({locale:?})"
+        );
+    }
+    click_selector(cx, "go-to-models");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Models);
 }
 
 fn editor_fields(cx: &mut VisualTestContext, view: &View) -> (Field, Field, Area, Area) {

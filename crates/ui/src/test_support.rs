@@ -49,8 +49,8 @@ pub enum Overlay {
     /// with its warnings and both receipts (the first undone), paused at the
     /// first of three reviews; the results scrolled to the receipts.
     AssistantReview,
-    /// On Meetings: keyboard focus on the Process button, reached with Tab
-    /// from the project tree.
+    /// On Meetings: keyboard focus on the first available document action,
+    /// reached with Tab from the project tree.
     FocusedButton,
     /// On Settings: keyboard focus on the theme select, reached with Tab
     /// from the Settings entry.

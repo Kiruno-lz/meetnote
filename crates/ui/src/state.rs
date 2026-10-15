@@ -570,17 +570,89 @@ struct NavigationTarget {
     project: Option<ProjectId>,
 }
 
-/// The default models' readiness for the Meetings status line.
-pub fn model_status(
+/// Processing prerequisites the installation snapshot can identify.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct MissingModels {
+    pub(crate) transcription: bool,
+    pub(crate) diarization: bool,
+}
+
+impl MissingModels {
+    pub(crate) fn any(self) -> bool {
+        self.transcription || self.diarization
+    }
+
+    pub(crate) fn hint_key(self) -> Option<&'static str> {
+        match (self.transcription, self.diarization) {
+            (true, true) => Some("models_missing_both"),
+            (true, false) => Some("models_missing_asr"),
+            (false, true) => Some("models_missing_diarization"),
+            (false, false) => None,
+        }
+    }
+}
+
+/// Match the references processing uses to published installation facts.
+/// References outside the catalog's artifact paths remain the backend
+/// preflight's responsibility; a matching id alone does not prove readiness.
+pub(crate) fn missing_models(
     installation: &application::InstallationState,
-    locale: super::i18n::Locale,
-) -> String {
-    let label = |ready| super::i18n::text(locale, if ready { "ready" } else { "missing" });
-    format!(
-        "ASR {} / DIA {}",
-        label(installation.default_asr_ready),
-        label(installation.default_diarization_ready)
-    )
+    settings: &settings::AppSettings,
+    defaults: (&contracts::ModelRef, &contracts::ModelRef),
+) -> MissingModels {
+    let missing = |task: &str,
+                   backend: Option<&String>,
+                   chosen: Option<&contracts::ModelRef>,
+                   default: &contracts::ModelRef,
+                   default_ready: bool| {
+        if backend.is_some() && chosen.is_none() {
+            return true;
+        }
+        let model = chosen.unwrap_or(default);
+        if let Some(entry) = installation
+            .catalog
+            .iter()
+            .find(|entry| entry.model.id == model.model_id)
+        {
+            if entry.model.task != task || !entry.model.supports_backend(&model.backend_id) {
+                return true;
+            }
+            let path = std::path::Path::new(&model.artifact_path);
+            let same_artifacts = if entry.model.artifacts.is_empty() {
+                entry
+                    .artifact_paths
+                    .first()
+                    .is_some_and(|artifact| artifact == path)
+            } else {
+                !entry.artifact_paths.is_empty()
+                    && entry
+                        .artifact_paths
+                        .iter()
+                        .all(|artifact| artifact.parent() == Some(path))
+            };
+            if same_artifacts {
+                return entry.install_state != models::ModelInstallState::Installed;
+            }
+        }
+        // An empty catalog is the state before the initial probe lands.
+        model == default && !installation.catalog.is_empty() && !default_ready
+    };
+    MissingModels {
+        transcription: missing(
+            "asr",
+            settings.asr_backend_id.as_ref(),
+            settings.asr_model.as_ref(),
+            defaults.0,
+            installation.default_asr_ready,
+        ),
+        diarization: missing(
+            "diarization",
+            settings.diarization_backend_id.as_ref(),
+            settings.diarization_model.as_ref(),
+            defaults.1,
+            installation.default_diarization_ready,
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -649,6 +721,89 @@ mod tests {
             "terminal status needs no inferred percentage"
         );
         assert_eq!(feedback.diarization.value(), None);
+    }
+
+    #[test]
+    fn model_guidance_uses_the_chosen_reference_and_leaves_external_paths_to_preflight() {
+        let catalog =
+            models::ModelCatalog::parse(include_str!("../../../resources/models/catalog.json"))
+                .unwrap();
+        let model = catalog.find("paraformer-zh").unwrap().clone();
+        let asr = contracts::ModelRef {
+            backend_id: "sherpa-onnx".into(),
+            model_id: model.id.clone(),
+            revision: model.revision.clone(),
+            artifact_path: model.install_directory("models").display().to_string(),
+            artifacts: vec![],
+        };
+        let diarization = contracts::ModelRef {
+            backend_id: "external".into(),
+            model_id: "external".into(),
+            revision: None,
+            artifact_path: "external-diarization".into(),
+            artifacts: vec![],
+        };
+        let mut installation = application::InstallationState {
+            catalog: vec![models::ModelAvailability {
+                artifact_paths: model.artifact_paths("models"),
+                model,
+                install_state: models::ModelInstallState::Installed,
+                probe: None,
+                failure: None,
+                record_error: None,
+            }],
+            default_asr_ready: true,
+            default_diarization_ready: true,
+            ..Default::default()
+        };
+        let defaults = (&asr, &diarization);
+        let mut settings = settings::AppSettings {
+            asr_backend_id: None,
+            diarization_backend_id: None,
+            ..Default::default()
+        };
+        assert!(
+            !missing_models(&installation, &settings, defaults).any(),
+            "installed defaults do not block processing"
+        );
+        settings.asr_backend_id = Some(asr.backend_id.clone());
+        assert!(
+            missing_models(&installation, &settings, defaults).transcription,
+            "a chosen backend still needs its chosen model"
+        );
+        settings.asr_model = Some(asr.clone());
+        assert!(!missing_models(&installation, &settings, defaults).any());
+        installation.catalog[0].install_state = models::ModelInstallState::Partial;
+        assert!(
+            missing_models(&installation, &settings, defaults).transcription,
+            "the selected bundle must be complete"
+        );
+        settings.asr_model.as_mut().unwrap().artifact_path = "external-copy".into();
+        assert!(
+            !missing_models(&installation, &settings, defaults).transcription,
+            "a matching catalog id cannot diagnose a different artifact path"
+        );
+        settings.asr_model = Some(asr.clone());
+        installation.catalog[0].install_state = models::ModelInstallState::Installed;
+        settings.asr_backend_id = Some("whisper-rs".into());
+        settings.asr_model.as_mut().unwrap().backend_id = "whisper-rs".into();
+        assert!(
+            missing_models(&installation, &settings, defaults).transcription,
+            "installed files do not make an incompatible backend usable"
+        );
+        settings.asr_backend_id = Some(asr.backend_id.clone());
+        settings.asr_model = Some(asr.clone());
+        installation.catalog[0].model.task = "diarization".into();
+        assert!(
+            missing_models(&installation, &settings, defaults).transcription,
+            "the selected model must serve the processing stage"
+        );
+        settings.asr_backend_id = None;
+        settings.asr_model = None;
+        assert!(
+            !missing_models(&Default::default(), &settings, defaults).any(),
+            "the initial snapshot has no installation diagnosis yet"
+        );
     }
 
     #[test]

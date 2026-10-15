@@ -4129,6 +4129,15 @@ impl RootView {
             cx.notify();
             return;
         };
+        if crate::state::missing_models(
+            &self.installation,
+            &self.settings_draft,
+            (&self.services.asr_model, &self.services.diarization_model),
+        )
+        .any()
+        {
+            return;
+        }
         self.ui.begin_processing(project_id.clone());
         self.processing_cancel_requested = false;
         self.ui.notice = i18n::message(self.ui.locale, "processing", project.title());

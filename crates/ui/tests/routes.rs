@@ -661,8 +661,9 @@ fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
     expected.extend([
         // The tree is one stop, on its selected row.
         leak(format!("project-row-{}", DOCUMENT_IDS[0])),
-        "process-project",
+        // Processing waits for models; the next steps remain reachable.
         "open-project-detail",
+        "go-to-models",
         "content-mode-summary",
         "content-mode-original",
         "content-mode-edit",
