@@ -2671,7 +2671,7 @@ impl RootView {
     /// Reads `document_id` (state and Markdown body) on a worker and makes it
     /// the document's draft, replacing any edits.
     fn load_document_draft(&mut self, document_id: ProjectId, cx: &mut Context<Self>) {
-        self.editor.read_errors.remove(&document_id);
+        let previous_error = self.editor.read_errors.remove(&document_id);
         self.editor.loading.insert(document_id.clone());
         let commands = self.services.workspace.document_commands();
         let read_id = document_id.clone();
@@ -2689,6 +2689,9 @@ impl RootView {
                 this.editor.loading.remove(&document_id);
                 match result {
                     Ok(DocumentCommandResult::Document(Some(record))) => {
+                        if previous_error.as_ref() == Some(&this.ui.notice) {
+                            this.ui.notice.clear();
+                        }
                         this.show_loaded_draft(&record, cx)
                     }
                     Ok(_) => {
