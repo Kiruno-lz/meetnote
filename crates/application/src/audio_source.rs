@@ -6,7 +6,7 @@
 //! processing recorded on any document of the asset.
 
 use crate::workspace::read_file_sha256;
-use crate::{render_markdown, DocumentCommandError, WorkspaceService};
+use crate::{render_markdown, DocumentCommandError, DocumentService, WorkspaceService};
 use domain::{DocumentId, DocumentState};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -106,6 +106,19 @@ impl WorkspaceService {
         )
     }
 
+    /// Relinks the recording in the workspace current when this call starts.
+    pub fn relink_audio(
+        &self,
+        document_id: &DocumentId,
+        expected_revision: u64,
+        new_path: impl Into<String>,
+    ) -> Result<Vec<DocumentState>, AudioSourceError> {
+        self.documents()
+            .relink_audio(document_id, expected_revision, new_path)
+    }
+}
+
+impl DocumentService {
     /// Points every document sharing the document's audio asset (the root
     /// and its semantic children) at `new_path` and returns the documents it
     /// wrote.
@@ -118,7 +131,8 @@ impl WorkspaceService {
     /// new path); transcript, diarization, alignment and processing records
     /// are kept. Each document is saved against the revision this command
     /// read, and every revision is re-checked before the first write, so a
-    /// conflict writes nothing. Blocking: it hashes the whole file.
+    /// conflict writes nothing. Capture a frozen service before queueing the
+    /// relink to retain its chosen workspace. Blocking: it hashes the whole file.
     pub fn relink_audio(
         &self,
         document_id: &DocumentId,
@@ -126,7 +140,7 @@ impl WorkspaceService {
         new_path: impl Into<String>,
     ) -> Result<Vec<DocumentState>, AudioSourceError> {
         let new_path = new_path.into();
-        let service = self.documents().frozen();
+        let service = self.frozen();
         let documents = service.list().map_err(AudioSourceError::Service)?;
         let document = find(&documents, document_id)?;
         ensure_revision(document, expected_revision)?;

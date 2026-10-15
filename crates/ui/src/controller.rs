@@ -3890,11 +3890,11 @@ impl RootView {
         self.ui.notice = i18n::text(self.ui.locale, "relinking_audio").into();
         cx.notify();
         let root_generation = self.documents_root_generation;
-        let workspace = self.services.workspace.clone();
+        let documents = self.services.workspace.documents().frozen();
         let path = path.display().to_string();
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || {
-                workspace.relink_audio(&document_id, revision, path)
+                documents.relink_audio(&document_id, revision, path)
             })
             .await;
             this.update(cx, |this, cx| {
