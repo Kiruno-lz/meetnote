@@ -1342,3 +1342,38 @@ fn the_focused_select_visual_fixture_reaches_the_theme_control(cx: &mut TestAppC
         visible(cx, "select-theme")
     ));
 }
+
+#[gpui::test]
+fn an_empty_workspace_offers_import_where_the_work_begins(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::EmptyWorkspace, cx));
+    cx.run_until_parked();
+    let action = visible(cx, "empty-import-audio");
+    assert!(within(action, visible(cx, "content-plane")));
+    assert!(!cx.cx.did_prompt_for_paths());
+    cx.simulate_click(action.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.cx.did_prompt_for_paths(),
+        "the main action opens the audio picker"
+    );
+}
+
+#[gpui::test]
+fn an_empty_workspace_import_is_reachable_by_keyboard_at_minimum_size(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::EmptyWorkspace, cx));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.run_until_parked();
+    let viewport = Bounds::from_corners(
+        gpui::point(gpui::px(0.), gpui::px(0.)),
+        gpui::point(gpui::px(900.), gpui::px(600.)),
+    );
+    assert!(within(rendered(cx, "empty-import-audio"), viewport));
+    tab_to(cx, "empty-import-audio", &["empty-import-audio"]);
+    press(cx, "enter");
+    assert!(
+        cx.cx.did_prompt_for_paths(),
+        "Enter imports from the empty workspace"
+    );
+}

@@ -443,10 +443,41 @@ fn main_panel(
                     .text_2xl()
                     .child(tr(locale, "meetings")),
             )
-            .child(crate::components::empty_card(
-                tr(locale, "empty_meetings"),
-                &tokens,
-            ));
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(tokens.spacing.md)
+                    .text_center()
+                    .child(
+                        gpui::svg()
+                            .path("icons/file.svg")
+                            .size(tokens.control_height.lg)
+                            .text_color(tokens.text_muted),
+                    )
+                    .child(
+                        div()
+                            .text_size(tokens.font_size.lg)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(tr(locale, "empty_meetings_title")),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(tokens.text_muted)
+                            .child(tr(locale, "empty_meetings")),
+                    )
+                    .child(
+                        Button::new("empty-import-audio", tr(locale, "import_audio"))
+                            .debug_selector(|| "empty-import-audio".into())
+                            .primary()
+                            .on_click(cx.listener(RootView::import_audio)),
+                    ),
+            );
     }
     panel.child(
         div()
