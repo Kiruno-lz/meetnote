@@ -2776,6 +2776,14 @@ impl RootView {
                         if previous_error.as_ref() == Some(&this.ui.notice) {
                             this.ui.notice.clear();
                         }
+                        if let Some(generation) = this
+                            .ui
+                            .toast()
+                            .filter(|toast| previous_error.as_ref() == Some(&toast.notice))
+                            .map(|toast| toast.generation)
+                        {
+                            this.dismiss_toast(generation, cx);
+                        }
                         this.show_loaded_draft(&record, cx)
                     }
                     Ok(_) => {

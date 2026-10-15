@@ -1263,6 +1263,113 @@ fn a_failed_document_read_waits_for_retry_and_recovers_restored_files(cx: &mut T
     assert!(view.read_with(cx, |root, _| root.ui.toast().is_none()));
 }
 
+fn document_retry_after_locale_change(
+    cx: &mut TestAppContext,
+    first: i18n::Locale,
+    next: i18n::Locale,
+    newer_error: bool,
+) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let before = documents.package_bytes("a");
+    let settings = test_settings();
+    let mut initial = settings.snapshot().unwrap();
+    initial.ui_locale = first.code().into();
+    settings.update(initial).unwrap();
+    let mut services = desktop_services(
+        Arc::new(FakeAssistantUiService::default()),
+        settings.clone(),
+    );
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(Arc::new(documents.repository())),
+    );
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.audio.pending());
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    std::fs::remove_file(documents.path().join("a/state.json")).unwrap();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.read_errors.contains_key(&ProjectId::new("a"))
+    });
+    cx.run_until_parked();
+    let old_toast = view.read_with(cx, |root, _| root.ui.toast().unwrap().notice.clone());
+    assert!(old_toast.contains("state.json"));
+    // Apply the real Settings language operation while the read error is shown.
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Settings, cx);
+        root.set_locale(next, cx);
+    });
+    wait_for(cx, &view, |root| {
+        root.ui.notice == i18n::text(next, "language_changed")
+    });
+    assert_eq!(settings.snapshot().unwrap().ui_locale, next.code());
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.toast().unwrap().notice.clone()),
+        old_toast
+    );
+    std::fs::write(documents.path().join("a/state.json"), &before[0]).unwrap();
+    let expected_notice = if newer_error {
+        i18n::message(next, "document_read_failed", "another/state.json")
+    } else {
+        i18n::text(next, "language_changed").into()
+    };
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Meetings, cx);
+        if newer_error {
+            root.ui.notice = expected_notice.clone();
+        }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_selector(cx, "retry-document-read");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("a"))
+    });
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert!(root.editor.read_errors.is_empty());
+        assert_eq!(
+            root.ui.notice, expected_notice,
+            "a newer notice is retained"
+        );
+        if newer_error {
+            assert_eq!(root.ui.toast().unwrap().notice, expected_notice);
+        } else {
+            assert!(
+                root.ui.toast().is_none(),
+                "the restored document must not retain its old-language read error toast"
+            );
+        }
+    });
+    assert_eq!(documents.package_bytes("a"), before);
+}
+
+#[gpui::test]
+fn document_retry_clears_the_chinese_error_after_settings_switches_to_english(
+    cx: &mut TestAppContext,
+) {
+    document_retry_after_locale_change(cx, i18n::Locale::ZhCn, i18n::Locale::EnUs, false);
+}
+
+#[gpui::test]
+fn document_retry_clears_the_english_error_after_settings_switches_to_chinese(
+    cx: &mut TestAppContext,
+) {
+    document_retry_after_locale_change(cx, i18n::Locale::EnUs, i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn document_retry_preserves_a_newer_error_after_settings_changes_language(cx: &mut TestAppContext) {
+    document_retry_after_locale_change(cx, i18n::Locale::ZhCn, i18n::Locale::EnUs, true);
+}
+
 #[gpui::test]
 fn a_document_read_retry_preserves_a_newer_notice_and_moved_focus(cx: &mut TestAppContext) {
     let _alone = crate::tests::hold_a_worker_alone();
