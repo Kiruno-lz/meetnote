@@ -856,7 +856,7 @@ impl RootView {
     }
 
     /// Shows a reloaded project list and its scanner issues unless a newer
-    /// reload has started; the first list to land also opens the tree.
+    /// reload has started; a successful list initializes an absent selection.
     fn apply_projects(
         &mut self,
         generation: u64,
@@ -868,6 +868,9 @@ impl RootView {
                 Ok(snapshot) => {
                     self.projects = snapshot.documents;
                     self.document_issues = snapshot.issues;
+                    if !self.projects_loaded || self.ui.selected_project.is_none() {
+                        self.ui.open_loaded_projects(&self.projects);
+                    }
                 }
                 Err(error) => {
                     self.projects.clear();
@@ -875,10 +878,7 @@ impl RootView {
                     self.ui.notice = i18n::message(self.ui.locale, "documents_load_failed", &error);
                 }
             }
-            if !self.projects_loaded {
-                self.ui.open_loaded_projects(&self.projects);
-                self.projects_loaded = true;
-            }
+            self.projects_loaded = true;
             self.check_selected_audio(cx);
             cx.notify();
         }
@@ -1857,7 +1857,6 @@ impl RootView {
             this.update(cx, |this, cx| {
                 match imported {
                     Ok((project, projects)) => {
-                        this.ui.selected_project = Some(project.id().clone());
                         this.apply_projects(generation, projects, cx);
                         this.ui.notice = i18n::message(this.ui.locale, "imported", project.title());
                     }
