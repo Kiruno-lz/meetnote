@@ -9,7 +9,7 @@ use crate::assistant_ui::{
     AssistantUiError, AssistantUsage,
 };
 use crate::controller::{self, DocumentConflict, RootView, SpeakerLibraryPrompt};
-use crate::state::ContentMode;
+use crate::state::{ContentMode, StageFeedback};
 use application::{BackendInventory, DocumentIssue, DocumentIssueKind};
 use gpui::{AnyWindowHandle, App, Entity, WindowOptions};
 use std::path::Path;
@@ -32,6 +32,9 @@ pub enum Overlay {
     /// On Meetings: the Original view of the selected document, its
     /// speakers above the transcript.
     OriginalSpeakers,
+    /// On Meetings: fixture-only processing of the selected document, with
+    /// transcription completed and diarization at 1/4 reported units.
+    ProcessingFeedback,
     /// On Settings: the form scrolled to the Speaker Library section.
     SpeakerLibrary,
     /// On Meetings: the document with this id selected, with Detail open;
@@ -309,6 +312,20 @@ impl MainWindow {
                 cx.notify();
             }
             Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Original, cx),
+            Overlay::ProcessingFeedback => {
+                let Some(owner) = root.ui.selected_project.clone() else {
+                    return;
+                };
+                // Fixed visual state only: no backend or runtime job is started.
+                root.ui.begin_processing(owner);
+                root.ui.processing_feedback.transcription = StageFeedback::Completed;
+                root.ui.processing_feedback.diarization =
+                    StageFeedback::Running(Some(runtime::Progress {
+                        completed: 1,
+                        total: Some(4),
+                    }));
+                cx.notify();
+            }
             Overlay::SpeakerLibrary => {
                 root.scroll
                     .settings
@@ -403,6 +420,10 @@ impl MainWindow {
                 cx.notify();
             }
             Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Summary, cx),
+            Overlay::ProcessingFeedback => {
+                root.ui.finish_processing();
+                cx.notify();
+            }
             Overlay::SpeakerLibrary => {
                 root.scroll.settings.set_offset(gpui::Point::default());
                 cx.notify();
