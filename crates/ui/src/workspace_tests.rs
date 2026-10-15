@@ -41,6 +41,35 @@ const AUDIO_SHA256: &str = "731e82f7248116585d832c2ea8784dc94a8dcfd6529a6babfc94
 const OTHER_AUDIO: &[u8] = b"a different recording\n";
 const OTHER_SHA256: &str = "13c12877ebfb2e7edafd47f9c0b765a656e85a055c2b5cb35c3ff7770e611e93";
 
+/// Holds a successful real settings save after file IO, while the switch
+/// still waits to return its result to the desktop.
+struct HeldSettingsSave {
+    inner: JsonSettingsRepository,
+    gate: crate::tests::Gate,
+}
+
+impl settings::SettingsRepository for HeldSettingsSave {
+    fn load(&self) -> Result<settings::AppSettings, settings::SettingsError> {
+        settings::SettingsRepository::load(&self.inner)
+    }
+
+    fn save(&self, value: &settings::AppSettings) -> Result<(), settings::SettingsError> {
+        settings::SettingsRepository::save(&self.inner, value)
+    }
+
+    fn save_if_equal(
+        &self,
+        expected: &settings::AppSettings,
+        next: &settings::AppSettings,
+    ) -> Result<(), settings::SettingsError> {
+        let result = settings::SettingsRepository::save_if_equal(&self.inner, expected, next);
+        if result.is_ok() {
+            self.gate.pass();
+        }
+        result
+    }
+}
+
 /// Two documents roots, a model directory, the jobs the workspace runs on
 /// and settings in a `settings.json` of their own. The workspace starts on
 /// `old` and switches roots as `main`'s does.
@@ -1020,6 +1049,233 @@ fn an_import_in_a_rolled_back_workspace_still_reports_its_completion(cx: &mut Te
         .unwrap()
         .documents
         .is_empty());
+}
+
+fn assistant_switch_fixture(gate: &crate::tests::Gate) -> Workspace {
+    let mut fixture = Workspace::new();
+    put(&fixture.old, "old", "Old");
+    put(&fixture.new, "new", "New");
+    let mut saved = fixture.settings.snapshot().unwrap();
+    saved.assistant = crate::tests::stored_key_settings()
+        .snapshot()
+        .unwrap()
+        .assistant;
+    fixture.settings.update(saved).unwrap();
+    fixture.settings = SettingsService::open(Arc::new(HeldSettingsSave {
+        inner: JsonSettingsRepository::open(&fixture.settings_path),
+        gate: gate.clone(),
+    }))
+    .unwrap();
+    fixture
+}
+
+fn open_assistant_workspace<'a>(
+    cx: &'a mut TestAppContext,
+    fixture: &Workspace,
+    assistant: Arc<FakeAssistantUiService>,
+) -> (View, &'a mut VisualTestContext) {
+    let mut services = desktop_services(assistant, fixture.settings.clone());
+    services.workspace = fixture.workspace.clone();
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Assistant, cx));
+    cx.run_until_parked();
+    (view, cx)
+}
+
+fn send_workspace_prompt(cx: &mut VisualTestContext, view: &View, prompt: &str) {
+    let field = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    focus_field(cx, &field);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input(prompt);
+    click_selector(cx, "assistant-submit");
+}
+
+fn hold_workspace_switch(
+    cx: &mut VisualTestContext,
+    view: &View,
+    fixture: &Workspace,
+    gate: &crate::tests::Gate,
+) {
+    gate.arm();
+    view.update(cx, |root, cx| {
+        root.choose_documents_root(fixture.new.path().into(), cx)
+    });
+    wait_for(cx, view, |_| gate.counts().0 == 1);
+    assert_eq!(fixture.root(), fixture.new.path());
+    view.read_with(cx, |root, _| {
+        assert!(root.documents_root_switch.switching);
+        assert_eq!(root.projects[0].id().as_str(), "old");
+    });
+}
+
+#[gpui::test]
+fn switching_workspaces_blocks_assistant_enter_send_and_retry(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = assistant_switch_fixture(&gate);
+    let assistant = Arc::new(FakeAssistantUiService::default());
+    assistant
+        .run_errors
+        .lock()
+        .unwrap()
+        .push_back(crate::assistant_ui::AssistantUiError {
+            code: "PROVIDER_TIMEOUT".into(),
+            message: "timed out".into(),
+            retryable: true,
+        });
+    *assistant.run_result.lock().unwrap() = Some(empty_result());
+    let (view, cx) = open_assistant_workspace(cx, &fixture, assistant.clone());
+    send_workspace_prompt(cx, &view, "old prompt");
+    wait_for(cx, &view, |root| {
+        matches!(
+            root.assistant.task,
+            crate::assistant_ui::AssistantTaskState::Failed(_)
+        )
+    });
+    let before = assistant.run_request_ids.lock().unwrap().len();
+    hold_workspace_switch(cx, &view, &fixture, &gate);
+    let field = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    focus_field(cx, &field);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("keep this next prompt");
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    cx.simulate_keystrokes("enter");
+    view.read_with(cx, |root, _| {
+        assert!(
+            matches!(
+                root.assistant.task,
+                crate::assistant_ui::AssistantTaskState::Failed(_)
+            ),
+            "Enter must not replace the old result during a pending switch"
+        );
+    });
+    click_selector(cx, "assistant-submit");
+    click_selector(cx, "assistant-retry");
+    // Exercise the controller entry too, independently of disabled buttons.
+    view.update_in(cx, |root, window, cx| {
+        root.retry_assistant_run(&gpui::ClickEvent::default(), window, cx)
+    });
+    cx.run_until_parked();
+    let after = assistant.run_request_ids.lock().unwrap().len();
+    view.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.assistant_inputs.prompt.read(cx).value(cx).as_str(),
+            "keep this next prompt"
+        );
+        assert_eq!(root.ui.notice, notice);
+        assert!(matches!(
+            root.assistant.task,
+            crate::assistant_ui::AssistantTaskState::Failed(_)
+        ));
+    });
+    gate.release();
+    wait_for(cx, &view, |root| {
+        !root.documents_root_switch.switching
+            && root.projects.iter().any(|d| d.id().as_str() == "new")
+    });
+    assert_eq!(
+        after, before,
+        "the pending switch must not dispatch another Assistant request"
+    );
+    send_workspace_prompt(cx, &view, "new prompt");
+    wait_for(cx, &view, |root| {
+        root.assistant.task == crate::assistant_ui::AssistantTaskState::Completed
+    });
+    assert_eq!(assistant.grants_for("run"), [vec!["new".to_string()]]);
+}
+
+fn review_with_undo() -> AssistantRunResult {
+    let mut pending = pending_review("review", u64::MAX);
+    pending.affected_document_ids = vec!["old".into()];
+    AssistantRunResult {
+        pending_reviews: vec![pending],
+        mutation: Some(AssistantMutationSummary {
+            mutation_id: "applied".into(),
+            affected_documents: Vec::new(),
+            undo_token: "undo-applied".into(),
+            uncovered_segment_ids: Vec::new(),
+        }),
+        ..empty_result()
+    }
+}
+
+#[gpui::test]
+fn switching_workspaces_blocks_assistant_writes_and_keeps_rejection_available(
+    cx: &mut TestAppContext,
+) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = assistant_switch_fixture(&gate);
+    let assistant = Arc::new(FakeAssistantUiService::default());
+    *assistant.run_result.lock().unwrap() = Some(review_with_undo());
+    *assistant.confirm_result.lock().unwrap() = Some(empty_result());
+    let (view, cx) = open_assistant_workspace(cx, &fixture, assistant.clone());
+    send_workspace_prompt(cx, &view, "old review");
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    hold_workspace_switch(cx, &view, &fixture, &gate);
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    click_selector(cx, "assistant-confirm");
+    click_selector(cx, "assistant-undo-applied");
+    view.update_in(cx, |root, window, cx| {
+        root.accept_assistant_pending(&gpui::ClickEvent::default(), window, cx);
+        root.undo_assistant_mutation_for("applied".into(), cx);
+    });
+    cx.run_until_parked();
+    let confirm_calls = assistant.grants_for("confirm");
+    let undo_calls = assistant.grants_for("undo");
+    view.read_with(cx, |root, _| {
+        assert!(matches!(
+            root.assistant.pending,
+            Some(PendingReviewState::Awaiting(_))
+        ));
+        assert!(!root.assistant.is_mutation_undone("applied"));
+        assert!(!root.assistant.is_mutation_undo_in_flight("applied"));
+        assert_eq!(root.ui.notice, notice);
+    });
+    click_selector(cx, "assistant-reject");
+    wait_for(cx, &view, |root| {
+        root.assistant.pending == Some(PendingReviewState::Rejected)
+    });
+    assert_eq!(assistant.grants_for("reject"), [vec!["old".to_string()]]);
+    gate.release();
+    wait_for(cx, &view, |root| !root.documents_root_switch.switching);
+    assert!(
+        confirm_calls.is_empty(),
+        "the old review grant must not reach confirm during the switch"
+    );
+    assert!(
+        undo_calls.is_empty(),
+        "the old mutation grant must not reach undo during the switch"
+    );
+}
+
+#[gpui::test]
+fn assistant_review_and_undo_resume_after_a_workspace_switch_rolls_back(cx: &mut TestAppContext) {
+    let gate = crate::tests::Gate::default();
+    let fixture = assistant_switch_fixture(&gate);
+    let assistant = Arc::new(FakeAssistantUiService::default());
+    *assistant.run_result.lock().unwrap() = Some(review_with_undo());
+    *assistant.confirm_result.lock().unwrap() = Some(empty_result());
+    let (view, cx) = open_assistant_workspace(cx, &fixture, assistant.clone());
+    send_workspace_prompt(cx, &view, "old review");
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    let mut external = fixture.settings.snapshot().unwrap();
+    external.expected_speakers = Some(3);
+    fixture.settings.update(external).unwrap();
+    choose(cx, &view, fixture.new.path());
+    assert!(switch_status(cx, &view).unwrap().1);
+    assert_eq!(fixture.root(), fixture.old.path());
+    click_selector(cx, "assistant-confirm");
+    wait_for(cx, &view, |root| !root.assistant.decision_in_flight());
+    click_selector(cx, "assistant-undo-applied");
+    wait_for(cx, &view, |root| {
+        root.assistant.is_mutation_undone("applied")
+    });
+    assert_eq!(assistant.grants_for("confirm"), [vec!["old".to_string()]]);
+    assert_eq!(assistant.grants_for("undo"), [vec!["old".to_string()]]);
 }
 
 #[gpui::test]
