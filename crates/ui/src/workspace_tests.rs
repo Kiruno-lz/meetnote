@@ -1041,6 +1041,154 @@ fn relink(cx: &mut VisualTestContext, view: &View, path: &Path) {
 }
 
 #[gpui::test]
+fn a_late_audio_relink_cannot_complete_a_new_workspaces_relink(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let old_gate = crate::tests::Gate::default();
+    let new_gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_save_gates(&old_gate, &new_gate);
+    for (root, title) in [(&fixture.old, "Old"), (&fixture.new, "New")] {
+        root.put(
+            DocumentState::new(
+                ProjectId::new("shared"),
+                title,
+                root.path().join("missing.wav").display().to_string(),
+            ),
+            &format!("# {title} notes\n"),
+        );
+        std::fs::write(
+            root.path().join("shared/attachment.bin"),
+            b"keep attachment",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("restored.wav"), AUDIO).unwrap();
+    }
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    old_gate.arm();
+    let old_path = fixture.old.path().join("restored.wav");
+    view.update(cx, |root, cx| root.relink_audio_path(old_path.clone(), cx));
+    wait_for(cx, &view, |_| old_gate.counts().0 == 1);
+    let old_bytes = fixture.old.package_bytes("shared");
+    assert_eq!(
+        fixture.old.read("shared").state.audio_path(),
+        old_path.to_str().unwrap()
+    );
+
+    choose(cx, &view, fixture.new.path());
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "New")
+            && !root.audio.pending()
+    });
+    assert!(view.read_with(cx, |root, _| root.audio.relinking.is_none()));
+    new_gate.arm();
+    let new_path = fixture.new.path().join("restored.wav");
+    view.update(cx, |root, cx| root.relink_audio_path(new_path.clone(), cx));
+    wait_for(cx, &view, |_| new_gate.counts().0 == 1);
+    wait_for_watcher(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.revision() == 1)
+            && !root.audio.pending()
+    });
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let new_bytes = fixture.new.package_bytes("shared");
+    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = completed.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    old_gate.release();
+    wait_for(cx, &view, |_| completed.get());
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.audio.relinking,
+            Some(ProjectId::new("shared")),
+            "the old relink must not finish the new workspace's relink"
+        );
+        assert_eq!(root.ui.notice, notice);
+        assert!(root.document_conflict.is_none());
+        assert_eq!(root.ui.route, Route::Meetings);
+        assert_eq!(root.ui.selected_project, Some(ProjectId::new("shared")));
+    });
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(fixture.old.package_bytes("shared"), old_bytes);
+    assert_eq!(fixture.new.package_bytes("shared"), new_bytes);
+    new_gate.release();
+    wait_for(cx, &view, |root| root.audio.relinking.is_none());
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.notice,
+            i18n::message(root.ui.locale, "audio_relinked", "New")
+        );
+        assert!(root.document_conflict.is_none());
+    });
+    assert_eq!(
+        fixture.new.read("shared").state.audio_path(),
+        new_path.to_str().unwrap()
+    );
+    for root in [&fixture.old, &fixture.new] {
+        assert_eq!(
+            std::fs::read(root.path().join("shared/attachment.bin")).unwrap(),
+            b"keep attachment"
+        );
+        assert_eq!(
+            std::fs::read(root.path().join("restored.wav")).unwrap(),
+            AUDIO
+        );
+    }
+}
+
+#[gpui::test]
+fn an_audio_relink_in_a_rolled_back_workspace_still_completes(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_save_gates(&gate, &crate::tests::Gate::default());
+    put(&fixture.old, "shared", "Old");
+    let path = fixture.old.path().join("restored.wav");
+    std::fs::write(&path, AUDIO).unwrap();
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    gate.arm();
+    view.update(cx, |root, cx| root.relink_audio_path(path.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    let saved = fixture.old.package_bytes("shared");
+    let mut external = fixture.settings.snapshot().unwrap();
+    external.expected_speakers = Some(3);
+    fixture.settings.update(external).unwrap();
+    choose(cx, &view, fixture.new.path());
+    assert!(switch_status(cx, &view).unwrap().1);
+    assert_eq!(fixture.root(), fixture.old.path());
+    assert_eq!(
+        view.read_with(cx, |root, _| root.audio.relinking.clone()),
+        Some(ProjectId::new("shared"))
+    );
+    gate.release();
+    wait_for(cx, &view, |root| root.audio.relinking.is_none());
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.notice,
+            i18n::message(root.ui.locale, "audio_relinked", "Old")
+        );
+        assert!(root.document_conflict.is_none());
+    });
+    assert_eq!(fixture.old.package_bytes("shared"), saved);
+    assert_eq!(
+        fixture.old.read("shared").state.audio_path(),
+        path.to_str().unwrap()
+    );
+}
+
+#[gpui::test]
 fn a_moved_audio_file_is_missing_until_relinked_to_the_same_recording(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();
     let audio_directory = temp_directory();
