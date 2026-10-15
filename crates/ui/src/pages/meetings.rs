@@ -1000,6 +1000,7 @@ fn editor_form(
             div()
                 .debug_selector(|| "select-document-status".into())
                 .w(STATUS_SELECT_WIDTH)
+                .max_w_full()
                 .child(editor.status.clone())
                 .into_any_element(),
         ))

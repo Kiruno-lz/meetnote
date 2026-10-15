@@ -327,6 +327,74 @@ fn editor_fields(cx: &mut VisualTestContext, view: &View) -> (Field, Field, Area
     })
 }
 
+#[gpui::test]
+fn the_editor_status_fits_beside_detail_and_remains_keyboard_operable(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let audio = documents.path().join("weekly/recording.wav");
+    let mut document = processed("weekly", "产品周会");
+    document.source.audio_path = audio.display().to_string();
+    document
+        .processing
+        .latest
+        .as_mut()
+        .unwrap()
+        .input_audio_checksum = None;
+    documents.put(document, "# 产品周会\n");
+    std::fs::write(audio, b"fixture recording").unwrap();
+    let before = documents.package_bytes("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    open_editor(cx, &view, "weekly");
+    click_selector(cx, "open-project-detail");
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    for (locale, expected) in [
+        (i18n::Locale::ZhCn, "final"),
+        (i18n::Locale::EnUs, "archived"),
+    ] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            root.editor.follow_locale(locale, &root.projects, cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let body = rendered(cx, "meeting-content");
+        let status = rendered(cx, "select-document-status");
+        assert!(status.left() >= body.left() && status.right() <= body.right(),
+            "the entire status control fits its reading column: {status:?} in {body:?} ({locale:?})");
+        let select = view.read_with(cx, |root, _| root.editor.status.clone());
+        let tags = view.read_with(cx, |root, _| root.editor.tags.clone());
+        focus_field(cx, &tags);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert!(
+            cx.update(
+                |window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).is_focused(window)
+            ),
+            "Tab from tags reaches the status select"
+        );
+        let focused_status = rendered(cx, "select-document-status");
+        let focused_body = rendered(cx, "meeting-content");
+        assert!(within(focused_status, focused_body),
+            "keyboard focus reveals the whole status trigger: {focused_status:?} in {focused_body:?} ({locale:?})");
+        cx.simulate_keystrokes("enter");
+        let viewport = Bounds::from_corners(point(px(0.), px(0.)), point(px(900.), px(600.)));
+        assert!(
+            within(rendered(cx, "select-menu"), viewport),
+            "the keyboard menu remains within the window"
+        );
+        cx.simulate_keystrokes("down");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            select.read_with(cx, |select, _| select.selected_value().map(str::to_string)),
+            Some(expected.into())
+        );
+        assert_eq!(
+            documents.package_bytes("weekly"),
+            before,
+            "choosing a status only edits the draft"
+        );
+    }
+}
+
 /// Replaces a field's text as typing does.
 fn retype(cx: &mut VisualTestContext, field: &Field, text: &str) {
     focus_field(cx, field);
