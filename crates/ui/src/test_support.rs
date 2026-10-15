@@ -21,6 +21,10 @@ pub use crate::route::Route;
 pub enum Overlay {
     /// On Meetings: a loaded workspace with no documents.
     EmptyWorkspace,
+    /// On Assistant: the first run needs an active model connection.
+    AssistantSetup,
+    /// On Assistant: the connection is configured and the workspace is empty.
+    AssistantImport,
     /// The Settings theme select with its menu open.
     ThemeSelect,
     /// The Speaker Library migration question.
@@ -263,6 +267,15 @@ impl MainWindow {
             return;
         }
         self.view.update(cx, |root, cx| match overlay {
+            Overlay::AssistantSetup => {
+                root.set_fixture_assistant_connection(None);
+                cx.notify();
+            }
+            Overlay::AssistantImport => {
+                root.projects.clear();
+                root.ui.selected_project = None;
+                cx.notify();
+            }
             Overlay::EmptyWorkspace => {
                 root.projects.clear();
                 root.ui.selected_project = None;
@@ -406,7 +419,13 @@ impl MainWindow {
             return;
         }
         self.view.update(cx, |root, cx| match overlay {
-            Overlay::EmptyWorkspace => root.reload_projects(cx),
+            Overlay::AssistantSetup => {
+                root.set_fixture_assistant_connection(
+                    root.settings_draft.assistant.active_connection_id.clone(),
+                );
+                cx.notify();
+            }
+            Overlay::EmptyWorkspace | Overlay::AssistantImport => root.reload_projects(cx),
             Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
                 if let Some(selectors) = &root.settings_selectors {

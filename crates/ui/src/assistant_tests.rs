@@ -19,8 +19,8 @@ use crate::document_tests::{leak, rendered, within, View};
 use crate::route::Route;
 use crate::tests::{
     click_selector, empty_result, field_value, focus_field, hold_a_worker_alone, open_desktop_with,
-    pending_review, start_run, stored_key_settings, wait_for, FakeAssistantUiService, Field, Gate,
-    STORED_KEY,
+    pending_review, start_run, stored_key_settings, test_settings, wait_for,
+    FakeAssistantUiService, Field, Gate, STORED_KEY,
 };
 use gpui::{TestAppContext, VisualTestContext};
 use runtime::{JobEvent, JobId, Progress};
@@ -201,6 +201,171 @@ fn open_assistant(
     let assistant = Arc::new(assistant);
     let (view, cx) = open_desktop_with(cx, assistant.clone(), stored_key_settings());
     (view, cx, assistant)
+}
+
+/// The actual default empty workspace, with an optional saved connection.
+fn first_use_assistant(
+    cx: &mut TestAppContext,
+    connected: bool,
+) -> (View, &mut VisualTestContext, Arc<FakeAssistantUiService>) {
+    let assistant = Arc::new(FakeAssistantUiService::default());
+    let settings = if connected {
+        stored_key_settings()
+    } else {
+        test_settings()
+    };
+    let (view, cx) = open_desktop_with(cx, assistant.clone(), settings);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |root, _| root.projects.is_empty()));
+    (view, cx, assistant)
+}
+
+fn tab_to_first_use_action(cx: &mut VisualTestContext, selector: &'static str) {
+    for _ in 0..40 {
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        if cx
+            .debug_bounds("focus-ring")
+            .is_some_and(|ring| within(ring, rendered(cx, selector)))
+        {
+            return;
+        }
+    }
+    panic!("Tab never reached {selector}");
+}
+
+fn activate_first_use_action(cx: &mut VisualTestContext) {
+    let keystroke = gpui::Keystroke::parse("enter").unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn first_use_offers_connection_settings_without_losing_a_rejected_question(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, assistant) = first_use_assistant(cx, false);
+    let action = rendered(cx, "assistant-first-settings");
+    assert!(within(action, rendered(cx, "assistant-results")));
+    assert!(
+        !shown(cx, "assistant-first-import".into()),
+        "connection comes before import"
+    );
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep this question");
+    assert!(
+        cx.update(
+            |window, cx| gpui::Focusable::focus_handle(prompt.read(cx), cx)
+                .contains_focused(window, cx)
+        ),
+        "drawing guidance does not move focus"
+    );
+    click_selector(cx, "assistant-submit");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.assistant.task, AssistantTaskState::Idle);
+        assert!(root.ui.notice.contains("CONNECTION_NOT_CONFIGURED"));
+    });
+    rendered(cx, "assistant-first-settings");
+    assert!(assistant.run_request_ids.lock().unwrap().is_empty());
+    click_selector(cx, "assistant-first-settings");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Settings);
+        assert_eq!(
+            root.ui.settings_section,
+            crate::pages::settings::ASSISTANT_SECTION
+        );
+    });
+    assert_eq!(field_value(cx, &prompt), "keep this question");
+}
+
+#[gpui::test]
+fn first_use_connection_settings_is_keyboard_reachable_at_minimum_size(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    assert!(within(
+        rendered(cx, "assistant-first-settings"),
+        rendered(cx, "assistant-results")
+    ));
+    tab_to_first_use_action(cx, "assistant-first-settings");
+    activate_first_use_action(cx);
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Settings);
+        assert_eq!(
+            root.ui.settings_section,
+            crate::pages::settings::ASSISTANT_SECTION
+        );
+    });
+}
+
+#[gpui::test]
+fn first_use_with_a_connection_offers_the_existing_audio_picker(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = first_use_assistant(cx, true);
+    let action = rendered(cx, "assistant-first-import");
+    assert!(within(action, rendered(cx, "assistant-results")));
+    assert!(action.bottom() <= rendered(cx, "assistant-input-bar").top());
+    assert!(!shown(cx, "assistant-first-settings".into()));
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep this question too");
+    click_selector(cx, "assistant-submit");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.assistant.task, AssistantTaskState::Idle);
+        assert!(root.ui.notice.contains("DOCUMENT_ACCESS_DENIED"));
+    });
+    assert!(!cx.cx.did_prompt_for_paths());
+    click_selector(cx, "assistant-first-import");
+    assert!(cx.cx.did_prompt_for_paths());
+    assert_eq!(field_value(cx, &prompt), "keep this question too");
+    assert!(assistant.run_request_ids.lock().unwrap().is_empty());
+}
+
+#[gpui::test]
+fn first_use_audio_import_is_keyboard_reachable_at_minimum_size(cx: &mut TestAppContext) {
+    let (_view, cx, _) = first_use_assistant(cx, true);
+    assert!(within(
+        rendered(cx, "assistant-first-import"),
+        rendered(cx, "assistant-results")
+    ));
+    tab_to_first_use_action(cx, "assistant-first-import");
+    activate_first_use_action(cx);
+    assert!(cx.cx.did_prompt_for_paths());
+}
+
+#[gpui::test]
+fn first_use_guidance_never_replaces_an_existing_result_or_review(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    // A result already received remains readable if the connection is later removed.
+    view.update(cx, |root, cx| {
+        let document =
+            domain::DocumentState::new(domain::ProjectId::new("first"), "First", "first.wav");
+        root.assistant.authorize_document(Some(&document));
+        let settings = settings::AssistantSettings {
+            active_connection_id: Some("previous-connection".into()),
+            ..Default::default()
+        };
+        let (request, _) = root
+            .assistant
+            .begin("previous request".into(), &settings)
+            .unwrap();
+        root.assistant.complete(
+            &request.request_id,
+            AssistantRunResult {
+                answer: Some("existing answer".into()),
+                pending_reviews: vec![pending_review("existing-review", u64::MAX)],
+                ..empty_result()
+            },
+        );
+        cx.notify();
+    });
+    cx.run_until_parked();
+    rendered(cx, "assistant-result");
+    rendered(cx, "assistant-pending-existing-review");
+    assert!(!shown(cx, "assistant-first-settings".into()));
+    assert!(!shown(cx, "assistant-first-import".into()));
 }
 
 #[gpui::test]

@@ -1450,3 +1450,33 @@ fn processing_feedback_leaves_reading_space_beside_detail_at_minimum_size(cx: &m
     visible(cx, "notice-toast");
     visible(cx, "processing-progress");
 }
+
+#[gpui::test]
+fn first_use_fixtures_reach_settings_and_import_at_minimum_size(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.update(|_, cx| window.open_overlay(Overlay::AssistantSetup, cx));
+    cx.run_until_parked();
+    let setup = rendered(cx, "assistant-first-settings");
+    assert!(within(setup, rendered(cx, "assistant-results")));
+    cx.simulate_click(setup.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Settings);
+    cx.update(|_, cx| {
+        window.close_overlay(Overlay::AssistantSetup, cx);
+        window.navigate(Route::Assistant, cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("assistant-first-settings").is_none());
+    cx.update(|_, cx| window.open_overlay(Overlay::AssistantImport, cx));
+    cx.run_until_parked();
+    assert!(within(
+        rendered(cx, "assistant-first-import"),
+        rendered(cx, "assistant-results")
+    ));
+    tab_to(cx, "assistant-first-import", &["assistant-first-import"]);
+    press(cx, "enter");
+    assert!(cx.cx.did_prompt_for_paths());
+    cx.update(|_, cx| window.close_overlay(Overlay::AssistantImport, cx));
+    wait_for(cx, |cx| cx.debug_bounds("assistant-first-import").is_none());
+}

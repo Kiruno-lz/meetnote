@@ -917,6 +917,12 @@ impl RootView {
         &self.settings_base.assistant
     }
 
+    /// Changes only the in-memory connection projection for visual fixtures.
+    /// The Settings service and its persisted configuration stay untouched.
+    pub(crate) fn set_fixture_assistant_connection(&mut self, id: Option<String>) {
+        self.settings_base.assistant.active_connection_id = id;
+    }
+
     fn installation_query(&self) -> InstallationQuery {
         InstallationQuery {
             asr_model: self.services.asr_model.clone(),

@@ -63,6 +63,20 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
     let retry = root.assistant.retry_prompt().is_some();
     let review_focus = root.review_focus.clone();
     let scroll = root.scroll.assistant_results.clone();
+    let first_use = (matches!(root.assistant.task, AssistantTaskState::Idle)
+        && root.assistant.sent_request().is_none()
+        && root.assistant.result.is_none()
+        && root.assistant.pending.is_none())
+    .then(|| {
+        if root.saved_assistant().active_connection().is_none() {
+            Some(render_first_use(true, root.ui.locale, &tokens, cx))
+        } else if root.projects_loaded && root.projects.is_empty() {
+            Some(render_first_use(false, root.ui.locale, &tokens, cx))
+        } else {
+            None
+        }
+    })
+    .flatten();
     // Results, diffs and pending cards scroll on the opaque plane above
     // the input bar. Reserve its space outside the viewport so keyboard
     // focus and pointer scrolling reveal the same visible area.
@@ -75,6 +89,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .flex()
         .flex_col()
         .gap_3()
+        .children(first_use)
         .children(
             root.assistant
                 .sent_request()
@@ -259,6 +274,56 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         )),
                 ),
         )
+}
+
+/// One next action before the first run, using the existing recovery paths.
+fn render_first_use(
+    needs_connection: bool,
+    locale: Locale,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let (title, hint, action) = if needs_connection {
+        (
+            tr(locale, "assistant_first_connection_title"),
+            tr(locale, "assistant_first_connection_hint"),
+            Button::new(
+                "assistant-first-settings",
+                tr(locale, "assistant_open_settings"),
+            )
+            .debug_selector(|| "assistant-first-settings".into())
+            .primary()
+            .compact()
+            .on_click(cx.listener(|root, _, _, cx| root.open_assistant_settings(cx))),
+        )
+    } else {
+        (
+            tr(locale, "assistant_first_document_title"),
+            tr(locale, "assistant_first_document_hint"),
+            Button::new("assistant-first-import", tr(locale, "import_audio"))
+                .debug_selector(|| "assistant-first-import".into())
+                .primary()
+                .compact()
+                .on_click(cx.listener(RootView::import_audio)),
+        )
+    };
+    div()
+        .debug_selector(|| "assistant-first-use".into())
+        .flex_shrink_0()
+        .py(tokens.spacing.md)
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(tokens.spacing.sm)
+        .child(
+            div()
+                .text_lg()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(title),
+        )
+        .child(div().text_sm().text_color(tokens.text_muted).child(hint))
+        .child(action)
+        .into_any_element()
 }
 
 /// The status line under the prompt in the input bar.
