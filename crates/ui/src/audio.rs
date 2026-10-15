@@ -70,6 +70,13 @@ impl AudioCheck {
         self.document_id.is_some() && self.landed != self.generation
     }
 
+    /// Stops accepting an in-flight check while keeping the displayed
+    /// result. A documents-root switch restarts the check once it settles.
+    pub(crate) fn invalidate_pending(&mut self) {
+        self.generation += 1;
+        self.landed = self.generation;
+    }
+
     /// Forgets every check, including one still running.
     pub(crate) fn clear(&mut self) {
         self.document_id = None;

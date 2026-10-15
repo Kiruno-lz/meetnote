@@ -70,6 +70,40 @@ impl settings::SettingsRepository for HeldSettingsSave {
     }
 }
 
+/// Holds a real list/audio snapshot after IO has released its file locks.
+struct HeldSnapshots {
+    inner: FileDocumentRepository,
+    gate: crate::tests::Gate,
+}
+
+impl DocumentRepository for HeldSnapshots {
+    fn snapshot(&self) -> Result<application::DocumentSnapshot, String> {
+        let snapshot = self.inner.snapshot();
+        self.gate.pass();
+        snapshot
+    }
+
+    fn get(&self, id: &ProjectId) -> Result<Option<DocumentState>, String> {
+        self.inner.get(id)
+    }
+
+    fn read(&self, id: &ProjectId) -> Result<Option<contracts::DocumentRecord>, String> {
+        self.inner.read(id)
+    }
+
+    fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
+        self.inner.save(document, markdown)
+    }
+
+    fn watch(&self) -> Result<std::sync::mpsc::Receiver<DocumentChange>, String> {
+        self.inner.watch()
+    }
+
+    fn subscribe_changes(&self) -> Result<application::DocumentChanges, String> {
+        self.inner.subscribe_changes()
+    }
+}
+
 /// Two documents roots, a model directory, the jobs the workspace runs on
 /// and settings in a `settings.json` of their own. The workspace starts on
 /// `old` and switches roots as `main`'s does.
@@ -224,6 +258,240 @@ fn choose(cx: &mut VisualTestContext, view: &View, path: &Path) {
 
 fn switch_status(cx: &mut VisualTestContext, view: &View) -> Option<(String, bool)> {
     view.read_with(cx, |root, _| root.documents_root_switch.status.clone())
+}
+
+#[gpui::test]
+fn returning_to_an_unloaded_old_document_defers_its_read_until_the_switch_finishes(
+    cx: &mut TestAppContext,
+) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let mut fixture = Workspace::new();
+    put(&fixture.old, "draft", "Keep this draft");
+    put(&fixture.old, "shared", "Old");
+    put(&fixture.new, "shared", "New");
+    fixture.settings = SettingsService::open(Arc::new(HeldSettingsSave {
+        inner: JsonSettingsRepository::open(&fixture.settings_path),
+        gate: gate.clone(),
+    }))
+    .unwrap();
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| !root.audio.pending());
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    select_row(cx, &view, "draft");
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("draft"))
+    });
+    let field = view.read_with(cx, |root, _| root.editor.title.clone());
+    focus_field(cx, &field);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Keep my unsaved wording");
+    gate.arm();
+    view.update(cx, |root, cx| {
+        root.choose_documents_root(fixture.new.path().into(), cx)
+    });
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    assert_eq!(fixture.root(), fixture.new.path());
+    view.update(cx, |root, cx| {
+        root.select_project(ProjectId::new("shared"), cx)
+    });
+    cx.run_until_parked();
+    let deferred = view.read_with(cx, |root, _| {
+        root.editor.loading.is_empty() && !root.editor.has_draft(&ProjectId::new("shared"))
+    });
+    // Selecting the already cached draft remains local while a different
+    // repository is open on the worker.
+    view.update(cx, |root, cx| {
+        root.select_project(ProjectId::new("draft"), cx)
+    });
+    cx.run_until_parked();
+    let preserved = view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits.title);
+    gate.release();
+    wait_for(cx, &view, |root| !root.documents_root_switch.switching);
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "New")
+    });
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("shared"))
+    });
+    assert!(
+        deferred,
+        "an old page must not start reading the new root during the switch"
+    );
+    assert_eq!(preserved, "Keep my unsaved wording");
+    assert_eq!(
+        view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits.body),
+        "# New\n"
+    );
+}
+
+/// A started read has already read "Old". A switch that keeps the old
+/// root must restart it from the files, without losing another draft.
+fn a_switch_that_keeps_the_root_restarts_pending_reads(cx: &mut TestAppContext, busy: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_read_gate(Some(&gate));
+    put(&fixture.old, "draft", "Draft");
+    put(&fixture.old, "pending", "Old");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| !root.audio.pending());
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    select_row(cx, &view, "draft");
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("draft"))
+    });
+    let field = view.read_with(cx, |root, _| root.editor.title.clone());
+    focus_field(cx, &field);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Retain this draft");
+    gate.arm();
+    view.update(cx, |root, cx| {
+        root.select_project(ProjectId::new("pending"), cx)
+    });
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    put(&fixture.old, "pending", "Fresh from disk");
+    let (job, _events) = fixture.jobs.create_job();
+    if busy {
+        job.started();
+    } else {
+        job.completed();
+    }
+    choose(
+        cx,
+        &view,
+        if busy {
+            fixture.new.path()
+        } else {
+            fixture.old.path()
+        },
+    );
+    let status = switch_status(cx, &view).unwrap();
+    gate.release();
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("pending")) && root.editor.loading.is_empty()
+    });
+    let read_body = view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits.body);
+    select_row(cx, &view, "draft");
+    assert_eq!(
+        view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits.title),
+        "Retain this draft"
+    );
+    assert_eq!(fixture.root(), fixture.old.path());
+    assert_eq!(status.1, busy);
+    job.completed();
+    assert_eq!(
+        read_body, "# Fresh from disk\n",
+        "a deferred read must resume on the unchanged root"
+    );
+}
+
+#[gpui::test]
+fn a_busy_refusal_restarts_the_old_root_read_without_losing_its_draft(cx: &mut TestAppContext) {
+    a_switch_that_keeps_the_root_restarts_pending_reads(cx, true);
+}
+
+#[gpui::test]
+fn choosing_the_current_root_restarts_its_read_without_losing_its_draft(cx: &mut TestAppContext) {
+    a_switch_that_keeps_the_root_restarts_pending_reads(cx, false);
+}
+
+fn a_late_snapshot_stays_out_of_the_switching_workspace(cx: &mut TestAppContext, audio: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let snapshots = crate::tests::Gate::default();
+    let settings_save = crate::tests::Gate::default();
+    let mut fixture = Workspace::new();
+    put(&fixture.old, "shared", "Old");
+    put(&fixture.new, "shared", "New");
+    fixture.workspace = WorkspaceService::new(
+        fixture.workspace.processing(),
+        DocumentService::new(Arc::new(HeldSnapshots {
+            inner: fixture.old.repository(),
+            gate: snapshots.clone(),
+        })),
+    )
+    .with_documents_root(application::DocumentsRoot::new(
+        fixture.old.path(),
+        &fixture.models,
+        |root: &Path| {
+            FileDocumentRepository::open(root)
+                .map(|repository| Arc::new(repository) as Arc<dyn DocumentRepository>)
+        },
+    ));
+    fixture.settings = SettingsService::open(Arc::new(HeldSettingsSave {
+        inner: JsonSettingsRepository::open(&fixture.settings_path),
+        gate: settings_save.clone(),
+    }))
+    .unwrap();
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    let original_audio = view.read_with(cx, |root, _| {
+        root.audio.result_for(&ProjectId::new("shared")).cloned()
+    });
+    let existing_audio = fixture.models.join("existing.wav");
+    std::fs::write(&existing_audio, AUDIO).unwrap();
+    let mut changed = fixture.old.read("shared").state;
+    changed.content.title = "Changed after the displayed snapshot".into();
+    changed.source.audio_path = existing_audio.display().to_string();
+    fixture.old.put(changed, "# Changed externally\n");
+    snapshots.arm();
+    view.update(cx, |root, cx| {
+        if audio {
+            root.select_project(ProjectId::new("shared"), cx);
+        } else {
+            root.reload_projects(cx);
+        }
+    });
+    wait_for(cx, &view, |_| snapshots.counts().0 == 1);
+    settings_save.arm();
+    view.update(cx, |root, cx| {
+        root.choose_documents_root(fixture.new.path().into(), cx)
+    });
+    wait_for(cx, &view, |_| settings_save.counts().0 == 1);
+    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = completed.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    snapshots.release();
+    wait_for(cx, &view, |_| completed.get());
+    cx.run_until_parked();
+    let title_during_switch = view.read_with(cx, |root, _| root.projects[0].title().to_string());
+    let audio_during_switch = view.read_with(cx, |root, _| {
+        root.audio.result_for(&ProjectId::new("shared")).cloned()
+    });
+    settings_save.release();
+    wait_for(cx, &view, |root| !root.documents_root_switch.switching);
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "New")
+            && !root.audio.pending()
+    });
+    assert_eq!(
+        title_during_switch, "Old",
+        "a held list must not replace the visible workspace during a switch"
+    );
+    assert_eq!(
+        audio_during_switch, original_audio,
+        "a held audio check must not replace the visible workspace during a switch"
+    );
+}
+
+#[gpui::test]
+fn a_late_list_snapshot_does_not_land_while_the_workspace_is_switching(cx: &mut TestAppContext) {
+    a_late_snapshot_stays_out_of_the_switching_workspace(cx, false);
+}
+
+#[gpui::test]
+fn a_late_audio_check_does_not_land_while_the_workspace_is_switching(cx: &mut TestAppContext) {
+    a_late_snapshot_stays_out_of_the_switching_workspace(cx, true);
 }
 
 /// Waits, on the wall clock, for the file watcher to report a change.
