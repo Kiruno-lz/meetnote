@@ -58,7 +58,8 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         state,
         position: root.assistant.pending_position(),
     });
-    let busy = root.assistant_busy();
+    let switching = root.documents_root_switch.switching;
+    let busy = switching || root.assistant_busy();
     let cancellable = root.assistant_cancellable();
     let retry = root.assistant.retry_prompt().is_some();
     let review_focus = root.review_focus.clone();
@@ -73,6 +74,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 FirstUseStep::Connection,
                 root.ui.locale,
                 &tokens,
+                switching,
                 cx,
             ))
         } else if root.projects_loaded && root.projects_error.is_none() && root.projects.is_empty()
@@ -81,6 +83,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 FirstUseStep::Import,
                 root.ui.locale,
                 &tokens,
+                switching,
                 cx,
             ))
         } else if selected.is_some_and(|document| {
@@ -90,6 +93,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 FirstUseStep::OpenProject,
                 root.ui.locale,
                 &tokens,
+                switching,
                 cx,
             ))
         } else {
@@ -122,14 +126,26 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             _ => None,
         })
         .children(result.map(|result| render_result(result, warnings, root.ui.locale, cx)))
-        .children(
-            (!receipts.is_empty())
-                .then(|| render_receipts(receipts, &titles, root.ui.locale, cx, &root.assistant)),
-        )
-        .children(
-            pending
-                .map(|pending| render_pending(pending, &titles, &review_focus, root.ui.locale, cx)),
-        )
+        .children((!receipts.is_empty()).then(|| {
+            render_receipts(
+                receipts,
+                &titles,
+                root.ui.locale,
+                cx,
+                &root.assistant,
+                switching,
+            )
+        }))
+        .children(pending.map(|pending| {
+            render_pending(
+                pending,
+                &titles,
+                &review_focus,
+                root.ui.locale,
+                switching,
+                cx,
+            )
+        }))
         .children((root.assistant.pending_overflow_count() > 0).then(|| {
             render_pending_overflow(
                 root.assistant.pending_overflow_count(),
@@ -307,6 +323,7 @@ fn render_first_use(
     step: FirstUseStep,
     locale: Locale,
     tokens: &Tokens,
+    switching: bool,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
     let (title, hint, action) = match step {
@@ -329,6 +346,7 @@ fn render_first_use(
                 .debug_selector(|| "assistant-first-import".into())
                 .primary()
                 .compact()
+                .disabled(switching)
                 .on_click(cx.listener(RootView::import_audio)),
         ),
         FirstUseStep::OpenProject => (
@@ -769,6 +787,7 @@ fn render_receipts(
     locale: Locale,
     cx: &mut Context<RootView>,
     controller: &AssistantController,
+    switching: bool,
 ) -> gpui::AnyElement {
     let tokens = *theme::tokens(cx);
     div()
@@ -799,6 +818,7 @@ fn render_receipts(
                 cx,
                 controller.is_mutation_undone(&mutation_id),
                 controller.is_mutation_undo_in_flight(&mutation_id),
+                switching,
             )
         }))
         .into_any_element()
@@ -1152,6 +1172,7 @@ fn render_mutation(
     cx: &mut Context<RootView>,
     undone: bool,
     undo_in_flight: bool,
+    switching: bool,
 ) -> gpui::AnyElement {
     let summary = receipt_summary(locale, &mutation, &|id| titles.get(id).cloned());
     let details = receipt_details(&mutation);
@@ -1222,7 +1243,7 @@ fn render_mutation(
                         })
                         .ghost()
                         .compact()
-                        .disabled(undone || undo_in_flight)
+                        .disabled(switching || undone || undo_in_flight)
                         .on_click(cx.listener(move |root, _, _window, cx| {
                             root.undo_assistant_mutation_for(mutation_id.clone(), cx)
                         })),
@@ -1352,6 +1373,7 @@ fn render_pending(
     titles: &DocumentTitles,
     focus: &FocusHandle,
     locale: Locale,
+    switching: bool,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
     let tokens = *theme::tokens(cx);
@@ -1542,7 +1564,7 @@ fn render_pending(
                 Button::new("assistant-confirm", accept_label)
                     .debug_selector(|| "assistant-confirm".into())
                     .primary()
-                    .disabled(busy)
+                    .disabled(switching || busy)
                     .on_click(cx.listener(RootView::accept_assistant_pending)),
             ),
     )

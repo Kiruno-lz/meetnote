@@ -3433,7 +3433,7 @@ impl RootView {
     }
 
     fn start_assistant_run(&mut self, query: String, cx: &mut Context<Self>) {
-        if self.assistant_busy() {
+        if self.documents_root_switch.switching || self.assistant_busy() {
             return;
         }
         match self.assistant.scope_mode {
@@ -3578,6 +3578,9 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let (Some(run), Some(pending)) = (
             self.assistant.result_run(),
             self.assistant.pending_for_accept(now_ms()),
@@ -3683,6 +3686,9 @@ impl RootView {
         mutation_id: String,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let Some(run) = self.assistant.result_run() else {
             return;
         };
@@ -4191,6 +4197,9 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let Some(project_id) = self.ui.selected_project.clone() else {
             self.ui.notice = i18n::text(self.ui.locale, "select_project_first").into();
             cx.notify();

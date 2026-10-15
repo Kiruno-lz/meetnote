@@ -457,7 +457,8 @@ fn main_panel(
                             .disabled(
                                 (root.ui.processing && !processing_here)
                                     || (!root.ui.processing
-                                        && (root.audio.missing(project.id())
+                                        && (root.documents_root_switch.switching
+                                            || root.audio.missing(project.id())
                                             || missing_models.any())),
                             )
                             .on_click(cx.listener(RootView::process_or_cancel)),
