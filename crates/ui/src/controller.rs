@@ -854,12 +854,21 @@ impl RootView {
 
     /// Re-reads the project list and the scanner issues off the main thread.
     pub(crate) fn reload_projects(&mut self, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let generation = self.begin_projects_reload();
         let workspace = self.services.workspace.clone();
         cx.spawn(async move |this, cx| {
             let snapshot = runtime::spawn_blocking(move || workspace.document_snapshot()).await;
-            this.update(cx, |this, cx| this.apply_projects(generation, snapshot, cx))
-                .ok();
+            this.update(cx, |this, cx| {
+                if generation != this.projects_generation {
+                    cx.notify();
+                    return;
+                }
+                this.apply_projects(generation, snapshot, cx);
+            })
+            .ok();
         })
         .detach();
     }
@@ -920,6 +929,9 @@ impl RootView {
     /// the file); the tree row, the Meetings header and Detail show what it
     /// finds.
     fn check_selected_audio(&mut self, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let Some(document_id) = self
             .ui
             .selected_project
@@ -934,9 +946,8 @@ impl RootView {
             let result =
                 runtime::spawn_blocking(move || workspace.audio_status(&document_id)).await;
             this.update(cx, |this, cx| {
-                if this.audio.apply(generation, result) {
-                    cx.notify();
-                }
+                this.audio.apply(generation, result);
+                cx.notify();
             })
             .ok();
         })
@@ -1403,14 +1414,11 @@ impl RootView {
     ) {
         self.documents_root_switch.switching = false;
         let locale = self.ui.locale;
-        let (message, failed) = match result {
+        let (message, failed, root_changed) = match result {
             Ok(DocumentsRootSwitched { saved, switched }) => {
                 self.settings_draft.documents_root = saved.documents_root.clone();
                 self.settings_base = saved;
                 self.settings_error = None;
-                if switched {
-                    self.follow_documents_root(true, cx);
-                }
                 (
                     i18n::message(
                         locale,
@@ -1418,10 +1426,11 @@ impl RootView {
                         &self.settings_draft.documents_root,
                     ),
                     false,
+                    switched.then_some(true),
                 )
             }
             Err(DocumentsRootSwitchFailure::Refused(error)) => {
-                (i18n::documents_root_error(locale, &error), true)
+                (i18n::documents_root_error(locale, &error), true, None)
             }
             Err(DocumentsRootSwitchFailure::NotSaved {
                 failure,
@@ -1430,10 +1439,7 @@ impl RootView {
             }) => {
                 let reason = settings_error_text(locale, &failure.error);
                 self.settings_write_failed(failure, cx);
-                // Switching there and back ended the feeds of both roots.
-                if switched {
-                    self.follow_documents_root(restore.is_some(), cx);
-                }
+                let root_changed = switched.then_some(restore.is_some());
                 let message = match restore {
                     None => i18n::message(locale, "documents_root_not_saved", &reason),
                     Some(error) => i18n::message(
@@ -1442,9 +1448,16 @@ impl RootView {
                         &format!("{reason} {}", i18n::documents_root_error(locale, &error)),
                     ),
                 };
-                (message, true)
+                (message, true, root_changed)
             }
         };
+        match root_changed {
+            // Switching there and back also ended the old change feed.
+            Some(changed) => self.follow_documents_root(changed, cx),
+            // Refusal and choosing the same root still resume the reads
+            // invalidated when the switch began.
+            None => self.reload_projects(cx),
+        }
         let tone = if failed {
             NoticeTone::Error
         } else {
@@ -2706,6 +2719,9 @@ impl RootView {
     /// Reads `document_id` (state and Markdown body) on a worker and makes it
     /// the document's draft, replacing any edits.
     fn load_document_draft(&mut self, document_id: ProjectId, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let previous_error = self.editor.read_errors.remove(&document_id);
         let generation = self.documents_repository_generation;
         self.editor.loading.insert(document_id.clone());
@@ -2891,6 +2907,9 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let Some(conflict) = self.document_conflict.take() else {
             return;
         };
@@ -3748,6 +3767,13 @@ impl RootView {
             return;
         }
         self.documents_root_switch.switching = true;
+        // The repository changes before the settings worker returns.
+        // Keep the current projection until the switch settles, and let
+        // the selected document start its read again afterwards.
+        self.documents_repository_generation += 1;
+        self.editor.loading.clear();
+        self.begin_projects_reload();
+        self.audio.invalidate_pending();
         self.documents_root_switch.status = None;
         self.ui.notice = i18n::text(self.ui.locale, "documents_root_switching").into();
         self.queue_settings_write(SettingsWrite::DocumentsRoot { root }, cx);
