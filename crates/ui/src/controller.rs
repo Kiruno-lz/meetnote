@@ -521,7 +521,7 @@ pub(crate) struct RootView {
     documents_repository_generation: u64,
     /// A different root discards drafts and their pending saves. A switch
     /// rolled back to the same root still accepts its completed save.
-    documents_root_generation: u64,
+    pub(crate) documents_root_generation: u64,
     /// Whether the initial project-list request has completed.
     pub(crate) projects_loaded: bool,
     /// The latest list read failure; the last successful snapshot stays shown.
@@ -2963,6 +2963,10 @@ impl RootView {
         new_parent_id: ProjectId,
         cx: &mut Context<Self>,
     ) {
+        if drag.root_generation != self.documents_root_generation {
+            cx.notify();
+            return;
+        }
         self.run_tree_command(
             self.reparent_command(drag, Some(new_parent_id)),
             "hierarchy_updated",
@@ -3003,6 +3007,10 @@ impl RootView {
         before: bool,
         cx: &mut Context<Self>,
     ) {
+        if drag.root_generation != self.documents_root_generation {
+            cx.notify();
+            return;
+        }
         self.run_tree_command(
             Self::reorder_command(drag, target_id, before),
             "order_updated",
@@ -3037,6 +3045,7 @@ impl RootView {
         let drag = ProjectDrag {
             project_id: document.id().clone(),
             revision: document.revision(),
+            root_generation: self.documents_root_generation,
         };
         match crate::components::tree_shift(&self.projects, &drag.project_id, shift) {
             Some(TreeShiftMove::Reorder { target, before }) => self.run_tree_command(

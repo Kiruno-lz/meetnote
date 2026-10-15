@@ -106,6 +106,7 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                     ProjectDrag {
                         project_id: drag_id,
                         revision: project.revision(),
+                        root_generation: root.documents_root_generation,
                     },
                     move |_, _, _, cx| {
                         cx.new(|_| DragGhost {
