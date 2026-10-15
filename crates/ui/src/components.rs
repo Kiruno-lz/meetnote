@@ -8,12 +8,13 @@ use crate::{
 use domain::{DocumentState, ProjectId, ProjectStatus};
 use gpui::{div, prelude::*, px, Context, Pixels, Render, SharedString, Window};
 
-/// A tree row being dragged, with the revision the row showed when the drag
-/// started; the move is checked against it.
+/// A tree row being dragged, with its workspace and revision when the drag
+/// started; the move is checked against both.
 #[derive(Clone)]
 pub(crate) struct ProjectDrag {
     pub(crate) project_id: ProjectId,
     pub(crate) revision: u64,
+    pub(crate) root_generation: u64,
 }
 
 pub(crate) struct DragGhost {

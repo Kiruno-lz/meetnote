@@ -260,6 +260,266 @@ fn switch_status(cx: &mut VisualTestContext, view: &View) -> Option<(String, boo
     view.read_with(cx, |root, _| root.documents_root_switch.status.clone())
 }
 
+/// Same IDs and revisions in both roots, with b sharing a's recording.
+fn drag_documents(root: &DocumentsRoot, prefix: &str) {
+    put(root, "a", &format!("{prefix} a"));
+    let mut b = DocumentState::new(ProjectId::new("b"), format!("{prefix} b"), "a.wav");
+    b.source.audio_asset_id = Some(ProjectId::new("a"));
+    b.hierarchy.sibling_order = 1;
+    root.put(b, &format!("# {prefix} b\n"));
+    for id in ["a", "b"] {
+        std::fs::write(root.path().join(id).join("attachment.txt"), prefix).unwrap();
+    }
+}
+
+fn start_row_drag(cx: &mut VisualTestContext, id: &str) {
+    let start = rendered(cx, crate::document_tests::leak(format!("drag-{id}"))).center();
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(
+        start + gpui::point(gpui::px(6.), gpui::px(6.)),
+        gpui::MouseButton::Left,
+        gpui::Modifiers::none(),
+    );
+    assert!(cx.update(|_, cx| cx.has_active_drag()));
+}
+
+fn finish_row_drag(cx: &mut VisualTestContext, view: &View, target: &'static str) {
+    let target = rendered(cx, target).center();
+    cx.simulate_mouse_move(target, gpui::MouseButton::Left, gpui::Modifiers::none());
+    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = completed.clone();
+    let _completion = cx.update(|_, cx| cx.observe(view, move |_, _| observed.set(true)));
+    cx.simulate_mouse_up(target, gpui::MouseButton::Left, gpui::Modifiers::none());
+    wait_for(cx, view, |_| completed.get());
+    assert!(!cx.update(|_, cx| cx.has_active_drag()));
+}
+
+fn a_drag_cannot_move_the_workspace_opened_after_it_started(
+    cx: &mut TestAppContext,
+    reparent: bool,
+) {
+    let fixture = Workspace::new();
+    drag_documents(&fixture.old, "Old");
+    drag_documents(&fixture.new, "New");
+    let old_bytes = [
+        fixture.old.package_bytes("a"),
+        fixture.old.package_bytes("b"),
+    ];
+    let new_bytes = [
+        fixture.new.package_bytes("a"),
+        fixture.new.package_bytes("b"),
+    ];
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    cx.simulate_keystrokes("cmd-2");
+    cx.run_until_parked();
+    start_row_drag(cx, "b");
+    cx.simulate_keystrokes("cmd-,");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Settings);
+    // The test platform has no folder prompt. This is the same callback
+    // the native folder selection invokes, including settings persistence.
+    choose(cx, &view, fixture.new.path());
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "New b")
+            && !root.audio.pending()
+    });
+    assert_eq!(
+        fixture.saved_documents_root(),
+        fixture.new.path().display().to_string()
+    );
+    assert!(
+        cx.update(|_, cx| cx.has_active_drag()),
+        "changing roots does not cancel GPUI's drag payload"
+    );
+    cx.simulate_keystrokes("cmd-2");
+    cx.run_until_parked();
+    finish_row_drag(
+        cx,
+        &view,
+        if reparent {
+            "project-row-a"
+        } else {
+            "before-a"
+        },
+    );
+    assert_eq!(
+        [
+            fixture.old.package_bytes("a"),
+            fixture.old.package_bytes("b")
+        ],
+        old_bytes
+    );
+    assert_eq!(
+        [
+            fixture.new.package_bytes("a"),
+            fixture.new.package_bytes("b")
+        ],
+        new_bytes,
+        "an old workspace's drag must not modify matching new documents"
+    );
+    for (root, prefix) in [(&fixture.old, "Old"), (&fixture.new, "New")] {
+        for id in ["a", "b"] {
+            assert_eq!(
+                std::fs::read(root.path().join(id).join("attachment.txt")).unwrap(),
+                prefix.as_bytes()
+            );
+        }
+    }
+    // A new keyboard gesture uses the current workspace and still works.
+    select_row(cx, &view, "b");
+    cx.simulate_keystrokes("alt-up");
+    wait_for(cx, &view, |_| fixture.new.revision("b") == 1);
+    assert_eq!(fixture.new.read("b").state.hierarchy.sibling_order, 0);
+}
+
+#[gpui::test]
+fn an_old_workspace_drag_cannot_reorder_matching_new_documents(cx: &mut TestAppContext) {
+    a_drag_cannot_move_the_workspace_opened_after_it_started(cx, false);
+}
+
+#[gpui::test]
+fn an_old_workspace_drag_cannot_reparent_matching_new_documents(cx: &mut TestAppContext) {
+    a_drag_cannot_move_the_workspace_opened_after_it_started(cx, true);
+}
+
+#[gpui::test]
+fn a_drag_still_moves_its_workspace_after_an_ordinary_list_refresh(cx: &mut TestAppContext) {
+    let fixture = Workspace::new();
+    drag_documents(&fixture.old, "Old");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    cx.simulate_keystrokes("cmd-2");
+    cx.run_until_parked();
+    start_row_drag(cx, "b");
+    let mut a = fixture.old.read("a").state;
+    a.content.title = "Updated externally without moving the recording".into();
+    fixture.old.put(a, "# Updated externally\n");
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "Updated externally without moving the recording")
+            && !root.audio.pending()
+    });
+    assert!(cx.update(|_, cx| cx.has_active_drag()));
+    finish_row_drag(cx, &view, "before-a");
+    assert_eq!(fixture.old.read("b").state.hierarchy.sibling_order, 0);
+    assert_eq!(fixture.old.read("a").state.hierarchy.sibling_order, 1);
+    assert_eq!(fixture.old.read("a").markdown, "# Updated externally\n");
+}
+
+/// A same-root choice or a settings-conflict rollback retains the gesture's
+/// original workspace, even though reads are restarted against its repository.
+fn a_drag_survives_a_root_choice_that_keeps_its_workspace(
+    cx: &mut TestAppContext,
+    rollback: bool,
+    reparent: bool,
+) {
+    let fixture = Workspace::new();
+    drag_documents(&fixture.old, "Old");
+    drag_documents(&fixture.new, "New");
+    let untouched = [
+        fixture.new.package_bytes("a"),
+        fixture.new.package_bytes("b"),
+    ];
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    cx.simulate_keystrokes("cmd-2");
+    cx.run_until_parked();
+    start_row_drag(cx, "b");
+    cx.simulate_keystrokes("cmd-,");
+    if rollback {
+        // Another real settings writer makes the desktop's expected value
+        // stale, so a successful root replacement must be rolled back.
+        let mut external = fixture.settings.snapshot().unwrap();
+        external.expected_speakers = Some(3);
+        fixture.settings.update(external).unwrap();
+    }
+    choose(
+        cx,
+        &view,
+        if rollback {
+            fixture.new.path()
+        } else {
+            fixture.old.path()
+        },
+    );
+    assert_eq!(switch_status(cx, &view).unwrap().1, rollback);
+    assert_eq!(fixture.root(), fixture.old.path());
+    assert_eq!(
+        fixture.saved_documents_root(),
+        fixture.old.path().display().to_string()
+    );
+    wait_for(cx, &view, |root| {
+        root.projects_loaded && !root.audio.pending()
+    });
+    assert!(cx.update(|_, cx| cx.has_active_drag()));
+    cx.simulate_keystrokes("cmd-2");
+    cx.run_until_parked();
+    finish_row_drag(
+        cx,
+        &view,
+        if reparent {
+            "project-row-a"
+        } else {
+            "before-a"
+        },
+    );
+    assert_eq!(fixture.old.revision("b"), 1);
+    if reparent {
+        assert_eq!(
+            fixture.old.read("b").state.hierarchy.parent_id,
+            Some(ProjectId::new("a"))
+        );
+    } else {
+        assert_eq!(fixture.old.read("b").state.hierarchy.sibling_order, 0);
+        assert_eq!(fixture.old.read("a").state.hierarchy.sibling_order, 1);
+    }
+    assert_eq!(
+        [
+            fixture.new.package_bytes("a"),
+            fixture.new.package_bytes("b")
+        ],
+        untouched
+    );
+    for (root, prefix) in [(&fixture.old, "Old"), (&fixture.new, "New")] {
+        for id in ["a", "b"] {
+            assert_eq!(
+                std::fs::read(root.path().join(id).join("attachment.txt")).unwrap(),
+                prefix.as_bytes()
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn a_drag_can_reorder_after_choosing_its_current_root(cx: &mut TestAppContext) {
+    a_drag_survives_a_root_choice_that_keeps_its_workspace(cx, false, false);
+}
+
+#[gpui::test]
+fn a_drag_can_reparent_after_choosing_its_current_root(cx: &mut TestAppContext) {
+    a_drag_survives_a_root_choice_that_keeps_its_workspace(cx, false, true);
+}
+
+#[gpui::test]
+fn a_drag_can_reorder_after_a_root_switch_rolls_back(cx: &mut TestAppContext) {
+    a_drag_survives_a_root_choice_that_keeps_its_workspace(cx, true, false);
+}
+
+#[gpui::test]
+fn a_drag_can_reparent_after_a_root_switch_rolls_back(cx: &mut TestAppContext) {
+    a_drag_survives_a_root_choice_that_keeps_its_workspace(cx, true, true);
+}
+
 #[gpui::test]
 fn returning_to_an_unloaded_old_document_defers_its_read_until_the_switch_finishes(
     cx: &mut TestAppContext,
