@@ -3017,12 +3017,17 @@ impl RootView {
         focus: TreeMoveFocus,
         cx: &mut Context<Self>,
     ) {
+        let root_generation = self.documents_root_generation;
         let generation = self.begin_projects_reload();
         let commands = self.services.workspace.document_commands();
         let envelope = DocumentCommandEnvelope::new("ui-tree-move", command);
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || commands.execute(envelope)).await;
             this.update(cx, |this, cx| {
+                if root_generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(DocumentCommandResult::Snapshot { documents, issues }) => {
                         // The listing's issues carry no kind; each keeps
