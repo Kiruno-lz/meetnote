@@ -624,6 +624,100 @@ fn a_save_in_a_rolled_back_workspace_still_rebases_its_draft(cx: &mut TestAppCon
 }
 
 #[gpui::test]
+fn a_late_tree_move_keeps_the_new_workspaces_tree_and_editor(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_save_gates(&gate, &crate::tests::Gate::default());
+    for (documents, prefix) in [(&fixture.old, "Old"), (&fixture.new, "New")] {
+        put(documents, "a", &format!("{prefix} a"));
+        let mut second = DocumentState::new(ProjectId::new("b"), format!("{prefix} b"), "a.wav");
+        second.source.audio_asset_id = Some(ProjectId::new("a"));
+        second.hierarchy.sibling_order = 1;
+        documents.put(second, &format!("# {prefix} b\n"));
+    }
+    let new_bytes = [
+        fixture.new.package_bytes("a"),
+        fixture.new.package_bytes("b"),
+    ];
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    select_row(cx, &view, "b");
+    gate.arm();
+    // Option-Right moves b under a through the real tree command binding.
+    cx.simulate_keystrokes("alt-right");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    assert_eq!(
+        fixture.old.read("b").state.hierarchy.parent_id,
+        Some(ProjectId::new("a"))
+    );
+    let old_bytes = [
+        fixture.old.package_bytes("a"),
+        fixture.old.package_bytes("b"),
+    ];
+
+    choose(cx, &view, fixture.new.path());
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "New b")
+            && !root.audio.pending()
+    });
+    select_row(cx, &view, "b");
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("b"))
+    });
+    let title = view.read_with(cx, |root, _| root.editor.title.clone());
+    focus_field(cx, &title);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Keep the new workspace draft");
+    let draft = view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits);
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let expanded = view.read_with(cx, |root, _| root.ui.expanded_projects.clone());
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = completed.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    gate.release();
+    wait_for(cx, &view, |_| completed.get());
+    cx.run_until_parked();
+    view.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.ui.expanded_projects, expanded,
+            "the old keyboard move must not open its parent in the new workspace"
+        );
+        assert_eq!(root.ui.notice, notice);
+        assert_eq!(root.ui.selected_project, Some(ProjectId::new("b")));
+        assert_eq!(root.ui.route, Route::Meetings);
+        assert_eq!(root.editor.current(cx).unwrap().edits, draft);
+        assert!(root.document_conflict.is_none());
+        assert!(root
+            .projects
+            .iter()
+            .all(|document| document.hierarchy.parent_id.is_none()));
+    });
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        [
+            fixture.old.package_bytes("a"),
+            fixture.old.package_bytes("b")
+        ],
+        old_bytes
+    );
+    assert_eq!(
+        [
+            fixture.new.package_bytes("a"),
+            fixture.new.package_bytes("b")
+        ],
+        new_bytes
+    );
+}
+
+#[gpui::test]
 fn a_switch_while_a_job_runs_names_the_busy_jobs_and_changes_nothing(cx: &mut TestAppContext) {
     let fixture = Workspace::new();
     put(&fixture.old, "old-doc", "Old");
