@@ -1062,6 +1062,13 @@ fn processing_failure_clears_the_document_identity(cx: &mut TestAppContext) {
     let (view, cx, _changes) = open_on(cx, &documents);
     select_row(cx, &view, "a");
     let outcome = pending_processing(cx, &view);
+    let context = view.read_with(cx, |root, _| {
+        root.cancel_contexts.as_ref().unwrap().0.clone()
+    });
+    context.failed("fixture failure");
+    cx.run_until_parked();
+    rendered(cx, "processing-transcription-failed");
+    assert!(view.read_with(cx, |root, _| root.ui.notice.is_empty()));
     outcome
         .send(Err(contracts::BackendError {
             code: contracts::BackendErrorCode::InferenceFailed,
@@ -1072,4 +1079,137 @@ fn processing_failure_clears_the_document_identity(cx: &mut TestAppContext) {
     cx.run_until_parked();
     rendered(cx, "project-status-a-Ready");
     assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_none()));
+}
+
+#[gpui::test]
+fn processing_feedback_stays_visible_in_default_and_minimum_windows(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    let outcome = pending_processing(cx, &view);
+    let contexts = view.read_with(cx, |root, _| root.cancel_contexts.clone().unwrap());
+    contexts.0.started();
+    contexts.1.started();
+    cx.run_until_parked();
+    let progress = rendered(cx, "processing-progress");
+    assert!(within(rendered(cx, "processing-transcription"), progress));
+    assert!(within(rendered(cx, "processing-diarization"), progress));
+    rendered(cx, "processing-transcription-indeterminate");
+    rendered(cx, "processing-diarization-indeterminate");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.notice.clone()), "");
+    contexts.0.report(runtime::Progress {
+        completed: 1,
+        total: Some(4),
+    });
+    contexts.1.report(runtime::Progress {
+        completed: 3,
+        total: None,
+    });
+    cx.run_until_parked();
+    rendered(cx, "processing-transcription-determinate");
+    rendered(cx, "processing-diarization-indeterminate");
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    cx.run_until_parked();
+    let progress = rendered(cx, "processing-progress");
+    assert!(within(progress, rendered(cx, "meetings-page")));
+    assert!(progress.bottom() <= rendered(cx, "content-mode-group").top());
+    assert!(rendered(cx, "meeting-content").size.height > px(0.));
+    contexts.0.report(runtime::Progress {
+        completed: 4,
+        total: Some(4),
+    });
+    cx.run_until_parked();
+    rendered(cx, "processing-transcription-running");
+    contexts.0.completed();
+    cx.run_until_parked();
+    rendered(cx, "processing-transcription-completed");
+    outcome.send(Ok(documents.read("a").state)).unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("processing-progress").is_none());
+}
+
+#[gpui::test]
+fn background_processing_feedback_preserves_the_active_edit_and_notice(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    documents.put(b, "# B\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    let contexts = view.read_with(cx, |root, _| root.cancel_contexts.clone().unwrap());
+    select_row(cx, &view, "b");
+    open_editor(cx, &view, "b");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    retype(cx, &title, "B 的草稿");
+    retype_area(cx, &body, "继续编辑 B");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    view.update(cx, |root, cx| {
+        root.ui.notice = i18n::message(root.ui.locale, "document_saved", "B");
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let toast = view.read_with(cx, |root, _| root.ui.toast().map(|toast| toast.generation));
+    contexts.0.started();
+    contexts.1.started();
+    contexts.0.report(runtime::Progress {
+        completed: 2,
+        total: Some(5),
+    });
+    contexts.1.report(runtime::Progress {
+        completed: 1,
+        total: Some(3),
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("processing-progress").is_none());
+    assert_eq!(view.read_with(cx, |root, _| root.ui.notice.clone()), notice);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.toast().map(|toast| toast.generation)),
+        toast
+    );
+    assert_eq!(field_value(cx, &title), "B 的草稿");
+    assert_eq!(area_value(cx, &body), "继续编辑 B");
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    outcome.send(Ok(documents.read("a").state)).unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+}
+
+#[gpui::test]
+fn completed_processing_cancellation_is_one_neutral_owner_notice(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    documents.put(b, "# B\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    let contexts = view.read_with(cx, |root, _| root.cancel_contexts.clone().unwrap());
+    contexts.0.cancel();
+    contexts.1.cancel();
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |root, _| root.ui.notice.is_empty()),
+        "stage cancellation does not replace the final outcome notice"
+    );
+    select_row(cx, &view, "b");
+    outcome
+        .send(Err(contracts::BackendError {
+            code: contracts::BackendErrorCode::Cancelled,
+            message: "cancelled".into(),
+        }))
+        .unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        let toast = root.ui.toast().unwrap();
+        assert_eq!(toast.notice, "已取消 A");
+        assert_eq!(toast.tone, crate::state::NoticeTone::Info);
+        assert!(root.ui.processing_project.is_none());
+    });
 }

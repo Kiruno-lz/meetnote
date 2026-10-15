@@ -32,6 +32,8 @@ pub struct UiState {
     pub processing: bool,
     /// The document owned by the one active processing task.
     pub(crate) processing_project: Option<ProjectId>,
+    /// Stage feedback belongs to `processing_project`; it has no second owner.
+    pub(crate) processing_feedback: ProcessingFeedback,
 }
 
 impl UiState {
@@ -57,17 +59,20 @@ impl UiState {
             toast: ToastState::default(),
             processing: false,
             processing_project: None,
+            processing_feedback: ProcessingFeedback::default(),
         }
     }
 
     pub(crate) fn begin_processing(&mut self, document_id: ProjectId) {
         self.processing = true;
         self.processing_project = Some(document_id);
+        self.processing_feedback = ProcessingFeedback::default();
     }
 
     pub(crate) fn finish_processing(&mut self) {
         self.processing = false;
         self.processing_project = None;
+        self.processing_feedback = ProcessingFeedback::default();
     }
 
     pub(crate) fn is_processing_document(&self, document_id: &ProjectId) -> bool {
@@ -208,6 +213,105 @@ impl UiState {
             self.notice.clear();
             self.toast.seen.clear();
         }
+    }
+}
+
+/// The two runtime jobs of an audio processing task.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ProcessingStage {
+    Transcription,
+    Diarization,
+}
+
+impl ProcessingStage {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Transcription => "transcription",
+            Self::Diarization => "diarization",
+        }
+    }
+
+    pub(crate) fn label_key(self) -> &'static str {
+        match self {
+            Self::Transcription => "processing_transcription",
+            Self::Diarization => "processing_diarization",
+        }
+    }
+}
+
+/// Feedback from one runtime job. Counted work never implies completion:
+/// only the job's Completed event does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum StageFeedback {
+    #[default]
+    Waiting,
+    Running(Option<runtime::Progress>),
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl StageFeedback {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Running(_) => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub(crate) fn status_key(self) -> &'static str {
+        match self {
+            Self::Waiting => "processing_stage_waiting",
+            Self::Running(_) => "processing",
+            Self::Completed => "processing_stage_completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "processing_stage_cancelled",
+        }
+    }
+
+    /// A fraction of this job's reported units, never an estimate of elapsed
+    /// time or a combined percentage of ASR and diarization.
+    pub(crate) fn value(self) -> Option<f32> {
+        match self {
+            Self::Running(Some(runtime::Progress {
+                completed,
+                total: Some(total),
+            })) if total > 0 => Some((completed.min(total) as f64 / total as f64 * 100.) as f32),
+            _ => None,
+        }
+    }
+}
+
+/// Per-job facts only. `UiState::processing_project` owns the task identity.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct ProcessingFeedback {
+    pub(crate) transcription: StageFeedback,
+    pub(crate) diarization: StageFeedback,
+}
+
+impl ProcessingFeedback {
+    pub(crate) fn stage(&self, stage: ProcessingStage) -> StageFeedback {
+        match stage {
+            ProcessingStage::Transcription => self.transcription,
+            ProcessingStage::Diarization => self.diarization,
+        }
+    }
+
+    pub(crate) fn apply(&mut self, stage: ProcessingStage, event: runtime::JobEvent) {
+        let target = match stage {
+            ProcessingStage::Transcription => &mut self.transcription,
+            ProcessingStage::Diarization => &mut self.diarization,
+        };
+        *target = match event {
+            runtime::JobEvent::Started { .. } => StageFeedback::Running(None),
+            runtime::JobEvent::Progress { progress, .. } => StageFeedback::Running(Some(progress)),
+            runtime::JobEvent::Completed { .. } => StageFeedback::Completed,
+            runtime::JobEvent::Failed { .. } => StageFeedback::Failed,
+            runtime::JobEvent::Cancelled { .. } => StageFeedback::Cancelled,
+        };
     }
 }
 
@@ -483,6 +587,69 @@ pub fn model_status(
 mod tests {
     use super::*;
     use crate::i18n::{self, Locale};
+
+    #[test]
+    fn stage_feedback_requires_a_positive_own_total_and_an_explicit_completion() {
+        use runtime::{JobEvent, JobId, Progress};
+        let mut feedback = ProcessingFeedback::default();
+        feedback.apply(
+            ProcessingStage::Transcription,
+            JobEvent::Progress {
+                job_id: JobId(1),
+                progress: Progress {
+                    completed: 1,
+                    total: Some(4),
+                },
+            },
+        );
+        assert_eq!(feedback.transcription.value(), Some(25.));
+        assert_eq!(
+            feedback.diarization.value(),
+            None,
+            "another job has no inferred progress"
+        );
+        feedback.apply(
+            ProcessingStage::Diarization,
+            JobEvent::Progress {
+                job_id: JobId(2),
+                progress: Progress {
+                    completed: 0,
+                    total: Some(0),
+                },
+            },
+        );
+        assert_eq!(
+            feedback.diarization.value(),
+            None,
+            "zero totals have unknown extent"
+        );
+        feedback.apply(
+            ProcessingStage::Transcription,
+            JobEvent::Progress {
+                job_id: JobId(1),
+                progress: Progress {
+                    completed: 4,
+                    total: Some(4),
+                },
+            },
+        );
+        assert_eq!(
+            feedback.transcription.status_key(),
+            "processing",
+            "counted units do not complete the job"
+        );
+        feedback.apply(
+            ProcessingStage::Transcription,
+            JobEvent::Completed { job_id: JobId(1) },
+        );
+        assert_eq!(feedback.transcription, StageFeedback::Completed);
+        assert_eq!(
+            feedback.transcription.value(),
+            None,
+            "terminal status needs no inferred percentage"
+        );
+        assert_eq!(feedback.diarization.value(), None);
+    }
 
     #[test]
     fn every_template_has_words_of_its_own_in_both_locales() {

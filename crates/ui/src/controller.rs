@@ -13,7 +13,7 @@ use crate::{
     i18n, pages,
     route::Route,
     speakers::{document_speakers, NameEntry, NameRows, SpeakerConfirmation, SpeakerProfiles},
-    state::{ContentMode, NoticeChange, NoticeTone, UiState, TOAST_LIFETIME},
+    state::{ContentMode, NoticeChange, NoticeTone, ProcessingStage, UiState, TOAST_LIFETIME},
     theme,
 };
 use application::{
@@ -4180,22 +4180,29 @@ impl RootView {
             futures::select! {
                 event = asr_next => {
                     if let Some(event) = event {
-                        this.update(cx, |this, cx| this.apply_job_event("ASR", event, cx)).ok();
+                        this.update(cx, |this, cx| this.apply_job_event(ProcessingStage::Transcription, event, cx)).ok();
                     }
                 }
                 event = diarization_next => {
                     if let Some(event) = event {
-                        this.update(cx, |this, cx| this.apply_job_event("DIA", event, cx)).ok();
+                        this.update(cx, |this, cx| this.apply_job_event(ProcessingStage::Diarization, event, cx)).ok();
                     }
                 }
                 result = processing_future => {
                     this.update(cx, |this, cx| {
+                        let title = this.ui.processing_project.as_ref().map(|id| {
+                            this.projects.iter().find(|project| project.id() == id)
+                                .map(|project| project.title()).unwrap_or(id.as_str())
+                        }).unwrap_or_default().to_string();
                         this.ui.finish_processing();
                         this.cancel_contexts = None;
                         this.reload_projects(cx);
                         match result {
                             Ok(project) => {
                                 this.ui.notice = i18n::message(this.ui.locale, "finished", project.title());
+                            }
+                            Err(error) if error.code == contracts::BackendErrorCode::Cancelled => {
+                                this.ui.set_notice(NoticeTone::Info, i18n::message(this.ui.locale, "cancelled", &title));
                             }
                             Err(error) => {
                                 this.ui.notice = i18n::message(this.ui.locale, "processing_failed", &error.message)
@@ -4238,28 +4245,11 @@ impl RootView {
         .detach();
     }
 
-    fn apply_job_event(&mut self, source: &str, event: JobEvent, cx: &mut Context<Self>) {
-        self.ui.notice = match event {
-            JobEvent::Started { .. } => i18n::message(self.ui.locale, "job_started", source),
-            JobEvent::Progress { progress, .. } => match progress.total {
-                Some(total) => i18n::message(
-                    self.ui.locale,
-                    "job_progress_total",
-                    &format!("{source}|{}|{total}", progress.completed),
-                ),
-                None => i18n::message(
-                    self.ui.locale,
-                    "job_progress",
-                    &format!("{source}|{}", progress.completed),
-                ),
-            },
-            JobEvent::Completed { .. } => i18n::message(self.ui.locale, "job_completed", source),
-            JobEvent::Failed { message, .. } => {
-                i18n::message(self.ui.locale, "job_failed", &format!("{source}|{message}"))
-            }
-            JobEvent::Cancelled { .. } => i18n::message(self.ui.locale, "job_cancelled", source),
-        };
-        cx.notify();
+    fn apply_job_event(&mut self, stage: ProcessingStage, event: JobEvent, cx: &mut Context<Self>) {
+        if self.ui.processing {
+            self.ui.processing_feedback.apply(stage, event);
+            cx.notify();
+        }
     }
 }
 
