@@ -11,7 +11,7 @@ use crate::document_tests::{
     open_on, processed, rendered, select_row, within, DocumentsRoot, UnreadableDocumentsRoot, View,
 };
 use crate::tests::{
-    click_selector, desktop_services, empty_result, open_desktop_on, pending_review,
+    click_selector, desktop_services, empty_result, focus_field, open_desktop_on, pending_review,
     temp_directory, wait_for, FakeAssistantUiService,
 };
 use crate::{
@@ -56,6 +56,10 @@ struct Workspace {
 
 impl Workspace {
     fn new() -> Self {
+        Self::with_read_gate(None)
+    }
+
+    fn with_read_gate(read_gate: Option<&crate::tests::Gate>) -> Self {
         let old = DocumentsRoot::new();
         let new = DocumentsRoot::new();
         let models = temp_directory();
@@ -73,7 +77,10 @@ impl Workspace {
                 Arc::new(SherpaOnnxDiarizationBackend::default()),
             )
             .with_job_runtime(jobs.clone()),
-            DocumentService::new(Arc::new(old.repository())),
+            DocumentService::new(match read_gate {
+                Some(gate) => crate::document_tests::gated_read_repository(old.repository(), gate),
+                None => Arc::new(old.repository()),
+            }),
         )
         .with_documents_root(application::DocumentsRoot::new(
             old.path(),
@@ -285,6 +292,162 @@ fn switching_workspaces_clears_the_old_read_failure(cx: &mut TestAppContext) {
         Some(ProjectId::new("new-doc"))
     );
     assert_eq!(fixture.root(), fixture.new.path());
+}
+
+fn late_document_read_keeps_the_new_workspace(cx: &mut TestAppContext, succeeds: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_read_gate(Some(&gate));
+    put(&fixture.old, "shared", "Old");
+    put(&fixture.new, "shared", "New");
+    assert_eq!(
+        fixture.old.revision("shared"),
+        fixture.new.revision("shared")
+    );
+    let old_bytes = fixture.old.package_bytes("shared");
+    let new_bytes = fixture.new.package_bytes("shared");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    // Fail the initial read, then hold the retry after the real repository
+    // has produced its record or error, with no repository IO lock held.
+    std::fs::remove_file(fixture.old.path().join("shared/state.json")).unwrap();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor
+            .read_errors
+            .contains_key(&ProjectId::new("shared"))
+    });
+    if succeeds {
+        std::fs::write(fixture.old.path().join("shared/state.json"), &old_bytes[0]).unwrap();
+    }
+    gate.arm();
+    click_selector(cx, "retry-document-read");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+
+    // Use the actual Settings switch, including persistence and UI reset.
+    choose(cx, &view, fixture.new.path());
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "New")
+            && !root.audio.pending()
+    });
+    assert_eq!(fixture.root(), fixture.new.path());
+    assert_eq!(
+        fixture.saved_documents_root(),
+        fixture.new.path().display().to_string()
+    );
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("shared"))
+    });
+    let title = view.read_with(cx, |root, _| root.editor.title.clone());
+    focus_field(cx, &title);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("New workspace draft");
+    let draft = view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits);
+    assert_eq!(draft.body, "# New\n");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = completed.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    gate.release();
+    wait_for(cx, &view, |_| completed.get());
+    cx.run_until_parked();
+    view.read_with(cx, |root, cx| {
+        assert!(
+            root.editor.read_errors.is_empty(),
+            "the old failure must not block the new root"
+        );
+        assert_eq!(
+            root.editor.current(cx).unwrap().edits,
+            draft,
+            "the old record must not replace the new root's draft"
+        );
+        assert_eq!(root.ui.notice, notice);
+        assert_eq!(root.ui.route, Route::Meetings);
+        assert_eq!(root.ui.selected_project, Some(ProjectId::new("shared")));
+    });
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(fixture.new.package_bytes("shared"), new_bytes);
+}
+
+#[gpui::test]
+fn a_late_document_read_record_does_not_replace_a_new_workspaces_draft(cx: &mut TestAppContext) {
+    late_document_read_keeps_the_new_workspace(cx, true);
+}
+
+#[gpui::test]
+fn a_late_document_read_error_does_not_block_a_new_workspaces_draft(cx: &mut TestAppContext) {
+    late_document_read_keeps_the_new_workspace(cx, false);
+}
+
+#[gpui::test]
+fn a_rolled_back_workspace_restarts_reads_and_keeps_its_existing_drafts(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_read_gate(Some(&gate));
+    put(&fixture.old, "pending", "Old");
+    put(&fixture.old, "draft", "Draft");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    select_row(cx, &view, "draft");
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("draft"))
+    });
+    let title = view.read_with(cx, |root, _| root.editor.title.clone());
+    focus_field(cx, &title);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("Keep this local draft");
+    gate.arm();
+    select_row(cx, &view, "pending");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    // The old read already has "Old"; the restored repository must read
+    // the real file again instead of retaining that in-flight marker.
+    put(&fixture.old, "pending", "Fresh");
+    let mut external = fixture.settings.snapshot().unwrap();
+    external.expected_speakers = Some(3);
+    fixture.settings.update(external).unwrap();
+    choose(cx, &view, fixture.new.path());
+    assert!(switch_status(cx, &view).unwrap().1);
+    assert_eq!(fixture.root(), fixture.old.path());
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("pending"))
+            && root.editor.loading.is_empty()
+            && !root.audio.pending()
+    });
+    assert_eq!(
+        view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits.body),
+        "# Fresh\n"
+    );
+    select_row(cx, &view, "draft");
+    assert_eq!(
+        view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits.title),
+        "Keep this local draft"
+    );
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = completed.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    gate.release();
+    wait_for(cx, &view, |_| completed.get());
+    cx.run_until_parked();
+    assert_eq!(view.read_with(cx, |root, _| root.ui.notice.clone()), notice);
+    select_row(cx, &view, "pending");
+    assert_eq!(
+        view.read_with(cx, |root, cx| root.editor.current(cx).unwrap().edits.body),
+        "# Fresh\n"
+    );
 }
 
 #[gpui::test]

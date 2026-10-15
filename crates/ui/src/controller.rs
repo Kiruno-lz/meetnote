@@ -513,6 +513,9 @@ pub(crate) struct RootView {
     /// The latest project-list reload; an older one that finishes later is
     /// dropped.
     projects_generation: u64,
+    /// The documents-root subscription lifecycle; ordinary list reloads
+    /// do not invalidate document reads.
+    documents_root_generation: u64,
     /// Whether the initial project-list request has completed.
     pub(crate) projects_loaded: bool,
     /// The latest list read failure; the last successful snapshot stays shown.
@@ -740,6 +743,7 @@ impl RootView {
             pending_expiry: None,
             installation: InstallationState::default(),
             projects_generation: 0,
+            documents_root_generation: 0,
             projects_loaded: false,
             projects_error: None,
             speaker_library_prompt: None,
@@ -1439,6 +1443,10 @@ impl RootView {
     /// audio check, document speaker controls and the Assistant's results,
     /// reviews and undo entries.
     fn follow_documents_root(&mut self, root_changed: bool, cx: &mut Context<Self>) {
+        self.documents_root_generation += 1;
+        // A successful rollback also replaced the repository. Retain its
+        // drafts, but let reads from the restored root start again.
+        self.editor.loading.clear();
         if root_changed {
             self.projects.clear();
             self.document_issues.clear();
@@ -2672,6 +2680,7 @@ impl RootView {
     /// the document's draft, replacing any edits.
     fn load_document_draft(&mut self, document_id: ProjectId, cx: &mut Context<Self>) {
         let previous_error = self.editor.read_errors.remove(&document_id);
+        let generation = self.documents_root_generation;
         self.editor.loading.insert(document_id.clone());
         let commands = self.services.workspace.document_commands();
         let read_id = document_id.clone();
@@ -2686,6 +2695,10 @@ impl RootView {
             })
             .await;
             this.update(cx, |this, cx| {
+                if generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 this.editor.loading.remove(&document_id);
                 match result {
                     Ok(DocumentCommandResult::Document(Some(record))) => {

@@ -1277,12 +1277,7 @@ fn a_document_read_retry_preserves_a_newer_notice_and_moved_focus(cx: &mut TestA
             Arc::new(WhisperRsBackend::default()),
             Arc::new(SherpaOnnxDiarizationBackend::default()),
         ),
-        DocumentService::new(Arc::new(GatedDocumentRepository {
-            inner: documents.repository(),
-            gate: Default::default(),
-            snapshot_failure_gate: Default::default(),
-            read_gate: read_gate.clone(),
-        })),
+        DocumentService::new(gated_read_repository(documents.repository(), &read_gate)),
     );
     let (view, cx) = open_desktop_on(cx, services);
     wait_for(cx, &view, |root| !root.audio.pending());
@@ -1307,6 +1302,8 @@ fn a_document_read_retry_preserves_a_newer_notice_and_moved_focus(cx: &mut TestA
     );
     view.update(cx, |root, cx| {
         root.navigate(Route::Assistant, cx);
+        // A same-root list refresh must not invalidate this editor read.
+        root.reload_projects(cx);
         root.ui.notice = later_notice.clone();
         cx.notify();
     });
@@ -1546,6 +1543,18 @@ struct GatedDocumentRepository {
     gate: crate::tests::Gate,
     snapshot_failure_gate: crate::tests::Gate,
     read_gate: crate::tests::Gate,
+}
+
+pub(crate) fn gated_read_repository(
+    inner: FileDocumentRepository,
+    read_gate: &crate::tests::Gate,
+) -> Arc<dyn application::DocumentRepository> {
+    Arc::new(GatedDocumentRepository {
+        inner,
+        gate: Default::default(),
+        snapshot_failure_gate: Default::default(),
+        read_gate: read_gate.clone(),
+    })
 }
 
 impl application::DocumentRepository for GatedDocumentRepository {
