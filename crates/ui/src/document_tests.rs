@@ -1226,7 +1226,25 @@ fn a_failed_document_read_waits_for_retry_and_recovers_restored_files(cx: &mut T
     cx.run_until_parked();
     assert!(view.read_with(cx, |root, _| root.editor.shown().is_none()));
     rendered(cx, "retry-document-read");
-    click_selector(cx, "retry-document-read");
+    // The failed read's stored text remains Chinese across a locale change.
+    view.update(cx, |root, cx| {
+        root.ui.locale = i18n::Locale::EnUs;
+        cx.notify();
+    });
+    let reached = (0..40).any(|_| {
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        cx.debug_bounds("focus-ring")
+            .is_some_and(|ring| within(ring, rendered(cx, "retry-document-read")))
+    });
+    assert!(reached, "Tab reaches the document read recovery action");
+    let enter = gpui::Keystroke::parse("enter").unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: enter.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: enter });
     wait_for(cx, &view, |root| {
         root.editor.shown() == Some(&ProjectId::new("a"))
     });
@@ -1234,6 +1252,83 @@ fn a_failed_document_read_waits_for_retry_and_recovers_restored_files(cx: &mut T
     let (title, _, _, body) = editor_fields(cx, &view);
     assert_eq!(field_value(cx, &title), "A");
     assert_eq!(area_value(cx, &body), "# A\n");
+    assert_eq!(documents.package_bytes("a"), before);
+    assert!(
+        view.read_with(cx, |root, _| root.ui.notice.is_empty()),
+        "the restored document must not retain its failed-read notice"
+    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |root, _| root.ui.toast().is_none()));
+}
+
+#[gpui::test]
+fn a_document_read_retry_preserves_a_newer_notice_and_moved_focus(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let before = documents.package_bytes("a");
+    let read_gate = crate::tests::Gate::default();
+    let mut services =
+        desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(Arc::new(GatedDocumentRepository {
+            inner: documents.repository(),
+            gate: Default::default(),
+            snapshot_failure_gate: Default::default(),
+            read_gate: read_gate.clone(),
+        })),
+    );
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.audio.pending());
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    std::fs::remove_file(documents.path().join("a/state.json")).unwrap();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.read_errors.contains_key(&ProjectId::new("a"))
+    });
+    std::fs::write(documents.path().join("a/state.json"), &before[0]).unwrap();
+    read_gate.arm();
+    click_selector(cx, "retry-document-read");
+    wait_for(cx, &view, |_| read_gate.counts().0 == 1);
+
+    // The user moves to a different field; a later error has the same
+    // translated prefix but belongs to another document.
+    let later_notice = i18n::message(
+        i18n::Locale::ZhCn,
+        "document_read_failed",
+        "another/state.json",
+    );
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Assistant, cx);
+        root.ui.notice = later_notice.clone();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "continue this question");
+    let moved_focus = cx.update(|window, cx| window.focused(cx));
+    read_gate.release();
+    wait_for(cx, &view, |root| root.editor.loading.is_empty());
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        later_notice
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), moved_focus);
+    assert_eq!(field_value(cx, &prompt), "continue this question");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Assistant);
+        assert!(root.editor.read_errors.is_empty());
+        assert_eq!(root.editor.shown(), Some(&ProjectId::new("a")));
+        assert_eq!(root.ui.toast().unwrap().notice, later_notice);
+    });
     assert_eq!(documents.package_bytes("a"), before);
 }
 
@@ -1445,14 +1540,15 @@ fn completed_processing_cancellation_is_one_neutral_owner_notice(cx: &mut TestAp
     });
 }
 
-/// Gates the real import write's return, after its package and locks are committed.
-struct ImportWriteRepository {
+/// Gates real repository returns after package IO and its locks are finished.
+struct GatedDocumentRepository {
     inner: FileDocumentRepository,
     gate: crate::tests::Gate,
     snapshot_failure_gate: crate::tests::Gate,
+    read_gate: crate::tests::Gate,
 }
 
-impl application::DocumentRepository for ImportWriteRepository {
+impl application::DocumentRepository for GatedDocumentRepository {
     fn snapshot(&self) -> Result<application::DocumentSnapshot, String> {
         let snapshot = self.inner.snapshot();
         if snapshot.is_err() {
@@ -1466,7 +1562,9 @@ impl application::DocumentRepository for ImportWriteRepository {
     }
 
     fn read(&self, id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String> {
-        self.inner.read(id)
+        let record = self.inner.read(id);
+        self.read_gate.pass();
+        record
     }
 
     fn watch(&self) -> Result<std::sync::mpsc::Receiver<DocumentChange>, String> {
@@ -1501,10 +1599,11 @@ fn open_import_with_snapshot_gate_on<'a>(
             Arc::new(WhisperRsBackend::default()),
             Arc::new(SherpaOnnxDiarizationBackend::default()),
         ),
-        DocumentService::new(Arc::new(ImportWriteRepository {
+        DocumentService::new(Arc::new(GatedDocumentRepository {
             inner: documents.repository(),
             gate: gate.clone(),
             snapshot_failure_gate: snapshot_failure_gate.clone(),
+            read_gate: Default::default(),
         })),
     );
     open_desktop_on(cx, services)
