@@ -368,6 +368,111 @@ fn first_use_guidance_never_replaces_an_existing_result_or_review(cx: &mut TestA
     assert!(!shown(cx, "assistant-first-import".into()));
 }
 
+/// Runs the real import use case and its asynchronous controller completion.
+/// The in-memory repository avoids user files; no audio processing is run.
+fn complete_first_audio_import(view: &View, cx: &mut VisualTestContext) {
+    view.read_with(cx, |root, _| {
+        assert!(root.projects.is_empty());
+        assert!(root.ui.selected_project.is_none());
+    });
+    view.update(cx, |root, cx| {
+        root.import_audio_path("first-recording.wav".into(), cx)
+    });
+    wait_for(cx, view, |root| {
+        root.projects.len() == 1 && !root.audio.pending()
+    });
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.selected_project.as_ref(),
+            Some(root.projects[0].id())
+        );
+        assert_eq!(
+            root.projects[0].processing_status(),
+            domain::ProjectStatus::Imported
+        );
+        assert!(!root.ui.processing);
+    });
+}
+
+#[gpui::test]
+fn imported_audio_offers_its_project_without_interrupting_the_question(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = first_use_assistant(cx, true);
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep the question while importing");
+    complete_first_audio_import(&view, cx);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.route),
+        Route::Assistant
+    );
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(prompt.read(cx), cx)
+            .contains_focused(window, cx)
+    ));
+    let action = rendered(cx, "assistant-first-project");
+    assert!(within(action, rendered(cx, "assistant-results")));
+    assert!(action.bottom() <= rendered(cx, "assistant-input-bar").top());
+    assert!(!shown(cx, "assistant-first-import".into()));
+    let selected = view.read_with(cx, |root, _| root.ui.selected_project.clone());
+    click_selector(cx, "assistant-first-project");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Meetings);
+        assert_eq!(root.ui.selected_project, selected);
+        assert!(!root.ui.processing);
+    });
+    rendered(cx, "process-project");
+    assert_eq!(
+        field_value(cx, &prompt),
+        "keep the question while importing"
+    );
+    assert!(assistant.run_request_ids.lock().unwrap().is_empty());
+}
+
+#[gpui::test]
+fn imported_audio_project_is_keyboard_reachable_at_minimum_size(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, true);
+    complete_first_audio_import(&view, cx);
+    tab_to_first_use_action(cx, "assistant-first-project");
+    activate_first_use_action(cx);
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Meetings);
+    rendered(cx, "process-project");
+}
+
+#[gpui::test]
+fn imported_audio_guidance_yields_to_processing_and_existing_results(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, true);
+    complete_first_audio_import(&view, cx);
+    rendered(cx, "assistant-first-project");
+    view.update(cx, |root, cx| {
+        root.ui
+            .begin_processing(root.ui.selected_project.clone().unwrap());
+        cx.notify();
+    });
+    assert!(!shown(cx, "assistant-first-project".into()));
+    view.update(cx, |root, cx| {
+        root.ui.finish_processing();
+        let document = root.projects[0].clone();
+        root.assistant.authorize_document(Some(&document));
+        let settings = root.saved_assistant().clone();
+        let (request, _) = root
+            .assistant
+            .begin("previous question".into(), &settings)
+            .unwrap();
+        root.assistant.complete(
+            &request.request_id,
+            AssistantRunResult {
+                answer: Some("existing answer".into()),
+                pending_reviews: vec![pending_review("existing-review", u64::MAX)],
+                ..empty_result()
+            },
+        );
+        cx.notify();
+    });
+    cx.run_until_parked();
+    rendered(cx, "assistant-result");
+    rendered(cx, "assistant-pending-existing-review");
+    assert!(!shown(cx, "assistant-first-project".into()));
+}
+
 #[gpui::test]
 fn a_run_that_fails_after_two_writes_keeps_every_receipt_warning_and_undo(cx: &mut TestAppContext) {
     let _alone = hold_a_worker_alone();

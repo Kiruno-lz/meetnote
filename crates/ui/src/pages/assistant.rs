@@ -69,9 +69,28 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         && root.assistant.pending.is_none())
     .then(|| {
         if root.saved_assistant().active_connection().is_none() {
-            Some(render_first_use(true, root.ui.locale, &tokens, cx))
+            Some(render_first_use(
+                FirstUseStep::Connection,
+                root.ui.locale,
+                &tokens,
+                cx,
+            ))
         } else if root.projects_loaded && root.projects.is_empty() {
-            Some(render_first_use(false, root.ui.locale, &tokens, cx))
+            Some(render_first_use(
+                FirstUseStep::Import,
+                root.ui.locale,
+                &tokens,
+                cx,
+            ))
+        } else if selected.is_some_and(|document| {
+            root.ui.processing_status(document) == domain::ProjectStatus::Imported
+        }) {
+            Some(render_first_use(
+                FirstUseStep::OpenProject,
+                root.ui.locale,
+                &tokens,
+                cx,
+            ))
         } else {
             None
         }
@@ -277,14 +296,20 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
 }
 
 /// One next action before the first run, using the existing recovery paths.
+enum FirstUseStep {
+    Connection,
+    Import,
+    OpenProject,
+}
+
 fn render_first_use(
-    needs_connection: bool,
+    step: FirstUseStep,
     locale: Locale,
     tokens: &Tokens,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
-    let (title, hint, action) = if needs_connection {
-        (
+    let (title, hint, action) = match step {
+        FirstUseStep::Connection => (
             tr(locale, "assistant_first_connection_title"),
             tr(locale, "assistant_first_connection_hint"),
             Button::new(
@@ -295,9 +320,8 @@ fn render_first_use(
             .primary()
             .compact()
             .on_click(cx.listener(|root, _, _, cx| root.open_assistant_settings(cx))),
-        )
-    } else {
-        (
+        ),
+        FirstUseStep::Import => (
             tr(locale, "assistant_first_document_title"),
             tr(locale, "assistant_first_document_hint"),
             Button::new("assistant-first-import", tr(locale, "import_audio"))
@@ -305,7 +329,21 @@ fn render_first_use(
                 .primary()
                 .compact()
                 .on_click(cx.listener(RootView::import_audio)),
-        )
+        ),
+        FirstUseStep::OpenProject => (
+            tr(locale, "assistant_imported_title"),
+            tr(locale, "assistant_imported_hint"),
+            Button::new(
+                "assistant-first-project",
+                tr(locale, "assistant_open_project"),
+            )
+            .debug_selector(|| "assistant-first-project".into())
+            .primary()
+            .compact()
+            .on_click(
+                cx.listener(|root, _, _, cx| root.navigate(crate::route::Route::Meetings, cx)),
+            ),
+        ),
     };
     div()
         .debug_selector(|| "assistant-first-use".into())
