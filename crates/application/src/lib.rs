@@ -555,6 +555,12 @@ impl DocumentService {
             .clone()
     }
 
+    /// Keeps a multi-step operation on the repository it started with,
+    /// even when the shared workspace switches roots between its calls.
+    pub(crate) fn frozen(&self) -> Self {
+        Self::new(self.current())
+    }
+
     /// Makes every clone use `repository` and ends every change feed of the
     /// previous one.
     pub(crate) fn replace_repository(&self, repository: Arc<dyn DocumentRepository>) {

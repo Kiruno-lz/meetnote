@@ -469,9 +469,10 @@ impl WorkspaceService {
 
     /// Revision-checked update, tree move and speaker correction commands on
     /// this workspace's documents; a stale revision fails with
-    /// [`crate::DocumentCommandError::RevisionConflict`].
+    /// [`crate::DocumentCommandError::RevisionConflict`]. The handle keeps the
+    /// current repository if execution is queued across a documents-root switch.
     pub fn document_commands(&self) -> crate::DocumentCommandService {
-        crate::DocumentCommandService::new(self.documents.clone())
+        crate::DocumentCommandService::new(self.documents.frozen())
     }
 
     pub fn processing(&self) -> ProcessingService {
