@@ -1502,3 +1502,47 @@ fn imported_audio_fixture_opens_the_existing_project_at_minimum_size(cx: &mut Te
         cx.debug_bounds("assistant-first-project").is_none()
     });
 }
+
+#[gpui::test]
+fn a_read_failure_fixture_keeps_reading_space_beside_detail(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    let selected = cx.update(|_, cx| window.selected_document(cx));
+    cx.update(|_, cx| window.open_overlay(Overlay::WorkspaceReadFailure, cx));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.run_until_parked();
+    let page = rendered(cx, "meetings-page");
+    let error = rendered(cx, "workspace-read-error");
+    assert!(within(error, page));
+    assert!(within(rendered(cx, "retry-workspace-read"), error));
+    assert!(within(rendered(cx, "meeting-content"), page));
+    assert!(rendered(cx, "meeting-content").size.height >= gpui::px(72.));
+    assert_eq!(cx.update(|_, cx| window.selected_document(cx)), selected);
+    assert!(cx.debug_bounds("empty-import-audio").is_none());
+    visible(cx, "detail-panel");
+    cx.update(|_, cx| window.close_overlay(Overlay::WorkspaceReadFailure, cx));
+    wait_for(cx, |cx| cx.debug_bounds("workspace-read-error").is_none());
+    assert_eq!(cx.update(|_, cx| window.selected_document(cx)), selected);
+    assert!(cx.debug_bounds("detail-panel").is_none());
+}
+
+#[gpui::test]
+fn an_initial_read_failure_fixture_recovers_with_keyboard_retry(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::InitialWorkspaceReadFailure, cx));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| window.selected_document(cx)).is_none());
+    assert!(cx.debug_bounds("empty-import-audio").is_none());
+    visible(cx, "project-tree-unavailable");
+    assert!(within(
+        rendered(cx, "retry-workspace-read"),
+        rendered(cx, "meetings-page")
+    ));
+    tab_to(cx, "retry-workspace-read", &["retry-workspace-read"]);
+    press(cx, "enter");
+    wait_for(cx, |cx| cx.debug_bounds("workspace-read-error").is_none());
+    assert!(cx.update(|_, cx| window.selected_document(cx)).is_some());
+    visible(cx, "document-title");
+    assert!(cx.debug_bounds("project-tree-unavailable").is_none());
+    cx.update(|_, cx| window.close_overlay(Overlay::InitialWorkspaceReadFailure, cx));
+}

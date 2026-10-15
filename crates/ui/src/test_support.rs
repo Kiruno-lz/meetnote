@@ -21,6 +21,10 @@ pub use crate::route::Route;
 pub enum Overlay {
     /// On Meetings: a loaded workspace with no documents.
     EmptyWorkspace,
+    /// On Meetings: fixture-only read failure over the last loaded document.
+    WorkspaceReadFailure,
+    /// On Meetings: fixture-only read failure before any document was loaded.
+    InitialWorkspaceReadFailure,
     /// On Assistant: the first run needs an active model connection.
     AssistantSetup,
     /// On Assistant: the connection is configured and the workspace is empty.
@@ -298,6 +302,21 @@ impl MainWindow {
                 root.editor.discard_all();
                 cx.notify();
             }
+            Overlay::WorkspaceReadFailure | Overlay::InitialWorkspaceReadFailure => {
+                // Only the UI projection fails; the fixture service stays valid
+                // so Retry can load its documents. Filesystem failures are
+                // exercised separately in document_tests.
+                root.projects_error = Some("Not a directory (os error 20)".into());
+                root.ui.notice.clear();
+                root.ui.content_mode = ContentMode::Summary;
+                root.ui.detail_open = overlay == Overlay::WorkspaceReadFailure;
+                if overlay == Overlay::InitialWorkspaceReadFailure {
+                    root.projects.clear();
+                    root.ui.selected_project = None;
+                    root.editor.discard_all();
+                }
+                cx.notify();
+            }
             Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
                 let select = root
@@ -442,6 +461,12 @@ impl MainWindow {
             }
             Overlay::EmptyWorkspace | Overlay::AssistantImport | Overlay::AssistantImported => {
                 root.reload_projects(cx)
+            }
+            Overlay::WorkspaceReadFailure | Overlay::InitialWorkspaceReadFailure => {
+                root.projects_error = None;
+                root.ui.detail_open = false;
+                root.ui.content_mode = ContentMode::Summary;
+                root.reload_projects(cx);
             }
             Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
