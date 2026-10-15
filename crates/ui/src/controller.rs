@@ -670,9 +670,30 @@ impl RootView {
             window,
             |this, _, event, _, cx| match event {
                 TextFieldEvent::Submit => this.submit_assistant_prompt(cx),
+                TextFieldEvent::Change => {}
             },
         )
         .detach();
+        // Feedback belongs to the exact connection currently held by the form.
+        for field in [
+            &assistant_inputs.connection_id,
+            &assistant_inputs.connection_name,
+            &assistant_inputs.base_url,
+            &assistant_inputs.model,
+            &assistant_inputs.api_key,
+            &assistant_inputs.api_key_file,
+            &assistant_inputs.context_window_tokens,
+            &assistant_inputs.timeout_ms,
+            &assistant_inputs.max_output_tokens,
+        ] {
+            cx.subscribe(field, |this, _, event, cx| {
+                if matches!(event, TextFieldEvent::Change) {
+                    this.assistant.forget_probe();
+                    cx.notify();
+                }
+            })
+            .detach();
+        }
         let editor = DocumentEditor::new(locale, window, cx);
         cx.subscribe_in(&editor.status, window, |this, _, event, _, cx| {
             let DropdownEvent::Confirm(value) = event;
@@ -2988,6 +3009,7 @@ impl RootView {
         else {
             return;
         };
+        self.assistant.forget_probe();
         self.settings_draft.assistant.active_connection_id = Some(profile.id.clone());
         self.assistant_protocol = profile.protocol;
         self.assistant_auth_mode = profile.auth_mode;
@@ -3034,6 +3056,7 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.assistant.forget_probe();
         self.assistant_protocol = LlmProtocol::OpenAiChatCompletions;
         self.assistant_auth_mode = AssistantAuthMode::Bearer;
         self.assistant_inputs.load_profile(None, cx);
@@ -3056,7 +3079,10 @@ impl RootView {
     }
 
     pub(crate) fn set_assistant_protocol(&mut self, protocol: LlmProtocol, cx: &mut Context<Self>) {
-        self.assistant_protocol = protocol;
+        if self.assistant_protocol != protocol {
+            self.assistant.forget_probe();
+            self.assistant_protocol = protocol;
+        }
         cx.notify();
     }
 
@@ -3065,7 +3091,10 @@ impl RootView {
         auth_mode: AssistantAuthMode,
         cx: &mut Context<Self>,
     ) {
-        self.assistant_auth_mode = auth_mode;
+        if self.assistant_auth_mode != auth_mode {
+            self.assistant.forget_probe();
+            self.assistant_auth_mode = auth_mode;
+        }
         cx.notify();
     }
 

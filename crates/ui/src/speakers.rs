@@ -315,6 +315,7 @@ impl<K: PartialEq> NameRows<K> {
                 window,
                 move |root, _, event: &TextFieldEvent, _, cx| match event {
                     TextFieldEvent::Submit => on_rename(root, id.clone(), cx),
+                    TextFieldEvent::Change => {}
                 },
             ));
             let options = entries

@@ -509,9 +509,11 @@ fn assistant_settings_section(
         .map(|profile| {
             let id = profile.id.clone();
             let selected = active == Some(id.as_str());
+            let selector = format!("assistant-profile-{id}");
             (
                 selected,
-                Button::new(format!("assistant-profile-{id}"), profile.name.clone())
+                Button::new(selector.clone(), profile.name.clone())
+                    .debug_selector(move || selector.clone())
                     .compact()
                     .on_click(
                         cx.listener(move |root, _, _, cx| root.edit_assistant_profile(&id, cx)),

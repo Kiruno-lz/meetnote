@@ -977,6 +977,99 @@ fn probing(view: &View, cx: &mut VisualTestContext) -> Option<ConnectionProbeKin
 }
 
 #[gpui::test]
+fn editing_a_connection_clears_its_old_probe_without_losing_the_draft(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_assistant(cx, FakeAssistantUiService::default());
+    open_assistant_settings(cx, &view);
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    let model = view.read_with(cx, |root, _| root.assistant_inputs.model.clone());
+    retype(cx, &model, "changed-model");
+    assert!(
+        !shown(cx, "assistant-probe-result".into()),
+        "the old model result no longer describes this draft"
+    );
+    assert_eq!(field_value(cx, &model), "changed-model");
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(model.read(cx), cx).contains_focused(window, cx)
+    ));
+    assert_eq!(
+        view.read_with(cx, |root, _| root
+            .saved_assistant()
+            .active_connection()
+            .unwrap()
+            .model
+            .clone()),
+        "assistant-default"
+    );
+}
+
+#[gpui::test]
+fn switching_profiles_clears_probe_errors_and_cancels_the_previous_probe(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let settings = stored_key_settings();
+    let mut value = settings.snapshot().unwrap();
+    let mut second = value.assistant.connections[0].clone();
+    second.id = "second".into();
+    second.name = "Second".into();
+    second.model = "second-model".into();
+    value.assistant.connections.push(second);
+    settings.update(value).unwrap();
+    let gate = Gate::default();
+    let assistant = Arc::new(FakeAssistantUiService {
+        settings: Some(settings.clone()),
+        probe_gate: Some(gate.clone()),
+        ..Default::default()
+    });
+    assistant
+        .probe_results
+        .lock()
+        .unwrap()
+        .push_back(Err(warning("PROVIDER_TIMEOUT", true)));
+    let (view, cx) = open_desktop_with(cx, assistant.clone(), settings);
+    open_assistant_settings(cx, &view);
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    assert!(shown(cx, "assistant-probe-retry".into()));
+    click_assistant_setting(cx, &view, "assistant-profile-second");
+    assert!(
+        !shown(cx, "assistant-probe-error".into()),
+        "the second profile does not inherit the first error"
+    );
+    assert!(!shown(cx, "assistant-probe-retry".into()));
+    gate.arm();
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    click_assistant_setting(cx, &view, "assistant-profile-local");
+    let cancellation = assistant.probe_cancellations.lock().unwrap()[1].clone();
+    let cancelled = cancellation.is_cancelled();
+    gate.release();
+    assert!(
+        cancelled,
+        "switching cancels the old profile's actual service token"
+    );
+    assert_eq!(probing(&view, cx), None);
+    assert!(!shown(cx, "assistant-probe-running".into()));
+    assert!(
+        !shown(cx, "assistant-probe-cancelled".into()),
+        "a profile change is not a user cancellation outcome"
+    );
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.assistant
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .requested_model,
+            "assistant-default"
+        )
+    });
+}
+
+#[gpui::test]
 fn connection_probes_succeed_fail_retry_and_cancel_off_the_ui_thread(cx: &mut TestAppContext) {
     let _alone = hold_a_worker_alone();
     let gate = Gate::default();
