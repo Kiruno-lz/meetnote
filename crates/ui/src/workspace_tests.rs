@@ -2305,6 +2305,83 @@ fn relink(cx: &mut VisualTestContext, view: &View, path: &Path) {
 }
 
 #[gpui::test]
+fn an_audio_relink_queued_before_a_host_root_switch_keeps_its_original_asset(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Workspace::new();
+    let missing = fixture.models.join("moved-away.wav");
+    let restored = fixture.models.join("found-again.wav");
+    std::fs::write(&restored, AUDIO).unwrap();
+    for (root, attachment) in [
+        (&fixture.old, b"old attachment"),
+        (&fixture.new, b"new attachment"),
+    ] {
+        recording(root, &missing);
+        for id in ["weekly", "decisions"] {
+            std::fs::write(root.path().join(id).join("attachment.bin"), attachment).unwrap();
+        }
+    }
+    let untouched = [
+        fixture.new.package_bytes("weekly"),
+        fixture.new.package_bytes("decisions"),
+    ];
+    let old_records = [fixture.old.read("weekly"), fixture.old.read("decisions")];
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| !root.audio.pending());
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    select_row(cx, &view, "weekly");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    view.update(cx, |root, cx| {
+        root.relink_audio_path(restored.clone(), cx);
+        assert_eq!(
+            fixture.old.read("weekly").state.audio_path(),
+            missing.to_str().unwrap()
+        );
+        // The accepted UI task has not been polled. The real Host replaces
+        // its repository before the queued relink starts reading or writing.
+        fixture
+            .workspace
+            .switch_documents_root(fixture.new.path())
+            .unwrap();
+    });
+    wait_for(cx, &view, |root| root.audio.relinking.is_none());
+    assert_eq!(
+        fixture.new.read("weekly").state.audio_path(),
+        missing.to_str().unwrap(),
+        "the queued relink must not alter the replacement workspace's same-ID asset"
+    );
+    assert_eq!(
+        [
+            fixture.new.package_bytes("weekly"),
+            fixture.new.package_bytes("decisions")
+        ],
+        untouched
+    );
+    for previous in old_records {
+        let current = fixture.old.read(previous.state.id().as_str());
+        assert_eq!(current.state.audio_path(), restored.to_str().unwrap());
+        assert_eq!(current.state.revision(), previous.state.revision() + 1);
+        assert_eq!(current.state.results, previous.state.results);
+        assert_eq!(current.state.processing, previous.state.processing);
+        assert_eq!(current.state.hierarchy, previous.state.hierarchy);
+        assert_eq!(current.markdown, previous.markdown);
+    }
+    for (root, attachment) in [
+        (&fixture.old, b"old attachment"),
+        (&fixture.new, b"new attachment"),
+    ] {
+        for id in ["weekly", "decisions"] {
+            assert_eq!(
+                std::fs::read(root.path().join(id).join("attachment.bin")).unwrap(),
+                attachment
+            );
+        }
+    }
+    assert_eq!(std::fs::read(restored).unwrap(), AUDIO);
+}
+
+#[gpui::test]
 fn a_late_audio_relink_cannot_complete_a_new_workspaces_relink(cx: &mut TestAppContext) {
     let _alone = crate::tests::hold_a_worker_alone();
     let old_gate = crate::tests::Gate::default();
