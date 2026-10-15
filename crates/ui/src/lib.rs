@@ -985,14 +985,14 @@ mod tests {
     fn starting_processing_leaves_the_ui_thread_free(cx: &mut TestAppContext) {
         let _alone = hold_a_worker_alone();
         let gate = Gate::default();
-        // Selected models that are not installed.
+        // Custom references are checked by backend preflight on the worker.
         let settings = test_settings();
         let mut value = settings.snapshot().unwrap();
         let missing = |backend_id: &str| ModelRef {
             backend_id: backend_id.into(),
             model_id: "fixture".into(),
             revision: None,
-            artifact_path: "missing-model".into(),
+            artifact_path: format!("unlisted-selected-{backend_id}"),
             artifacts: Vec::new(),
         };
         value.asr_model = Some(missing("whisper-rs"));

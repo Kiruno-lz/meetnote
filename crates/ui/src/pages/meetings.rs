@@ -1,8 +1,9 @@
 use crate::{
-    components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
+    components::{ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
     controls::{tree, Button, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
+    route::Route,
     speakers::{document_speakers, DocumentSpeaker},
     state::{self, ContentMode},
     theme::{self, Tokens},
@@ -249,6 +250,42 @@ fn status_line(
     }
 }
 
+fn model_guidance(
+    hint: &'static str,
+    locale: i18n::Locale,
+    in_body: bool,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> gpui::Div {
+    div()
+        .debug_selector(|| "models-required".into())
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(tokens.spacing.sm)
+        .text_sm()
+        .when(!in_body, |row| {
+            row.flex_row().flex_wrap().items_center().text_xs()
+        })
+        .child(
+            div()
+                .min_w_0()
+                .max_w_full()
+                .text_color(tokens.text_muted)
+                .child(tr(locale, hint)),
+        )
+        .child(
+            Button::new("go-to-models", tr(locale, "go_to_models"))
+                .debug_selector(|| "go-to-models".into())
+                .compact()
+                .when(in_body, |button| button.primary())
+                .when(!in_body, |button| button.ghost())
+                .on_click(cx.listener(|this, _, _, cx| this.navigate(Route::Models, cx))),
+        )
+}
+
 fn main_panel(
     root: &mut RootView,
     project: Option<&DocumentState>,
@@ -271,8 +308,16 @@ fn main_panel(
         let ready = project.processing_status() == ProjectStatus::Ready;
         let audio_problem = root.audio.problem(project.id());
         let processing_here = root.ui.is_processing_document(project.id());
+        let missing_models = state::missing_models(
+            &root.installation,
+            &root.settings_draft,
+            (&root.services.asr_model, &root.services.diarization_model),
+        );
         let process_label = tr(locale, if processing_here { "cancel" } else { "process" });
         let mode = root.ui.content_mode;
+        let model_hint = missing_models
+            .hint_key()
+            .filter(|_| !processing_here && audio_problem.is_none());
         let scroll = root.scroll.meeting_content.clone();
         let mut content = div()
             .id("meeting-content")
@@ -314,30 +359,48 @@ fn main_panel(
                         )
                         .child(div().text_sm().child(segment.text.clone()))
                 })),
-            _ => content.child(
-                div()
-                    .text_color(tokens.text_muted)
-                    .child(tr(locale, "need_process")),
-            ),
+            _ => match model_hint {
+                Some(hint) => content.child(model_guidance(hint, locale, true, &tokens, cx)),
+                None => content.child(
+                    div()
+                        .text_color(tokens.text_muted)
+                        .child(tr(locale, "need_process")),
+                ),
+            },
         };
         panel = panel
             .child(
                 div()
+                    .debug_selector(|| "document-title".into())
                     .flex_shrink_0()
+                    .min_w_0()
+                    .flex()
                     .text_2xl()
-                    .child(project.title().to_string()),
+                    .child(theme::tail_faded_label(
+                        format!("document-title-{}", project.id()),
+                        project.title().to_string(),
+                        tokens.content,
+                    )),
             )
             .child(
                 div()
+                    .debug_selector(|| "document-audio-path".into())
                     .flex_shrink_0()
+                    .min_w_0()
+                    .flex()
                     .text_sm()
                     .text_color(tokens.text_muted)
-                    .child(project.audio_path().to_string()),
+                    .child(theme::tail_faded_label(
+                        format!("document-audio-path-{}", project.id()),
+                        project.audio_path().to_string(),
+                        tokens.content,
+                    )),
             )
             // The status and actions wrap beside an open Detail rather than
             // run past the content column.
             .child(
                 div()
+                    .debug_selector(|| "document-actions".into())
                     .flex_shrink_0()
                     .flex()
                     .flex_wrap()
@@ -377,10 +440,12 @@ fn main_panel(
                             .debug_selector(|| "process-project".into())
                             .primary()
                             .compact()
-                            // Missing audio cannot be processed; relink it.
+                            // Cancelling remains available while this document runs.
                             .disabled(
                                 (root.ui.processing && !processing_here)
-                                    || (!root.ui.processing && root.audio.missing(project.id())),
+                                    || (!root.ui.processing
+                                        && (root.audio.missing(project.id())
+                                            || missing_models.any())),
                             )
                             .on_click(cx.listener(RootView::process_or_cancel)),
                     )
@@ -399,6 +464,11 @@ fn main_panel(
                             .secondary()
                             .compact()
                             .on_click(cx.listener(RootView::open_detail)),
+                    )
+                    .children(
+                        model_hint
+                            .filter(|_| ready || mode == ContentMode::Edit)
+                            .map(|hint| model_guidance(hint, locale, false, &tokens, cx)),
                     ),
             );
         // Summary and Edit always; the speaker-labelled original once
@@ -407,6 +477,7 @@ fn main_panel(
             .debug_selector(|| "content-mode-group".into())
             .flex_shrink_0()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
             .option(
@@ -448,25 +519,7 @@ fn main_panel(
                 &tokens,
             ));
     }
-    panel.child(
-        div()
-            .flex_shrink_0()
-            .border_t_1()
-            .border_color(tokens.hairline)
-            .pt_3()
-            .text_xs()
-            .text_color(tokens.text_muted)
-            .child(format!(
-                "ASR: {}   •   DIA: {}",
-                backend_ids(&root.inventory.asr),
-                backend_ids(&root.inventory.diarization)
-            ))
-            .child(format!(
-                "{}: {}",
-                tr(locale, "models"),
-                state::model_status(&root.installation, locale)
-            )),
-    )
+    panel
 }
 
 /// The speakers of the document above its transcript, each with its

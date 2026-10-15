@@ -326,14 +326,6 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year_of_era + era * 400 + i64::from(month <= 2), month, day)
 }
 
-pub(crate) fn backend_ids(descriptors: &[application::BackendDescriptor]) -> String {
-    descriptors
-        .iter()
-        .map(|descriptor| descriptor.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 #[cfg(test)]
 mod tests {
     use super::{tree_move, tree_shift, utc_time, TreeMove, TreeShiftMove};

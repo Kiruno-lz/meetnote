@@ -143,7 +143,10 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "models_active") => "下载中",
         (Locale::ZhCn, "model_status") => "模型状态",
         (Locale::ZhCn, "choose_audio") => "选择音频",
-        (Locale::ZhCn, "missing") => "缺失",
+        (Locale::ZhCn, "go_to_models") => "前往模型",
+        (Locale::ZhCn, "models_missing_both") => "语音模型尚未就绪",
+        (Locale::ZhCn, "models_missing_asr") => "语音识别模型尚未就绪",
+        (Locale::ZhCn, "models_missing_diarization") => "说话人分离模型尚未就绪",
         (Locale::ZhCn, "interface_description") => "界面偏好与本地化选项",
         (Locale::ZhCn, "transcription_description") => "选择语音识别后端、模型和转录语言",
         (Locale::ZhCn, "speaker_description") => "选择说话人分离后端、模型和人数提示",
@@ -524,7 +527,10 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "models_active") => "Downloads active",
         (Locale::EnUs, "model_status") => "Model status",
         (Locale::EnUs, "choose_audio") => "Choose audio",
-        (Locale::EnUs, "missing") => "Missing",
+        (Locale::EnUs, "go_to_models") => "Go to Models",
+        (Locale::EnUs, "models_missing_both") => "Models aren't ready",
+        (Locale::EnUs, "models_missing_asr") => "The transcription model isn't ready",
+        (Locale::EnUs, "models_missing_diarization") => "The speaker separation model isn't ready",
         (Locale::EnUs, "interface_description") => "Interface preferences and localization",
         (Locale::EnUs, "transcription_description") => {
             "Choose the speech recognition backend, model, and language"
