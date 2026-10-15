@@ -1,10 +1,10 @@
 use crate::{
     components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
-    controls::{tree, Button, RadioGroup, Scrollbar, Tree, TreeItem},
+    controls::{tree, Button, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
     speakers::{document_speakers, DocumentSpeaker},
-    state::{self, ContentMode},
+    state::{self, ContentMode, ProcessingFeedback, ProcessingStage, StageFeedback},
     theme::{self, Tokens},
 };
 use domain::{DocumentState, ProjectStatus};
@@ -401,6 +401,13 @@ fn main_panel(
                             .on_click(cx.listener(RootView::open_detail)),
                     ),
             );
+        if processing_here {
+            panel = panel.child(processing_feedback(
+                &root.ui.processing_feedback,
+                locale,
+                &tokens,
+            ));
+        }
         // Summary and Edit always; the speaker-labelled original once
         // processed.
         let mut controls = RadioGroup::new("content-mode", tr(locale, "content_mode"))
@@ -467,6 +474,72 @@ fn main_panel(
                 state::model_status(&root.installation, locale)
             )),
     )
+}
+
+/// Persistent feedback for the shown task's runtime jobs. Each bar uses
+/// only its own reported units; unknown extents remain indeterminate.
+fn processing_feedback(
+    feedback: &ProcessingFeedback,
+    locale: i18n::Locale,
+    tokens: &Tokens,
+) -> impl IntoElement {
+    div()
+        .debug_selector(|| "processing-progress".into())
+        .w_full()
+        .max_w(px(360.))
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.sm)
+        .children(
+            [ProcessingStage::Transcription, ProcessingStage::Diarization].map(|stage| {
+                let state = feedback.stage(stage);
+                let value = state.value();
+                let stage_id = stage.name();
+                div()
+                    .debug_selector(move || format!("processing-{stage_id}"))
+                    .flex()
+                    .flex_col()
+                    .gap(tokens.spacing.xs)
+                    .child(
+                        div()
+                            .debug_selector(move || {
+                                format!("processing-{stage_id}-{}", state.name())
+                            })
+                            .flex()
+                            .justify_between()
+                            .text_xs()
+                            .text_color(tokens.text_muted)
+                            .child(tr(locale, stage.label_key()))
+                            .child(tr(locale, state.status_key())),
+                    )
+                    .children(
+                        matches!(state, StageFeedback::Waiting | StageFeedback::Running(_)).then(
+                            || {
+                                div()
+                                    .debug_selector(move || {
+                                        format!(
+                                            "processing-{stage_id}-{}",
+                                            if value.is_some() {
+                                                "determinate"
+                                            } else {
+                                                "indeterminate"
+                                            }
+                                        )
+                                    })
+                                    .child(
+                                        ProgressBar::new(
+                                            format!("processing-{stage_id}-bar"),
+                                            tr(locale, stage.label_key()),
+                                        )
+                                        .value(value.unwrap_or(0.))
+                                        .indeterminate(value.is_none()),
+                                    )
+                            },
+                        ),
+                    )
+            }),
+        )
 }
 
 /// The speakers of the document above its transcript, each with its
