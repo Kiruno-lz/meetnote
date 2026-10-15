@@ -1410,3 +1410,43 @@ fn the_processing_overlay_owns_its_document_and_restores_it_when_closed(cx: &mut
     visible(cx, "document-status-Ready");
     assert_eq!(cx.update(|_, cx| window.selected_document(cx)), Some(owner));
 }
+
+#[gpui::test]
+fn processing_feedback_leaves_reading_space_beside_detail_at_minimum_size(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::ProcessingFeedback, cx));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.run_until_parked();
+    let detail_action = visible(cx, "open-project-detail");
+    cx.simulate_click(detail_action.center(), Modifiers::none());
+    cx.run_until_parked();
+    let page = visible(cx, "meetings-page");
+    for selector in [
+        "processing-progress",
+        "processing-transcription-completed",
+        "processing-diarization-running",
+        "process-project",
+        "content-mode-group",
+    ] {
+        assert!(
+            within(visible(cx, selector), page),
+            "{selector} fits beside Detail"
+        );
+    }
+    let body = visible(cx, "meeting-content");
+    assert!(
+        body.size.width >= gpui::px(192.),
+        "a readable document column remains: {body:?}"
+    );
+    assert!(
+        body.size.height >= gpui::px(96.),
+        "progress leaves room for document content: {body:?}"
+    );
+    assert!(body.right() <= visible(cx, "detail-panel").left());
+    let cancel = visible(cx, "process-project");
+    cx.simulate_click(cancel.center(), Modifiers::none());
+    cx.run_until_parked();
+    // The fixture proves the UI request, not cancellation of a backend task.
+    visible(cx, "notice-toast");
+    visible(cx, "processing-progress");
+}
