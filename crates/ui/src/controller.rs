@@ -579,8 +579,8 @@ pub(crate) struct RootView {
 /// Why the next review awaits, which decides whether it takes the focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReviewFocus {
-    /// The user accepted or rejected the one before: the next review takes
-    /// the focus, so the queue can be worked through from the keyboard.
+    /// The user accepted or rejected the one before: continue the keyboard
+    /// queue only while focus remains in its review region.
     Decision,
     /// The one before expired: the next review takes the focus only from
     /// the review that had it, never from a field the user is typing in.
@@ -3512,7 +3512,7 @@ impl RootView {
     pub(crate) fn accept_assistant_pending(
         &mut self,
         _: &ClickEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let (Some(run), Some(pending)) = (
@@ -3522,6 +3522,11 @@ impl RootView {
             cx.notify();
             return;
         };
+        // The decision buttons become disabled; keep keyboard focus in
+        // their stable region until the user chooses somewhere else.
+        if self.review_focus.contains_focused(window, cx) {
+            self.review_focus.focus(window, cx);
+        }
         let authorized_document_ids = self.assistant.result_authorized_document_ids();
         let service = self.services.assistant.clone();
         cx.notify();
@@ -3547,7 +3552,7 @@ impl RootView {
     pub(crate) fn reject_assistant_pending(
         &mut self,
         _: &ClickEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let (Some(run), Some(pending)) = (
@@ -3557,6 +3562,9 @@ impl RootView {
             cx.notify();
             return;
         };
+        if self.review_focus.contains_focused(window, cx) {
+            self.review_focus.focus(window, cx);
+        }
         let authorized_document_ids = self.assistant.result_authorized_document_ids();
         let service = self.services.assistant.clone();
         cx.notify();
@@ -4624,7 +4632,7 @@ impl RootView {
             return;
         }
         let take = match request {
-            ReviewFocus::Decision => true,
+            ReviewFocus::Decision => self.review_focus.contains_focused(window, cx),
             ReviewFocus::Expiry => {
                 self.window_focus.is_focused(window)
                     || window.focused(cx).is_none()
@@ -4633,7 +4641,12 @@ impl RootView {
         };
         if take {
             let focus = self.review_focus.clone();
-            window.defer(cx, move |window, cx| focus.focus(window, cx));
+            let previous = window.focused(cx);
+            window.defer(cx, move |window, cx| {
+                if window.focused(cx) == previous {
+                    focus.focus(window, cx);
+                }
+            });
         }
     }
 }

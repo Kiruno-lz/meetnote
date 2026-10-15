@@ -235,7 +235,7 @@ fn tab_to_first_use_action(cx: &mut VisualTestContext, selector: &'static str) {
     panic!("Tab never reached {selector}");
 }
 
-fn activate_first_use_action(cx: &mut VisualTestContext) {
+fn press_enter(cx: &mut VisualTestContext) {
     let keystroke = gpui::Keystroke::parse("enter").unwrap();
     cx.simulate_event(gpui::KeyDownEvent {
         keystroke: keystroke.clone(),
@@ -292,7 +292,7 @@ fn first_use_connection_settings_is_keyboard_reachable_at_minimum_size(cx: &mut 
         rendered(cx, "assistant-results")
     ));
     tab_to_first_use_action(cx, "assistant-first-settings");
-    activate_first_use_action(cx);
+    press_enter(cx);
     view.read_with(cx, |root, _| {
         assert_eq!(root.ui.route, Route::Settings);
         assert_eq!(
@@ -331,7 +331,7 @@ fn first_use_audio_import_is_keyboard_reachable_at_minimum_size(cx: &mut TestApp
         rendered(cx, "assistant-results")
     ));
     tab_to_first_use_action(cx, "assistant-first-import");
-    activate_first_use_action(cx);
+    press_enter(cx);
     assert!(cx.cx.did_prompt_for_paths());
 }
 
@@ -432,7 +432,7 @@ fn imported_audio_project_is_keyboard_reachable_at_minimum_size(cx: &mut TestApp
     let (view, cx, _) = first_use_assistant(cx, true);
     complete_first_audio_import(&view, cx);
     tab_to_first_use_action(cx, "assistant-first-project");
-    activate_first_use_action(cx);
+    press_enter(cx);
     assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Meetings);
     rendered(cx, "process-project");
 }
@@ -643,6 +643,99 @@ fn review_focused(cx: &mut VisualTestContext, view: &View) -> bool {
     cx.update(|window, _| focus.is_focused(window))
 }
 
+fn decision_keeps_the_question_focus(
+    cx: &mut TestAppContext,
+    accept: bool,
+    move_during_decision: bool,
+) {
+    let _alone = hold_a_worker_alone();
+    let gate = Gate::default();
+    let (view, cx, assistant) = open_assistant(
+        cx,
+        FakeAssistantUiService {
+            decision_gate: Some(gate.clone()),
+            ..Default::default()
+        },
+    );
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        pending_reviews: vec![
+            pending_review("review-1", u64::MAX),
+            pending_review("review-2", u64::MAX),
+        ],
+        ..empty_result()
+    });
+    *assistant.confirm_result.lock().unwrap() = Some(confirmed("accepted-1"));
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep this next question");
+    if move_during_decision {
+        let focus = view.read_with(cx, |root, _| root.review_focus.clone());
+        cx.update(|window, cx| focus.focus(window, cx));
+    }
+    // The short viewport can put the decisions below the initial view.
+    let action = if accept {
+        "assistant-confirm"
+    } else {
+        "assistant-reject"
+    };
+    let scroll = view.read_with(cx, |root, _| root.scroll.assistant_results.clone());
+    let delta = scroll.bounds().bottom() - rendered(cx, action).bottom() - gpui::px(8.);
+    if delta < gpui::px(0.) {
+        scroll.set_offset(gpui::point(scroll.offset().x, scroll.offset().y + delta));
+        cx.update(|window, cx| window.draw(cx).clear());
+    }
+    assert!(within(rendered(cx, action), scroll.bounds()));
+    gate.arm();
+    click_selector(cx, action);
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    if move_during_decision {
+        retype(cx, &prompt, "keep this next question");
+    }
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(prompt.read(cx), cx)
+            .contains_focused(window, cx)
+    ));
+    gate.release();
+    wait_for(cx, &view, |root| {
+        matches!(
+            &root.assistant.pending,
+            Some(PendingReviewState::Awaiting(review)) if review.confirmation_id == "review-2"
+        )
+    });
+    assert!(
+        cx.update(
+            |window, cx| gpui::Focusable::focus_handle(prompt.read(cx), cx)
+                .contains_focused(window, cx)
+        ),
+        "the decision must not move focus from the question"
+    );
+    assert_eq!(field_value(cx, &prompt), "keep this next question");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.route),
+        Route::Assistant
+    );
+    rendered(cx, "assistant-pending-review-2");
+}
+
+#[gpui::test]
+fn accepting_a_review_keeps_the_question_focus_after_the_user_moves_on(cx: &mut TestAppContext) {
+    decision_keeps_the_question_focus(cx, true, true);
+}
+
+#[gpui::test]
+fn rejecting_a_review_keeps_the_question_focus_after_the_user_moves_on(cx: &mut TestAppContext) {
+    decision_keeps_the_question_focus(cx, false, true);
+}
+
+#[gpui::test]
+fn a_pointer_review_decision_keeps_the_question_focus_without_further_input(
+    cx: &mut TestAppContext,
+) {
+    decision_keeps_the_question_focus(cx, true, false);
+}
+
 #[gpui::test]
 fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut TestAppContext) {
     let _alone = hold_a_worker_alone();
@@ -691,9 +784,22 @@ fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut Te
     );
 
     // Accepting: both decisions and a new run wait until it is written.
+    // Continue from the review with the keyboard; pointer presses retain
+    // whichever field was already focused instead.
+    let focus = view.read_with(cx, |root, _| root.review_focus.clone());
+    cx.update(|window, cx| focus.focus(window, cx));
+    cx.simulate_keystrokes("tab tab");
+    assert!(within(
+        rendered(cx, "focus-ring"),
+        rendered(cx, "assistant-confirm")
+    ));
     gate.arm();
-    click_selector(cx, "assistant-confirm");
+    press_enter(cx);
     wait_for(cx, &view, |_| gate.counts().0 == 1);
+    assert!(
+        cx.update(|window, cx| focus.contains_focused(window, cx)),
+        "the in-flight keyboard decision stays in the review region"
+    );
     assert!(shown(cx, "assistant-review-accepting".into()));
     let task = view.read_with(cx, |root, _| root.assistant.task.clone());
     click_selector(cx, "assistant-confirm");
@@ -702,6 +808,10 @@ fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut Te
     assert_no_new_run(cx, &view, &assistant, 1, &task);
     assert_eq!(assistant.grants_for("confirm").len(), 1);
     assert!(assistant.grants_for("reject").is_empty());
+    assert!(
+        cx.update(|window, cx| focus.contains_focused(window, cx)),
+        "disabled presses leave the review focus unchanged"
+    );
     gate.release();
     wait_for(cx, &view, |root| {
         matches!(
