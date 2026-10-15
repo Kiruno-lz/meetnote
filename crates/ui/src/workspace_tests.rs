@@ -70,6 +70,31 @@ impl settings::SettingsRepository for HeldSettingsSave {
     }
 }
 
+/// Pauses before the real compare-and-save so another writer can win.
+struct HeldSettingsBeforeSave {
+    inner: JsonSettingsRepository,
+    gate: crate::tests::Gate,
+}
+
+impl settings::SettingsRepository for HeldSettingsBeforeSave {
+    fn load(&self) -> Result<settings::AppSettings, settings::SettingsError> {
+        settings::SettingsRepository::load(&self.inner)
+    }
+
+    fn save(&self, value: &settings::AppSettings) -> Result<(), settings::SettingsError> {
+        settings::SettingsRepository::save(&self.inner, value)
+    }
+
+    fn save_if_equal(
+        &self,
+        expected: &settings::AppSettings,
+        next: &settings::AppSettings,
+    ) -> Result<(), settings::SettingsError> {
+        self.gate.pass();
+        settings::SettingsRepository::save_if_equal(&self.inner, expected, next)
+    }
+}
+
 /// Holds a real list/audio snapshot after IO has released its file locks.
 struct HeldSnapshots {
     inner: FileDocumentRepository,
@@ -1838,6 +1863,89 @@ fn a_settings_conflict_after_the_switch_switches_the_workspace_back(cx: &mut Tes
         fixture.settings.snapshot().unwrap().expected_speakers,
         Some(3)
     );
+}
+
+#[gpui::test]
+fn a_failed_root_restore_shows_the_active_path_and_can_save_it_on_retry(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let mut fixture = Workspace::new();
+    put(&fixture.old, "old-doc", "Old");
+    put(&fixture.new, "new-doc", "New");
+    let old_bytes = fixture.old.package_bytes("old-doc");
+    let new_bytes = fixture.new.package_bytes("new-doc");
+    fixture.settings = SettingsService::open(Arc::new(HeldSettingsBeforeSave {
+        inner: JsonSettingsRepository::open(&fixture.settings_path),
+        gate: gate.clone(),
+    }))
+    .unwrap();
+    let (view, cx) = open_workspace(cx, &fixture);
+    gate.arm();
+    view.update(cx, |root, cx| {
+        root.choose_documents_root(fixture.new.path().into(), cx)
+    });
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    assert_eq!(fixture.root(), fixture.new.path());
+
+    // A real competing write makes compare-and-save fail. Meanwhile the
+    // previous directory becomes unavailable, so restoring it also fails.
+    let external = SettingsService::open(Arc::new(JsonSettingsRepository::open(
+        &fixture.settings_path,
+    )))
+    .unwrap();
+    let mut value = external.snapshot().unwrap();
+    value.expected_speakers = Some(3);
+    external.update(value).unwrap();
+    let unreadable = UnreadableDocumentsRoot::new(&fixture.old);
+    gate.release();
+    wait_for(cx, &view, |root| !root.documents_root_switch.switching);
+    wait_for(cx, &view, |root| root.projects_loaded);
+    let (message, failed) = switch_status(cx, &view).unwrap();
+    assert!(failed);
+    assert!(message.starts_with(&i18n::message(
+        Locale::ZhCn,
+        "documents_root_restore_failed",
+        ""
+    )));
+    assert_eq!(fixture.root(), fixture.new.path());
+    assert_eq!(ids(&view, cx), ["new-doc"]);
+    assert_eq!(
+        fixture.saved_documents_root(),
+        fixture.old.path().display().to_string()
+    );
+    let displayed = view.read_with(cx, |root, _| root.settings_draft.documents_root.clone());
+    assert_eq!(
+        displayed,
+        fixture.new.path().display().to_string(),
+        "Settings must show the active directory when restoring the saved path fails"
+    );
+
+    // Another settings conflict must not replace the active path with the
+    // persisted one that the workspace could not restore.
+    let mut value = external.snapshot().unwrap();
+    value.expected_speakers = Some(4);
+    external.update(value).unwrap();
+    view.update(cx, |root, cx| root.set_locale(Locale::EnUs, cx));
+    wait_for(cx, &view, |root| root.ui.locale == Locale::ZhCn);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.settings_draft.documents_root.clone()),
+        fixture.new.path().display().to_string(),
+        "unrelated settings conflicts must retain the active path"
+    );
+
+    drop(unreadable);
+    choose(cx, &view, fixture.new.path());
+    assert!(!switch_status(cx, &view).unwrap().1);
+    assert_eq!(
+        fixture.saved_documents_root(),
+        fixture.new.path().display().to_string()
+    );
+    assert_eq!(
+        fixture.settings.snapshot().unwrap().expected_speakers,
+        Some(4)
+    );
+    assert_eq!(fixture.old.package_bytes("old-doc"), old_bytes);
+    assert_eq!(fixture.new.package_bytes("new-doc"), new_bytes);
 }
 
 /// A processed root `weekly` whose results came from `AUDIO` at `audio`,

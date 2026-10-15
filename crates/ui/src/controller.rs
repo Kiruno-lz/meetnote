@@ -77,7 +77,7 @@ struct DocumentsRootSwitched {
     switched: bool,
 }
 
-/// Why a documents-root switch left the workspace on the root it had.
+/// Why a documents-root switch failed to save its requested setting.
 enum DocumentsRootSwitchFailure {
     /// The workspace refused the root; nothing changed.
     Refused(DocumentsRootError),
@@ -87,6 +87,7 @@ enum DocumentsRootSwitchFailure {
         failure: SettingsWriteFailure,
         switched: bool,
         restore: Option<DocumentsRootError>,
+        active_root: Option<PathBuf>,
     },
 }
 
@@ -116,7 +117,9 @@ fn switch_documents_root(
             let restore = previous
                 .filter(|_| switched)
                 .and_then(|previous| workspace.switch_documents_root(previous).err());
+            let active_root = restore.as_ref().and_then(|_| workspace.documents_root());
             Err(DocumentsRootSwitchFailure::NotSaved {
+                active_root,
                 failure,
                 switched,
                 restore,
@@ -1404,9 +1407,9 @@ impl RootView {
     }
 
     /// Shows how a documents-root switch ended. A switch saved in the
-    /// settings shows the new root's tree; a refused one changes nothing; a
-    /// switch whose save failed was switched back and adopts the settings
-    /// the conflict reloaded.
+    /// settings shows the new root's tree; a refused one changes nothing.
+    /// A failed save adopts reloaded settings, but if restoring the old root
+    /// also fails, the path and tree still follow the active workspace.
     fn finish_documents_root_switch(
         &mut self,
         result: Result<DocumentsRootSwitched, DocumentsRootSwitchFailure>,
@@ -1436,9 +1439,15 @@ impl RootView {
                 failure,
                 switched,
                 restore,
+                active_root,
             }) => {
                 let reason = settings_error_text(locale, &failure.error);
                 self.settings_write_failed(failure, cx);
+                if let Some(active_root) = active_root {
+                    // The saved setting could not be restored. Show the
+                    // directory the workspace actually reads and writes.
+                    self.settings_draft.documents_root = active_root.display().to_string();
+                }
                 let root_changed = switched.then_some(restore.is_some());
                 let message = match restore {
                     None => i18n::message(locale, "documents_root_not_saved", &reason),
@@ -1551,14 +1560,16 @@ impl RootView {
 
     /// The persisted settings stay authoritative after a failed write: a
     /// conflict adopts the settings reloaded from the repository, and the
-    /// instant-save fields show them again. The unsaved Assistant form is
-    /// kept, so saving it again is the retry.
+    /// instant-save fields show them again. Keep the active documents path
+    /// until an explicit root switch, and keep the unsaved Assistant form
+    /// so saving it again is the retry.
     fn settings_write_failed(&mut self, failure: SettingsWriteFailure, cx: &mut Context<Self>) {
         let SettingsWriteFailure { error, reloaded } = failure;
         if let Some(latest) = reloaded {
             self.settings_base = latest;
         }
         self.settings_draft = AppSettings {
+            documents_root: self.settings_draft.documents_root.clone(),
             assistant: self.settings_draft.assistant.clone(),
             ..self.settings_base.clone()
         };
