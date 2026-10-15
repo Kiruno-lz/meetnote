@@ -546,6 +546,67 @@ fn a_drag_can_reparent_after_a_root_switch_rolls_back(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn an_import_queued_before_a_host_root_switch_stays_in_its_original_workspace(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Workspace::new();
+    put(&fixture.old, "old-doc", "Old");
+    put(&fixture.new, "new-doc", "New");
+    let old_bytes = fixture.old.package_bytes("old-doc");
+    let new_bytes = fixture.new.package_bytes("new-doc");
+    let audio = fixture.models.join("Queued recording.wav");
+    std::fs::write(&audio, AUDIO).unwrap();
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| !root.audio.pending());
+
+    view.update(cx, |root, cx| {
+        root.import_audio_path(audio.clone(), cx);
+        // The UI accepted this import but its async task has not been
+        // polled. Replace the repository through the real Host API that
+        // Settings calls, before the queued worker can execute its write.
+        assert_eq!(
+            fixture.old.repository().snapshot().unwrap().documents.len(),
+            1
+        );
+        fixture
+            .workspace
+            .switch_documents_root(fixture.new.path())
+            .unwrap();
+    });
+    wait_for(cx, &view, |_| {
+        fixture.old.repository().snapshot().unwrap().documents.len()
+            + fixture.new.repository().snapshot().unwrap().documents.len()
+            == 3
+    });
+    let old = fixture.old.repository().snapshot().unwrap().documents;
+    let new = fixture.new.repository().snapshot().unwrap().documents;
+    assert_eq!(
+        old.len(),
+        2,
+        "the accepted import belongs to the workspace open at admission"
+    );
+    assert_eq!(
+        new.len(),
+        1,
+        "the queued worker must not import into the replacement root"
+    );
+    let imported = old
+        .iter()
+        .find(|document| document.id().as_str() != "old-doc")
+        .unwrap();
+    assert_eq!(imported.title(), "Queued recording");
+    assert_eq!(imported.audio_path(), audio.display().to_string());
+    assert!(fixture
+        .old
+        .read(imported.id().as_str())
+        .markdown
+        .contains("Queued recording.wav"));
+    assert_eq!(fixture.old.package_bytes("old-doc"), old_bytes);
+    assert_eq!(fixture.new.package_bytes("new-doc"), new_bytes);
+    assert_eq!(std::fs::read(audio).unwrap(), AUDIO);
+}
+
+#[gpui::test]
 fn returning_to_an_unloaded_old_document_defers_its_read_until_the_switch_finishes(
     cx: &mut TestAppContext,
 ) {

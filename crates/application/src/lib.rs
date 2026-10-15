@@ -555,9 +555,10 @@ impl DocumentService {
             .clone()
     }
 
-    /// Keeps a multi-step operation on the repository it started with,
-    /// even when the shared workspace switches roots between its calls.
-    pub(crate) fn frozen(&self) -> Self {
+    /// Keeps an operation on the current repository, even if it is queued
+    /// before the shared workspace switches roots. This only captures the
+    /// repository handle; it does not perform file IO.
+    pub fn frozen(&self) -> Self {
         Self::new(self.current())
     }
 

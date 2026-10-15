@@ -503,24 +503,7 @@ impl WorkspaceService {
     }
 
     pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<DocumentState, String> {
-        let audio_path = audio_path.into();
-        let path = Path::new(&audio_path);
-        let title = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty())
-            .unwrap_or("Untitled meeting")
-            .to_string();
-        let id = ProjectId::new(format!("project-{}", unique_suffix()));
-        let project = DocumentState::new(id, title, audio_path);
-        let project = self.documents.save_with_markdown(
-            project.clone(),
-            render_markdown(
-                Path::new(project.audio_path()),
-                &project.results.speaker_segments,
-            ),
-        )?;
-        Ok(project)
+        self.documents.import_audio(audio_path)
     }
 
     pub fn project(&self, project_id: &ProjectId) -> Result<Option<DocumentState>, String> {
@@ -988,6 +971,31 @@ fn collect_files(root: &Path, files: &mut Vec<std::path::PathBuf>) -> std::io::R
         }
     }
     Ok(())
+}
+
+impl DocumentService {
+    /// Creates the document for an external audio path. Capture a frozen
+    /// service before queueing the import to retain its chosen workspace.
+    pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<DocumentState, String> {
+        let audio_path = audio_path.into();
+        let path = Path::new(&audio_path);
+        let title = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Untitled meeting")
+            .to_string();
+        let id = ProjectId::new(format!("project-{}", unique_suffix()));
+        let project = DocumentState::new(id, title, audio_path);
+        let project = self.save_with_markdown(
+            project.clone(),
+            render_markdown(
+                Path::new(project.audio_path()),
+                &project.results.speaker_segments,
+            ),
+        )?;
+        Ok(project)
+    }
 }
 
 fn unique_suffix() -> u128 {
