@@ -641,13 +641,18 @@ impl WorkspaceService {
         diarization_model: ModelRef,
         speaker_library_path: Option<String>,
     ) -> Result<ProjectProcessingJob, contracts::BackendError> {
+        // Request construction and job admission must read the same workspace.
+        let _no_switch = self
+            .documents_root
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let request = self.processing_request(
             &project_id,
             asr_model,
             diarization_model,
             speaker_library_path,
         )?;
-        self.start_project_processing_with_request(project_id, request)
+        self.start_project_processing_inner(project_id, request)
     }
 
     pub fn processing_request(
@@ -690,6 +695,16 @@ impl WorkspaceService {
             .documents_root
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.start_project_processing_inner(project_id, request)
+    }
+
+    // Both public admission paths hold documents_root across request reads,
+    // probe and registration; do not acquire the read lock recursively here.
+    fn start_project_processing_inner(
+        &self,
+        project_id: ProjectId,
+        request: ProcessingRequest,
+    ) -> Result<ProjectProcessingJob, contracts::BackendError> {
         let mut project = self
             .documents
             .get(&project_id)
