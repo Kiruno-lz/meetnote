@@ -3228,7 +3228,26 @@ impl RootView {
 
     fn probe_assistant_connection(&mut self, kind: ConnectionProbeKind, cx: &mut Context<Self>) {
         let profile = match self.assistant_profile_from_inputs(cx) {
-            Ok(Some((profile, _))) => profile,
+            Ok(Some((profile, credential))) => {
+                let validation = self
+                    .assistant_origin
+                    .connections
+                    .iter()
+                    .find(|stored| stored.id == profile.id)
+                    .map_or(Ok(()), |stored| {
+                        connection_patch(stored, &profile, credential)
+                            .validate_credential_target(stored)
+                    });
+                if let Err(error) = validation {
+                    let error = AssistantUiError::from_settings(&error);
+                    self.ui.notice = settings_error_text(self.ui.locale, &error);
+                    self.settings_error = Some(error);
+                    cx.notify();
+                    return;
+                }
+                self.forget_credential_target_conflict();
+                profile
+            }
             Ok(None) => {
                 self.ui.notice = i18n::text(self.ui.locale, "assistant_connection_required").into();
                 cx.notify();
