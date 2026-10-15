@@ -1561,10 +1561,18 @@ pub(crate) fn gated_save_repository(
     inner: FileDocumentRepository,
     gate: &crate::tests::Gate,
 ) -> Arc<dyn application::DocumentRepository> {
+    gated_import_repository(inner, gate, &crate::tests::Gate::default())
+}
+
+pub(crate) fn gated_import_repository(
+    inner: FileDocumentRepository,
+    gate: &crate::tests::Gate,
+    snapshot_failure_gate: &crate::tests::Gate,
+) -> Arc<dyn application::DocumentRepository> {
     Arc::new(GatedDocumentRepository {
         inner,
         gate: gate.clone(),
-        snapshot_failure_gate: Default::default(),
+        snapshot_failure_gate: snapshot_failure_gate.clone(),
         read_gate: Default::default(),
     })
 }
