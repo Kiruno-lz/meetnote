@@ -1557,6 +1557,18 @@ pub(crate) fn gated_read_repository(
     })
 }
 
+pub(crate) fn gated_save_repository(
+    inner: FileDocumentRepository,
+    gate: &crate::tests::Gate,
+) -> Arc<dyn application::DocumentRepository> {
+    Arc::new(GatedDocumentRepository {
+        inner,
+        gate: gate.clone(),
+        snapshot_failure_gate: Default::default(),
+        read_gate: Default::default(),
+    })
+}
+
 impl application::DocumentRepository for GatedDocumentRepository {
     fn snapshot(&self) -> Result<application::DocumentSnapshot, String> {
         let snapshot = self.inner.snapshot();
@@ -1578,6 +1590,10 @@ impl application::DocumentRepository for GatedDocumentRepository {
 
     fn watch(&self) -> Result<std::sync::mpsc::Receiver<DocumentChange>, String> {
         self.inner.watch()
+    }
+
+    fn subscribe_changes(&self) -> Result<application::DocumentChanges, String> {
+        self.inner.subscribe_changes()
     }
 
     fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
