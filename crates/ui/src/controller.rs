@@ -1887,6 +1887,7 @@ impl RootView {
     /// Imports `path` and reloads the project list off the main thread.
     pub(crate) fn import_audio_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
         let generation = self.begin_projects_reload();
+        let root_generation = self.documents_root_generation;
         let workspace = self.services.workspace.clone();
         cx.spawn(async move |this, cx| {
             let imported = runtime::spawn_blocking(move || {
@@ -1895,6 +1896,10 @@ impl RootView {
             })
             .await;
             this.update(cx, |this, cx| {
+                if root_generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 match imported {
                     Ok((project, projects)) => {
                         let refreshed = projects.is_ok();

@@ -60,16 +60,25 @@ impl Workspace {
     }
 
     fn with_read_gate(read_gate: Option<&crate::tests::Gate>) -> Self {
-        Self::with_gates(read_gate, None)
+        Self::with_gates(read_gate, None, None)
     }
 
     fn with_save_gates(old: &crate::tests::Gate, new: &crate::tests::Gate) -> Self {
-        Self::with_gates(None, Some((old, new)))
+        Self::with_gates(None, Some((old, new)), None)
+    }
+
+    fn with_import_gates(save: &crate::tests::Gate, snapshot_failure: &crate::tests::Gate) -> Self {
+        Self::with_gates(
+            None,
+            Some((save, &crate::tests::Gate::default())),
+            Some(snapshot_failure),
+        )
     }
 
     fn with_gates(
         read_gate: Option<&crate::tests::Gate>,
         save_gates: Option<(&crate::tests::Gate, &crate::tests::Gate)>,
+        snapshot_failure_gate: Option<&crate::tests::Gate>,
     ) -> Self {
         let old = DocumentsRoot::new();
         let new = DocumentsRoot::new();
@@ -92,9 +101,11 @@ impl Workspace {
                 (Some(gate), _) => {
                     crate::document_tests::gated_read_repository(old.repository(), gate)
                 }
-                (_, Some((gate, _))) => {
-                    crate::document_tests::gated_save_repository(old.repository(), gate)
-                }
+                (_, Some((gate, _))) => crate::document_tests::gated_import_repository(
+                    old.repository(),
+                    gate,
+                    snapshot_failure_gate.unwrap_or(&crate::tests::Gate::default()),
+                ),
                 _ => Arc::new(old.repository()),
             }),
         )
@@ -866,6 +877,149 @@ fn a_late_tree_move_keeps_the_new_workspaces_tree_and_editor(cx: &mut TestAppCon
         ],
         new_bytes
     );
+}
+
+fn late_import_keeps_the_new_workspace(cx: &mut TestAppContext, snapshot_fails: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let save_gate = crate::tests::Gate::default();
+    let snapshot_gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_import_gates(&save_gate, &snapshot_gate);
+    put(&fixture.old, "shared", "Old");
+    put(&fixture.new, "shared", "New");
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("arriving.wav");
+    std::fs::write(&audio, AUDIO).unwrap();
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    save_gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| save_gate.counts().0 == 1);
+    let imported = fixture
+        .old
+        .repository()
+        .snapshot()
+        .unwrap()
+        .documents
+        .into_iter()
+        .find(|document| document.title() == "arriving")
+        .unwrap();
+    let imported_bytes = fixture.old.package_bytes(imported.id().as_str());
+    assert_eq!(imported.audio_path(), audio.display().to_string());
+    // Capture a real failure from the original root before changing roots,
+    // then restore its packages while the result waits outside repository IO.
+    let completion_gate = if snapshot_fails {
+        let unreadable = UnreadableDocumentsRoot::new(&fixture.old);
+        snapshot_gate.arm();
+        save_gate.release();
+        wait_for(cx, &view, |_| snapshot_gate.counts().0 == 1);
+        drop(unreadable);
+        &snapshot_gate
+    } else {
+        &save_gate
+    };
+    choose(cx, &view, fixture.new.path());
+    assert_eq!(fixture.root(), fixture.new.path());
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.title() == "New")
+            && !root.audio.pending()
+    });
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("shared"))
+    });
+    let title = view.read_with(cx, |root, _| root.editor.title.clone());
+    focus_field(cx, &title);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("New workspace draft");
+    let draft = view.read_with(cx, |root, cx| root.editor.current(cx).unwrap());
+    let new_bytes = fixture.new.package_bytes("shared");
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let toast = view.read_with(cx, |root, _| {
+        root.ui.toast().map(|toast| toast.notice.clone())
+    });
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let completed = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = completed.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    completion_gate.release();
+    wait_for(cx, &view, |_| completed.get());
+    cx.run_until_parked();
+    view.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.ui.notice, notice,
+            "the old import must not replace the new workspace's notice"
+        );
+        assert_eq!(root.ui.toast().map(|toast| toast.notice.clone()), toast);
+        assert_eq!(root.editor.current(cx).unwrap().edits, draft.edits);
+        assert_eq!(root.editor.current(cx).unwrap().base, draft.base);
+        assert_eq!(root.ui.route, Route::Meetings);
+        assert_eq!(root.ui.selected_project, Some(ProjectId::new("shared")));
+        assert_eq!(root.projects.len(), 1);
+        assert!(root.projects_error.is_none());
+    });
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(fixture.new.package_bytes("shared"), new_bytes);
+    assert_eq!(
+        fixture.old.package_bytes(imported.id().as_str()),
+        imported_bytes
+    );
+}
+
+#[gpui::test]
+fn a_late_import_success_keeps_the_new_workspaces_notice_and_draft(cx: &mut TestAppContext) {
+    late_import_keeps_the_new_workspace(cx, false);
+}
+
+#[gpui::test]
+fn a_late_import_snapshot_failure_keeps_the_new_workspaces_notice_and_draft(
+    cx: &mut TestAppContext,
+) {
+    late_import_keeps_the_new_workspace(cx, true);
+}
+
+#[gpui::test]
+fn an_import_in_a_rolled_back_workspace_still_reports_its_completion(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_save_gates(&gate, &crate::tests::Gate::default());
+    put(&fixture.old, "shared", "Old");
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("arriving.wav");
+    std::fs::write(&audio, AUDIO).unwrap();
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    let mut external = fixture.settings.snapshot().unwrap();
+    external.expected_speakers = Some(3);
+    fixture.settings.update(external).unwrap();
+    choose(cx, &view, fixture.new.path());
+    assert!(switch_status(cx, &view).unwrap().1);
+    assert_eq!(fixture.root(), fixture.old.path());
+    gate.release();
+    wait_for(cx, &view, |root| {
+        root.ui.notice == i18n::message(root.ui.locale, "imported", "arriving")
+    });
+    assert_eq!(
+        fixture.old.repository().snapshot().unwrap().documents.len(),
+        2
+    );
+    assert!(fixture
+        .new
+        .repository()
+        .snapshot()
+        .unwrap()
+        .documents
+        .is_empty());
 }
 
 #[gpui::test]
