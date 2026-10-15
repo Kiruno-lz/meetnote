@@ -1857,8 +1857,12 @@ impl RootView {
             this.update(cx, |this, cx| {
                 match imported {
                     Ok((project, projects)) => {
+                        let refreshed = projects.is_ok();
                         this.apply_projects(generation, projects, cx);
-                        this.ui.notice = i18n::message(this.ui.locale, "imported", project.title());
+                        if refreshed {
+                            this.ui.notice =
+                                i18n::message(this.ui.locale, "imported", project.title());
+                        }
                     }
                     Err(error) => {
                         this.ui.notice = i18n::message(this.ui.locale, "import_failed", &error)

@@ -1358,11 +1358,16 @@ fn completed_processing_cancellation_is_one_neutral_owner_notice(cx: &mut TestAp
 struct ImportWriteRepository {
     inner: FileDocumentRepository,
     gate: crate::tests::Gate,
+    snapshot_failure_gate: crate::tests::Gate,
 }
 
 impl application::DocumentRepository for ImportWriteRepository {
     fn snapshot(&self) -> Result<application::DocumentSnapshot, String> {
-        self.inner.snapshot()
+        let snapshot = self.inner.snapshot();
+        if snapshot.is_err() {
+            self.snapshot_failure_gate.pass();
+        }
+        snapshot
     }
 
     fn get(&self, id: &domain::DocumentId) -> Result<Option<DocumentState>, String> {
@@ -1389,6 +1394,15 @@ fn open_import_on<'a>(
     documents: &DocumentsRoot,
     gate: &crate::tests::Gate,
 ) -> (View, &'a mut VisualTestContext) {
+    open_import_with_snapshot_gate_on(cx, documents, gate, &crate::tests::Gate::default())
+}
+
+fn open_import_with_snapshot_gate_on<'a>(
+    cx: &'a mut TestAppContext,
+    documents: &DocumentsRoot,
+    gate: &crate::tests::Gate,
+    snapshot_failure_gate: &crate::tests::Gate,
+) -> (View, &'a mut VisualTestContext) {
     let mut services =
         desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
     services.workspace = WorkspaceService::new(
@@ -1399,6 +1413,7 @@ fn open_import_on<'a>(
         DocumentService::new(Arc::new(ImportWriteRepository {
             inner: documents.repository(),
             gate: gate.clone(),
+            snapshot_failure_gate: snapshot_failure_gate.clone(),
         })),
     );
     open_desktop_on(cx, services)
@@ -1582,18 +1597,23 @@ fn an_import_snapshot_failure_preserves_the_selection(cx: &mut TestAppContext) {
     wait_for(cx, &view, |_| gate.counts().1 == 1);
     // The import already wrote its package. Temporarily occupying its root
     // with a file makes the real repository's following snapshot fail.
+    let repository = documents.repository();
     let moved = audio_files.path().join("temporarily-moved-workspace");
     std::fs::rename(documents.path(), &moved).unwrap();
     std::fs::write(documents.path(), b"root temporarily occupied").unwrap();
+    let error = repository.snapshot().unwrap_err();
     gate.release();
-    let notice = i18n::message(i18n::Locale::ZhCn, "imported", "saved");
-    wait_for(cx, &view, |root| root.ui.notice == notice);
-    let selected = view.read_with(cx, |root, _| {
-        assert!(root.projects.is_empty(), "the snapshot actually failed");
-        root.ui.selected_project.clone()
+    wait_for(cx, &view, |root| root.projects.is_empty());
+    let (selected, notice) = view.read_with(cx, |root, _| {
+        (root.ui.selected_project.clone(), root.ui.notice.clone())
     });
     std::fs::remove_file(documents.path()).unwrap();
     std::fs::rename(moved, documents.path()).unwrap();
+    assert_eq!(
+        notice,
+        i18n::message(i18n::Locale::ZhCn, "documents_load_failed", &error),
+        "import success must not hide the following snapshot failure"
+    );
     assert_eq!(
         selected,
         Some(ProjectId::new("a")),
@@ -1603,6 +1623,57 @@ fn an_import_snapshot_failure_preserves_the_selection(cx: &mut TestAppContext) {
         documents.repository().snapshot().unwrap().documents.len(),
         2,
         "the import was really persisted"
+    );
+}
+
+#[gpui::test]
+fn a_stale_import_snapshot_failure_preserves_the_newer_feedback(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("late-failure.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let write_gate = crate::tests::Gate::default();
+    let snapshot_gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_with_snapshot_gate_on(cx, &documents, &write_gate, &snapshot_gate);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    write_gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| write_gate.counts().1 == 1);
+    let moved = audio_files.path().join("temporarily-moved-workspace");
+    std::fs::rename(documents.path(), &moved).unwrap();
+    std::fs::write(documents.path(), b"root temporarily occupied").unwrap();
+    snapshot_gate.arm();
+    write_gate.release();
+    wait_for(cx, &view, |_| snapshot_gate.counts().1 == 1);
+    // The old snapshot has genuinely failed, but cannot return yet. A
+    // newer successful reload must remain authoritative when it does.
+    std::fs::remove_file(documents.path()).unwrap();
+    std::fs::rename(moved, documents.path()).unwrap();
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| {
+        root.projects.len() == 2 && !root.audio.pending()
+    });
+    cx.run_until_parked();
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let notified = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = notified.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    snapshot_gate.release();
+    // Import completion always notifies even when its stale snapshot is
+    // ignored, so this waits for that callback rather than sleeping.
+    wait_for(cx, &view, |_| notified.get());
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.notice, notice);
+        assert_eq!(root.projects.len(), 2);
+        assert_eq!(root.ui.selected_project, Some(ProjectId::new("a")));
+    });
+    assert_eq!(
+        documents.repository().snapshot().unwrap().documents.len(),
+        2
     );
 }
 
