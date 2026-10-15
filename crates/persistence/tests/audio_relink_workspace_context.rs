@@ -10,6 +10,7 @@ use domain::{DocumentId, DocumentState};
 use persistence::{DocumentPackage, FileDocumentRepository};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 
 struct UnusedProviders;
@@ -119,13 +120,15 @@ fn package_bytes(root: &Path) -> Vec<Vec<u8>> {
 }
 
 fn relink_during_switch(pause_after: PauseAfter) {
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
     let fixture = Fixture(std::env::temp_dir().join(format!(
-        "meetnote-relink-context-{}-{}",
+        "meetnote-relink-context-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_nanos()
+            .as_nanos(),
+        NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed),
     )));
     let old_root = fixture.0.join("old");
     let new_root = fixture.0.join("new");
