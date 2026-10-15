@@ -8,8 +8,8 @@
 //! would.
 
 use crate::tests::{
-    click_selector, desktop_services, field_value, focus_field, open_desktop_on, temp_directory,
-    test_settings, wait_for, FakeAssistantUiService, Field,
+    click_selector, desktop_services, field_value, focus_field, open_desktop_on,
+    stored_key_settings, temp_directory, test_settings, wait_for, FakeAssistantUiService, Field,
 };
 use crate::{
     controller::RootView,
@@ -88,6 +88,29 @@ impl DocumentsRoot {
 impl Drop for DocumentsRoot {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+/// Makes a real repository unreadable without altering its document packages.
+pub(crate) struct UnreadableDocumentsRoot {
+    path: PathBuf,
+    moved: PathBuf,
+}
+
+impl UnreadableDocumentsRoot {
+    pub(crate) fn new(documents: &DocumentsRoot) -> Self {
+        let path = documents.path().to_path_buf();
+        let moved = temp_directory();
+        std::fs::rename(&path, &moved).unwrap();
+        std::fs::write(&path, b"root temporarily occupied").unwrap();
+        Self { path, moved }
+    }
+}
+
+impl Drop for UnreadableDocumentsRoot {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.path).unwrap();
+        std::fs::rename(&self.moved, &self.path).unwrap();
     }
 }
 
@@ -1603,8 +1626,15 @@ fn an_import_snapshot_failure_preserves_the_selection(cx: &mut TestAppContext) {
     std::fs::write(documents.path(), b"root temporarily occupied").unwrap();
     let error = repository.snapshot().unwrap_err();
     gate.release();
-    wait_for(cx, &view, |root| root.projects.is_empty());
+    let expected = i18n::message(i18n::Locale::ZhCn, "documents_load_failed", &error);
+    wait_for(cx, &view, |root| root.ui.notice == expected);
     let (selected, notice) = view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.projects.len(),
+            1,
+            "a failed read retains the last list"
+        );
+        assert_eq!(root.projects_error.as_deref(), Some(error.as_str()));
         (root.ui.selected_project.clone(), root.ui.notice.clone())
     });
     std::fs::remove_file(documents.path()).unwrap();
@@ -1624,6 +1654,184 @@ fn an_import_snapshot_failure_preserves_the_selection(cx: &mut TestAppContext) {
         2,
         "the import was really persisted"
     );
+}
+
+#[gpui::test]
+fn workspace_read_failure_keeps_the_editor_and_retry_keeps_its_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let mut a = processed("a", "A");
+    let audio = documents.path().join("a/recording.wav");
+    a.source.audio_path = audio.display().to_string();
+    a.processing.latest.as_mut().unwrap().input_audio_checksum = None;
+    a.content.summary = Some("继续阅读与编辑这份记录。\n".repeat(100));
+    documents.put(a, "# A\n");
+    std::fs::write(audio, b"fixture audio").unwrap();
+    std::fs::create_dir_all(documents.path().join("broken")).unwrap();
+    std::fs::write(documents.path().join("broken/state.json"), b"{").unwrap();
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(1100.), px(700.)));
+    cx.run_until_parked();
+    open_editor(cx, &view, "a");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    retype(cx, &title, "目录暂不可读时的草稿");
+    retype_area(cx, &body, "仍在编辑这里的内容");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    scroll.set_offset(point(px(0.), px(-20.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let position = scroll.offset();
+    assert!(position.y < px(0.));
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let (issues, audio) = view.read_with(cx, |root, _| {
+        (root.document_issues.clone(), format!("{:?}", root.audio))
+    });
+    assert!(!issues.is_empty());
+    let before = documents.package_bytes("a");
+    let repository = documents.repository();
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    let error = repository.snapshot().unwrap_err();
+    let expected = i18n::message(i18n::Locale::ZhCn, "documents_load_failed", &error);
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| root.ui.notice == expected);
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.projects.len(),
+            1,
+            "a read error is not an empty workspace"
+        );
+        assert_eq!(root.document_issues, issues);
+        assert_eq!(root.ui.selected_project, Some(ProjectId::new("a")));
+        assert_eq!(root.editor.shown(), Some(&ProjectId::new("a")));
+        assert_eq!(
+            format!("{:?}", root.audio),
+            audio,
+            "failed reads do not recheck audio"
+        );
+    });
+    assert_eq!(field_value(cx, &title), "目录暂不可读时的草稿");
+    assert_eq!(area_value(cx, &body), "仍在编辑这里的内容");
+    assert_eq!(scroll.offset(), position);
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert!(cx.debug_bounds("empty-import-audio").is_none());
+    let banner = rendered(cx, "workspace-read-error");
+    assert!(within(rendered(cx, "retry-workspace-read"), banner));
+    drop(unreadable);
+    assert_eq!(documents.package_bytes("a"), before);
+    // Other valid facts may change while the user's unsaved draft remains open.
+    documents.put(
+        DocumentState::new(ProjectId::new("b"), "B", "b.wav"),
+        "# B\n",
+    );
+    click_selector(cx, "open-project-detail");
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    cx.run_until_parked();
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let page = rendered(cx, "meetings-page");
+        let banner = rendered(cx, "workspace-read-error");
+        assert!(within(banner, page), "{banner:?} in {page:?}");
+        assert!(within(rendered(cx, "workspace-read-error-message"), banner));
+        assert!(within(rendered(cx, "retry-workspace-read"), banner));
+        let body = rendered(cx, "meeting-content");
+        assert!(within(body, page), "{body:?} in {page:?}");
+        assert!(
+            body.size.height >= px(72.),
+            "the editor remains usable beside Detail: {body:?} ({locale:?}); error={banner:?}"
+        );
+    }
+    let later_notice = i18n::message(i18n::Locale::ZhCn, "document_saved", "另一份记录");
+    view.update(cx, |root, cx| {
+        root.ui.notice = later_notice.clone();
+        cx.notify();
+    });
+    click_selector(cx, "retry-workspace-read");
+    let retry_focus = cx.update(|window, cx| window.focused(cx));
+    wait_for(cx, &view, |root| {
+        root.projects.len() == 2 && !root.audio.pending()
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("workspace-read-error").is_none());
+    assert_eq!(field_value(cx, &title), "目录暂不可读时的草稿");
+    assert_eq!(area_value(cx, &body), "仍在编辑这里的内容");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), retry_focus);
+    assert_eq!(documents.package_bytes("a"), before);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        later_notice
+    );
+}
+
+#[gpui::test]
+fn an_initial_workspace_read_failure_does_not_claim_the_workspace_is_empty(
+    cx: &mut TestAppContext,
+) {
+    let documents = DocumentsRoot::new();
+    let repository = documents.repository();
+    let mut services = desktop_services(
+        Arc::new(FakeAssistantUiService::default()),
+        stored_key_settings(),
+    );
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(Arc::new(repository.clone())),
+    );
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    let error = repository.snapshot().unwrap_err();
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.installation.catalog.is_empty());
+    assert!(
+        cx.debug_bounds("assistant-first-import").is_none(),
+        "an unreadable root is not known to need its first import"
+    );
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        i18n::message(i18n::Locale::ZhCn, "documents_load_failed", &error)
+    );
+    assert!(
+        cx.debug_bounds("empty-import-audio").is_none(),
+        "an unreadable root is not known to be empty"
+    );
+    rendered(cx, "workspace-read-error");
+    rendered(cx, "project-tree-unavailable");
+    drop(unreadable);
+    let notified = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = notified.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    click_selector(cx, "retry-workspace-read");
+    wait_for(cx, &view, |_| notified.get());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("workspace-read-error").is_none());
+    assert!(cx.debug_bounds("project-tree-unavailable").is_none());
+    assert!(
+        view.read_with(cx, |root, _| root.ui.notice.is_empty()),
+        "a successful retry removes its previous failure notice"
+    );
+    rendered(cx, "empty-import-audio");
+    view.update(cx, |root, cx| root.navigate(Route::Assistant, cx));
+    cx.run_until_parked();
+    rendered(cx, "assistant-first-import");
+}
+
+#[gpui::test]
+fn a_successfully_read_empty_workspace_offers_import(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let (_view, cx, _changes) = open_on(cx, &documents);
+    rendered(cx, "empty-import-audio");
+    assert!(cx.debug_bounds("workspace-read-error").is_none());
+    assert!(cx.debug_bounds("project-tree-unavailable").is_none());
 }
 
 #[gpui::test]
@@ -1668,6 +1876,10 @@ fn a_stale_import_snapshot_failure_preserves_the_newer_feedback(cx: &mut TestApp
     wait_for(cx, &view, |_| notified.get());
     view.read_with(cx, |root, _| {
         assert_eq!(root.ui.notice, notice);
+        assert!(
+            root.projects_error.is_none(),
+            "the old failure is not the latest read outcome"
+        );
         assert_eq!(root.projects.len(), 2);
         assert_eq!(root.ui.selected_project, Some(ProjectId::new("a")));
     });

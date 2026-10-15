@@ -513,8 +513,10 @@ pub(crate) struct RootView {
     /// The latest project-list reload; an older one that finishes later is
     /// dropped.
     projects_generation: u64,
-    /// Whether the project list has loaded since the window opened.
+    /// Whether the initial project-list request has completed.
     pub(crate) projects_loaded: bool,
+    /// The latest list read failure; the last successful snapshot stays shown.
+    pub(crate) projects_error: Option<String>,
     /// The open Speaker Library migration question, if any.
     pub(crate) speaker_library_prompt: Option<SpeakerLibraryPrompt>,
     pub(crate) scroll: ScrollAreas,
@@ -739,6 +741,7 @@ impl RootView {
             installation: InstallationState::default(),
             projects_generation: 0,
             projects_loaded: false,
+            projects_error: None,
             speaker_library_prompt: None,
             scroll: ScrollAreas::default(),
             dialog_focus: cx.focus_handle(),
@@ -868,18 +871,24 @@ impl RootView {
                 Ok(snapshot) => {
                     self.projects = snapshot.documents;
                     self.document_issues = snapshot.issues;
+                    if let Some(error) = self.projects_error.take() {
+                        if self.ui.notice
+                            == i18n::message(self.ui.locale, "documents_load_failed", &error)
+                        {
+                            self.ui.notice.clear();
+                        }
+                    }
                     if !self.projects_loaded || self.ui.selected_project.is_none() {
                         self.ui.open_loaded_projects(&self.projects);
                     }
+                    self.check_selected_audio(cx);
                 }
                 Err(error) => {
-                    self.projects.clear();
-                    self.document_issues.clear();
                     self.ui.notice = i18n::message(self.ui.locale, "documents_load_failed", &error);
+                    self.projects_error = Some(error);
                 }
             }
             self.projects_loaded = true;
-            self.check_selected_audio(cx);
             cx.notify();
         }
     }
@@ -1433,6 +1442,7 @@ impl RootView {
         if root_changed {
             self.projects.clear();
             self.document_issues.clear();
+            self.projects_error = None;
             self.projects_loaded = false;
             self.ui.selected_project = None;
             self.ui.expanded_projects.clear();

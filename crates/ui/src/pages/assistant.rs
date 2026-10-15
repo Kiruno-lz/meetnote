@@ -75,7 +75,8 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 &tokens,
                 cx,
             ))
-        } else if root.projects_loaded && root.projects.is_empty() {
+        } else if root.projects_loaded && root.projects_error.is_none() && root.projects.is_empty()
+        {
             Some(render_first_use(
                 FirstUseStep::Import,
                 root.ui.locale,

@@ -13,6 +13,8 @@ use gpui::{div, prelude::*, px, AnyElement, Context, IntoElement, Pixels};
 
 /// The tallest the issue list grows before it scrolls.
 const ISSUE_LIST_HEIGHT: Pixels = px(168.);
+/// Long read errors scroll so the retry and document remain reachable.
+const READ_ERROR_HEIGHT: Pixels = px(96.);
 /// The width of the document status select.
 const STATUS_SELECT_WIDTH: Pixels = px(240.);
 /// The name column of a speaker row.
@@ -65,7 +67,17 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .p_3()
                 .text_sm()
                 .text_color(tokens.text_muted)
-                .child(tr(root.ui.locale, "no_projects")),
+                .when(root.projects_error.is_some(), |empty| {
+                    empty.debug_selector(|| "project-tree-unavailable".into())
+                })
+                .child(tr(
+                    root.ui.locale,
+                    if root.projects_error.is_some() {
+                        "documents_unavailable"
+                    } else {
+                        "no_projects"
+                    },
+                )),
         );
     } else {
         for (project, depth) in rows {
@@ -302,6 +314,7 @@ fn main_panel(
         .flex()
         .flex_col()
         .gap_4()
+        .children(workspace_read_error(root, &tokens, cx))
         .children(conflict_notice(root, &tokens, cx))
         .children(issues_panel(root, &tokens));
     if let Some(project) = project {
@@ -315,9 +328,9 @@ fn main_panel(
         );
         let process_label = tr(locale, if processing_here { "cancel" } else { "process" });
         let mode = root.ui.content_mode;
-        let model_hint = missing_models
-            .hint_key()
-            .filter(|_| !processing_here && audio_problem.is_none());
+        let model_hint = missing_models.hint_key().filter(|_| {
+            !processing_here && audio_problem.is_none() && root.projects_error.is_none()
+        });
         let scroll = root.scroll.meeting_content.clone();
         let mut content = div()
             .id("meeting-content")
@@ -513,7 +526,7 @@ fn main_panel(
                 )
                 .child(Scrollbar::vertical("meeting-content-scrollbar", &scroll)),
         );
-    } else {
+    } else if root.projects_error.is_none() {
         panel = panel
             .child(
                 div()
@@ -558,6 +571,53 @@ fn main_panel(
             );
     }
     panel
+}
+
+fn workspace_read_error(
+    root: &RootView,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> Option<AnyElement> {
+    let error = root.projects_error.as_ref()?;
+    let locale = root.ui.locale;
+    Some(
+        div()
+            .debug_selector(|| "workspace-read-error".into())
+            .flex_shrink_0()
+            .min_w_0()
+            .p_2()
+            .rounded(tokens.radius.sm)
+            .bg(tokens.warning_surface)
+            .text_color(tokens.warning_text)
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .id("workspace-read-error-message")
+                    .debug_selector(|| "workspace-read-error-message".into())
+                    .flex_1()
+                    .min_w_0()
+                    .max_h(READ_ERROR_HEIGHT)
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_sm().child(i18n::message(
+                        locale,
+                        "workspace_read_failed",
+                        error,
+                    ))),
+            )
+            .child(
+                Button::new("retry-workspace-read", tr(locale, "retry_workspace_read"))
+                    .debug_selector(|| "retry-workspace-read".into())
+                    .secondary()
+                    .compact()
+                    .on_click(cx.listener(|this, _, _, cx| this.reload_projects(cx))),
+            )
+            .into_any_element(),
+    )
 }
 
 /// Persistent feedback for the shown task's runtime jobs. Each bar uses
@@ -814,7 +874,7 @@ pub(crate) fn issue_sentence(issue: &application::DocumentIssue, locale: i18n::L
 /// The scanner's issues of the documents directory, each with its path and
 /// reason, as the last reload read them. Nothing when there are none.
 fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
-    if root.document_issues.is_empty() {
+    if root.projects_error.is_some() || root.document_issues.is_empty() {
         return None;
     }
     let scroll = root.scroll.document_issues.clone();

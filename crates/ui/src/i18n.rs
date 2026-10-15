@@ -54,6 +54,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "project_tree_shortcuts") => "Option-↑/↓ 在同级中调整所选项目的顺序；Option-→ 把它移入上方的同级项目；Option-← 把它移到上一层的末尾。",
         (Locale::ZhCn, "import_audio") => "导入音频",
         (Locale::ZhCn, "no_projects") => "还没有项目。导入音频开始整理。",
+        (Locale::ZhCn, "documents_unavailable") => "暂时无法读取项目列表。",
+        (Locale::ZhCn, "retry_workspace_read") => "重新读取",
         (Locale::ZhCn, "open_detail") => "打开详情",
         (Locale::ZhCn, "process") => "处理项目",
         (Locale::ZhCn, "cancel") => "取消",
@@ -441,6 +443,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "project_tree_shortcuts") => "Option-Up and Option-Down move the selected project among its siblings; Option-Right moves it into the project above; Option-Left moves it to the end of the level above.",
         (Locale::EnUs, "import_audio") => "Import audio",
         (Locale::EnUs, "no_projects") => "No projects yet. Import audio to begin.",
+        (Locale::EnUs, "documents_unavailable") => "The project list cannot be read right now.",
+        (Locale::EnUs, "retry_workspace_read") => "Retry",
         (Locale::EnUs, "open_detail") => "Open detail",
         (Locale::EnUs, "process") => "Process project",
         (Locale::EnUs, "cancel") => "Cancel",
@@ -1110,6 +1114,8 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::ZhCn, "assistant_probe_failed") => format!("检测失败：{value}"),
         (Locale::EnUs, "assistant_probe_failed") => format!("Check failed: {value}"),
         (Locale::ZhCn, "documents_load_failed") => format!("无法读取文档目录：{value}"),
+        (Locale::ZhCn, "workspace_read_failed") => format!("读取失败：{value}"),
+        (Locale::EnUs, "workspace_read_failed") => format!("Read failed: {value}"),
         (Locale::EnUs, "documents_load_failed") => {
             format!("Cannot read the documents folder: {value}")
         }

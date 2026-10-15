@@ -8,7 +8,7 @@
 //! `choose_documents_root` and `relink_audio_path`.
 
 use crate::document_tests::{
-    open_on, processed, rendered, select_row, within, DocumentsRoot, View,
+    open_on, processed, rendered, select_row, within, DocumentsRoot, UnreadableDocumentsRoot, View,
 };
 use crate::tests::{
     click_selector, desktop_services, empty_result, open_desktop_on, pending_review,
@@ -252,6 +252,39 @@ fn choosing_a_documents_root_shows_its_documents_saves_it_and_follows_its_change
             .iter()
             .any(|project| project.id().as_str() == "later-doc")
     });
+}
+
+#[gpui::test]
+fn switching_workspaces_clears_the_old_read_failure(cx: &mut TestAppContext) {
+    let fixture = Workspace::new();
+    put(&fixture.old, "old-doc", "Old");
+    put(&fixture.new, "new-doc", "New");
+    let (view, cx) = open_workspace(cx, &fixture);
+    let repository = fixture.old.repository();
+    let unreadable = UnreadableDocumentsRoot::new(&fixture.old);
+    let error = repository.snapshot().unwrap_err();
+    let expected = i18n::message(Locale::ZhCn, "documents_load_failed", &error);
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Meetings, cx);
+        root.reload_projects(cx);
+    });
+    wait_for(cx, &view, |root| root.ui.notice == expected);
+    rendered(cx, "workspace-read-error");
+    drop(unreadable);
+    choose(cx, &view, fixture.new.path());
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|document| document.id().as_str() == "new-doc")
+    });
+    cx.run_until_parked();
+    assert_eq!(ids(&view, cx), ["new-doc"]);
+    assert!(cx.debug_bounds("workspace-read-error").is_none());
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("new-doc"))
+    );
+    assert_eq!(fixture.root(), fixture.new.path());
 }
 
 #[gpui::test]
