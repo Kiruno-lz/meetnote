@@ -126,7 +126,8 @@ impl WorkspaceService {
         new_path: impl Into<String>,
     ) -> Result<Vec<DocumentState>, AudioSourceError> {
         let new_path = new_path.into();
-        let documents = self.list_projects().map_err(AudioSourceError::Service)?;
+        let service = self.documents().frozen();
+        let documents = service.list().map_err(AudioSourceError::Service)?;
         let document = find(&documents, document_id)?;
         ensure_revision(document, expected_revision)?;
         if !Path::new(&new_path).is_file() {
@@ -145,7 +146,6 @@ impl WorkspaceService {
             }
         }
 
-        let service = self.documents();
         let mut writes = Vec::new();
         for read in asset {
             let current = service
