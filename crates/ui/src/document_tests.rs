@@ -1353,3 +1353,298 @@ fn completed_processing_cancellation_is_one_neutral_owner_notice(cx: &mut TestAp
         assert!(root.ui.processing_project.is_none());
     });
 }
+
+/// Gates the real import write's return, after its package and locks are committed.
+struct ImportWriteRepository {
+    inner: FileDocumentRepository,
+    gate: crate::tests::Gate,
+}
+
+impl application::DocumentRepository for ImportWriteRepository {
+    fn snapshot(&self) -> Result<application::DocumentSnapshot, String> {
+        self.inner.snapshot()
+    }
+
+    fn get(&self, id: &domain::DocumentId) -> Result<Option<DocumentState>, String> {
+        self.inner.get(id)
+    }
+
+    fn read(&self, id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String> {
+        self.inner.read(id)
+    }
+
+    fn watch(&self) -> Result<std::sync::mpsc::Receiver<DocumentChange>, String> {
+        self.inner.watch()
+    }
+
+    fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
+        self.inner.save(document, markdown)?;
+        self.gate.pass();
+        Ok(())
+    }
+}
+
+fn open_import_on<'a>(
+    cx: &'a mut TestAppContext,
+    documents: &DocumentsRoot,
+    gate: &crate::tests::Gate,
+) -> (View, &'a mut VisualTestContext) {
+    let mut services =
+        desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(Arc::new(ImportWriteRepository {
+            inner: documents.repository(),
+            gate: gate.clone(),
+        })),
+    );
+    open_desktop_on(cx, services)
+}
+
+#[gpui::test]
+fn background_import_preserves_the_document_chosen_while_completion_waits(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    b.content.summary = Some("继续阅读与编辑这份记录。\n".repeat(100));
+    documents.put(b, "# B\n");
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("arriving.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    select_row(cx, &view, "a");
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    assert_eq!(
+        documents.repository().snapshot().unwrap().documents.len(),
+        3,
+        "the real import committed its package before returning"
+    );
+    assert_eq!(view.read_with(cx, |root, _| root.projects.len()), 2);
+    select_row(cx, &view, "b");
+    open_editor(cx, &view, "b");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    retype(cx, &title, "B 等待导入时的草稿");
+    retype_area(cx, &body, "继续整理 B，保持这里的输入");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    scroll.set_offset(point(px(0.), px(-100.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let position = scroll.offset();
+    assert!(position.y < px(0.));
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let before = documents.package_bytes("b");
+    gate.release();
+    wait_for(cx, &view, |root| root.projects.len() == 3);
+    cx.run_until_parked();
+    let imported = view.read_with(cx, |root, _| {
+        root.projects
+            .iter()
+            .find(|doc| doc.title() == "arriving")
+            .unwrap()
+            .id()
+            .clone()
+    });
+    let record = documents.read(imported.as_str());
+    assert_eq!(record.state.audio_path(), audio.display().to_string());
+    assert!(
+        !record.markdown.is_empty(),
+        "the WorkspaceService created a real document package"
+    );
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.selected_project,
+            Some(ProjectId::new("b")),
+            "import must not replace the document chosen while it waited"
+        );
+        assert_eq!(root.ui.route, Route::Meetings);
+        assert_eq!(root.ui.content_mode, crate::state::ContentMode::Edit);
+        assert_eq!(root.editor.shown(), Some(&ProjectId::new("b")));
+        assert_eq!(
+            root.ui.toast().unwrap().notice,
+            i18n::message(root.ui.locale, "imported", "arriving")
+        );
+    });
+    assert_eq!(field_value(cx, &title), "B 等待导入时的草稿");
+    assert_eq!(area_value(cx, &body), "继续整理 B，保持这里的输入");
+    assert_eq!(scroll.offset(), position);
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(documents.package_bytes("b"), before);
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    click_selector(cx, "navigate-forward");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("b"))
+    );
+    assert_eq!(field_value(cx, &title), "B 等待导入时的草稿");
+}
+
+#[gpui::test]
+fn first_import_selects_its_real_document_without_leaving_the_current_route(
+    cx: &mut TestAppContext,
+) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("first.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    view.read_with(cx, |root, _| {
+        assert!(root.projects_loaded);
+        assert!(root.projects.is_empty());
+        assert!(root.ui.selected_project.is_none());
+        assert_eq!(root.ui.route, Route::Assistant);
+    });
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    gate.release();
+    wait_for(cx, &view, |root| {
+        root.projects.len() == 1 && !root.audio.pending()
+    });
+    cx.run_until_parked();
+    let id = view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Assistant);
+        assert_eq!(
+            root.ui.selected_project.as_ref(),
+            Some(root.projects[0].id())
+        );
+        root.projects[0].id().clone()
+    });
+    let imported = documents.read(id.as_str());
+    assert_eq!(imported.state.title(), "first");
+    assert_eq!(imported.state.audio_path(), audio.display().to_string());
+    assert!(!imported.markdown.is_empty());
+}
+
+#[gpui::test]
+fn a_stale_import_snapshot_does_not_choose_a_document(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("late.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    documents.put(
+        DocumentState::new(ProjectId::new("external"), "External", "external.wav"),
+        "# External\n",
+    );
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| root.projects.len() == 2);
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    select_row(cx, &view, "external");
+    gate.release();
+    let notice = i18n::message(i18n::Locale::ZhCn, "imported", "late");
+    wait_for(cx, &view, |root| root.ui.notice == notice);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("external")),
+        "an outdated completion cannot replace the user's newer selection"
+    );
+    assert_eq!(
+        documents.repository().snapshot().unwrap().documents.len(),
+        2
+    );
+}
+
+#[gpui::test]
+fn an_import_snapshot_failure_preserves_the_selection(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("saved.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    wait_for(cx, &view, |root| !root.audio.pending());
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    // The import already wrote its package. Temporarily occupying its root
+    // with a file makes the real repository's following snapshot fail.
+    let moved = audio_files.path().join("temporarily-moved-workspace");
+    std::fs::rename(documents.path(), &moved).unwrap();
+    std::fs::write(documents.path(), b"root temporarily occupied").unwrap();
+    gate.release();
+    let notice = i18n::message(i18n::Locale::ZhCn, "imported", "saved");
+    wait_for(cx, &view, |root| root.ui.notice == notice);
+    let selected = view.read_with(cx, |root, _| {
+        assert!(root.projects.is_empty(), "the snapshot actually failed");
+        root.ui.selected_project.clone()
+    });
+    std::fs::remove_file(documents.path()).unwrap();
+    std::fs::rename(moved, documents.path()).unwrap();
+    assert_eq!(
+        selected,
+        Some(ProjectId::new("a")),
+        "a read failure is not evidence that the user has no selection"
+    );
+    assert_eq!(
+        documents.repository().snapshot().unwrap().documents.len(),
+        2,
+        "the import was really persisted"
+    );
+}
+
+#[gpui::test]
+fn first_import_is_selected_by_a_reload_before_its_completion(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("watcher-first.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    // As a watcher does, reload the real committed package before the
+    // still-blocked import service is allowed to publish its completion.
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| {
+        root.projects.len() == 1 && !root.audio.pending()
+    });
+    let (chosen_before_completion, imported) = view.read_with(cx, |root, _| {
+        (
+            root.ui.selected_project.clone(),
+            root.projects[0].id().clone(),
+        )
+    });
+    gate.release();
+    let notice = i18n::message(i18n::Locale::ZhCn, "imported", "watcher-first");
+    wait_for(cx, &view, |root| root.ui.notice == notice);
+    assert_eq!(chosen_before_completion, Some(imported.clone()), "the latest successful snapshot initializes selection, independently of the late import callback");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.selected_project, Some(imported.clone()));
+        assert_eq!(root.ui.route, Route::Assistant);
+        assert!(
+            !root.ui.can_go_back(),
+            "initial selection adds no history entry"
+        );
+        assert!(root.ui.expanded_projects.contains(&imported));
+    });
+    assert_eq!(
+        documents.read(imported.as_str()).state.audio_path(),
+        audio.display().to_string()
+    );
+}
