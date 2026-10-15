@@ -3788,6 +3788,12 @@ impl RootView {
         .detach();
     }
 
+    /// An accepted action owns the current workspace before its worker
+    /// registers a shared job, and until its result has reached the UI.
+    pub(crate) fn documents_root_busy(&self) -> bool {
+        self.ui.processing || self.assistant_busy()
+    }
+
     /// The Workspace section's button: asks for a folder and switches the
     /// documents root to it.
     pub(crate) fn choose_documents_root_directory(
@@ -3796,6 +3802,14 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
+        if self.documents_root_busy() {
+            self.ui.notice = i18n::text(self.ui.locale, "documents_root_operation_pending").into();
+            cx.notify();
+            return;
+        }
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -3821,6 +3835,11 @@ impl RootView {
     /// after the switch switches the workspace back.
     pub(crate) fn choose_documents_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
         if self.documents_root_switch.switching {
+            return;
+        }
+        if self.documents_root_busy() {
+            self.ui.notice = i18n::text(self.ui.locale, "documents_root_operation_pending").into();
+            cx.notify();
             return;
         }
         self.documents_root_switch.switching = true;

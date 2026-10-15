@@ -254,7 +254,7 @@ fn workspace_section(
                     .debug_selector(|| "choose-documents-root".into())
                     .secondary()
                     .compact()
-                    .disabled(switch.switching)
+                    .disabled(switch.switching || root.documents_root_busy())
                     .on_click(cx.listener(RootView::choose_documents_root_directory)),
             )
             .into_any_element(),
@@ -263,6 +263,11 @@ fn workspace_section(
     .into_any_element()];
     let status = if switch.switching {
         Some((tr(locale, "documents_root_switching").to_string(), false))
+    } else if root.documents_root_busy() {
+        Some((
+            tr(locale, "documents_root_operation_pending").to_string(),
+            false,
+        ))
     } else {
         switch.status.clone()
     };

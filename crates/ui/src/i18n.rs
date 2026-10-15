@@ -412,6 +412,9 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "workspace") => "工作区",
         (Locale::ZhCn, "documents_root") => "文档目录",
         (Locale::ZhCn, "documents_root_switching") => "正在切换文档目录……",
+        (Locale::ZhCn, "documents_root_operation_pending") => {
+            "当前操作仍在进行；结束或取消完成后再切换文档目录。"
+        }
         (Locale::ZhCn, "detail_audio_status") => "音频状态",
         (Locale::ZhCn, "audio_checking") => "正在检查……",
         (Locale::ZhCn, "audio_missing") => "音频缺失",
@@ -823,6 +826,9 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "workspace") => "Workspace",
         (Locale::EnUs, "documents_root") => "Documents folder",
         (Locale::EnUs, "documents_root_switching") => "Switching the documents folder…",
+        (Locale::EnUs, "documents_root_operation_pending") => {
+            "Wait for the current operation to finish or stop before switching the documents folder."
+        }
         (Locale::EnUs, "detail_audio_status") => "Audio status",
         (Locale::EnUs, "audio_checking") => "Checking…",
         (Locale::EnUs, "audio_missing") => "Audio missing",
