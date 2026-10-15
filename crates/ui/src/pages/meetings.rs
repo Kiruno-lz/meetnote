@@ -55,7 +55,9 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
     .has_selection(has_selection)
     .reveal_selection(std::mem::take(&mut root.reveal_tree_selection))
     .on_step(cx.listener(|this, step, window, cx| this.step_project_tree(*step, window, cx)))
-    .on_shift(cx.listener(|this, shift, _, cx| this.shift_project(*shift, cx)))
+    .when(!root.documents_root_switch.switching, |tree| {
+        tree.on_shift(cx.listener(|this, shift, _, cx| this.shift_project(*shift, cx)))
+    })
     .size_full()
     .overflow_y_scroll()
     .track_scroll(&scroll)
@@ -467,7 +469,10 @@ fn main_panel(
                             .debug_selector(|| "relink-audio".into())
                             .secondary()
                             .compact()
-                            .disabled(root.audio.relinking.is_some())
+                            .disabled(
+                                root.audio.relinking.is_some()
+                                    || root.documents_root_switch.switching,
+                            )
                             .on_click(cx.listener(RootView::relink_audio))
                     }))
                     .child(
@@ -564,6 +569,7 @@ fn main_panel(
                     )
                     .child(
                         Button::new("empty-import-audio", tr(locale, "import_audio"))
+                            .disabled(root.documents_root_switch.switching)
                             .debug_selector(|| "empty-import-audio".into())
                             .primary()
                             .on_click(cx.listener(RootView::import_audio)),
@@ -611,6 +617,7 @@ fn workspace_read_error(
             )
             .child(
                 Button::new("retry-workspace-read", tr(locale, "retry_workspace_read"))
+                    .disabled(root.documents_root_switch.switching)
                     .debug_selector(|| "retry-workspace-read".into())
                     .secondary()
                     .compact()
@@ -696,7 +703,7 @@ fn speakers_panel(
     cx: &mut Context<RootView>,
 ) -> AnyElement {
     let locale = root.ui.locale;
-    let busy = root.speaker_command.is_some();
+    let busy = root.speaker_command.is_some() || root.documents_root_switch.switching;
     // Built for this document during the same render.
     let rows = root
         .speaker_rows
@@ -853,6 +860,7 @@ fn conflict_notice(
             )
             .child(
                 Button::new("reload-conflicted-document", tr(locale, "reload"))
+                    .disabled(root.documents_root_switch.switching)
                     .debug_selector(|| "reload-conflicted-document".into())
                     .secondary()
                     .compact()
@@ -958,6 +966,7 @@ fn editor_form(
             )
             .child(
                 Button::new("retry-document-read", tr(locale, "retry_document_read"))
+                    .disabled(root.documents_root_switch.switching)
                     .debug_selector(|| "retry-document-read".into())
                     .secondary()
                     .compact()
@@ -1018,7 +1027,7 @@ fn editor_form(
                     .debug_selector(|| "save-document".into())
                     .primary()
                     .compact()
-                    .disabled(saving)
+                    .disabled(saving || root.documents_root_switch.switching)
                     .on_click(cx.listener(RootView::save_document_draft)),
             ),
         )

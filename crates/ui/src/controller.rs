@@ -1865,6 +1865,9 @@ impl RootView {
     }
 
     pub(crate) fn import_audio(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -1886,6 +1889,9 @@ impl RootView {
 
     /// Imports `path` and reloads the project list off the main thread.
     pub(crate) fn import_audio_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let generation = self.begin_projects_reload();
         let workspace = self.services.workspace.clone();
         cx.spawn(async move |this, cx| {
@@ -2281,6 +2287,9 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let Some(rows) = &self.speaker_rows else {
             return;
         };
@@ -2321,6 +2330,9 @@ impl RootView {
         done: String,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let (DocumentCommand::SetSpeakerLabel { document_id, .. }
         | DocumentCommand::MergeSpeaker { document_id, .. }) = &command
         else {
@@ -2790,6 +2802,9 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         if self.editor.saving.is_some() {
             return;
         }
@@ -3017,6 +3032,9 @@ impl RootView {
         focus: TreeMoveFocus,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let root_generation = self.documents_root_generation;
         let generation = self.begin_projects_reload();
         let commands = self.services.workspace.document_commands();
@@ -3757,6 +3775,9 @@ impl RootView {
     /// The Meetings header's relink button: asks for the selected
     /// document's audio file and relinks it.
     pub(crate) fn relink_audio(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -3782,6 +3803,9 @@ impl RootView {
     /// refused relink writes nothing; a revision conflict opens the
     /// conflict notice.
     pub(crate) fn relink_audio_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         if self.audio.relinking.is_some() {
             return;
         }

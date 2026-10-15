@@ -206,6 +206,7 @@ fn rail(root: &mut RootView, cx: &mut Context<RootView>) -> impl IntoElement {
         .child(div().flex_1())
         .child(
             Button::new("import-audio", tr(locale, "import_audio"))
+                .disabled(root.documents_root_switch.switching)
                 .debug_selector(|| "import-audio".into())
                 .ghost()
                 .icon("icons/plus.svg")
