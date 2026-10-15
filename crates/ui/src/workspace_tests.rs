@@ -2299,6 +2299,90 @@ fn a_pending_root_choice_keeps_speaker_input_and_resumes_actions(cx: &mut TestAp
     assert_eq!(saved.state.revision(), 4);
 }
 
+fn settings_path_row_fits_the_minimum_width(cx: &mut TestAppContext, speakers: bool) {
+    let fixture = Workspace::new();
+    put(&fixture.old, "old", "Old");
+    let (view, cx) = open_workspace(cx, &fixture);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    let (section, section_selector, path_selector, button_selector, label_key) = if speakers {
+        (
+            crate::pages::settings::SPEAKER_LIBRARY_SECTION,
+            "speaker-library-section",
+            "speaker-library-path",
+            "choose-speaker-library",
+            "speaker_library_path",
+        )
+    } else {
+        (
+            crate::pages::settings::WORKSPACE_SECTION,
+            "workspace-section",
+            "documents-root-path",
+            "choose-documents-root",
+            "documents_root",
+        )
+    };
+    for locale in [Locale::ZhCn, Locale::EnUs] {
+        for path in ["data/documents", "/Users/meeting-notes/Documents/团队工作区/a-long-project-name/meeting-recordings/资料与访谈/documents"] {
+            view.update(cx, |root, cx| {
+                root.ui.locale = locale;
+                if speakers {
+                    root.settings_draft.speaker_library_path = path.into();
+                } else {
+                    root.settings_draft.documents_root = path.into();
+                }
+                cx.notify();
+            });
+            cx.run_until_parked();
+            click_selector(cx, crate::document_tests::leak(format!("settings-section-{section}")));
+            let label = rendered(cx, crate::document_tests::leak(format!("setting-label-{}", i18n::text(locale, label_key))));
+            let path_bounds = rendered(cx, path_selector);
+            let button = rendered(cx, button_selector);
+            let section_bounds = rendered(cx, section_selector);
+            assert!(path_bounds.left() >= label.right(), "{locale:?}: the path must not cover its label: {path_bounds:?} versus {label:?}");
+            assert!(path_bounds.right() <= button.left(), "{locale:?}: the path must not cover its choose button");
+            assert!(path_bounds.size.width > gpui::px(0.), "the current path retains visible space");
+            assert!(within(path_bounds, section_bounds));
+            assert!(within(button, section_bounds));
+            assert!(within(button, rendered(cx, "settings-page")));
+            let mut reached = false;
+            for _ in 0..80 {
+                cx.simulate_keystrokes("tab");
+                cx.run_until_parked();
+                if cx.debug_bounds("focus-ring").is_some_and(|ring| within(ring, rendered(cx, button_selector))) {
+                    reached = true;
+                    break;
+                }
+            }
+            assert!(reached, "{locale:?}: {button_selector} must stay keyboard reachable");
+        }
+    }
+    assert!(!cx.cx.did_prompt_for_paths());
+    let key = gpui::Keystroke::parse("enter").unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: key.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: key });
+    cx.run_until_parked();
+    assert!(
+        cx.cx.did_prompt_for_paths(),
+        "Enter activates the focused chooser"
+    );
+}
+
+#[gpui::test]
+fn the_documents_path_keeps_its_label_and_chooser_clear_at_minimum_width(cx: &mut TestAppContext) {
+    settings_path_row_fits_the_minimum_width(cx, false);
+}
+
+#[gpui::test]
+fn the_speaker_library_path_keeps_its_label_and_chooser_clear_at_minimum_width(
+    cx: &mut TestAppContext,
+) {
+    settings_path_row_fits_the_minimum_width(cx, true);
+}
+
 #[gpui::test]
 fn a_switch_while_a_job_runs_names_the_busy_jobs_and_changes_nothing(cx: &mut TestAppContext) {
     let fixture = Workspace::new();

@@ -236,8 +236,11 @@ fn workspace_section(
     let mut rows = vec![setting_control_row(
         tr(locale, "documents_root"),
         div()
+            .w_full()
+            .min_w_0()
             .flex()
             .items_center()
+            .justify_end()
             .gap_2()
             .child(
                 div()
@@ -247,7 +250,11 @@ fn workspace_section(
                     .flex_shrink(1.)
                     .text_xs()
                     .text_color(tokens.text_muted)
-                    .child(root.settings_draft.documents_root.clone()),
+                    .child(theme::tail_faded_label(
+                        "documents-root-path-label",
+                        root.settings_draft.documents_root.clone(),
+                        tokens.content,
+                    )),
             )
             .child(
                 Button::new("choose-documents-root", tr(locale, "choose_directory"))
@@ -311,17 +318,25 @@ fn speaker_library_section(
     let mut rows = vec![setting_control_row(
         tr(locale, "speaker_library_path"),
         div()
+            .w_full()
+            .min_w_0()
             .flex()
             .items_center()
+            .justify_end()
             .gap_2()
             .child(
                 div()
+                    .debug_selector(|| "speaker-library-path".into())
                     .w(PATH_WIDTH)
                     .min_w_0()
                     .flex_shrink(1.)
                     .text_xs()
                     .text_color(tokens.text_muted)
-                    .child(root.settings_draft.speaker_library_path.clone()),
+                    .child(theme::tail_faded_label(
+                        "speaker-library-path-label",
+                        root.settings_draft.speaker_library_path.clone(),
+                        tokens.content,
+                    )),
             )
             .child(
                 Button::new("choose-speaker-library", tr(locale, "choose_directory"))
