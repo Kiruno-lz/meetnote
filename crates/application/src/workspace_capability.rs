@@ -321,9 +321,12 @@ pub struct WorkspaceCapabilityPort {
 }
 
 impl WorkspaceCapabilityPort {
+    /// Binds this grant to the current documents repository. A later
+    /// workspace switch requires a new port; it cannot redirect an existing
+    /// grant's reads, pending confirmations, mutations or undo history.
     pub fn new(documents: DocumentService, access: WorkspaceAccessPolicy) -> Self {
         Self {
-            documents,
+            documents: documents.frozen(),
             tools: ToolRegistry,
             granted_tools: ToolRegistry
                 .definitions()
