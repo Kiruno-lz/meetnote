@@ -1377,3 +1377,35 @@ fn an_empty_workspace_import_is_reachable_by_keyboard_at_minimum_size(cx: &mut T
         "Enter imports from the empty workspace"
     );
 }
+
+#[gpui::test]
+fn the_processing_overlay_owns_its_document_and_restores_it_when_closed(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    let owner = cx.update(|_, cx| window.selected_document(cx)).unwrap();
+    cx.update(|_, cx| window.open_overlay(Overlay::ProcessingFeedback, cx));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    assert_eq!(
+        cx.update(|_, cx| window.selected_document(cx)),
+        Some(owner.clone())
+    );
+    visible(cx, "processing-progress");
+    visible(cx, "processing-transcription-completed");
+    visible(cx, "processing-diarization-running");
+    visible(cx, "processing-diarization-determinate");
+    assert_eq!(owner, DOCUMENT_IDS[0]);
+    visible(cx, "project-status-doc-1-weekly-sync-Processing");
+    assert!(cx.debug_bounds("notice-toast").is_none());
+    let cancel = visible(cx, "process-project");
+    // This static fixture covers the UI request; gated lib tests cover
+    // cancellation of actual runtime tokens.
+    cx.simulate_click(cancel.center(), Modifiers::none());
+    cx.run_until_parked();
+    visible(cx, "notice-toast");
+    visible(cx, "processing-progress");
+    cx.update(|_, cx| window.close_overlay(Overlay::ProcessingFeedback, cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("processing-progress").is_none());
+    visible(cx, "document-status-Ready");
+    assert_eq!(cx.update(|_, cx| window.selected_document(cx)), Some(owner));
+}
