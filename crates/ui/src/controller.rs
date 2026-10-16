@@ -600,12 +600,14 @@ pub(crate) struct RootView {
     /// The rename and merge controls of the speakers of the document shown
     /// in the Original view, and the revision they were read at.
     pub(crate) speaker_rows: Option<NameRows<(ProjectId, u64, i18n::Locale)>>,
+    /// A confirmed document merge returns focus to its surviving speaker.
+    speaker_removal_focus: Option<(ProjectId, SpeakerRemovalFocus)>,
     /// The rename and merge controls of the Speaker Library profiles.
     pub(crate) profile_rows: Option<NameRows<(u64, i18n::Locale)>>,
     /// Focus destination when the last profile is deleted.
     pub(crate) speaker_library_focus: FocusHandle,
-    /// A confirmed deletion returns focus after the refreshed rows exist.
-    profile_removal_focus: Option<ProfileRemovalFocus>,
+    /// A confirmed profile removal returns focus after the refreshed rows exist.
+    profile_removal_focus: Option<SpeakerRemovalFocus>,
     /// The document whose speaker correction is in flight.
     pub(crate) speaker_command: Option<ProjectId>,
     /// The speaker merge or profile change waiting for confirmation.
@@ -673,11 +675,21 @@ pub(crate) struct ScrollAreas {
     pub(crate) settings: ScrollHandle,
 }
 
-/// Returns focus after a profile deletion unless the user has moved it.
-struct ProfileRemovalFocus {
+/// Returns focus after a speaker row is removed unless the user has moved it.
+struct SpeakerRemovalFocus {
     removed_id: String,
-    next_id: Option<String>,
+    destination_id: Option<String>,
     previous: Option<FocusHandle>,
+}
+
+impl SpeakerRemovalFocus {
+    fn restore(self, destination: FocusHandle, window: &mut Window, cx: &mut Context<RootView>) {
+        window.defer(cx, move |window, cx| {
+            if window.focused(cx) == self.previous {
+                destination.focus(window, cx);
+            }
+        });
+    }
 }
 
 /// Asked when the Speaker Library moves to a path without a library while
@@ -809,6 +821,7 @@ impl RootView {
             speaker_profiles: SpeakerProfiles::default(),
             speaker_library_path,
             speaker_rows: None,
+            speaker_removal_focus: None,
             profile_rows: None,
             speaker_library_focus: cx.focus_handle(),
             profile_removal_focus: None,
@@ -1568,6 +1581,7 @@ impl RootView {
             self.document_conflict = None;
             self.audio.clear();
             self.speaker_rows = None;
+            self.speaker_removal_focus = None;
             self.speaker_command = None;
             if matches!(
                 self.speaker_confirmation,
@@ -2431,7 +2445,7 @@ impl RootView {
             // A user may have moved on while the library worker ran.
             if window.focused(cx) == request.previous {
                 let destination = request
-                    .next_id
+                    .destination_id
                     .as_deref()
                     .and_then(|id| self.profile_rows.as_ref()?.row(id))
                     .map(|row| gpui::Focusable::focus_handle(row.name.read(cx), cx));
@@ -2441,12 +2455,48 @@ impl RootView {
                         .scroll_to_top_of_item(pages::settings::SPEAKER_LIBRARY_SECTION);
                     self.speaker_library_focus.clone()
                 });
-                window.defer(cx, move |window, cx| {
-                    if window.focused(cx) == request.previous {
-                        destination.focus(window, cx);
-                    }
-                });
+                request.restore(destination, window, cx);
             }
+        }
+    }
+
+    /// Follow a completed merge only in its original visible document.
+    /// Returning to another view or moving focus cancels the handoff.
+    fn restore_speaker_removal_focus(
+        &mut self,
+        document: Option<&DocumentState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((owner, request)) = &self.speaker_removal_focus else {
+            return;
+        };
+        if self.ui.route != Route::Meetings
+            || self.ui.content_mode != ContentMode::Original
+            || !document.is_some_and(|document| document.id() == owner)
+        {
+            self.speaker_removal_focus = None;
+            return;
+        }
+        let Some(rows) = self
+            .speaker_rows
+            .as_ref()
+            .filter(|rows| &rows.key().0 == owner)
+        else {
+            return;
+        };
+        if self.speaker_command.is_some() || rows.row(&request.removed_id).is_some() {
+            return;
+        }
+        let destination = request
+            .destination_id
+            .as_deref()
+            .and_then(|id| rows.row(id))
+            .map(|row| gpui::Focusable::focus_handle(row.name.read(cx), cx))
+            .unwrap_or_else(|| self.window_focus.clone());
+        let (_, request) = self.speaker_removal_focus.take().unwrap();
+        if window.focused(cx) == request.previous {
+            request.restore(destination, window, cx);
         }
     }
 
@@ -2581,10 +2631,14 @@ impl RootView {
                         this.reload_projects(cx);
                     }
                     Ok(_) => {
+                        this.speaker_removal_focus = None;
                         this.ui.notice = done;
                         this.reload_projects(cx);
                     }
-                    Err(error) => this.document_write_failed(error, "speaker_edit_failed", cx),
+                    Err(error) => {
+                        this.speaker_removal_focus = None;
+                        this.document_write_failed(error, "speaker_edit_failed", cx);
+                    }
                 }
                 cx.notify();
             })
@@ -2744,6 +2798,14 @@ impl RootView {
                     rows.clear_merge_choice(&from, cx);
                 }
                 if confirmed {
+                    self.speaker_removal_focus = Some((
+                        document_id.clone(),
+                        SpeakerRemovalFocus {
+                            removed_id: from.clone(),
+                            destination_id: Some(into.clone()),
+                            previous: self.dialog_return.clone(),
+                        },
+                    ));
                     let done =
                         i18n::message_pair(locale, "speakers_merged", &from_name, &into_name);
                     self.run_speaker_command(
@@ -2768,9 +2830,9 @@ impl RootView {
                         .position(|profile| profile.id == profile_id)
                         .and_then(|index| self.speaker_profiles.profiles.get(index + 1))
                         .map(|profile| profile.id.clone());
-                    self.profile_removal_focus = Some(ProfileRemovalFocus {
+                    self.profile_removal_focus = Some(SpeakerRemovalFocus {
                         removed_id: profile_id.clone(),
-                        next_id,
+                        destination_id: next_id,
                         previous: self.dialog_return.clone(),
                     });
                     let done = i18n::message(locale, "speaker_profile_deleted", &name);
@@ -2795,6 +2857,11 @@ impl RootView {
                     rows.clear_merge_choice(&source_id, cx);
                 }
                 if confirmed {
+                    self.profile_removal_focus = Some(SpeakerRemovalFocus {
+                        removed_id: source_id.clone(),
+                        destination_id: Some(target_id.clone()),
+                        previous: self.dialog_return.clone(),
+                    });
                     let done = i18n::message_pair(
                         locale,
                         "speaker_profiles_merged",
@@ -5149,6 +5216,7 @@ impl Render for RootView {
         }
         self.ensure_speaker_rows(selected.as_ref(), window, cx);
         self.ensure_profile_rows(window, cx);
+        self.restore_speaker_removal_focus(selected.as_ref(), window, cx);
         if let Some(rows) = &self.speaker_rows {
             rows.set_merge_disabled(
                 self.speaker_command.is_some() || self.documents_root_switch.switching,

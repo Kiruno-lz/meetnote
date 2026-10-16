@@ -761,6 +761,169 @@ fn speaker_actions_wait_for_a_pending_write_without_blocking_typing(cx: &mut Tes
 }
 
 #[gpui::test]
+fn a_document_speaker_merge_returns_focus_to_the_retained_name(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("weekly"), "# Original body\n");
+    let original = documents.read("weekly");
+    let before = documents.package_bytes("weekly");
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_speakers_saving_on(cx, &documents, &gate);
+    open_original(cx, &view, "weekly");
+    let source = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .merge_into
+            .clone()
+            .unwrap()
+    });
+    choose(cx, "merge-speaker-speaker-0", 0);
+    click_selector(cx, "dialog-cancel");
+    assert!(
+        cx.update(
+            |window, cx| gpui::Focusable::focus_handle(source.read(cx), cx).is_focused(window)
+        ),
+        "cancel returns to the unchanged source control"
+    );
+    assert_eq!(documents.package_bytes("weekly"), before);
+    choose(cx, "merge-speaker-speaker-0", 0);
+    gate.arm();
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    gate.release();
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    let target = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-1")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert!(
+        cx.update(
+            |window, cx| gpui::Focusable::focus_handle(target.read(cx), cx).is_focused(window)
+        ),
+        "successful merging returns focus to the surviving name"
+    );
+    assert!(cx.debug_bounds("speaker-row-speaker-0").is_none());
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("主持人");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none()
+            && documents.revision("weekly") == original.state.revision() + 2
+    });
+    let after = documents.read("weekly");
+    assert!(after
+        .state
+        .results
+        .speaker_segments
+        .iter()
+        .all(|segment| segment.speaker_id == "speaker-1"
+            && segment.speaker_label.as_deref() == Some("主持人")));
+    assert_eq!(
+        after.state.results.transcript,
+        original.state.results.transcript
+    );
+    assert_eq!(after.state.processing, original.state.processing);
+    assert_eq!(after.markdown, original.markdown);
+}
+
+#[gpui::test]
+fn a_document_speaker_merge_keeps_focus_moved_to_another_document(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("first"), "# First body\n");
+    let mut other = two_speakers("other");
+    other.hierarchy.sibling_order = 1;
+    documents.put(other, "# Other body\n");
+    let before = documents.package_bytes("other");
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_speakers_saving_on(cx, &documents, &gate);
+    open_original(cx, &view, "first");
+    choose(cx, "merge-speaker-speaker-0", 0);
+    gate.arm();
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    select_row(cx, &view, "other");
+    retype_at(cx, "speaker-name-speaker-0", "来宾草稿");
+    cx.simulate_keystrokes("left left");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    gate.release();
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    cx.simulate_input("的");
+    assert_eq!(field_value(cx, &name), "来宾的草稿");
+    assert_eq!(documents.package_bytes("other"), before);
+    assert!(documents
+        .read("first")
+        .state
+        .results
+        .speaker_segments
+        .iter()
+        .all(|s| s.speaker_id == "speaker-1"));
+}
+
+#[gpui::test]
+fn a_document_speaker_merge_conflict_keeps_focus_on_the_source(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("weekly"), "# Original body\n");
+    let (view, cx, _) = open_on(cx, &documents);
+    open_original(cx, &view, "weekly");
+    let source = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .merge_into
+            .clone()
+            .unwrap()
+    });
+    choose(cx, "merge-speaker-speaker-0", 0);
+    let mut changed = documents.read("weekly").state;
+    changed.content.title = "Changed while confirming".into();
+    documents.external_save(changed);
+    let before = documents.package_bytes("weekly");
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none()
+            && root.document_conflict.is_some()
+            && root
+                .projects
+                .iter()
+                .any(|p| p.title() == "Changed while confirming")
+    });
+    rendered(cx, "speaker-row-speaker-0");
+    rendered(cx, "speaker-row-speaker-1");
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        before,
+        "a refused merge writes nothing"
+    );
+    assert!(
+        cx.update(
+            |window, cx| gpui::Focusable::focus_handle(source.read(cx), cx).is_focused(window)
+        ),
+        "a refused merge leaves focus on its surviving source control"
+    );
+}
+
+#[gpui::test]
 fn merging_a_speaker_attributes_its_segments_after_confirmation(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();
     root.put(two_speakers("weekly"), "# 产品周会\n");
@@ -1771,6 +1934,104 @@ fn deleting_a_profile_preserves_focus_moved_while_the_worker_is_pending(cx: &mut
 }
 
 #[gpui::test]
+fn a_profile_merge_returns_focus_to_the_retained_name(cx: &mut TestAppContext) {
+    merged_profile_focus(cx, false);
+}
+
+#[gpui::test]
+fn a_profile_merge_keeps_focus_moved_to_another_name(cx: &mut TestAppContext) {
+    merged_profile_focus(cx, true);
+}
+
+fn merged_profile_focus(cx: &mut TestAppContext, moved: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let library = Library::new(three_profiles());
+    let documents = DocumentsRoot::new();
+    let (view, cx, _) = open_with_library(cx, &library.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha-2", true);
+    let gate = pause_saved_library(&view, cx, &library);
+    let source = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("alpha-2")
+            .unwrap()
+            .merge_into
+            .clone()
+            .unwrap()
+    });
+    let before = std::fs::read(library.path()).unwrap();
+    choose(cx, "merge-speaker-profile-alpha-2", 0);
+    click_selector(cx, "dialog-cancel");
+    assert!(
+        cx.update(
+            |window, cx| gpui::Focusable::focus_handle(source.read(cx), cx).is_focused(window)
+        ),
+        "cancel returns to the unchanged source control"
+    );
+    assert_eq!(std::fs::read(library.path()).unwrap(), before);
+    choose(cx, "merge-speaker-profile-alpha-2", 0);
+    gate.arm();
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    if moved {
+        retype_at(cx, "speaker-profile-name-beta", "来宾草稿");
+        cx.simulate_keystrokes("left left");
+    }
+    let focus = cx.update(|window, cx| window.focused(cx));
+    gate.release();
+    wait_for(cx, &view, |root| root.speaker_profiles.write_path.is_none());
+    let id = if moved { "beta" } else { "alpha" };
+    let name = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row(id)
+            .unwrap()
+            .name
+            .clone()
+    });
+    if moved {
+        assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+        cx.simulate_input("的");
+        assert_eq!(field_value(cx, &name), "来宾的草稿");
+    } else {
+        assert!(
+            cx.update(
+                |window, cx| gpui::Focusable::focus_handle(name.read(cx), cx).is_focused(window)
+            ),
+            "successful merging returns focus to the surviving name"
+        );
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("主持人");
+    }
+    assert!(cx.debug_bounds("speaker-profile-alpha-2").is_none());
+    let merged = library.load();
+    assert_eq!(merged.profiles[0].samples.len(), 3);
+    assert_eq!(merged.profiles[0].display_name, "Alpha");
+    cx.simulate_keystrokes("enter");
+    let expected = if moved {
+        "来宾的草稿"
+    } else {
+        "主持人"
+    };
+    wait_for(cx, &view, |root| {
+        root.speaker_profiles.write_path.is_none()
+            && library
+                .names()
+                .iter()
+                .any(|(key, name)| key == id && name == expected)
+    });
+    let after = library.load();
+    for saved in after.profiles {
+        let prior = merged.profiles.iter().find(|p| p.id == saved.id).unwrap();
+        assert_eq!(saved.samples, prior.samples);
+        assert_eq!(saved.aliases, prior.aliases);
+        assert_eq!(saved.embedding_space, prior.embedding_space);
+    }
+}
+
+#[gpui::test]
 fn merging_profiles_moves_samples_and_shows_refusals(cx: &mut TestAppContext) {
     let library = Library::new(three_profiles());
     let documents = DocumentsRoot::new();
@@ -1791,6 +2052,16 @@ fn merging_profiles_moves_samples_and_shows_refusals(cx: &mut TestAppContext) {
 
     // Two different voices are refused: the error shows, nothing changes.
     let unchanged = library.load();
+    let source = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("beta")
+            .unwrap()
+            .merge_into
+            .clone()
+            .unwrap()
+    });
     choose(cx, "merge-speaker-profile-beta", 0);
     click_selector(cx, "dialog-confirm");
     wait_rendered(cx, "speaker-library-status", true);
@@ -1802,6 +2073,12 @@ fn merging_profiles_moves_samples_and_shows_refusals(cx: &mut TestAppContext) {
     });
     assert_eq!(library.load(), unchanged);
     rendered(cx, "speaker-profile-beta");
+    assert!(
+        cx.update(
+            |window, cx| gpui::Focusable::focus_handle(source.read(cx), cx).is_focused(window)
+        ),
+        "a refused merge leaves focus on its surviving source control"
+    );
 }
 
 #[gpui::test]
