@@ -865,6 +865,136 @@ fn detail_shows_revision_status_provenance_and_statistics(cx: &mut TestAppContex
     assert!(cx.debug_bounds("detail-revision").is_some());
 }
 
+/// Wheel over the reading area's padding so nested editor inputs do not
+/// consume a gesture meant for the document itself.
+pub(crate) fn scroll_document(cx: &mut VisualTestContext, view: &View) -> gpui::Point<Pixels> {
+    let area = rendered(cx, "meeting-content");
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: point(area.left() + px(4.), area.center().y),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-240.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let offset = view.read_with(cx, |root, _| root.scroll.meeting_content.offset());
+    assert!(offset.y < px(0.), "the document really scrolls: {offset:?}");
+    offset
+}
+
+#[gpui::test]
+fn a_new_document_starts_at_the_top_without_resetting_the_current_read(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    for (index, id) in ["first", "second"].into_iter().enumerate() {
+        let mut document = processed(id, id);
+        document.hierarchy.sibling_order = index as u32;
+        document.content.summary = Some(format!("Reading {id} document.\n").repeat(120));
+        documents.put(document, "# Original document\n");
+    }
+    let (view, cx, changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    select_row(cx, &view, "first");
+    let offset = scroll_document(cx, &view);
+    select_row(cx, &view, "first");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        offset,
+        "selecting the current document keeps its reading position"
+    );
+    let mut external = documents.read("first").state;
+    external.content.title = "Refreshed externally".into();
+    documents.external_save(external);
+    let first_bytes = documents.package_bytes("first");
+    let second_bytes = documents.package_bytes("second");
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|p| p.title() == "Refreshed externally")
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        offset,
+        "a background refresh of the same document preserves the current read"
+    );
+    select_row(cx, &view, "second");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default(),
+        "a newly selected document must not inherit the previous document's middle"
+    );
+    let offset = scroll_document(cx, &view);
+    click_selector(cx, "nav-Settings");
+    click_selector(cx, "nav-Meetings");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        offset,
+        "visiting another route keeps the same document's reading position"
+    );
+    assert_eq!(documents.package_bytes("first"), first_bytes);
+    assert_eq!(documents.package_bytes("second"), second_bytes);
+}
+
+#[gpui::test]
+fn switching_document_views_starts_at_the_top_and_keeps_the_edit_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let mut document = processed("weekly", "Weekly");
+    document.content.summary = Some("A long summary paragraph.\n".repeat(120));
+    document.results.transcript = (0..100)
+        .map(|index| TranscriptSegment {
+            id: format!("t-{index}"),
+            start_ms: index * 4000,
+            end_ms: (index + 1) * 4000,
+            text: format!("Transcript paragraph {index}."),
+        })
+        .collect();
+    document.results.diarization[0].end_ms = 400000;
+    document.results.speaker_segments = domain::align_transcript_and_speakers(
+        &document.results.transcript,
+        &document.results.diarization,
+    );
+    documents.put(document, "# Original body\n");
+    let before = documents.package_bytes("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    view.update(cx, |root, cx| {
+        root.ui.locale = i18n::Locale::EnUs;
+        cx.notify();
+    });
+    select_row(cx, &view, "weekly");
+    scroll_document(cx, &view);
+    click_selector(cx, "content-mode-original");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default(),
+        "Original starts at its first speaker and sentence"
+    );
+    let offset = scroll_document(cx, &view);
+    click_selector(cx, "content-mode-original");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        offset
+    );
+    open_editor(cx, &view, "weekly");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default()
+    );
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "Keep my draft across views");
+    scroll_document(cx, &view);
+    click_selector(cx, "content-mode-summary");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default()
+    );
+    open_editor(cx, &view, "weekly");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default()
+    );
+    assert_eq!(field_value(cx, &title), "Keep my draft across views");
+    assert_eq!(documents.package_bytes("weekly"), before);
+}
+
 #[gpui::test]
 fn the_editor_saves_every_semantic_field_with_the_loaded_revision(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();

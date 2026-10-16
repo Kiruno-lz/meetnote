@@ -8,7 +8,8 @@
 //! `choose_documents_root` and `relink_audio_path`.
 
 use crate::document_tests::{
-    open_on, processed, rendered, select_row, within, DocumentsRoot, UnreadableDocumentsRoot, View,
+    open_on, processed, rendered, scroll_document, select_row, within, DocumentsRoot,
+    UnreadableDocumentsRoot, View,
 };
 use crate::tests::{
     click_selector, desktop_services, empty_result, focus_field, open_desktop_on, pending_review,
@@ -930,6 +931,38 @@ fn choosing_a_documents_root_shows_its_documents_saves_it_and_follows_its_change
             .iter()
             .any(|project| project.id().as_str() == "later-doc")
     });
+}
+
+#[gpui::test]
+fn a_new_workspace_starts_at_the_top_even_with_the_same_document_id(cx: &mut TestAppContext) {
+    let fixture = Workspace::new();
+    for (root, title) in [
+        (&fixture.old, "Old document"),
+        (&fixture.new, "New document"),
+    ] {
+        let mut document = processed("shared", title);
+        document.content.summary = Some(format!("Reading {title}.\n").repeat(120));
+        root.put(document, "# Original body\n");
+    }
+    let old_bytes = fixture.old.package_bytes("shared");
+    let new_bytes = fixture.new.package_bytes("shared");
+    let (view, cx) = open_workspace(cx, &fixture);
+    wait_for(cx, &view, |root| {
+        root.projects_loaded && !root.audio.pending()
+    });
+    click_selector(cx, "nav-Meetings");
+    scroll_document(cx, &view);
+    choose(cx, &view, fixture.new.path());
+    wait_for(cx, &view, |root| {
+        root.projects.iter().any(|p| p.title() == "New document") && !root.audio.pending()
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default(),
+        "matching IDs in different workspaces do not share a reading position"
+    );
+    assert_eq!(fixture.old.package_bytes("shared"), old_bytes);
+    assert_eq!(fixture.new.package_bytes("shared"), new_bytes);
 }
 
 #[gpui::test]

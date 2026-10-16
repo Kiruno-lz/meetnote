@@ -313,6 +313,19 @@ fn main_panel(
 ) -> gpui::Div {
     let locale = root.ui.locale;
     let tokens = *theme::tokens(cx);
+    // A different workspace, document or view starts at its beginning;
+    // refreshing the same content keeps the user's reading position.
+    let context = project.map(|project| {
+        (
+            root.documents_root_generation,
+            project.id().clone(),
+            root.ui.content_mode,
+        )
+    });
+    if root.scroll.meeting_context != context {
+        root.scroll.meeting_context = context;
+        root.scroll.meeting_content.set_offset(Default::default());
+    }
     // Compact the metadata beside Detail in a short window so recovery
     // feedback still leaves room for reading and editing.
     let compact = root.ui.detail_open
