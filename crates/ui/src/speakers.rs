@@ -98,9 +98,9 @@ pub(crate) struct SpeakerProfiles {
     /// The outcome of the last library call: its message and whether it
     /// failed.
     pub(crate) status: Option<(String, bool)>,
-    /// Whether a library call is in flight.
-    pub(crate) busy: bool,
-    /// Bumped whenever `profiles` changes, so the rows are rebuilt.
+    /// The library path of the one call in flight, including its saved read.
+    pub(crate) write_path: Option<String>,
+    /// Bumped whenever `profiles` changes, so controls can follow the saved list.
     pub(crate) version: u64,
     /// The latest read; an older one that lands later is dropped.
     generation: u64,

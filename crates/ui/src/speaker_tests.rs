@@ -1262,6 +1262,7 @@ fn deleting_the_only_profile_moves_focus_to_the_library_title(cx: &mut TestAppCo
 struct GatedLibrary {
     inner: JsonSpeakerProfileStore,
     gate: crate::tests::Gate,
+    pause_after_save: bool,
 }
 
 impl application::SpeakerProfileStore for GatedLibrary {
@@ -1273,9 +1274,251 @@ impl application::SpeakerProfileStore for GatedLibrary {
         &self,
         value: &SpeakerLibraryDocument,
     ) -> Result<(), application::SpeakerLibraryError> {
-        self.gate.pass();
-        self.inner.replace(value)
+        if !self.pause_after_save {
+            self.gate.pass();
+        }
+        self.inner.replace(value)?;
+        if self.pause_after_save {
+            self.gate.pass();
+        }
+        Ok(())
     }
+}
+
+fn pause_saved_library(
+    view: &View,
+    cx: &mut VisualTestContext,
+    library: &Library,
+) -> crate::tests::Gate {
+    let gate = crate::tests::Gate::default();
+    view.update(cx, |root, _| {
+        root.services.speaker_library =
+            application::SpeakerLibraryService::new(Arc::new(GatedLibrary {
+                inner: JsonSpeakerProfileStore::new(library.path()),
+                gate: gate.clone(),
+                pause_after_save: true,
+            }));
+    });
+    gate
+}
+
+#[gpui::test]
+fn a_profile_save_keeps_later_input_in_another_row(cx: &mut TestAppContext) {
+    profile_save_later_input(cx, false);
+}
+
+#[gpui::test]
+fn a_profile_save_keeps_an_edit_back_to_the_old_name(cx: &mut TestAppContext) {
+    profile_save_later_input(cx, true);
+}
+
+fn profile_save_later_input(cx: &mut TestAppContext, same_row: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let library = Library::new(three_profiles());
+    let documents = DocumentsRoot::new();
+    let (view, cx, _) = open_with_library(cx, &library.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha", true);
+    let gate = pause_saved_library(&view, cx, &library);
+    retype_at(cx, "speaker-profile-name-alpha", "Alice");
+    gate.arm();
+    click_selector(cx, "rename-speaker-profile-alpha");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    let (id, draft) = if same_row {
+        ("alpha", "Alpha")
+    } else {
+        ("beta", "来宾草稿")
+    };
+    retype_at(cx, leak(format!("speaker-profile-name-{id}")), draft);
+    if !same_row {
+        cx.simulate_keystrokes("left left");
+    }
+    let focus = cx.update(|window, cx| window.focused(cx));
+    view.update(cx, |root, cx| root.reload_speaker_profiles(cx));
+    wait_for(cx, &view, |root| {
+        root.speaker_profiles
+            .find("alpha")
+            .is_some_and(|p| p.display_name == "Alice")
+    });
+    let during = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row(id)
+            .unwrap()
+            .name
+            .clone()
+    });
+    let during_value = field_value(cx, &during);
+    gate.release();
+    assert_eq!(
+        during_value, draft,
+        "a read arriving before the acknowledgement keeps later input"
+    );
+    wait_for(cx, &view, |root| root.speaker_profiles.write_path.is_none());
+    let name = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row(id)
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(field_value(cx, &name), draft);
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        library.names()[0].1,
+        "Alice",
+        "later typing is not another write"
+    );
+    let before = library.load();
+    if !same_row {
+        cx.simulate_input("的");
+        assert_eq!(field_value(cx, &name), "来宾的草稿");
+    }
+    let expected = if same_row { "Alpha" } else { "来宾的草稿" };
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |root| {
+        root.speaker_profiles.write_path.is_none()
+            && library
+                .names()
+                .iter()
+                .any(|(key, name)| key == id && name == expected)
+    });
+    let after = library.load();
+    for prior in before.profiles {
+        let saved = after.profiles.iter().find(|p| p.id == prior.id).unwrap();
+        assert_eq!(saved.samples, prior.samples);
+        assert_eq!(saved.embedding_space, prior.embedding_space);
+        assert_eq!(saved.aliases, prior.aliases);
+    }
+    assert!(view.read_with(cx, |root, _| root
+        .speaker_profiles
+        .status
+        .as_ref()
+        .is_some_and(|(_, failed)| !failed)));
+}
+
+#[gpui::test]
+fn a_profile_save_keeps_a_remaining_name_after_merge(cx: &mut TestAppContext) {
+    profile_removal_later_input(cx, true);
+}
+
+#[gpui::test]
+fn a_profile_save_keeps_a_remaining_name_after_deletion(cx: &mut TestAppContext) {
+    profile_removal_later_input(cx, false);
+}
+
+fn profile_removal_later_input(cx: &mut TestAppContext, merge: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let library = Library::new(three_profiles());
+    let documents = DocumentsRoot::new();
+    let (view, cx, _) = open_with_library(cx, &library.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha-2", true);
+    let gate = pause_saved_library(&view, cx, &library);
+    if merge {
+        choose(cx, "merge-speaker-profile-alpha-2", 0);
+    } else {
+        click_selector(cx, "delete-speaker-profile-alpha-2");
+    }
+    gate.arm();
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    retype_at(cx, "speaker-profile-name-alpha", "主持人草稿");
+    cx.simulate_keystrokes("left left");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    view.update(cx, |root, cx| root.reload_speaker_profiles(cx));
+    wait_for(cx, &view, |root| root.speaker_profiles.profiles.len() == 2);
+    let during = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("alpha")
+            .unwrap()
+            .name
+            .clone()
+    });
+    let during_value = field_value(cx, &during);
+    gate.release();
+    assert_eq!(during_value, "主持人草稿");
+    wait_for(cx, &view, |root| root.speaker_profiles.write_path.is_none());
+    let name = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("alpha")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(field_value(cx, &name), "主持人草稿");
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert!(cx.debug_bounds("speaker-profile-alpha-2").is_none());
+    let before = library.load();
+    assert_eq!(before.profiles[0].display_name, "Alpha");
+    assert_eq!(before.profiles[0].samples.len(), if merge { 3 } else { 2 });
+    cx.simulate_input("的");
+    assert_eq!(field_value(cx, &name), "主持人的草稿");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |root| {
+        root.speaker_profiles.write_path.is_none() && library.names()[0].1 == "主持人的草稿"
+    });
+    assert_eq!(
+        library.load().profiles[0].samples,
+        before.profiles[0].samples
+    );
+}
+
+#[gpui::test]
+fn a_profile_save_does_not_publish_its_outcome_in_another_library(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let library = Library::new(three_profiles());
+    let mut profiles = three_profiles();
+    profiles[0].display_name = "Another Alpha".into();
+    let other = Library::new(profiles);
+    let documents = DocumentsRoot::new();
+    let (view, cx, _) = open_with_library(cx, &library.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha", true);
+    let gate = pause_saved_library(&view, cx, &library);
+    retype_at(cx, "speaker-profile-name-alpha", "Alice");
+    gate.arm();
+    click_selector(cx, "rename-speaker-profile-alpha");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    view.update(cx, |root, cx| {
+        root.change_speaker_library_path(other.path(), cx)
+    });
+    wait_for(cx, &view, |root| {
+        root.settings_draft.speaker_library_path == other.path().display().to_string()
+            && root
+                .speaker_profiles
+                .find("alpha")
+                .is_some_and(|p| p.display_name == "Another Alpha")
+    });
+    retype_at(cx, "speaker-profile-name-beta", "新库草稿");
+    cx.simulate_keystrokes("left left");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let before = std::fs::read(other.path()).unwrap();
+    gate.release();
+    wait_for(cx, &view, |root| root.speaker_profiles.write_path.is_none());
+    let name = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("beta")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(field_value(cx, &name), "新库草稿");
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(std::fs::read(other.path()).unwrap(), before);
+    assert_eq!(library.names()[0].1, "Alice");
+    assert!(
+        view.read_with(cx, |root, _| root.speaker_profiles.status.is_none()),
+        "the old library's success must not be shown in the new library"
+    );
+    cx.simulate_input("的");
+    assert_eq!(field_value(cx, &name), "新库的草稿");
 }
 
 #[gpui::test]
@@ -1291,6 +1534,7 @@ fn deleting_a_profile_preserves_focus_moved_while_the_worker_is_pending(cx: &mut
             application::SpeakerLibraryService::new(Arc::new(GatedLibrary {
                 inner: JsonSpeakerProfileStore::new(library.path()),
                 gate: gate.clone(),
+                pause_after_save: false,
             }));
     });
     let field = view.read_with(cx, |root, _| {
