@@ -497,6 +497,36 @@ fn long_status_menu(cx: &mut TestAppContext, size: gpui::Size<Pixels>, keyboard:
         ),
         "reopening keeps the new draft choice visible"
     );
+    // Choose a visible item in the middle of the list, away from either
+    // end. Reopening must not move that already visible choice to the top.
+    let position = rendered(cx, "select-menu").center();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(300.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let middle = leak(format!("select-option-{}", index - 12));
+    let item = rendered(cx, middle);
+    let menu = rendered(cx, "select-menu");
+    assert!(
+        within(item, menu),
+        "the middle choice is fully visible before selecting"
+    );
+    let previous_position = item.top() - menu.top();
+    click_selector(cx, middle);
+    assert_eq!(
+        select.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+        Some("stage-07".into())
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        rendered(cx, middle).top() - rendered(cx, "select-menu").top(),
+        previous_position,
+        "reopening must preserve the position of an already visible choice"
+    );
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert_eq!(
