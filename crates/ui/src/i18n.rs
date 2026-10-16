@@ -232,6 +232,9 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_readiness") => "连接检测",
         (Locale::ZhCn, "assistant_model_probe") => "模型能力检测",
         (Locale::ZhCn, "assistant_settings_saved") => "Assistant 设置已保存。",
+        (Locale::ZhCn, "assistant_settings_saved_draft_kept") => {
+            "已保存提交的设置，后续编辑已保留。"
+        }
         (Locale::ZhCn, "assistant_connection_required") => "请先配置 Assistant 连接。",
         (Locale::ZhCn, "assistant_scene") => "场景",
         (Locale::ZhCn, "assistant_scope") => "文档范围",
@@ -646,6 +649,9 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_readiness") => "Test connection",
         (Locale::EnUs, "assistant_model_probe") => "Probe model capabilities",
         (Locale::EnUs, "assistant_settings_saved") => "Assistant settings saved.",
+        (Locale::EnUs, "assistant_settings_saved_draft_kept") => {
+            "Submitted settings saved; later edits kept."
+        }
         (Locale::EnUs, "assistant_connection_required") => "Configure an Assistant connection first.",
         (Locale::EnUs, "assistant_scene") => "Scene",
         (Locale::EnUs, "assistant_scope") => "Document scope",

@@ -57,8 +57,11 @@ enum SettingsWrite {
         change: SettingsChange,
         saved_notice: String,
     },
-    /// The Assistant form, relative to the settings it was loaded from.
-    Assistant(AssistantSettingsSave),
+    /// The explicit save and its raw form for acknowledging later edits.
+    Assistant {
+        save: AssistantSettingsSave,
+        submitted: AssistantForm,
+    },
     /// A documents-root switch and the save of `documents_root` it needs.
     DocumentsRoot { root: PathBuf },
 }
@@ -367,6 +370,27 @@ impl AssistantInputs {
     }
 }
 
+/// The raw form at submission. Keep its text so later unfinished edits
+/// can be compared without parsing or replacing them.
+struct AssistantForm {
+    connection_id: String,
+    connection_name: String,
+    base_url: String,
+    model: String,
+    api_key: String,
+    api_key_file: String,
+    context_window_tokens: String,
+    timeout_ms: String,
+    max_output_tokens: String,
+    max_tool_rounds: String,
+    max_validation_retries: String,
+    protocol: LlmProtocol,
+    auth_mode: AssistantAuthMode,
+    enabled: bool,
+    write_mode: AgentWriteMode,
+    active_connection_id: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct DesktopServices {
     pub workspace: WorkspaceService,
@@ -496,6 +520,9 @@ pub(crate) struct RootView {
     assistant_origin: AssistantSettings,
     /// The last queued settings write; writes run one at a time.
     settings_write: Option<Task<()>>,
+    /// Keep editing available while a save awaits its acknowledgment,
+    /// but require that result before accepting another explicit save.
+    pub(crate) assistant_save_pending: bool,
     pub(crate) projects: Vec<DocumentState>,
     pub(crate) ui: UiState,
     pub(crate) assistant: AssistantController,
@@ -733,6 +760,7 @@ impl RootView {
             settings_base: settings_draft.clone(),
             assistant_origin: settings_draft.assistant.clone(),
             settings_write: None,
+            assistant_save_pending: false,
             settings_draft,
             projects: Vec::new(),
             ui,
@@ -1387,15 +1415,17 @@ impl RootView {
                     })
                     .ok();
                 }
-                SettingsWrite::Assistant(save) => {
+                SettingsWrite::Assistant { save, submitted } => {
                     let result = runtime::spawn_blocking(move || {
                         let result = assistant
                             .save_assistant_settings(SettingsService::revision_of(&expected), save);
                         reload_after_conflict(&settings, result)
                     })
                     .await;
-                    this.update(cx, |this, cx| this.finish_assistant_save(result, cx))
-                        .ok();
+                    this.update(cx, |this, cx| {
+                        this.finish_assistant_save(&submitted, result, cx);
+                    })
+                    .ok();
                 }
                 SettingsWrite::DocumentsRoot { root } => {
                     let result = runtime::spawn_blocking(move || {
@@ -1544,17 +1574,23 @@ impl RootView {
 
     fn finish_assistant_save(
         &mut self,
+        submitted: &AssistantForm,
         result: Result<AppSettings, SettingsWriteFailure>,
         cx: &mut Context<Self>,
     ) {
+        self.assistant_save_pending = false;
         match result {
             Ok(saved) => {
+                let draft_kept = self.acknowledge_assistant_form(submitted, &saved.assistant, cx);
                 self.assistant_origin = saved.assistant.clone();
-                self.settings_draft.assistant = saved.assistant.clone();
                 self.settings_base = saved;
-                self.load_assistant_form(cx);
                 self.settings_error = None;
-                self.ui.notice = i18n::text(self.ui.locale, "assistant_settings_saved").into();
+                let notice = if draft_kept {
+                    "assistant_settings_saved_draft_kept"
+                } else {
+                    "assistant_settings_saved"
+                };
+                self.ui.notice = i18n::text(self.ui.locale, notice).into();
             }
             Err(error) => self.settings_write_failed(error, cx),
         }
@@ -1603,20 +1639,121 @@ impl RootView {
         theme::set_preference(self.settings_draft.appearance, cx);
     }
 
-    fn load_assistant_form(&mut self, cx: &mut Context<Self>) {
-        let assistant = &self.settings_draft.assistant;
-        let profile = assistant.active_connection().cloned();
-        self.assistant_protocol = profile
-            .as_ref()
-            .map_or(LlmProtocol::OpenAiChatCompletions, |profile| {
-                profile.protocol
-            });
-        self.assistant_auth_mode = profile
-            .as_ref()
-            .map_or(AssistantAuthMode::Bearer, |profile| profile.auth_mode);
-        self.assistant_inputs.load_profile(profile.as_ref(), cx);
-        let assistant = self.settings_draft.assistant.clone();
-        self.assistant_inputs.load_limits(&assistant, cx);
+    /// Adopt the saved baseline, acknowledging only values the user has
+    /// not changed since submission. Leave other text, selection and focus
+    /// with the current form, including a newly selected connection.
+    fn acknowledge_assistant_form(
+        &mut self,
+        submitted: &AssistantForm,
+        saved: &AssistantSettings,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let current_id = AssistantInputs::value(&self.assistant_inputs.connection_id, cx);
+        let same_profile = current_id == submitted.connection_id;
+        let current = &self.settings_draft.assistant;
+        let mut draft = saved.clone();
+        let mut draft_kept = false;
+        if current.enabled != submitted.enabled {
+            draft.enabled = current.enabled;
+            draft_kept |= current.enabled != saved.enabled;
+        }
+        if current.write_mode != submitted.write_mode {
+            draft.write_mode = current.write_mode;
+            draft_kept |= current.write_mode != saved.write_mode;
+        }
+        if !same_profile || current.active_connection_id != submitted.active_connection_id {
+            draft.active_connection_id = current.active_connection_id.clone();
+            draft_kept |=
+                !same_profile || current.active_connection_id != saved.active_connection_id;
+        }
+        let mut inputs = vec![
+            (
+                &self.assistant_inputs.max_tool_rounds,
+                &submitted.max_tool_rounds,
+                saved.max_tool_rounds.to_string(),
+            ),
+            (
+                &self.assistant_inputs.max_validation_retries,
+                &submitted.max_validation_retries,
+                saved.max_validation_retries.to_string(),
+            ),
+        ];
+        if same_profile {
+            let profile = saved
+                .active_connection()
+                .cloned()
+                .unwrap_or_else(empty_connection_profile);
+            if self.assistant_protocol == submitted.protocol {
+                self.assistant_protocol = profile.protocol;
+            } else {
+                draft_kept |= self.assistant_protocol != profile.protocol;
+            }
+            if self.assistant_auth_mode == submitted.auth_mode {
+                self.assistant_auth_mode = profile.auth_mode;
+            } else {
+                draft_kept |= self.assistant_auth_mode != profile.auth_mode;
+            }
+            inputs.extend([
+                (
+                    &self.assistant_inputs.connection_id,
+                    &submitted.connection_id,
+                    profile.id,
+                ),
+                (
+                    &self.assistant_inputs.connection_name,
+                    &submitted.connection_name,
+                    profile.name,
+                ),
+                (
+                    &self.assistant_inputs.base_url,
+                    &submitted.base_url,
+                    profile.base_url,
+                ),
+                (
+                    &self.assistant_inputs.model,
+                    &submitted.model,
+                    profile.model,
+                ),
+                (
+                    &self.assistant_inputs.api_key,
+                    &submitted.api_key,
+                    String::new(),
+                ),
+                (
+                    &self.assistant_inputs.api_key_file,
+                    &submitted.api_key_file,
+                    profile.api_key_file.unwrap_or_default(),
+                ),
+                (
+                    &self.assistant_inputs.context_window_tokens,
+                    &submitted.context_window_tokens,
+                    profile
+                        .context_window_tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                ),
+                (
+                    &self.assistant_inputs.timeout_ms,
+                    &submitted.timeout_ms,
+                    profile.timeout_ms.to_string(),
+                ),
+                (
+                    &self.assistant_inputs.max_output_tokens,
+                    &submitted.max_output_tokens,
+                    profile.max_output_tokens.to_string(),
+                ),
+            ]);
+        }
+        for (input, submitted, saved) in inputs {
+            let value = AssistantInputs::value(input, cx);
+            if &value != submitted {
+                draft_kept |= value != saved;
+            } else if value != saved {
+                input.update(cx, |input, cx| input.set_value(saved, cx));
+            }
+        }
+        self.settings_draft.assistant = draft;
+        draft_kept
     }
 
     fn refresh_model_selector(
@@ -3356,14 +3493,49 @@ impl RootView {
         Ok(save)
     }
 
+    fn assistant_form(&self, cx: &App) -> AssistantForm {
+        AssistantForm {
+            connection_id: AssistantInputs::value(&self.assistant_inputs.connection_id, cx),
+            connection_name: AssistantInputs::value(&self.assistant_inputs.connection_name, cx),
+            base_url: AssistantInputs::value(&self.assistant_inputs.base_url, cx),
+            model: AssistantInputs::value(&self.assistant_inputs.model, cx),
+            api_key: AssistantInputs::value(&self.assistant_inputs.api_key, cx),
+            api_key_file: AssistantInputs::value(&self.assistant_inputs.api_key_file, cx),
+            context_window_tokens: AssistantInputs::value(
+                &self.assistant_inputs.context_window_tokens,
+                cx,
+            ),
+            timeout_ms: AssistantInputs::value(&self.assistant_inputs.timeout_ms, cx),
+            max_output_tokens: AssistantInputs::value(&self.assistant_inputs.max_output_tokens, cx),
+            max_tool_rounds: AssistantInputs::value(&self.assistant_inputs.max_tool_rounds, cx),
+            max_validation_retries: AssistantInputs::value(
+                &self.assistant_inputs.max_validation_retries,
+                cx,
+            ),
+            protocol: self.assistant_protocol,
+            auth_mode: self.assistant_auth_mode,
+            enabled: self.settings_draft.assistant.enabled,
+            write_mode: self.settings_draft.assistant.write_mode,
+            active_connection_id: self.settings_draft.assistant.active_connection_id.clone(),
+        }
+    }
+
     pub(crate) fn save_assistant_settings(
         &mut self,
         _: &ClickEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.assistant_save_pending {
+            return;
+        }
         match self.assistant_save_from_inputs(cx) {
-            Ok(save) => self.queue_settings_write(SettingsWrite::Assistant(save), cx),
+            Ok(save) => {
+                let submitted = self.assistant_form(cx);
+                self.assistant_save_pending = true;
+                self.queue_settings_write(SettingsWrite::Assistant { save, submitted }, cx);
+                cx.notify();
+            }
             Err(error) => {
                 self.ui.notice = error.to_string();
                 cx.notify();

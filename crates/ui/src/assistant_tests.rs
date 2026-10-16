@@ -1391,6 +1391,419 @@ fn click_assistant_setting(cx: &mut VisualTestContext, view: &View, selector: &'
     click_selector(cx, selector);
 }
 
+/// Real settings files whose successful CAS can wait before its result
+/// reaches the form. Readers use another service, so the saving service's
+/// held write lock never blocks an assertion on the UI thread.
+struct AssistantSaveFiles {
+    path: std::path::PathBuf,
+    settings: settings::SettingsService,
+    gate: Gate,
+    writes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct HeldAssistantSave {
+    inner: settings::JsonSettingsRepository,
+    gate: Gate,
+    writes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl settings::SettingsRepository for HeldAssistantSave {
+    fn load(&self) -> Result<settings::AppSettings, settings::SettingsError> {
+        settings::SettingsRepository::load(&self.inner)
+    }
+
+    fn save(&self, value: &settings::AppSettings) -> Result<(), settings::SettingsError> {
+        settings::SettingsRepository::save(&self.inner, value)
+    }
+
+    fn save_if_equal(
+        &self,
+        expected: &settings::AppSettings,
+        value: &settings::AppSettings,
+    ) -> Result<(), settings::SettingsError> {
+        let result = settings::SettingsRepository::save_if_equal(&self.inner, expected, value);
+        if result.is_ok() {
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.gate.pass();
+        }
+        result
+    }
+}
+
+impl AssistantSaveFiles {
+    fn new() -> Self {
+        let path = crate::tests::temp_directory().join("settings.json");
+        let inner = settings::JsonSettingsRepository::open(&path);
+        let mut saved = stored_key_settings().snapshot().unwrap();
+        let mut second = saved.assistant.connections[0].clone();
+        second.id = "second".into();
+        second.name = "Second".into();
+        second.api_key = Some("second-stored-key".into());
+        saved.assistant.connections.push(second);
+        settings::SettingsRepository::save(&inner, &saved).unwrap();
+        let gate = Gate::default();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let settings = settings::SettingsService::open(Arc::new(HeldAssistantSave {
+            inner,
+            gate: gate.clone(),
+            writes: writes.clone(),
+        }))
+        .unwrap();
+        Self {
+            path,
+            settings,
+            gate,
+            writes,
+        }
+    }
+
+    fn read(&self) -> settings::AssistantSettings {
+        settings::SettingsService::open(Arc::new(settings::JsonSettingsRepository::open(
+            &self.path,
+        )))
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .assistant
+    }
+
+    fn write_count(&self) -> usize {
+        self.writes.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Drop for AssistantSaveFiles {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(self.path.parent().unwrap()).ok();
+    }
+}
+
+fn open_saving_form<'a>(
+    cx: &'a mut TestAppContext,
+    files: &AssistantSaveFiles,
+) -> (View, &'a mut VisualTestContext) {
+    let assistant = Arc::new(FakeAssistantUiService {
+        settings: Some(files.settings.clone()),
+        ..Default::default()
+    });
+    let (view, cx) = open_desktop_with(cx, assistant, files.settings.clone());
+    open_assistant_settings(cx, &view);
+    (view, cx)
+}
+
+#[gpui::test]
+fn a_saved_assistant_form_keeps_new_typing_and_credentials(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let (view, cx) = open_saving_form(cx, &files);
+    let (name, key, rounds) = view.read_with(cx, |root, _| {
+        (
+            root.assistant_inputs.connection_name.clone(),
+            root.assistant_inputs.api_key.clone(),
+            root.assistant_inputs.max_tool_rounds.clone(),
+        )
+    });
+    retype(cx, &name, "Saved name");
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    assert_eq!(files.read().connections[0].name, "Saved name");
+    click_assistant_setting(cx, &view, "settings-write-mode-confirm-each");
+    retype(cx, &key, "later-key-draft");
+    retype(cx, &rounds, "1e"); // A partial numeric edit is a draft too.
+    retype(cx, &name, "Keep this draft");
+    cx.simulate_keystrokes("left");
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Saved name"
+    });
+    assert_eq!(
+        field_value(cx, &name),
+        "Keep this draft",
+        "a save result must not replace later typing"
+    );
+    assert!(
+        field_value(cx, &key) == "later-key-draft",
+        "a save result must keep a newly typed key"
+    );
+    assert_eq!(field_value(cx, &rounds), "1e");
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings_draft.assistant.write_mode,
+            contracts::AgentWriteMode::ConfirmEach
+        );
+        assert_eq!(
+            root.saved_write_mode(),
+            contracts::AgentWriteMode::Automatic
+        );
+        assert_eq!(
+            root.ui.notice,
+            crate::i18n::text(root.ui.locale, "assistant_settings_saved_draft_kept")
+        );
+    });
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(name.read(cx), cx).contains_focused(window, cx)
+    ));
+    cx.simulate_input("!");
+    assert_eq!(field_value(cx, &name), "Keep this draf!t");
+    assert!(files.read().connections[0].api_key.as_deref() == Some(STORED_KEY));
+    retype(cx, &rounds, "12");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Keep this draf!t"
+    });
+    let saved = files.read();
+    assert_eq!(saved.connections[0].name, "Keep this draf!t");
+    assert_eq!(saved.max_tool_rounds, 12);
+    assert_eq!(saved.write_mode, contracts::AgentWriteMode::ConfirmEach);
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.notice,
+            crate::i18n::text(root.ui.locale, "assistant_settings_saved")
+        )
+    });
+    assert!(saved.connections[0].api_key.as_deref() == Some("later-key-draft"));
+    assert!(
+        field_value(cx, &key).is_empty(),
+        "only the explicitly saved key is cleared"
+    );
+}
+
+#[gpui::test]
+fn a_saved_assistant_form_keeps_the_newly_selected_connection(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let (view, cx) = open_saving_form(cx, &files);
+    let (id, name, key) = view.read_with(cx, |root, _| {
+        (
+            root.assistant_inputs.connection_id.clone(),
+            root.assistant_inputs.connection_name.clone(),
+            root.assistant_inputs.api_key.clone(),
+        )
+    });
+    retype(cx, &name, "Saved first connection");
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    click_assistant_setting(cx, &view, "assistant-profile-second");
+    retype(cx, &name, "Second draft");
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Saved first connection"
+    });
+    assert_eq!(
+        field_value(cx, &id),
+        "second",
+        "an earlier save must not switch the form back"
+    );
+    assert_eq!(field_value(cx, &name), "Second draft");
+    assert!(field_value(cx, &key).is_empty());
+    view.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.settings_draft
+                .assistant
+                .active_connection_id
+                .as_deref(),
+            Some("second")
+        );
+        assert!(root.form_keeps_stored_credential(cx));
+        assert_eq!(
+            root.ui.notice,
+            crate::i18n::text(root.ui.locale, "assistant_settings_saved_draft_kept")
+        );
+    });
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(name.read(cx), cx).contains_focused(window, cx)
+    ));
+    let saved_first = files.read();
+    assert_eq!(saved_first.active_connection_id.as_deref(), Some("local"));
+    assert_eq!(saved_first.connections[1].name, "Second");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().active_connection_id.as_deref() == Some("second")
+    });
+    let saved_second = files.read();
+    assert_eq!(saved_second.connections[0].name, "Saved first connection");
+    assert_eq!(saved_second.connections[1].name, "Second draft");
+    assert!(saved_second.connections[1].api_key.as_deref() == Some("second-stored-key"));
+}
+
+#[gpui::test]
+fn a_pending_assistant_save_requires_a_later_explicit_save(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let (view, cx) = open_saving_form(cx, &files);
+    let name = view.read_with(cx, |root, _| root.assistant_inputs.connection_name.clone());
+    retype(cx, &name, "First saved edit");
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    assert_eq!(files.read().connections[0].name, "First saved edit");
+    retype(cx, &name, "Local");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    view.update_in(cx, |root, window, cx| {
+        root.save_assistant_settings(&gpui::ClickEvent::default(), window, cx);
+        // An ordinary settings write provides an actual queue barrier after
+        // both the button and a stale callback tried to save again.
+        root.set_locale(crate::i18n::Locale::EnUs, cx);
+    });
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.ui.notice == crate::i18n::text(crate::i18n::Locale::EnUs, "language_changed")
+    });
+    assert_eq!(
+        files.write_count(),
+        2,
+        "only A and the locale write may commit"
+    );
+    assert_eq!(files.read().connections[0].name, "First saved edit");
+    assert_eq!(field_value(cx, &name), "Local");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Local"
+    });
+    assert_eq!(files.write_count(), 3);
+    assert_eq!(files.read().connections[0].name, "Local");
+}
+
+#[gpui::test]
+fn a_later_assistant_save_preserves_unedited_external_settings(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let (view, cx) = open_saving_form(cx, &files);
+    let external = settings::SettingsService::open(Arc::new(
+        settings::JsonSettingsRepository::open(&files.path),
+    ))
+    .unwrap();
+    external
+        .patch_if_equal(
+            &external.revision().unwrap(),
+            settings::SettingsPatch {
+                write_mode: Some(contracts::AgentWriteMode::ConfirmEach),
+                connection: Some(settings::AssistantConnectionPatch {
+                    id: "local".into(),
+                    max_output_tokens: Some(3072),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            settings::SettingsGrant::full(),
+        )
+        .unwrap();
+    let name = view.read_with(cx, |root, _| root.assistant_inputs.connection_name.clone());
+    retype(cx, &name, "First retry");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| root.settings_error.is_some());
+    assert_eq!(files.write_count(), 0);
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    assert_eq!(
+        files.read().write_mode,
+        contracts::AgentWriteMode::ConfirmEach
+    );
+    assert_eq!(files.read().connections[0].max_output_tokens, 3072);
+    retype(cx, &name, "Second explicit edit");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "First retry"
+    });
+    assert_eq!(field_value(cx, &name), "Second explicit edit");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Second explicit edit"
+    });
+    assert_eq!(files.write_count(), 2);
+    let saved = files.read();
+    assert_eq!(
+        saved.write_mode,
+        contracts::AgentWriteMode::ConfirmEach,
+        "a later name edit must not restore the old external write mode"
+    );
+    assert_eq!(saved.connections[0].max_output_tokens, 3072);
+    assert_eq!(saved.connections[0].name, "Second explicit edit");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Second explicit edit"
+    });
+}
+
+#[gpui::test]
+fn a_later_assistant_save_keeps_the_acknowledged_credential(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let key_file = files.path.parent().unwrap().join("credentials/key.txt");
+    std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
+    std::fs::write(&key_file, "fixture-file-key").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    files
+        .settings
+        .patch_if_equal(
+            &files.settings.revision().unwrap(),
+            settings::SettingsPatch {
+                connection: Some(settings::AssistantConnectionPatch {
+                    id: "local".into(),
+                    credential: Some(settings::CredentialUpdate::File(
+                        "credentials/key.txt".into(),
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            settings::SettingsGrant::full(),
+        )
+        .unwrap();
+    let before = files.write_count();
+    let (view, cx) = open_saving_form(cx, &files);
+    let (name, key, file) = view.read_with(cx, |root, _| {
+        (
+            root.assistant_inputs.connection_name.clone(),
+            root.assistant_inputs.api_key.clone(),
+            root.assistant_inputs.api_key_file.clone(),
+        )
+    });
+    retype(cx, &key, "first-rotated-key");
+    retype(cx, &name, "First key save");
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    assert!(files.read().connections[0].api_key_file.is_none());
+    focus_field(cx, &key);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes("backspace");
+    assert!(field_value(cx, &key).is_empty());
+    retype(cx, &name, "Keep the saved credential");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "First key save"
+    });
+    assert!(field_value(cx, &key).is_empty());
+    assert!(field_value(cx, &file).is_empty());
+    assert_eq!(field_value(cx, &name), "Keep the saved credential");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Keep the saved credential"
+    });
+    assert_eq!(files.write_count(), before + 2);
+    let saved = files.read();
+    assert!(
+        saved.connections[0].api_key.as_deref() == Some("first-rotated-key"),
+        "an untouched old file field must not replace the just-saved key"
+    );
+    assert!(saved.connections[0].api_key_file.is_none());
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Keep the saved credential"
+    });
+    assert!(field_value(cx, &key).is_empty());
+    assert!(field_value(cx, &file).is_empty());
+}
+
 #[gpui::test]
 fn turning_automatic_write_back_off_explains_confirm_each(cx: &mut TestAppContext) {
     let settings = stored_key_settings();

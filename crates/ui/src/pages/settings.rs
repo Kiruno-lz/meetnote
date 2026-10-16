@@ -663,6 +663,7 @@ fn assistant_settings_section(
                     .child(
                         Button::new("assistant-save-settings", tr(locale, "save"))
                             .debug_selector(|| "assistant-save-settings".into())
+                            .disabled(root.assistant_save_pending)
                             .primary()
                             .compact()
                             .on_click(cx.listener(RootView::save_assistant_settings)),
