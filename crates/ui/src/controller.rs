@@ -2454,6 +2454,9 @@ impl RootView {
     /// field is blank: one `SetSpeakerLabel` against the revision the list
     /// was read at.
     pub(crate) fn rename_document_speaker(&mut self, speaker_id: String, cx: &mut Context<Self>) {
+        if self.speaker_command.is_some() || self.documents_root_switch.switching {
+            return;
+        }
         let Some(rows) = &self.speaker_rows else {
             return;
         };
@@ -2490,7 +2493,10 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.documents_root_switch.switching {
+        if self.speaker_command.is_some() || self.documents_root_switch.switching {
+            if let Some(rows) = &self.speaker_rows {
+                rows.clear_merge_choice(&from, cx);
+            }
             return;
         }
         let Some(rows) = &self.speaker_rows else {
@@ -2636,6 +2642,9 @@ impl RootView {
 
     /// Renames profile `profile_id` to the typed name.
     pub(crate) fn rename_speaker_profile(&mut self, profile_id: String, cx: &mut Context<Self>) {
+        if self.speaker_profiles.write_path.is_some() {
+            return;
+        }
         let Some((name, changed)) = self
             .profile_rows
             .as_ref()
@@ -2670,6 +2679,9 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.speaker_profiles.write_path.is_some() {
+            return;
+        }
         let Some(profile) = self.speaker_profiles.find(&profile_id) else {
             return;
         };
@@ -2689,6 +2701,12 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.speaker_profiles.write_path.is_some() {
+            if let Some(rows) = &self.profile_rows {
+                rows.clear_merge_choice(&source_id, cx);
+            }
+            return;
+        }
         let name = |id: &str| {
             self.speaker_profiles
                 .find(id)
@@ -5131,6 +5149,16 @@ impl Render for RootView {
         }
         self.ensure_speaker_rows(selected.as_ref(), window, cx);
         self.ensure_profile_rows(window, cx);
+        if let Some(rows) = &self.speaker_rows {
+            rows.set_merge_disabled(
+                self.speaker_command.is_some() || self.documents_root_switch.switching,
+                window,
+                cx,
+            );
+        }
+        if let Some(rows) = &self.profile_rows {
+            rows.set_merge_disabled(self.speaker_profiles.write_path.is_some(), window, cx);
+        }
         let body = match self.ui.route {
             Route::Assistant => pages::assistant::render(self, cx).into_any_element(),
             Route::Meetings => {
