@@ -302,6 +302,89 @@ fn first_use_connection_settings_is_keyboard_reachable_at_minimum_size(cx: &mut 
     });
 }
 
+fn first_settings_jump_reveals_the_assistant_form(
+    cx: &mut TestAppContext,
+    locale: crate::i18n::Locale,
+    keyboard: bool,
+) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    view.update(cx, |root, cx| root.set_locale(locale, cx));
+    wait_for(cx, &view, |root| {
+        root.ui.notice == crate::i18n::text(locale, "language_changed")
+    });
+    if keyboard {
+        tab_to_first_use_action(cx, "assistant-first-settings");
+        press_enter(cx);
+    } else {
+        click_selector(cx, "assistant-first-settings");
+    }
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Settings);
+    assert_assistant_form_visible(cx, locale);
+}
+
+fn assert_assistant_form_visible(cx: &mut VisualTestContext, locale: crate::i18n::Locale) {
+    let viewport = rendered(cx, "settings-scroll");
+    for key in [
+        "assistant_enabled",
+        "assistant_profiles",
+        "assistant_connection_id",
+    ] {
+        let selector = leak(format!("setting-label-{}", crate::i18n::text(locale, key)));
+        let label = rendered(cx, selector);
+        assert!(
+            within(label, viewport),
+            "{key} must be visible after the first settings jump: {label:?} in {viewport:?}"
+        );
+    }
+}
+
+#[gpui::test]
+fn the_first_chinese_settings_button_reveals_the_assistant_form(cx: &mut TestAppContext) {
+    first_settings_jump_reveals_the_assistant_form(cx, crate::i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn the_first_english_settings_button_reveals_the_assistant_form(cx: &mut TestAppContext) {
+    first_settings_jump_reveals_the_assistant_form(cx, crate::i18n::Locale::EnUs, false);
+}
+
+#[gpui::test]
+fn the_first_settings_keyboard_action_reveals_the_assistant_form(cx: &mut TestAppContext) {
+    first_settings_jump_reveals_the_assistant_form(cx, crate::i18n::Locale::EnUs, true);
+}
+
+#[gpui::test]
+fn returning_to_assistant_settings_keeps_the_question_and_reveals_the_form(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep my question while I connect");
+    click_selector(cx, "assistant-first-settings");
+    assert_assistant_form_visible(cx, crate::i18n::Locale::ZhCn);
+    click_selector(cx, "settings-section-0");
+    click_selector(cx, "nav-Assistant");
+    assert_eq!(field_value(cx, &prompt), "keep my question while I connect");
+    click_selector(cx, "assistant-first-settings");
+    assert_assistant_form_visible(cx, crate::i18n::Locale::ZhCn);
+    click_selector(cx, "nav-Assistant");
+    assert_eq!(field_value(cx, &prompt), "keep my question while I connect");
+}
+
+#[gpui::test]
+fn leaving_settings_before_layout_discards_the_assistant_jump(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    view.update(cx, |root, cx| {
+        root.open_assistant_settings(cx);
+        root.navigate(Route::Assistant, cx);
+    });
+    cx.run_until_parked();
+    click_selector(cx, "nav-Settings");
+    let scroll = view.read_with(cx, |root, _| root.scroll.settings.clone());
+    assert_eq!(scroll.offset().y, gpui::px(0.));
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Settings);
+}
+
 #[gpui::test]
 fn first_use_with_a_connection_offers_the_existing_audio_picker(cx: &mut TestAppContext) {
     let (view, cx, assistant) = first_use_assistant(cx, true);
@@ -612,6 +695,8 @@ fn a_rejected_api_key_explains_itself_and_opens_assistant_settings(cx: &mut Test
     assert!(!shown(cx, "assistant-retry".into()));
 
     click_selector(cx, "assistant-open-settings");
+    let locale = view.read_with(cx, |root, _| root.ui.locale);
+    assert_assistant_form_visible(cx, locale);
     let assistant_section = crate::pages::settings::SECTIONS
         .iter()
         .position(|key| *key == "assistant_settings");
