@@ -497,12 +497,22 @@ fn main_panel(
                             .on_click(cx.listener(RootView::relink_audio))
                     }))
                     .child(
-                        Button::new("open-project-detail", tr(locale, "open_detail"))
-                            .debug_selector(|| "open-project-detail".into())
-                            .focus_handle(&root.detail_trigger)
-                            .secondary()
-                            .compact()
-                            .on_click(cx.listener(RootView::open_detail)),
+                        Button::new(
+                            "open-project-detail",
+                            tr(
+                                locale,
+                                if root.ui.detail_open {
+                                    "close_detail"
+                                } else {
+                                    "open_detail"
+                                },
+                            ),
+                        )
+                        .debug_selector(|| "open-project-detail".into())
+                        .focus_handle(&root.detail_trigger)
+                        .secondary()
+                        .compact()
+                        .on_click(cx.listener(RootView::toggle_detail)),
                     )
                     .children(
                         model_hint
