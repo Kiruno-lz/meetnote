@@ -5,10 +5,11 @@
 //! a scrim, a frosted sheet (`BlurLevel::Sheet`) and, on the sheet, the
 //! opaque panel that holds the question and its two buttons.
 
-use super::{entrance, Button};
+use super::{entrance, Button, Scrollbar};
 use crate::theme::{self, BlurLevel};
 use gpui::{
-    div, prelude::*, px, App, FocusHandle, IntoElement, Pixels, Role, SharedString, Window,
+    div, prelude::*, px, App, FocusHandle, IntoElement, Pixels, Role, ScrollHandle, SharedString,
+    Window,
 };
 use gpui_base::{
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogDescription, AlertDialogTitle,
@@ -80,12 +81,19 @@ impl RenderOnce for ConfirmDialog {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = *theme::tokens(cx);
         let viewport = window.viewport_size();
+        let scroll = window
+            .use_keyed_state("confirm-dialog-content", cx, |_, _| ScrollHandle::new())
+            .read(cx)
+            .clone();
+        // Leave room for the sheet's padding, border and the window margin.
+        let max_height = viewport.height - (tokens.spacing.xl + tokens.spacing.md) * 2. - px(2.);
         let panel = div()
             .id("confirm-dialog")
             .debug_selector(|| "confirm-dialog".into())
             .role(Role::Group)
             .aria_label(self.title.clone())
             .w(PANEL_WIDTH)
+            .max_h(max_height)
             .p(tokens.spacing.xl)
             .rounded(tokens.radius.lg)
             .bg(tokens.content)
@@ -94,18 +102,39 @@ impl RenderOnce for ConfirmDialog {
             .flex_col()
             .gap(tokens.spacing.md)
             .child(
-                AlertDialogTitle::new()
-                    .text_size(tokens.font_size.lg)
-                    .child(self.title),
-            )
-            .child(
-                AlertDialogDescription::new()
-                    .text_sm()
-                    .text_color(tokens.text_muted)
-                    .child(self.description),
+                div()
+                    .id("confirm-dialog-content")
+                    .debug_selector(|| "confirm-dialog-content".into())
+                    .relative()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .child(
+                        div()
+                            .debug_selector(|| "confirm-dialog-text".into())
+                            .flex()
+                            .flex_col()
+                            .gap(tokens.spacing.md)
+                            .child(
+                                AlertDialogTitle::new()
+                                    .text_size(tokens.font_size.lg)
+                                    .child(self.title),
+                            )
+                            .child(
+                                AlertDialogDescription::new()
+                                    .text_sm()
+                                    .text_color(tokens.text_muted)
+                                    .child(self.description),
+                            ),
+                    )
+                    .child(
+                        Scrollbar::vertical("confirm-dialog-scrollbar", &scroll)
+                            .outset_right(tokens.spacing.xl),
+                    ),
             )
             .child(
                 div()
+                    .flex_none()
                     .mt(tokens.spacing.sm)
                     .flex()
                     .justify_end()

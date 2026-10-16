@@ -501,6 +501,138 @@ fn deleting_a_profile_asks_first_and_cancel_keeps_it(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_long_chinese_profile_name_keeps_confirmation_actions_inside_the_minimum_window(
+    cx: &mut TestAppContext,
+) {
+    long_profile_confirmation(
+        cx,
+        i18n::Locale::ZhCn,
+        crate::pages::chrome::MIN_WINDOW_SIZE,
+    );
+}
+
+#[gpui::test]
+fn a_long_english_profile_name_keeps_confirmation_actions_inside_the_window(
+    cx: &mut TestAppContext,
+) {
+    long_profile_confirmation(
+        cx,
+        i18n::Locale::EnUs,
+        gpui::size(gpui::px(1180.), gpui::px(760.)),
+    );
+}
+
+fn long_profile_confirmation(
+    cx: &mut TestAppContext,
+    locale: i18n::Locale,
+    size: gpui::Size<gpui::Pixels>,
+) {
+    let name = match locale {
+        i18n::Locale::ZhCn => "产品研发与用户访谈".repeat(80),
+        i18n::Locale::EnUs => "Research and customer interviews ".repeat(100),
+    };
+    let library = Library::new(vec![profile("alpha", &name, [1.0, 0.0], 1)]);
+    let documents = DocumentsRoot::new();
+    let (view, cx, _) = open_with_library(cx, &library.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha", true);
+    cx.simulate_resize(size);
+    view.update(cx, |root, cx| {
+        root.ui.locale = locale;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_selector(cx, "settings-section-5");
+    let before = std::fs::read(library.path()).unwrap();
+    click_selector(cx, "delete-speaker-profile-alpha");
+    let window = gpui::Bounds::new(gpui::point(gpui::px(0.), gpui::px(0.)), size);
+    let panel = rendered(cx, "confirm-dialog");
+    assert!(within(panel, window), "a valid long profile name must not push the dialog outside the window: {panel:?} in {window:?}");
+    for button in ["dialog-cancel", "dialog-confirm"] {
+        assert!(
+            within(rendered(cx, button), panel),
+            "{button} remains visible and usable"
+        );
+    }
+    let content = rendered(cx, "confirm-dialog-content");
+    let text = rendered(cx, "confirm-dialog-text");
+    assert!(
+        text.size.height > content.size.height,
+        "the full question is scrollable instead of discarded"
+    );
+    let buttons = [
+        rendered(cx, "dialog-cancel"),
+        rendered(cx, "dialog-confirm"),
+    ];
+    let track = rendered(cx, "confirm-dialog-scrollbar-viewport");
+    assert_eq!(
+        track.right(),
+        panel.right(),
+        "the scrollbar reaches the dialog's right edge"
+    );
+    let start = gpui::point(track.right() - gpui::px(7.), track.top() + gpui::px(8.));
+    let end = start + gpui::point(gpui::px(0.), gpui::px(50.));
+    cx.simulate_mouse_move(start, None, gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_down(start, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_move(end, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.simulate_mouse_up(end, gpui::MouseButton::Left, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        rendered(cx, "confirm-dialog-text").top() < text.top(),
+        "the scrollbar at the outer edge can be grabbed and dragged"
+    );
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: content.center(),
+        delta: gpui::ScrollDelta::Pixels(gpui::point(gpui::px(0.), gpui::px(-10000.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let scrolled = rendered(cx, "confirm-dialog-text");
+    let content = rendered(cx, "confirm-dialog-content");
+    assert!(
+        scrolled.top() < text.top(),
+        "the full name can be read by scrolling"
+    );
+    assert!(
+        scrolled.bottom() <= content.bottom() + gpui::px(1.),
+        "the description after the full name is reachable"
+    );
+    assert_eq!(
+        rendered(cx, "dialog-cancel").top() - rendered(cx, "confirm-dialog").top(),
+        buttons[0].top() - panel.top()
+    );
+    assert_eq!(
+        rendered(cx, "dialog-confirm").top() - rendered(cx, "confirm-dialog").top(),
+        buttons[1].top() - panel.top()
+    );
+    click_selector(cx, "dialog-cancel");
+    wait_rendered(cx, "confirm-dialog", false);
+    assert_eq!(
+        std::fs::read(library.path()).unwrap(),
+        before,
+        "cancel keeps the real library unchanged"
+    );
+    click_selector(cx, "delete-speaker-profile-alpha");
+    let text = rendered(cx, "confirm-dialog-text");
+    let content = rendered(cx, "confirm-dialog-content");
+    assert!(
+        text.top() >= content.top(),
+        "a new confirmation starts at the beginning of its question"
+    );
+    cx.simulate_keystrokes("escape");
+    wait_rendered(cx, "confirm-dialog", false);
+    assert_eq!(std::fs::read(library.path()).unwrap(), before);
+    click_selector(cx, "delete-speaker-profile-alpha");
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |_| library.load().profiles.is_empty());
+    assert!(
+        library.path().is_file(),
+        "the library asset remains present after confirming profile deletion"
+    );
+}
+
+#[gpui::test]
 fn deleting_a_profile_moves_focus_to_the_next_name(cx: &mut TestAppContext) {
     let library = Library::new(three_profiles());
     let documents = DocumentsRoot::new();
