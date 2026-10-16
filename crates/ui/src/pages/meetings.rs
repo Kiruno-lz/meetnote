@@ -271,11 +271,17 @@ fn status_line(
 
 fn model_guidance(
     hint: &'static str,
+    settings_section: Option<&'static str>,
     locale: i18n::Locale,
     in_body: bool,
     tokens: &Tokens,
     cx: &mut Context<RootView>,
 ) -> gpui::Div {
+    let (action, label) = if settings_section.is_some() {
+        ("go-to-model-settings", "choose_model")
+    } else {
+        ("go-to-models", "go_to_models")
+    };
     div()
         .debug_selector(|| "models-required".into())
         .w_full()
@@ -296,12 +302,15 @@ fn model_guidance(
                 .child(tr(locale, hint)),
         )
         .child(
-            Button::new("go-to-models", tr(locale, "go_to_models"))
-                .debug_selector(|| "go-to-models".into())
+            Button::new(action, tr(locale, label))
+                .debug_selector(move || action.into())
                 .compact()
                 .when(in_body, |button| button.primary())
                 .when(!in_body, |button| button.ghost())
-                .on_click(cx.listener(|this, _, _, cx| this.navigate(Route::Models, cx))),
+                .on_click(cx.listener(move |this, _, _, cx| match settings_section {
+                    Some(section) => this.open_settings_section(section, cx),
+                    None => this.navigate(Route::Models, cx),
+                })),
         )
 }
 
@@ -364,6 +373,7 @@ fn main_panel(
         );
         let process_label = tr(locale, if processing_here { "cancel" } else { "process" });
         let mode = root.ui.content_mode;
+        let model_settings_section = root.model_setup_section(missing_models);
         let model_hint = missing_models.hint_key().filter(|_| {
             !processing_here && audio_problem.is_none() && root.projects_error.is_none()
         });
@@ -412,7 +422,14 @@ fn main_panel(
                         .child(div().text_sm().child(segment.text.clone()))
                 })),
             _ => match model_hint {
-                Some(hint) => content.child(model_guidance(hint, locale, true, &tokens, cx)),
+                Some(hint) => content.child(model_guidance(
+                    hint,
+                    model_settings_section,
+                    locale,
+                    true,
+                    &tokens,
+                    cx,
+                )),
                 None => content.child(
                     div()
                         .text_color(tokens.text_muted)
@@ -534,7 +551,16 @@ fn main_panel(
                     .children(
                         model_hint
                             .filter(|_| has_results || mode == ContentMode::Edit)
-                            .map(|hint| model_guidance(hint, locale, false, &tokens, cx)),
+                            .map(|hint| {
+                                model_guidance(
+                                    hint,
+                                    model_settings_section,
+                                    locale,
+                                    false,
+                                    &tokens,
+                                    cx,
+                                )
+                            }),
                     ),
             );
         if processing_here {
