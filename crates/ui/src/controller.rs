@@ -2219,9 +2219,19 @@ impl RootView {
         let this = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
             let previous = window.focused(cx).filter(|focused| *focused != dialog);
-            this.update(cx, |this, _| this.dialog_return = previous)
-                .ok();
-            dialog.focus(window, cx);
+            let open = this
+                .update(cx, |this, _| {
+                    if this.speaker_confirmation.is_none() && this.speaker_library_prompt.is_none()
+                    {
+                        return false;
+                    }
+                    this.dialog_return = previous;
+                    true
+                })
+                .unwrap_or(false);
+            if open {
+                dialog.focus(window, cx);
+            }
         });
     }
 
@@ -2334,9 +2344,37 @@ impl RootView {
         {
             self.ui.notice = i18n::message(self.ui.locale, "processing_failed", &error);
         }
-        self.speaker_profiles.status = None;
+        self.speaker_profiles.reset_for_path_change();
         self.profile_rows = None;
         self.profile_removal_focus = None;
+        if matches!(
+            self.speaker_confirmation,
+            Some(
+                SpeakerConfirmation::DeleteProfile { .. }
+                    | SpeakerConfirmation::MergeProfiles { .. }
+            )
+        ) {
+            self.speaker_confirmation = None;
+            self.dialog_return = None;
+            cx.spawn(async move |this, cx| {
+                this.update_in(cx, |this, window, cx| {
+                    if this.ui.route == Route::Settings
+                        && this.speaker_confirmation.is_none()
+                        && this.speaker_library_prompt.is_none()
+                        && (this.dialog_focus.contains_focused(window, cx)
+                            || this.window_focus.is_focused(window))
+                    {
+                        this.scroll
+                            .settings
+                            .scroll_to_top_of_item(pages::settings::SPEAKER_LIBRARY_SECTION);
+                        this.speaker_library_focus.focus(window, cx);
+                        cx.notify();
+                    }
+                })
+                .ok();
+            })
+            .detach();
+        }
         self.reload_speaker_profiles(cx);
     }
 
@@ -2406,6 +2444,10 @@ impl RootView {
     fn ensure_profile_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ui.route != Route::Settings {
             self.profile_removal_focus = None;
+            return;
+        }
+        if !self.speaker_profiles.loaded {
+            self.profile_rows = None;
             return;
         }
         let locale = self.ui.locale;

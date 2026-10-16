@@ -2082,6 +2082,155 @@ fn merging_profiles_moves_samples_and_shows_refusals(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn a_library_switch_discards_the_old_profile_delete_confirmation(cx: &mut TestAppContext) {
+    switched_library_confirmation(cx, false);
+}
+
+#[gpui::test]
+fn a_library_switch_discards_the_old_profile_merge_confirmation(cx: &mut TestAppContext) {
+    switched_library_confirmation(cx, true);
+}
+
+fn switched_library_confirmation(cx: &mut TestAppContext, merge: bool) {
+    let first = Library::new(three_profiles());
+    let mut profiles = three_profiles();
+    for profile in &mut profiles {
+        profile.display_name = format!("New {}", profile.display_name);
+    }
+    let second = Library::new(profiles);
+    let documents = DocumentsRoot::new();
+    let (view, cx, services) = open_with_library(cx, &first.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha-2", true);
+    let first_bytes = std::fs::read(first.path()).unwrap();
+    let second_bytes = std::fs::read(second.path()).unwrap();
+    if merge {
+        choose(cx, "merge-speaker-profile-alpha-2", 0);
+    } else {
+        click_selector(cx, "delete-speaker-profile-alpha-2");
+    }
+    rendered(cx, "confirm-dialog");
+    view.update(cx, |root, cx| {
+        root.change_speaker_library_path(second.path(), cx)
+    });
+    wait_for(cx, &view, |root| {
+        root.settings_draft.speaker_library_path == second.path().display().to_string()
+            && root
+                .speaker_profiles
+                .find("alpha")
+                .is_some_and(|p| p.display_name == "New Alpha")
+    });
+    let dismissed = cx.debug_bounds("confirm-dialog").is_none();
+    // A delayed press on the old confirmation must also be harmless.
+    view.update(cx, |root, cx| root.answer_speaker_confirmation(true, cx));
+    wait_for(cx, &view, |root| root.speaker_profiles.write_path.is_none());
+    assert!(
+        std::fs::read(second.path()).unwrap() == second_bytes,
+        "an old confirmation must not mutate another library with the same profile ids: {:?}",
+        second.names()
+    );
+    assert_eq!(std::fs::read(first.path()).unwrap(), first_bytes);
+    assert!(dismissed, "a changed library invalidates its old question");
+    let heading = view.read_with(cx, |root, _| root.speaker_library_focus.clone());
+    assert!(
+        cx.update(|window, _| heading.is_focused(window)),
+        "the dismissed question leaves focus on the current library heading"
+    );
+    wait_for(cx, &view, |_| {
+        services.settings.snapshot().unwrap().speaker_library_path
+            == second.path().display().to_string()
+    });
+    retype_at(cx, "speaker-profile-name-alpha", "Current Alice");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |root| {
+        root.speaker_profiles.write_path.is_none() && second.names()[0].1 == "Current Alice"
+    });
+    assert_eq!(std::fs::read(first.path()).unwrap(), first_bytes);
+    assert_eq!(second.load().profiles.len(), 3);
+}
+
+#[gpui::test]
+fn a_library_switch_clears_old_profiles_before_reading_the_new_path(cx: &mut TestAppContext) {
+    let first = Library::new(three_profiles());
+    let empty = temp_directory();
+    std::fs::create_dir_all(&empty).unwrap();
+    let destination = empty.join("library.json");
+    let documents = DocumentsRoot::new();
+    let (view, cx, services) = open_with_library(cx, &first.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha", true);
+    let before = std::fs::read(first.path()).unwrap();
+    view.update(cx, |root, cx| {
+        root.change_speaker_library_path(destination.clone(), cx)
+    });
+    wait_rendered(cx, "confirm-dialog", true);
+    // The real migration callback changes the path synchronously, while
+    // its new file read and settings write are still queued on workers.
+    let (loaded, old_names, rows_cleared) = view.update(cx, |root, cx| {
+        root.answer_speaker_library_prompt(false, cx);
+        (
+            root.speaker_profiles.loaded,
+            root.speaker_profiles.profiles.len(),
+            root.profile_rows.is_none(),
+        )
+    });
+    assert_eq!(
+        (loaded, old_names, rows_cleared),
+        (false, 0, true),
+        "a new path must not display the old library while reading"
+    );
+    wait_for(cx, &view, |root| {
+        root.speaker_profiles.loaded
+            && root.speaker_profiles.profiles.is_empty()
+            && services.settings.snapshot().unwrap().speaker_library_path
+                == destination.display().to_string()
+    });
+    assert!(cx.debug_bounds("speaker-profile-alpha").is_none());
+    assert_eq!(std::fs::read(first.path()).unwrap(), before);
+    assert!(
+        !destination.exists(),
+        "choosing the new path does not migrate the library"
+    );
+    std::fs::remove_dir_all(empty).unwrap();
+}
+
+#[gpui::test]
+fn a_library_switch_keeps_an_unrelated_document_speaker_confirmation(cx: &mut TestAppContext) {
+    let first = Library::new(three_profiles());
+    let second = Library::new(vec![profile("new", "New voice", [1.0, 0.0], 1)]);
+    let first_bytes = std::fs::read(first.path()).unwrap();
+    let second_bytes = std::fs::read(second.path()).unwrap();
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("weekly"), "# Original body\n");
+    let original = documents.read("weekly");
+    let (view, cx, _) = open_with_library(cx, &first.path(), &documents);
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    open_original(cx, &view, "weekly");
+    choose(cx, "merge-speaker-speaker-0", 0);
+    view.update(cx, |root, cx| {
+        root.change_speaker_library_path(second.path(), cx)
+    });
+    wait_for(cx, &view, |root| {
+        root.speaker_profiles.find("new").is_some()
+    });
+    rendered(cx, "confirm-dialog");
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none()
+            && documents.revision("weekly") == original.state.revision() + 1
+    });
+    let after = documents.read("weekly");
+    assert!(after
+        .state
+        .results
+        .speaker_segments
+        .iter()
+        .all(|s| s.speaker_id == "speaker-1"));
+    assert_eq!(after.state.processing, original.state.processing);
+    assert_eq!(after.markdown, original.markdown);
+    assert_eq!(std::fs::read(first.path()).unwrap(), first_bytes);
+    assert_eq!(std::fs::read(second.path()).unwrap(), second_bytes);
+}
+
+#[gpui::test]
 fn changing_the_library_path_rebuilds_the_service_and_the_processing_options(
     cx: &mut TestAppContext,
 ) {
