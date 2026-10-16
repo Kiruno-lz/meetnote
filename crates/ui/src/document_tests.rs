@@ -877,6 +877,123 @@ fn the_editor_saves_every_semantic_field_with_the_loaded_revision(cx: &mut TestA
 }
 
 #[gpui::test]
+fn the_save_shortcut_keeps_the_editor_focus_scroll_and_insertion_point(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "Weekly"), "# Weekly\n");
+    let revision = documents.revision("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    select_row(cx, &view, "weekly");
+    open_editor(cx, &view, "weekly");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    focus_field(cx, &title);
+    cx.simulate_keystrokes("ctrl-tab ctrl-tab ctrl-tab ctrl-tab");
+    assert!(
+        cx.update(|window, cx| gpui::Focusable::focus_handle(body.read(cx), cx).is_focused(window)),
+        "keyboard traversal reaches the Markdown field"
+    );
+    let edited = format!(
+        "# Weekly\n\n{}pending",
+        "A paragraph in a long document.\n\n".repeat(30)
+    );
+    retype_area(cx, &body, &edited);
+    cx.simulate_keystrokes("left left left");
+    cx.run_until_parked();
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.offset());
+    cx.simulate_keystrokes("cmd-s");
+    wait_for(cx, &view, |root| {
+        root.editor.saving.is_none()
+            && root.editor.draft_revision(&ProjectId::new("weekly")) == Some(revision + 1)
+            && root
+                .projects
+                .iter()
+                .any(|p| p.id().as_str() == "weekly" && p.revision() == revision + 1)
+    });
+    assert_eq!(documents.read("weekly").markdown, edited);
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        scroll
+    );
+    cx.simulate_input("!");
+    assert_eq!(
+        area_value(cx, &body),
+        format!("{}pend!ing", edited.strip_suffix("pending").unwrap()),
+        "save completion preserves the insertion point"
+    );
+    assert_eq!(
+        documents.read("weekly").markdown,
+        edited,
+        "new typing stays a draft"
+    );
+    let saved = documents.package_bytes("weekly");
+    click_selector(cx, "content-mode-summary");
+    cx.simulate_keystrokes("cmd-s");
+    assert!(view.read_with(cx, |root, _| root.editor.saving.is_none()));
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        saved,
+        "Summary does not save hidden fields"
+    );
+    cx.simulate_keystrokes("cmd-4 cmd-s");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Settings);
+    assert!(view.read_with(cx, |root, _| root.editor.saving.is_none()));
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        saved,
+        "Settings does not save a document draft"
+    );
+}
+
+#[gpui::test]
+fn the_save_shortcut_does_not_write_a_draft_hidden_by_another_documents_read_error(
+    cx: &mut TestAppContext,
+) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    documents.put(processed("b", "B"), "# B\n");
+    let a = documents.package_bytes("a");
+    let b = documents.package_bytes("b");
+    let revision = documents.revision("a");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    open_editor(cx, &view, "a");
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "A draft");
+    std::fs::remove_file(documents.path().join("b/state.json")).unwrap();
+    select_row(cx, &view, "b");
+    wait_for(cx, &view, |root| {
+        root.editor.read_errors.contains_key(&ProjectId::new("b"))
+    });
+    std::fs::write(documents.path().join("b/state.json"), &b[0]).unwrap();
+    select_row(cx, &view, "a");
+    open_editor(cx, &view, "a");
+    assert_eq!(field_value(cx, &title), "A draft");
+    select_row(cx, &view, "b");
+    rendered(cx, "document-editor-read-failed");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.editor.shown().cloned()),
+        Some(ProjectId::new("a")),
+        "the retained editor belongs to A while B shows its read error"
+    );
+    cx.simulate_keystrokes("cmd-s");
+    assert!(view.read_with(cx, |root, _| root.editor.saving.is_none()));
+    assert_eq!(
+        documents.package_bytes("a"),
+        a,
+        "an invisible draft must not be saved"
+    );
+    assert_eq!(documents.package_bytes("b"), b);
+    select_row(cx, &view, "a");
+    cx.simulate_keystrokes("cmd-s");
+    wait_for(cx, &view, |root| {
+        root.editor.draft_revision(&ProjectId::new("a")) == Some(revision + 1)
+    });
+    assert_eq!(documents.read("a").state.title(), "A draft");
+}
+
+#[gpui::test]
 fn a_save_after_an_external_change_conflicts_and_leaves_the_disk_unchanged(
     cx: &mut TestAppContext,
 ) {
@@ -895,7 +1012,7 @@ fn a_save_after_an_external_change_conflicts_and_leaves_the_disk_unchanged(
     root.external_save(external);
     let on_disk = root.package_bytes("weekly");
 
-    click_selector(cx, "save-document");
+    cx.simulate_keystrokes("cmd-s");
     wait_for(cx, &view, |root| root.document_conflict.is_some());
     let conflict = view.read_with(cx, |root, _| root.document_conflict.clone().unwrap());
     assert_eq!(conflict.document_id.as_str(), "weekly");

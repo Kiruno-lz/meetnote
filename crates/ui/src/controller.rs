@@ -2829,6 +2829,16 @@ impl RootView {
             Shortcut::Forward => self.travel(true, cx),
             Shortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
             Shortcut::ImportAudio => self.import_audio(&ClickEvent::default(), window, cx),
+            Shortcut::SaveDocument => {
+                if self.ui.route == Route::Meetings
+                    && self.ui.content_mode == ContentMode::Edit
+                    && self.ui.selected_project.as_ref().is_some_and(|id| {
+                        self.editor.shown() == Some(id) && !self.editor.read_errors.contains_key(id)
+                    })
+                {
+                    self.save_document_draft(&ClickEvent::default(), window, cx);
+                }
+            }
         }
     }
 
