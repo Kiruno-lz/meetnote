@@ -480,11 +480,19 @@ impl Dropdown {
 impl Render for Dropdown {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if std::mem::take(&mut self.reveal_on_open) {
-            // The menu must publish its viewport before GPUI can reveal an
-            // option. Request it once after this opening layout.
+            // Reveal once after the menu publishes its viewport; reopening
+            // leaves an already visible choice at its familiar position.
             cx.defer_in(window, |this, _, cx| {
                 if this.open {
                     if let Some(index) = this.highlighted {
+                        let viewport = this.menu_scroll.bounds();
+                        let offset = this.menu_scroll.offset().y;
+                        if this.menu_scroll.bounds_for_item(index).is_some_and(|item| {
+                            item.top() + offset >= viewport.top()
+                                && item.bottom() + offset <= viewport.bottom()
+                        }) {
+                            return;
+                        }
                         this.menu_scroll.scroll_to_top_of_item(index);
                         cx.notify();
                     }
