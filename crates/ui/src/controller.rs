@@ -507,6 +507,8 @@ pub(crate) struct RootView {
     /// cancelled as soon as the start returns.
     processing_cancel_requested: bool,
     pub(crate) settings_selectors: Option<SettingsSelectors>,
+    /// A requested section is revealed after its settings viewport is laid out.
+    pending_settings_section: Option<usize>,
     /// The last failed settings write, shown on the settings page.
     pub(crate) settings_error: Option<AssistantUiError>,
     pending_expiry: Option<Task<()>>,
@@ -747,6 +749,7 @@ impl RootView {
             cancel_contexts: None,
             processing_cancel_requested: false,
             settings_selectors: None,
+            pending_settings_section: None,
             settings_error: None,
             pending_expiry: None,
             installation: InstallationState::default(),
@@ -3610,7 +3613,7 @@ impl RootView {
             .position(|key| *key == "assistant_settings")
         {
             self.ui.settings_section = section;
-            self.scroll.settings.scroll_to_top_of_item(section);
+            self.pending_settings_section = Some(section);
         }
         cx.notify();
     }
@@ -4755,6 +4758,18 @@ impl RootView {
 
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(section) = self.pending_settings_section.take() {
+            if self.ui.route == Route::Settings && self.ui.settings_section == section {
+                // Defer from render so this Settings layout publishes its
+                // viewport before the section scroll is requested.
+                cx.defer_in(window, move |this, _, cx| {
+                    if this.ui.route == Route::Settings && this.ui.settings_section == section {
+                        this.scroll.settings.scroll_to_top_of_item(section);
+                        cx.notify();
+                    }
+                });
+            }
+        }
         self.focus_awaiting_review(window, cx);
         self.ensure_settings_selectors(window, cx);
         self.ensure_document_editor(cx);
