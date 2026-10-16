@@ -619,6 +619,7 @@ fn workspace_read_error(
 ) -> Option<AnyElement> {
     let error = root.projects_error.as_ref()?;
     let locale = root.ui.locale;
+    let scroll = root.scroll.workspace_read_error.clone();
     Some(
         div()
             .debug_selector(|| "workspace-read-error".into())
@@ -635,18 +636,22 @@ fn workspace_read_error(
                 div()
                     .id("workspace-read-error-message")
                     .debug_selector(|| "workspace-read-error-message".into())
+                    .relative()
                     .flex_1()
                     .min_w_0()
                     .max_h(RECOVERY_MESSAGE_HEIGHT)
                     .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(div().text_sm().child(i18n::message(
-                        locale,
-                        "workspace_read_failed",
-                        error,
-                    ))),
+                    .track_scroll(&scroll)
+                    .child(
+                        div()
+                            .debug_selector(|| "workspace-read-error-text".into())
+                            .text_sm()
+                            .child(i18n::message(locale, "workspace_read_failed", error)),
+                    )
+                    .child(Scrollbar::vertical(
+                        "workspace-read-error-scrollbar",
+                        &scroll,
+                    )),
             )
             .child(
                 Button::new("retry-workspace-read", tr(locale, "retry_workspace_read"))

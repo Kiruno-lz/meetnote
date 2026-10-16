@@ -2530,6 +2530,126 @@ fn workspace_read_failure_keeps_the_editor_and_retry_keeps_its_draft(cx: &mut Te
 }
 
 #[gpui::test]
+fn a_long_workspace_error_can_be_read_with_its_edge_scrollbar(cx: &mut TestAppContext) {
+    long_workspace_error_reading(cx, i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn a_long_workspace_error_remains_readable_beside_detail(cx: &mut TestAppContext) {
+    long_workspace_error_reading(cx, i18n::Locale::EnUs, true);
+}
+
+fn long_workspace_error_reading(cx: &mut TestAppContext, locale: i18n::Locale, detail: bool) {
+    let container = DocumentsRoot::new();
+    let mut path = container.path().to_path_buf();
+    for index in 0..7 {
+        path.push(format!(
+            "{} {index}",
+            "planning and customer interview materials ".repeat(2)
+        ));
+    }
+    std::fs::create_dir_all(&path).unwrap();
+    let documents = DocumentsRoot(path);
+    documents.put(processed("weekly", "Weekly"), "# Original document\n");
+    let before = documents.package_bytes("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    open_editor(cx, &view, "weekly");
+    view.update(cx, |root, cx| {
+        root.ui.locale = locale;
+        cx.notify();
+    });
+    if detail {
+        click_selector(cx, "open-project-detail");
+    }
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "Keep this draft");
+    let repository = documents.repository();
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    let error = repository.snapshot().unwrap_err();
+    assert!(error.contains(&documents.path().display().to_string()));
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| {
+        root.projects_error.as_deref() == Some(&error)
+    });
+    click_selector(cx, "notice-toast-close");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    wait_for(cx, &view, |root| root.ui.toast().is_none());
+    let message = rendered(cx, "workspace-read-error-message");
+    let banner = rendered(cx, "workspace-read-error");
+    let page = rendered(cx, "meetings-page");
+    assert!(within(banner, page));
+    assert!(within(rendered(cx, "retry-workspace-read"), banner));
+    assert!(rendered(cx, "meeting-content").size.height >= px(80.));
+    let track = cx
+        .debug_bounds("workspace-read-error-scrollbar-viewport")
+        .expect("the long error must expose a draggable scrollbar");
+    let text = rendered(cx, "workspace-read-error-text");
+    assert!(
+        text.size.height > message.size.height,
+        "the real path needs scrolling"
+    );
+    assert_eq!(track.right(), message.right());
+    assert!(within(track, message));
+    focus_field(cx, &title);
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let editor_scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.offset());
+    let start = point(track.right() - px(7.), track.top() + px(8.));
+    let end = point(start.x, track.bottom() - px(4.));
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let text = rendered(cx, "workspace-read-error-text");
+    assert!(
+        text.top() < message.top() && text.bottom() <= message.bottom() + px(1.),
+        "dragging the edge reaches the end of the full error: {text:?} in {message:?}"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        editor_scroll
+    );
+    cx.simulate_input("!");
+    assert_eq!(field_value(cx, &title), "Keep this draft!");
+    assert!(view.read_with(cx, |root, _| root.ui.notice.is_empty()));
+    click_selector(cx, "retry-workspace-read");
+    let repeated_notice = i18n::message(locale, "documents_load_failed", &error);
+    wait_for(cx, &view, |root| root.ui.notice == repeated_notice);
+    assert_eq!(
+        rendered(cx, "workspace-read-error-text").top(),
+        text.top(),
+        "a repeated failure keeps the error's reading position"
+    );
+    // A repeated failure reports a new notification. Dismiss it before
+    // using the persistent panel's retry again, as with the first failure.
+    click_selector(cx, "notice-toast-close");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    wait_for(cx, &view, |root| root.ui.toast().is_none());
+    drop(unreadable);
+    click_selector(cx, "retry-workspace-read");
+    wait_for(cx, &view, |root| root.projects_error.is_none());
+    assert!(cx.debug_bounds("workspace-read-error").is_none());
+    assert_eq!(field_value(cx, &title), "Keep this draft!");
+    assert_eq!(documents.package_bytes("weekly"), before);
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| root.projects_error.is_some());
+    assert!(
+        rendered(cx, "workspace-read-error-text").top()
+            >= rendered(cx, "workspace-read-error-message").top(),
+        "a new failure starts at the beginning of its message"
+    );
+    assert_eq!(field_value(cx, &title), "Keep this draft!");
+    drop(unreadable);
+    assert_eq!(documents.package_bytes("weekly"), before);
+}
+
+#[gpui::test]
 fn an_initial_workspace_read_failure_does_not_claim_the_workspace_is_empty(
     cx: &mut TestAppContext,
 ) {
