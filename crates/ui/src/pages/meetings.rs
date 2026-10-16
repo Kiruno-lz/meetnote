@@ -353,7 +353,8 @@ fn main_panel(
         .children(conflict_notice(root, &tokens, cx))
         .children(issues_panel(root, &tokens));
     if let Some(project) = project {
-        let ready = project.processing_status() == ProjectStatus::Ready;
+        // A later failed attempt does not remove the last successful result.
+        let has_results = project.processing.latest.is_some();
         let audio_problem = root.audio.problem(project.id());
         let processing_here = root.ui.is_processing_document(project.id());
         let missing_models = state::missing_models(
@@ -378,16 +379,19 @@ fn main_panel(
             .bg(tokens.surface);
         content = match mode {
             ContentMode::Edit => content.child(editor_form(root, project, &tokens, cx)),
-            ContentMode::Summary if ready => content.child(
-                div().text_sm().child(
-                    project
-                        .content
-                        .summary
-                        .clone()
-                        .unwrap_or_else(|| tr(locale, "no_summary").into()),
-                ),
+            ContentMode::Summary if has_results => content.child(
+                div()
+                    .debug_selector(|| "document-summary".into())
+                    .text_sm()
+                    .child(
+                        project
+                            .content
+                            .summary
+                            .clone()
+                            .unwrap_or_else(|| tr(locale, "no_summary").into()),
+                    ),
             ),
-            ContentMode::Original if ready => content
+            ContentMode::Original if has_results => content
                 .child(speakers_panel(root, project, &tokens, cx))
                 .children(project.results.speaker_segments.iter().map(|segment| {
                     div()
@@ -529,7 +533,7 @@ fn main_panel(
                     )
                     .children(
                         model_hint
-                            .filter(|_| ready || mode == ContentMode::Edit)
+                            .filter(|_| has_results || mode == ContentMode::Edit)
                             .map(|hint| model_guidance(hint, locale, false, &tokens, cx)),
                     ),
             );
@@ -553,7 +557,7 @@ fn main_panel(
                 mode == ContentMode::Summary,
                 crate::components::mode_button(tr(locale, "summary"), ContentMode::Summary, cx),
             );
-        if ready {
+        if has_results {
             controls = controls.option(
                 mode == ContentMode::Original,
                 crate::components::mode_button(tr(locale, "original"), ContentMode::Original, cx),

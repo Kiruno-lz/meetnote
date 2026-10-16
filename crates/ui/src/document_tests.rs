@@ -996,6 +996,153 @@ fn switching_document_views_starts_at_the_top_and_keeps_the_edit_draft(cx: &mut 
 }
 
 #[gpui::test]
+fn an_unprocessed_selection_has_a_selected_view_and_keeps_its_edit_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("ready", "Ready"), "# Processed body\n");
+    let audio = documents.path().join("new/recording.wav");
+    let mut imported = DocumentState::new(
+        ProjectId::new("new"),
+        "New recording",
+        audio.display().to_string(),
+    );
+    imported.hierarchy.sibling_order = 1;
+    documents.put(imported, "# New recording\n");
+    std::fs::write(audio, b"fixture recording").unwrap();
+    let ready_bytes = documents.package_bytes("ready");
+    let new_bytes = documents.package_bytes("new");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    select_row(cx, &view, "ready");
+    click_selector(cx, "content-mode-original");
+    select_row(cx, &view, "new");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "the hidden Original option must not leave every visible choice unselected"
+    );
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    assert!(within(
+        rendered(cx, "models-required"),
+        rendered(cx, "meeting-content")
+    ));
+    click_selector(cx, "go-to-models");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Models);
+    click_selector(cx, "nav-Meetings");
+    open_editor(cx, &view, "new");
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "Keep the unprocessed draft");
+    select_row(cx, &view, "ready");
+    select_row(cx, &view, "new");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("new"))
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Edit
+    );
+    assert_eq!(field_value(cx, &title), "Keep the unprocessed draft");
+    assert_eq!(documents.package_bytes("ready"), ready_bytes);
+    assert_eq!(documents.package_bytes("new"), new_bytes);
+}
+
+#[gpui::test]
+fn removing_the_stored_processing_record_reselects_an_available_view(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "Weekly"), "# Original body\n");
+    let (view, cx, changes) = open_on(cx, &documents);
+    click_selector(cx, "content-mode-original");
+    let mut external = documents.read("weekly").state;
+    external.processing = Default::default();
+    external.results = Default::default();
+    documents.external_save(external);
+    let before = documents.package_bytes("weekly");
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|p| p.id().as_str() == "weekly" && p.processing.latest.is_none())
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "an external refresh must not leave the disappeared Original option selected"
+    );
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    open_editor(cx, &view, "weekly");
+    let (title, ..) = editor_fields(cx, &view);
+    assert_eq!(field_value(cx, &title), "Weekly");
+    assert_eq!(documents.package_bytes("weekly"), before);
+}
+
+#[gpui::test]
+fn a_failed_later_attempt_keeps_saved_results_readable_and_correctable(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "Weekly"), "# Original body\n");
+    let (view, cx, changes) = open_on(cx, &documents);
+    click_selector(cx, "content-mode-original");
+    let mut external = documents.read("weekly").state;
+    external.set_processing_error("A later processing attempt failed");
+    documents.external_save(external);
+    let failed = documents.read("weekly");
+    let before = documents.package_bytes("weekly");
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.projects.iter().any(|p| {
+            p.processing.last_error.as_deref() == Some("A later processing attempt failed")
+        })
+    });
+    assert!(
+        cx.debug_bounds("content-mode-original").is_some(),
+        "a failed later attempt must not hide the last successful transcript"
+    );
+    rendered(cx, "document-status-Failed");
+    rendered(cx, "document-speakers");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Original
+    );
+    click_selector(cx, "content-mode-summary");
+    rendered(cx, "document-summary");
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        before,
+        "reading writes nothing"
+    );
+    click_selector(cx, "content-mode-original");
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    retype(cx, &name, "Host");
+    click_selector(cx, "rename-speaker-speaker-0");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none()
+            && documents.revision("weekly") == failed.state.revision() + 1
+    });
+    let after = documents.read("weekly");
+    assert_eq!(after.state.processing, failed.state.processing);
+    assert_eq!(after.markdown, failed.markdown);
+    assert_eq!(
+        after.state.results.transcript,
+        failed.state.results.transcript
+    );
+    assert!(after
+        .state
+        .results
+        .speaker_segments
+        .iter()
+        .all(|s| s.speaker_label.as_deref() == Some("Host")));
+    assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
+    rendered(cx, "document-status-Failed");
+}
+
+#[gpui::test]
 fn the_editor_saves_every_semantic_field_with_the_loaded_revision(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();
     root.put(processed("weekly", "产品周会"), "# 产品周会\n\n旧正文\n");

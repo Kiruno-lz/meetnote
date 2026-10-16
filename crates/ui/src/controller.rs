@@ -26,7 +26,7 @@ use contracts::{
     AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, DocumentCommand,
     DocumentCommandEnvelope, DocumentCommandResult, DocumentRecord, ModelRef,
 };
-use domain::{DocumentState, ProjectId, ProjectStatus};
+use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
     prelude::*, App, Bounds, ClickEvent, Context, Entity, FocusHandle, PathPromptOptions,
@@ -2334,8 +2334,7 @@ impl RootView {
         if self.ui.route != Route::Meetings || self.ui.content_mode != ContentMode::Original {
             return;
         }
-        let Some(document) =
-            document.filter(|document| document.processing_status() == ProjectStatus::Ready)
+        let Some(document) = document.filter(|document| document.processing.latest.is_some())
         else {
             return;
         };
@@ -4989,6 +4988,14 @@ impl Render for RootView {
             .as_ref()
             .and_then(|id| self.projects.iter().find(|project| project.id() == id))
             .cloned();
+        if self.ui.route == Route::Meetings
+            && self.ui.content_mode == ContentMode::Original
+            && selected
+                .as_ref()
+                .is_some_and(|document| document.processing.latest.is_none())
+        {
+            self.ui.content_mode = ContentMode::Summary;
+        }
         self.ensure_speaker_rows(selected.as_ref(), window, cx);
         self.ensure_profile_rows(window, cx);
         let body = match self.ui.route {
