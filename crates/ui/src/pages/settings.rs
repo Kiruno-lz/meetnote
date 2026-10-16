@@ -53,7 +53,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .track_scroll(&scroll)
         .flex()
         .flex_col()
-        .gap(tokens.spacing.xl)
+        .gap(tokens.spacing.xl + tokens.spacing.lg)
         .max_w(px(960.))
         .mx_auto()
         .child(settings_section(

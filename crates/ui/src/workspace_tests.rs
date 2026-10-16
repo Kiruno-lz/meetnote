@@ -2299,6 +2299,50 @@ fn a_pending_root_choice_keeps_speaker_input_and_resumes_actions(cx: &mut TestAp
     assert_eq!(saved.state.revision(), 4);
 }
 
+#[gpui::test]
+fn settings_groups_have_more_room_without_spreading_their_rows(cx: &mut TestAppContext) {
+    let fixture = Workspace::new();
+    let (view, cx) = open_workspace(cx, &fixture);
+    for size in [
+        crate::pages::chrome::MIN_WINDOW_SIZE,
+        gpui::size(gpui::px(1180.), gpui::px(760.)),
+    ] {
+        cx.simulate_resize(size);
+        for locale in [Locale::ZhCn, Locale::EnUs] {
+            view.update(cx, |root, cx| {
+                root.ui.locale = locale;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            let theme = rendered(cx, "select-theme");
+            let material = rendered(cx, "select-material");
+            assert_eq!(
+                material.top() - theme.top(),
+                gpui::px(68.),
+                "the appearance rows retain their compact 52 px height and padding",
+            );
+            let sections = view.read_with(cx, |root, _| {
+                let scroll = &root.scroll.settings;
+                assert_eq!(
+                    scroll.children_count(),
+                    crate::pages::settings::SECTIONS.len()
+                );
+                (0..scroll.children_count())
+                    .map(|index| scroll.bounds_for_item(index).unwrap())
+                    .collect::<Vec<_>>()
+            });
+            for (index, pair) in sections.windows(2).enumerate() {
+                let gap = pair[1].top() - pair[0].bottom();
+                assert!(
+                    gap >= gpui::px(40.),
+                    "{locale:?} at {size:?}: groups {index} and {} need at least 40 px between their bounds, got {gap:?}",
+                    index + 1,
+                );
+            }
+        }
+    }
+}
+
 fn settings_path_row_fits_the_minimum_width(cx: &mut TestAppContext, speakers: bool) {
     let fixture = Workspace::new();
     put(&fixture.old, "old", "Old");
