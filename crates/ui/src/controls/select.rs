@@ -338,6 +338,11 @@ impl Dropdown {
             .flex()
             .items_center()
             .gap(tokens.spacing.sm)
+            // Keep an already focused trigger in the window's focus path
+            // while disabled, without offering it as a Tab destination.
+            .when(disabled, |trigger| {
+                trigger.track_focus(&self.trigger_focus.clone().tab_stop(false))
+            })
             .when(!disabled, |trigger| trigger.cursor_pointer())
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 // The root's own focus transfer would take focus back from
