@@ -2344,8 +2344,8 @@ impl RootView {
     }
 
     /// Builds correction controls for Original. Metadata-only revisions
-    /// keep them; changed audio, processing records, results or locale
-    /// rebuild them.
+    /// keep them; pending corrections retain their inputs until acknowledged.
+    /// Other audio, processing, result or locale changes rebuild them.
     fn ensure_speaker_rows(
         &mut self,
         document: Option<&DocumentState>,
@@ -2361,11 +2361,11 @@ impl RootView {
         };
         let locale = self.ui.locale;
         let key = (document.id().clone(), document.revision(), locale);
-        if self
-            .speaker_rows
-            .as_ref()
-            .is_some_and(|rows| rows.is_for(&key))
-        {
+        if self.speaker_rows.as_ref().is_some_and(|rows| {
+            rows.is_for(&key)
+                || (&rows.key().0 == document.id()
+                    && self.speaker_command.as_ref() == Some(document.id()))
+        }) {
             return;
         }
         let entries = document_speakers(document)
@@ -2521,9 +2521,9 @@ impl RootView {
         cx.notify();
     }
 
-    /// Runs a speaker correction on a worker and reloads the tree, whose
-    /// new revision rebuilds the speaker rows. A conflict opens the
-    /// conflict notice; nothing was written then.
+    /// Runs a speaker correction on a worker, accepts its saved revision
+    /// without replacing later input, and reloads the tree. A conflict opens
+    /// the conflict notice; nothing was written then.
     fn run_speaker_command(
         &mut self,
         command: DocumentCommand,
@@ -2542,6 +2542,14 @@ impl RootView {
         if self.speaker_command.is_some() {
             return;
         }
+        let submitted_field = match &command {
+            DocumentCommand::SetSpeakerLabel { speaker_id, .. } => self
+                .speaker_rows
+                .as_ref()
+                .and_then(|rows| rows.row(speaker_id))
+                .map(|row| row.name.entity_id()),
+            _ => None,
+        };
         let envelope = DocumentCommandEnvelope::new(
             format!("ui-speaker-{document_id}-{revision}"),
             command.clone(),
@@ -2559,6 +2567,11 @@ impl RootView {
                 }
                 this.speaker_command = None;
                 match result {
+                    Ok(DocumentCommandResult::Updated(record)) => {
+                        this.acknowledge_speaker_write(&record, revision, submitted_field, cx);
+                        this.ui.notice = done;
+                        this.reload_projects(cx);
+                    }
                     Ok(_) => {
                         this.ui.notice = done;
                         this.reload_projects(cx);
@@ -2570,6 +2583,53 @@ impl RootView {
             .ok();
         })
         .detach();
+    }
+
+    /// Rebase only the controls of this write's original document and
+    /// revision. A newer unrelated snapshot can supply the checked revision.
+    fn acknowledge_speaker_write(
+        &mut self,
+        record: &DocumentRecord,
+        base_revision: u64,
+        submitted_field: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(document) = self
+            .projects
+            .iter_mut()
+            .find(|document| document.id() == record.state.id())
+        {
+            if document.revision() <= record.state.revision() {
+                *document = record.state.clone();
+            }
+        }
+        let current_revision = self
+            .projects
+            .iter()
+            .find(|document| {
+                document.id() == record.state.id()
+                    && document.source == record.state.source
+                    && document.results == record.state.results
+                    && document.processing.latest == record.state.processing.latest
+            })
+            .map_or(record.state.revision(), DocumentState::revision);
+        if let Some(rows) = &mut self.speaker_rows {
+            if &rows.key().0 == record.state.id() && rows.key().1 == base_revision {
+                let entries = document_speakers(&record.state)
+                    .iter()
+                    .map(|speaker| NameEntry::speaker(speaker, self.ui.locale))
+                    .collect::<Vec<_>>();
+                if !rows.saved(
+                    (record.state.id().clone(), current_revision, self.ui.locale),
+                    &entries,
+                    submitted_field,
+                    i18n::text(self.ui.locale, "merge_into_placeholder"),
+                    cx,
+                ) {
+                    self.speaker_rows = None;
+                }
+            }
+        }
     }
 
     /// Renames profile `profile_id` to the typed name.

@@ -7,7 +7,8 @@
 //! the document helpers are the Documents slice's (`document_tests`).
 
 use crate::document_tests::{
-    leak, open_on, processed, rendered, select_row, within, DocumentsRoot, View,
+    gated_save_repository, leak, open_on, processed, rendered, select_row, within, DocumentsRoot,
+    View,
 };
 use crate::tests::{
     click_selector, desktop_services, field_value, open_desktop_on, temp_directory, test_settings,
@@ -364,6 +365,309 @@ fn an_external_speaker_correction_refreshes_the_name_controls(cx: &mut TestAppCo
         "changed speaker data must not be treated as unrelated metadata"
     );
     assert_eq!(documents.package_bytes("weekly"), before);
+}
+
+#[gpui::test]
+fn a_speaker_save_acknowledgement_keeps_later_input_in_another_row(cx: &mut TestAppContext) {
+    speaker_save_later_input(cx, false);
+}
+
+#[gpui::test]
+fn a_speaker_save_acknowledgement_keeps_an_edit_back_to_the_old_value(cx: &mut TestAppContext) {
+    speaker_save_later_input(cx, true);
+}
+
+fn open_speakers_saving_on<'a>(
+    cx: &'a mut TestAppContext,
+    documents: &DocumentsRoot,
+    gate: &crate::tests::Gate,
+) -> (View, &'a mut VisualTestContext) {
+    let mut services =
+        desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(gated_save_repository(documents.repository(), gate)),
+    );
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| {
+        root.projects_loaded && !root.installation.catalog.is_empty() && !root.audio.pending()
+    });
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    (view, cx)
+}
+
+fn speaker_save_later_input(cx: &mut TestAppContext, same_row: bool) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("weekly"), "# Original body\n");
+    let original = documents.read("weekly");
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_speakers_saving_on(cx, &documents, &gate);
+    open_original(cx, &view, "weekly");
+    retype_at(cx, "speaker-name-speaker-0", "Host");
+    gate.arm();
+    click_selector(cx, "rename-speaker-speaker-0");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    let id = if same_row { "speaker-0" } else { "speaker-1" };
+    let draft = if same_row { "" } else { "来宾草稿" };
+    retype_at(cx, leak(format!("speaker-name-{id}")), draft);
+    if same_row {
+        cx.simulate_keystrokes("backspace");
+    }
+    if !same_row {
+        cx.simulate_keystrokes("left left");
+    }
+    let focus = cx.update(|window, cx| window.focused(cx));
+    // A watcher can publish the real committed revision before the write's
+    // acknowledgement reaches the UI. Exercise that order explicitly.
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|p| p.revision() == original.state.revision() + 1)
+    });
+    let during = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row(id)
+            .unwrap()
+            .name
+            .clone()
+    });
+    let during_value = field_value(cx, &during);
+    gate.release();
+    assert_eq!(
+        during_value, draft,
+        "a saved snapshot must not replace later input while its acknowledgement is pending"
+    );
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row(id)
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(
+        field_value(cx, &name),
+        draft,
+        "the acknowledgement keeps later edits"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    let saved = documents.read("weekly");
+    assert_eq!(speaker_of(&saved.state, "t-0").1.as_deref(), Some("Host"));
+    assert_eq!(speaker_of(&saved.state, "t-1").1, None);
+    let expected = if same_row {
+        None
+    } else {
+        Some("来宾的草稿")
+    };
+    if !same_row {
+        cx.simulate_input("的");
+        assert_eq!(
+            field_value(cx, &name),
+            "来宾的草稿",
+            "the caret survives both snapshot and acknowledgement"
+        );
+    }
+    // Enter is a separate second write, based on the acknowledged revision.
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none() && documents.revision("weekly") == saved.state.revision() + 1
+    });
+    let after = documents.read("weekly");
+    let transcript_id = if same_row { "t-0" } else { "t-1" };
+    assert_eq!(
+        speaker_of(&after.state, transcript_id).1.as_deref(),
+        expected
+    );
+    assert_eq!(after.state.processing, original.state.processing);
+    assert_eq!(
+        after.state.results.transcript,
+        original.state.results.transcript
+    );
+    assert_eq!(after.markdown, original.markdown);
+    assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
+}
+
+#[gpui::test]
+fn a_speaker_save_acknowledgement_keeps_another_documents_input(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("first"), "# First body\n");
+    let mut other = two_speakers("other");
+    other.hierarchy.sibling_order = 1;
+    documents.put(other, "# Other body\n");
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_speakers_saving_on(cx, &documents, &gate);
+    open_original(cx, &view, "first");
+    retype_at(cx, "speaker-name-speaker-0", "Host");
+    gate.arm();
+    click_selector(cx, "rename-speaker-speaker-0");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    select_row(cx, &view, "other");
+    retype_at(cx, "speaker-name-speaker-0", "乙方草稿");
+    cx.simulate_keystrokes("left left");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let before = documents.package_bytes("other");
+    gate.release();
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(field_value(cx, &name), "乙方草稿");
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(documents.package_bytes("other"), before);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("other"))
+    );
+    cx.simulate_input("的");
+    assert_eq!(field_value(cx, &name), "乙方的草稿");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none() && documents.revision("other") == 4
+    });
+    assert_eq!(
+        speaker_of(&documents.read("other").state, "t-0")
+            .1
+            .as_deref(),
+        Some("乙方的草稿")
+    );
+    assert_eq!(
+        speaker_of(&documents.read("first").state, "t-0")
+            .1
+            .as_deref(),
+        Some("Host")
+    );
+    assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
+}
+
+#[gpui::test]
+fn a_speaker_save_acknowledgement_updates_clean_controls_reopened_while_saving(
+    cx: &mut TestAppContext,
+) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("first"), "# First body\n");
+    let mut other = two_speakers("other");
+    other.hierarchy.sibling_order = 1;
+    documents.put(other, "# Other body\n");
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_speakers_saving_on(cx, &documents, &gate);
+    open_original(cx, &view, "first");
+    retype_at(cx, "speaker-name-speaker-0", "Host");
+    gate.arm();
+    click_selector(cx, "rename-speaker-speaker-0");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    select_row(cx, &view, "other");
+    select_row(cx, &view, "first");
+    let before = documents.package_bytes("first");
+    gate.release();
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(
+        field_value(cx, &name),
+        "Host",
+        "a fresh clean control follows the completed write"
+    );
+    assert_eq!(documents.package_bytes("first"), before);
+}
+
+#[gpui::test]
+fn a_speaker_save_acknowledgement_keeps_a_remaining_name_after_merge(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("weekly"), "# Original body\n");
+    let original = documents.read("weekly");
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_speakers_saving_on(cx, &documents, &gate);
+    open_original(cx, &view, "weekly");
+    choose(cx, "merge-speaker-speaker-0", 0);
+    gate.arm();
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    retype_at(cx, "speaker-name-speaker-1", "来宾草稿");
+    cx.simulate_keystrokes("left left");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|p| p.revision() == original.state.revision() + 1)
+    });
+    let during = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-1")
+            .unwrap()
+            .name
+            .clone()
+    });
+    let during_value = field_value(cx, &during);
+    gate.release();
+    assert_eq!(during_value, "来宾草稿");
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-1")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(field_value(cx, &name), "来宾草稿");
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert!(cx.debug_bounds("speaker-row-speaker-0").is_none());
+    assert!(cx.debug_bounds("merge-speaker-speaker-1").is_none());
+    let saved = documents.read("weekly");
+    assert!(saved
+        .state
+        .results
+        .speaker_segments
+        .iter()
+        .all(|segment| { segment.speaker_id == "speaker-1" && segment.speaker_label.is_none() }));
+    cx.simulate_input("的");
+    assert_eq!(field_value(cx, &name), "来宾的草稿");
+    // The surviving row keeps its Enter subscription after the source leaves.
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none() && documents.revision("weekly") == saved.state.revision() + 1
+    });
+    let after = documents.read("weekly");
+    assert!(after.state.results.speaker_segments.iter().all(|segment| {
+        segment.speaker_id == "speaker-1" && segment.speaker_label.as_deref() == Some("来宾的草稿")
+    }));
+    assert_eq!(
+        after.state.results.transcript,
+        original.state.results.transcript
+    );
+    assert_eq!(spoken(&after.state), spoken(&original.state));
+    assert_eq!(after.state.processing, original.state.processing);
+    assert_eq!(after.markdown, original.markdown);
+    assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
 }
 
 #[gpui::test]
