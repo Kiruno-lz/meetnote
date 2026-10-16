@@ -8,13 +8,35 @@
 use super::{entrance, Button, Scrollbar};
 use crate::theme::{self, BlurLevel};
 use gpui::{
-    div, prelude::*, px, App, FocusHandle, IntoElement, Pixels, Role, ScrollHandle, SharedString,
-    Window,
+    actions, div, point, prelude::*, px, App, FocusHandle, IntoElement, KeyBinding, Pixels, Role,
+    ScrollHandle, SharedString, Window,
 };
 use gpui_base::{
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogDescription, AlertDialogTitle,
 };
 use std::rc::Rc;
+
+actions!(meetnote_confirmation, [ScrollPageUp, ScrollPageDown]);
+
+const KEY_CONTEXT: &str = "MeetNoteConfirmation";
+
+pub(super) fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("pageup", ScrollPageUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("pagedown", ScrollPageDown, Some(KEY_CONTEXT)),
+    ]);
+}
+
+/// Leave a little overlap between pages so reading keeps its context.
+fn scroll_page(scroll: &ScrollHandle, direction: f32, window: &mut Window) {
+    let offset = scroll.offset();
+    let step = scroll.bounds().size.height * 0.9;
+    let next = (offset.y - step * direction).clamp(-scroll.max_offset().y, px(0.));
+    if next != offset.y {
+        scroll.set_offset(point(offset.x, next));
+        window.refresh();
+    }
+}
 
 const PANEL_WIDTH: Pixels = px(460.);
 /// How far the sheet rises into place as it fades in.
@@ -172,7 +194,7 @@ impl RenderOnce for ConfirmDialog {
                 SHEET_RISE,
             ));
         let (on_confirm, on_cancel) = (self.on_confirm, self.on_cancel);
-        AlertDialog::new(cx)
+        let dialog = AlertDialog::new(cx)
             .focus_handle(self.focus)
             // Presses on the scrim neither close the dialog nor reach the
             // page behind it. The host wraps the backdrop in a div of its
@@ -194,6 +216,16 @@ impl RenderOnce for ConfirmDialog {
             .on_cancel(move |_, window, cx| {
                 on_cancel(window, cx);
                 true
+            });
+        div()
+            .absolute()
+            .inset_0()
+            .key_context(KEY_CONTEXT)
+            .on_action({
+                let scroll = scroll.clone();
+                move |_: &ScrollPageUp, window, _| scroll_page(&scroll, -1., window)
             })
+            .on_action(move |_: &ScrollPageDown, window, _| scroll_page(&scroll, 1., window))
+            .child(dialog)
     }
 }

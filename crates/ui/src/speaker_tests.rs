@@ -563,6 +563,55 @@ fn long_profile_confirmation(
         rendered(cx, "dialog-cancel"),
         rendered(cx, "dialog-confirm"),
     ];
+    let background_scroll = view.read_with(cx, |root, _| root.scroll.settings.offset());
+    let initial_position = text.top() - content.top();
+    let focus = cx.update(|window, cx| window.focused(cx));
+    cx.simulate_keystrokes("pagedown");
+    cx.run_until_parked();
+    assert!(
+        rendered(cx, "confirm-dialog-text").top() - rendered(cx, "confirm-dialog-content").top()
+            < initial_position,
+        "Page Down must reveal the long question while the dialog root holds focus"
+    );
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        focus,
+        "reading keeps focus in place"
+    );
+    cx.simulate_keystrokes("pageup tab");
+    cx.run_until_parked();
+    let button_focus = cx.update(|window, cx| window.focused(cx));
+    assert_ne!(button_focus, focus, "Tab reaches a dialog button");
+    assert!(
+        cx.update(|window, cx| view.read(cx).dialog_focus.contains_focused(window, cx)),
+        "Tab stays inside the dialog while reading"
+    );
+    cx.simulate_keystrokes(
+        "pagedown pagedown pagedown pagedown pagedown pagedown pagedown pagedown pagedown pagedown",
+    );
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        button_focus,
+        "paging from a button keeps its focus"
+    );
+    assert!(
+        rendered(cx, "confirm-dialog-text").bottom()
+            <= rendered(cx, "confirm-dialog-content").bottom() + gpui::px(1.),
+        "paging reaches the description at the end without overscrolling"
+    );
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.settings.offset()),
+        background_scroll,
+        "paging must not move the settings page behind the dialog"
+    );
+    cx.simulate_keystrokes("pageup pageup pageup pageup pageup pageup pageup pageup pageup pageup");
+    cx.run_until_parked();
+    assert_eq!(
+        rendered(cx, "confirm-dialog-text").top() - rendered(cx, "confirm-dialog-content").top(),
+        initial_position,
+        "Page Up returns to the beginning without overscrolling"
+    );
     let track = rendered(cx, "confirm-dialog-scrollbar-viewport");
     assert_eq!(
         track.right(),
@@ -578,7 +627,8 @@ fn long_profile_confirmation(
     cx.simulate_mouse_up(end, gpui::MouseButton::Left, gpui::Modifiers::none());
     cx.run_until_parked();
     assert!(
-        rendered(cx, "confirm-dialog-text").top() < text.top(),
+        rendered(cx, "confirm-dialog-text").top() - rendered(cx, "confirm-dialog-content").top()
+            < initial_position,
         "the scrollbar at the outer edge can be grabbed and dragged"
     );
     cx.simulate_event(gpui::ScrollWheelEvent {
@@ -591,7 +641,7 @@ fn long_profile_confirmation(
     let scrolled = rendered(cx, "confirm-dialog-text");
     let content = rendered(cx, "confirm-dialog-content");
     assert!(
-        scrolled.top() < text.top(),
+        scrolled.top() - content.top() < initial_position,
         "the full name can be read by scrolling"
     );
     assert!(
