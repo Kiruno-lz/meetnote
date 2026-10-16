@@ -1611,3 +1611,234 @@ fn a_model_selection_refreshes_the_stages_cleared_by_a_new_bundle(cx: &mut TestA
         "the stage control must show the default after its explicit override is cleared"
     );
 }
+
+/// Open a real document package while keeping the fixture's published model
+/// facts and reference service. No audio inference is performed here.
+fn model_setup_document(
+    cx: &mut VisualTestContext,
+    view: &View,
+) -> crate::document_tests::DocumentsRoot {
+    let documents = crate::document_tests::DocumentsRoot::new();
+    let audio = documents.path().join("setup/recording.wav");
+    documents.put(
+        domain::DocumentState::new(
+            domain::ProjectId::new("setup"),
+            "Setup recording",
+            audio.display().to_string(),
+        ),
+        "# Keep this document\n",
+    );
+    std::fs::write(&audio, b"fixture recording").unwrap();
+    let workspace = application::WorkspaceService::new(
+        application::ProcessingService::new(
+            Arc::new(asr_whisper_rs::WhisperRsBackend::default()),
+            Arc::new(diarization_sherpa_onnx::SherpaOnnxDiarizationBackend::default()),
+        ),
+        application::DocumentService::new(Arc::new(documents.repository())),
+    );
+    view.update(cx, |root, cx| {
+        root.services.workspace = workspace;
+        root.reload_projects(cx);
+        root.navigate(Route::Meetings, cx);
+    });
+    wait_for(cx, view, |root| {
+        root.ui
+            .selected_project
+            .as_ref()
+            .is_some_and(|id| id == &domain::ProjectId::new("setup"))
+            && !root.audio.pending()
+    });
+    documents
+}
+
+#[gpui::test]
+fn model_setup_opens_the_installed_transcription_choice_and_keeps_the_document(
+    cx: &mut TestAppContext,
+) {
+    model_setup_opens_installed_choice(cx, false, false);
+}
+
+#[gpui::test]
+fn model_setup_opens_the_installed_diarization_choice_from_the_keyboard(cx: &mut TestAppContext) {
+    model_setup_opens_installed_choice(cx, true, true);
+}
+
+fn model_setup_opens_installed_choice(cx: &mut TestAppContext, diarization: bool, keyboard: bool) {
+    use crate::document_tests::{rendered, within};
+    let (view, cx, _, settings) = model_selection_fixture(cx, diarization.then_some("choice-b"));
+    if diarization {
+        view.update(cx, |root, cx| {
+            root.select_diarization_backend("next-dia".into(), cx)
+        });
+        wait_for(cx, &view, |_| {
+            settings
+                .snapshot()
+                .unwrap()
+                .diarization_backend_id
+                .as_deref()
+                == Some("next-dia")
+        });
+        view.update(cx, |root, cx| {
+            root.select_diarization_backend("choice-dia".into(), cx)
+        });
+        wait_for(cx, &view, |_| {
+            settings
+                .snapshot()
+                .unwrap()
+                .diarization_backend_id
+                .as_deref()
+                == Some("choice-dia")
+        });
+        settle_model_settings(cx, &view, &settings);
+    }
+    let documents = model_setup_document(cx, &view);
+    let before = documents.package_bytes("setup");
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    if diarization {
+        view.update(cx, |root, cx| {
+            root.set_locale(crate::i18n::Locale::EnUs, cx)
+        });
+        wait_for(cx, &view, |root| {
+            root.ui.notice == crate::i18n::text(crate::i18n::Locale::EnUs, "language_changed")
+        });
+    }
+    click_selector(cx, "open-project-detail");
+    let action = if cx.debug_bounds("go-to-model-settings").is_some() {
+        "go-to-model-settings"
+    } else {
+        "go-to-models"
+    };
+    assert!(within(
+        rendered(cx, action),
+        rendered(cx, "meeting-content")
+    ));
+    if keyboard {
+        let bounds = rendered(cx, action);
+        cx.update(|window, cx| {
+            view.read(cx).window_focus.clone().focus(window, cx);
+        });
+        for step in 0..24 {
+            cx.simulate_keystrokes("tab");
+            if cx
+                .debug_bounds("focus-ring")
+                .is_some_and(|ring| within(ring, bounds))
+            {
+                break;
+            }
+            assert!(step < 23, "the setup action is keyboard reachable");
+        }
+        let keystroke = gpui::Keystroke::parse("enter").unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.run_until_parked();
+    } else {
+        click_selector(cx, action);
+    }
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.route),
+        Route::Settings,
+        "an installed choice belongs in Settings, where it can be selected"
+    );
+    let section = if diarization { 4 } else { 3 };
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.settings_section),
+        section
+    );
+    let label_key = if diarization {
+        "diarization_model"
+    } else {
+        "asr_model"
+    };
+    let locale = if diarization {
+        crate::i18n::Locale::EnUs
+    } else {
+        crate::i18n::Locale::ZhCn
+    };
+    let label = crate::document_tests::leak(format!(
+        "setting-label-{}",
+        crate::i18n::text(locale, label_key)
+    ));
+    assert!(
+        within(rendered(cx, label), rendered(cx, "settings-scroll")),
+        "the destination reveals the actual model control"
+    );
+    let model_id = if diarization {
+        "choice-dia-new"
+    } else {
+        "choice-b"
+    };
+    let model = view.read_with(cx, |root, _| {
+        let selectors = root.settings_selectors.as_ref().unwrap();
+        if diarization {
+            selectors.diarization_model.clone()
+        } else {
+            selectors.asr_model.clone()
+        }
+    });
+    choose_setting_value(cx, &model, model_id);
+    wait_for(cx, &view, |_| {
+        let saved = settings.snapshot().unwrap();
+        let model = if diarization {
+            saved.diarization_model
+        } else {
+            saved.asr_model
+        };
+        model.is_some_and(|model| model.model_id == model_id)
+    });
+    settle_model_settings(cx, &view, &settings);
+    click_selector(cx, "nav-Meetings");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(domain::ProjectId::new("setup"))
+    );
+    assert!(
+        cx.debug_bounds("models-required").is_none(),
+        "choosing the model clears the prerequisite guidance"
+    );
+    assert!(!view.read_with(cx, |root, _| root.ui.processing));
+    assert_eq!(documents.package_bytes("setup"), before);
+}
+
+#[gpui::test]
+fn model_setup_keeps_the_download_destination_when_no_compatible_model_is_installed(
+    cx: &mut TestAppContext,
+) {
+    model_setup_needs_a_download(cx, false);
+}
+
+#[gpui::test]
+fn model_setup_does_not_offer_an_installed_model_for_another_backend(cx: &mut TestAppContext) {
+    model_setup_needs_a_download(cx, true);
+}
+
+fn model_setup_needs_a_download(cx: &mut TestAppContext, incompatible: bool) {
+    let (view, cx, _, _) = model_selection_fixture(cx, None);
+    let mut state = view.read_with(cx, |root, _| root.installation.clone());
+    for entry in state
+        .catalog
+        .iter_mut()
+        .filter(|entry| entry.model.task == "asr")
+    {
+        if incompatible {
+            entry.model.candidate_backends = vec!["another-backend".into()];
+        } else {
+            entry.install_state = ModelInstallState::Missing;
+        }
+    }
+    // Vary only the published installation facts; this case checks the
+    // destination offered by the UI, not a filesystem probe.
+    view.update(cx, |root, cx| {
+        root.installation = state;
+        cx.notify();
+    });
+    let documents = model_setup_document(cx, &view);
+    let before = documents.package_bytes("setup");
+    assert!(cx.debug_bounds("go-to-model-settings").is_none());
+    click_selector(cx, "go-to-models");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Models);
+    assert_eq!(documents.package_bytes("setup"), before);
+}

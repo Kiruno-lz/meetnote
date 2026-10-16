@@ -1305,6 +1305,34 @@ impl RootView {
         });
     }
 
+    /// When a missing processing prerequisite has a selectable installed
+    /// model, take the user to its configuration rather than its download.
+    pub(crate) fn model_setup_section(
+        &self,
+        missing: crate::state::MissingModels,
+    ) -> Option<&'static str> {
+        let (task, backend, section) = if missing.transcription {
+            (
+                "asr",
+                self.settings_draft.asr_backend_id.as_deref(),
+                "transcription",
+            )
+        } else if missing.diarization {
+            (
+                "diarization",
+                self.settings_draft.diarization_backend_id.as_deref(),
+                "speaker_separation",
+            )
+        } else {
+            return None;
+        };
+        let backend = backend?;
+        self.installation
+            .models(task, Some(backend))
+            .any(|entry| entry.install_state == ModelInstallState::Installed)
+            .then_some(section)
+    }
+
     fn model_options(&self, task: &str, backend_id: Option<&str>) -> Vec<SelectOption> {
         self.installation
             .models(task, backend_id)
@@ -4086,10 +4114,15 @@ impl RootView {
     /// Opens Settings at its Assistant section, where a connection, key or
     /// limit an Assistant error names is fixed.
     pub(crate) fn open_assistant_settings(&mut self, cx: &mut Context<Self>) {
+        self.open_settings_section("assistant_settings", cx);
+    }
+
+    /// Reveal a configuration section after its viewport has been laid out.
+    pub(crate) fn open_settings_section(&mut self, key: &str, cx: &mut Context<Self>) {
         self.navigate(Route::Settings, cx);
         if let Some(section) = pages::settings::SECTIONS
             .iter()
-            .position(|key| *key == "assistant_settings")
+            .position(|candidate| *candidate == key)
         {
             self.ui.settings_section = section;
             self.pending_settings_section = Some(section);
