@@ -671,6 +671,96 @@ fn a_speaker_save_acknowledgement_keeps_a_remaining_name_after_merge(cx: &mut Te
 }
 
 #[gpui::test]
+fn speaker_actions_wait_for_a_pending_write_without_blocking_typing(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("weekly"), "# Original body\n");
+    let original = documents.read("weekly");
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_speakers_saving_on(cx, &documents, &gate);
+    open_original(cx, &view, "weekly");
+    retype_at(cx, "speaker-name-speaker-0", "Host");
+    gate.arm();
+    click_selector(cx, "rename-speaker-speaker-0");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    let saved = documents.package_bytes("weekly");
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    retype_at(cx, "speaker-name-speaker-0", "");
+    cx.simulate_keystrokes("backspace enter");
+    let kept_notice = view.read_with(cx, |root, _| root.ui.notice == notice);
+    retype_at(cx, "speaker-name-speaker-0", "主持人草稿");
+    cx.simulate_keystrokes("left left");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    click_selector(cx, "merge-speaker-speaker-0");
+    let opened = cx.debug_bounds("select-menu").is_some();
+    let kept_focus = cx.update(|window, cx| window.focused(cx)) == focus;
+    if opened {
+        cx.simulate_keystrokes("escape");
+    }
+    view.update_in(cx, |root, window, cx| {
+        root.ask_merge_document_speaker("speaker-0".into(), "speaker-1".into(), window, cx)
+    });
+    cx.run_until_parked();
+    let asked = cx.debug_bounds("confirm-dialog").is_some();
+    if asked {
+        click_selector(cx, "dialog-cancel");
+    }
+    retype_at(cx, "speaker-name-speaker-0", "主持人草稿");
+    cx.simulate_keystrokes("left left tab");
+    let next = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-1")
+            .unwrap()
+            .name
+            .clone()
+    });
+    let skipped =
+        cx.update(|window, cx| gpui::Focusable::focus_handle(next.read(cx), cx).is_focused(window));
+    cx.simulate_keystrokes("shift-tab");
+    let unchanged = documents.package_bytes("weekly") == saved;
+    gate.release();
+    assert_eq!(
+        (opened, kept_focus, asked, skipped, kept_notice, unchanged),
+        (false, true, false, true, true, true),
+        "pending controls must be inert, skip Tab and keep input focus and the current outcome"
+    );
+    wait_for(cx, &view, |root| root.speaker_command.is_none());
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(field_value(cx, &name), "主持人草稿");
+    cx.simulate_input("的");
+    assert_eq!(field_value(cx, &name), "主持人的草稿");
+    choose(cx, "merge-speaker-speaker-0", 0);
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none()
+            && documents.revision("weekly") == original.state.revision() + 2
+    });
+    let after = documents.read("weekly");
+    assert!(after
+        .state
+        .results
+        .speaker_segments
+        .iter()
+        .all(|segment| segment.speaker_id == "speaker-1"));
+    assert_eq!(
+        after.state.results.transcript,
+        original.state.results.transcript
+    );
+    assert_eq!(after.state.processing, original.state.processing);
+    assert_eq!(after.markdown, original.markdown);
+}
+
+#[gpui::test]
 fn merging_a_speaker_attributes_its_segments_after_confirmation(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();
     root.put(two_speakers("weekly"), "# 产品周会\n");
@@ -1300,6 +1390,105 @@ fn pause_saved_library(
             }));
     });
     gate
+}
+
+#[gpui::test]
+fn profile_actions_wait_for_a_pending_write_without_blocking_typing(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let library = Library::new(three_profiles());
+    let documents = DocumentsRoot::new();
+    let (view, cx, _) = open_with_library(cx, &library.path(), &documents);
+    wait_rendered(cx, "speaker-profile-alpha", true);
+    let gate = pause_saved_library(&view, cx, &library);
+    retype_at(cx, "speaker-profile-name-alpha", "Alice");
+    gate.arm();
+    click_selector(cx, "rename-speaker-profile-alpha");
+    wait_for(cx, &view, |_| gate.counts() == (1, 1));
+    let saved = std::fs::read(library.path()).unwrap();
+    let status = view.read_with(cx, |root, _| root.speaker_profiles.status.clone());
+    retype_at(cx, "speaker-profile-name-alpha", "Alpha");
+    cx.simulate_keystrokes("enter");
+    let kept_status = view.read_with(cx, |root, _| root.speaker_profiles.status == status);
+    retype_at(cx, "speaker-profile-name-alpha", "主持人草稿");
+    cx.simulate_keystrokes("left left");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    click_selector(cx, "merge-speaker-profile-alpha");
+    let opened = cx.debug_bounds("select-menu").is_some();
+    let kept_focus = cx.update(|window, cx| window.focused(cx)) == focus;
+    if opened {
+        cx.simulate_keystrokes("escape");
+    }
+    view.update_in(cx, |root, window, cx| {
+        root.ask_merge_speaker_profiles("alpha-2".into(), "alpha".into(), window, cx)
+    });
+    cx.run_until_parked();
+    let asked_merge = cx.debug_bounds("confirm-dialog").is_some();
+    if asked_merge {
+        click_selector(cx, "dialog-cancel");
+    }
+    view.update_in(cx, |root, window, cx| {
+        root.ask_delete_speaker_profile("alpha-2".into(), window, cx)
+    });
+    cx.run_until_parked();
+    let asked_delete = cx.debug_bounds("confirm-dialog").is_some();
+    if asked_delete {
+        click_selector(cx, "dialog-cancel");
+    }
+    retype_at(cx, "speaker-profile-name-alpha", "主持人草稿");
+    cx.simulate_keystrokes("left left tab");
+    let next = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("alpha-2")
+            .unwrap()
+            .name
+            .clone()
+    });
+    let skipped =
+        cx.update(|window, cx| gpui::Focusable::focus_handle(next.read(cx), cx).is_focused(window));
+    cx.simulate_keystrokes("shift-tab");
+    let unchanged = std::fs::read(library.path()).unwrap() == saved;
+    gate.release();
+    assert_eq!(
+        (
+            opened,
+            kept_focus,
+            asked_merge,
+            asked_delete,
+            skipped,
+            kept_status,
+            unchanged
+        ),
+        (false, true, false, false, true, true, true),
+        "pending controls must be inert, skip Tab and keep input focus and the current outcome"
+    );
+    wait_for(cx, &view, |root| root.speaker_profiles.write_path.is_none());
+    let name = view.read_with(cx, |root, _| {
+        root.profile_rows
+            .as_ref()
+            .unwrap()
+            .row("alpha")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(field_value(cx, &name), "主持人草稿");
+    cx.simulate_input("的");
+    assert_eq!(field_value(cx, &name), "主持人的草稿");
+    choose(cx, "merge-speaker-profile-alpha-2", 0);
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |root| {
+        root.speaker_profiles.write_path.is_none() && library.load().profiles.len() == 2
+    });
+    assert_eq!(library.load().profiles[0].samples.len(), 3);
+    assert_eq!(library.load().profiles[0].display_name, "Alice");
+    click_selector(cx, "speaker-profile-name-alpha");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |root| {
+        root.speaker_profiles.write_path.is_none() && library.names()[0].1 == "主持人的草稿"
+    });
+    assert_eq!(library.load().profiles[0].samples.len(), 3);
 }
 
 #[gpui::test]

@@ -421,6 +421,21 @@ impl<K: PartialEq> NameRows<K> {
         true
     }
 
+    /// Keep merge controls consistent with write availability while names
+    /// remain editable. Updating an unchanged state leaves the widgets alone.
+    pub(crate) fn set_merge_disabled(
+        &self,
+        disabled: bool,
+        window: &mut Window,
+        cx: &mut Context<RootView>,
+    ) {
+        for row in &self.rows {
+            if let Some(select) = &row.merge_into {
+                select.update(cx, |select, cx| select.set_disabled(disabled, window, cx));
+            }
+        }
+    }
+
     pub(crate) fn row(&self, id: &str) -> Option<&NameRow> {
         self.rows.iter().find(|row| row.id == id)
     }
