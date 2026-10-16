@@ -536,6 +536,9 @@ pub(crate) struct RootView {
     pub(crate) settings_selectors: Option<SettingsSelectors>,
     /// A requested section is revealed after its settings viewport is laid out.
     pending_settings_section: Option<usize>,
+    /// A later choice invalidates a model reference still resolving for that task.
+    asr_model_selection_generation: u64,
+    diarization_model_selection_generation: u64,
     /// The last failed settings write, shown on the settings page.
     pub(crate) settings_error: Option<AssistantUiError>,
     pending_expiry: Option<Task<()>>,
@@ -792,6 +795,8 @@ impl RootView {
             processing_cancel_requested: false,
             settings_selectors: None,
             pending_settings_section: None,
+            asr_model_selection_generation: 0,
+            diarization_model_selection_generation: 0,
             settings_error: None,
             pending_expiry: None,
             installation: InstallationState::default(),
@@ -1945,7 +1950,8 @@ impl RootView {
     ) {
         let DropdownEvent::Confirm(value) = event;
         if let Some(backend_id) = self.settings_draft.asr_backend_id.clone() {
-            self.use_model(value.clone(), "asr".into(), backend_id, cx);
+            self.use_model(value.clone(), "asr".into(), backend_id, cx)
+                .detach();
         }
     }
 
@@ -1987,7 +1993,8 @@ impl RootView {
     ) {
         let DropdownEvent::Confirm(value) = event;
         if let Some(backend_id) = self.settings_draft.diarization_backend_id.clone() {
-            self.use_model(value.clone(), "diarization".into(), backend_id, cx);
+            self.use_model(value.clone(), "diarization".into(), backend_id, cx)
+                .detach();
             self.refresh_stage_selectors(cx);
         }
     }
@@ -2000,6 +2007,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         let DropdownEvent::Confirm(value) = event;
+        self.invalidate_diarization_model_selection(cx);
         let model = self.stage_model_ref(DiarizationStageKind::Segmentation, value);
         self.persist_field(
             move |settings| settings.diarization_stages.segmentation_model = model.clone(),
@@ -2015,6 +2023,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         let DropdownEvent::Confirm(value) = event;
+        self.invalidate_diarization_model_selection(cx);
         let model = self.stage_model_ref(DiarizationStageKind::Embedding, value);
         self.persist_field(
             move |settings| settings.diarization_stages.embedding_model = model.clone(),
@@ -2030,6 +2039,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         let DropdownEvent::Confirm(value) = event;
+        self.invalidate_diarization_model_selection(cx);
         let option = self
             .selected_diarization_descriptor()
             .and_then(|descriptor| {
@@ -4482,6 +4492,7 @@ impl RootView {
     }
 
     pub(crate) fn select_asr_backend(&mut self, backend_id: String, cx: &mut Context<Self>) {
+        self.asr_model_selection_generation += 1;
         self.ui.notice = i18n::message(
             self.ui.locale,
             "backend_selected",
@@ -4507,6 +4518,7 @@ impl RootView {
         backend_id: String,
         cx: &mut Context<Self>,
     ) {
+        self.diarization_model_selection_generation += 1;
         self.ui.notice = i18n::message(
             self.ui.locale,
             "backend_selected",
@@ -4528,13 +4540,44 @@ impl RootView {
         );
     }
 
+    /// A manual stage choice supersedes a pending bundle selection, which
+    /// would otherwise reset the stages. Show the model still configured.
+    fn invalidate_diarization_model_selection(&mut self, cx: &mut Context<Self>) {
+        self.diarization_model_selection_generation += 1;
+        let backend = self.settings_draft.diarization_backend_id.clone();
+        self.refresh_model_selector("diarization", backend.as_deref(), cx);
+    }
+
+    /// Resolve the model off-thread; accept only the current task's choice.
+    /// The returned task completes once its UI result has been handled.
     pub(crate) fn use_model(
         &mut self,
         model_id: String,
         task: String,
         backend_id: String,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Task<()> {
+        let asr = task == "asr";
+        let task = if asr { "asr" } else { "diarization" };
+        let generation = if asr {
+            self.asr_model_selection_generation += 1;
+            self.asr_model_selection_generation
+        } else {
+            self.diarization_model_selection_generation += 1;
+            self.diarization_model_selection_generation
+        };
+        let base = if asr {
+            (
+                self.settings_draft.asr_backend_id.clone(),
+                self.settings_draft.asr_model.clone(),
+            )
+        } else {
+            (
+                self.settings_draft.diarization_backend_id.clone(),
+                self.settings_draft.diarization_model.clone(),
+            )
+        };
+        let stages = self.settings_draft.diarization_stages.clone();
         let models = self.services.model_manager.clone();
         cx.spawn(async move |this, cx| {
             let (model_id_for_ref, backend_id_for_ref) = (model_id.clone(), backend_id.clone());
@@ -4543,9 +4586,34 @@ impl RootView {
             })
             .await;
             this.update(cx, |this, cx| {
+                let current_generation = if asr {
+                    this.asr_model_selection_generation
+                } else {
+                    this.diarization_model_selection_generation
+                };
+                if generation != current_generation {
+                    return;
+                }
+                let current = if asr {
+                    (
+                        this.settings_draft.asr_backend_id.clone(),
+                        this.settings_draft.asr_model.clone(),
+                    )
+                } else {
+                    (
+                        this.settings_draft.diarization_backend_id.clone(),
+                        this.settings_draft.diarization_model.clone(),
+                    )
+                };
+                if current != base || (!asr && this.settings_draft.diarization_stages != stages) {
+                    this.refresh_model_selector(task, current.0.as_deref(), cx);
+                    cx.notify();
+                    return;
+                }
                 match model {
                     Ok(model) => {
                         this.ui.notice = i18n::message(this.ui.locale, "model_selected", &model_id);
+                        let backend_for_selector = backend_id.clone();
                         this.persist_field(
                             move |settings| {
                                 if task == "asr" {
@@ -4559,8 +4627,13 @@ impl RootView {
                             },
                             cx,
                         );
+                        this.refresh_model_selector(task, Some(&backend_for_selector), cx);
+                        if !asr {
+                            this.refresh_stage_selectors(cx);
+                        }
                     }
                     Err(error) => {
+                        this.refresh_model_selector(task, current.0.as_deref(), cx);
                         this.ui.notice =
                             i18n::message(this.ui.locale, "model_not_ready", &error.to_string())
                     }
@@ -4569,7 +4642,6 @@ impl RootView {
             })
             .ok();
         })
-        .detach();
     }
 
     /// Starts the download off the main thread and follows its progress.

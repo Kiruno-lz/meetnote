@@ -1237,6 +1237,7 @@ mod tests {
         gate.arm();
         view.update(cx, |root, cx| {
             root.use_model("gated-model".into(), "asr".into(), "gated-asr".into(), cx)
+                .detach()
         });
         assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-model-ref");
         wait_for(cx, &view, |_| {
