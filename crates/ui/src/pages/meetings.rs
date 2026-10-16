@@ -13,8 +13,8 @@ use gpui::{div, prelude::*, px, AnyElement, Context, IntoElement, Pixels};
 
 /// The tallest the issue list grows before it scrolls.
 const ISSUE_LIST_HEIGHT: Pixels = px(168.);
-/// Long read errors scroll so the retry and document remain reachable.
-const READ_ERROR_HEIGHT: Pixels = px(96.);
+/// Long recovery messages scroll so their action and document stay reachable.
+const RECOVERY_MESSAGE_HEIGHT: Pixels = px(96.);
 /// The width of the document status select.
 const STATUS_SELECT_WIDTH: Pixels = px(240.);
 /// The name column of a speaker row.
@@ -27,9 +27,10 @@ const SPEAKER_FIELD_WIDTH: Pixels = px(200.);
 pub(crate) fn render(
     root: &mut RootView,
     selected: Option<&DocumentState>,
+    viewport_height: Pixels,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
-    main_panel(root, selected, cx).debug_selector(|| "meetings-page".into())
+    main_panel(root, selected, viewport_height, cx).debug_selector(|| "meetings-page".into())
 }
 
 /// The three-level project tree the sidebar shows on the Meetings route:
@@ -307,19 +308,34 @@ fn model_guidance(
 fn main_panel(
     root: &mut RootView,
     project: Option<&DocumentState>,
+    viewport_height: Pixels,
     cx: &mut Context<RootView>,
 ) -> gpui::Div {
     let locale = root.ui.locale;
     let tokens = *theme::tokens(cx);
+    // Compact the metadata beside Detail in a short window so recovery
+    // feedback still leaves room for reading and editing.
+    let compact = root.ui.detail_open
+        && viewport_height < super::chrome::MIN_WINDOW_SIZE.height + RECOVERY_MESSAGE_HEIGHT;
+    let inset = if compact {
+        tokens.spacing.md
+    } else {
+        tokens.spacing.xl
+    };
+    let gap = if compact {
+        tokens.spacing.xs
+    } else {
+        tokens.spacing.lg
+    };
     let display_status = project.map(|project| root.ui.processing_status(project));
     let mut panel = div()
         .flex_1()
         .min_w_0()
         .h_full()
-        .p_6()
+        .p(inset)
         .flex()
         .flex_col()
-        .gap_4()
+        .gap(gap)
         .children(workspace_read_error(root, &tokens, cx))
         .children(conflict_notice(root, &tokens, cx))
         .children(issues_panel(root, &tokens));
@@ -535,8 +551,7 @@ fn main_panel(
                     theme::scroll_faded(&scroll, tokens.surface, content).rounded(tokens.radius.md),
                 )
                 .child(
-                    Scrollbar::vertical("meeting-content-scrollbar", &scroll)
-                        .outset_right(tokens.spacing.xl),
+                    Scrollbar::vertical("meeting-content-scrollbar", &scroll).outset_right(inset),
                 ),
         );
     } else if root.projects_error.is_none() {
@@ -612,7 +627,7 @@ fn workspace_read_error(
                     .debug_selector(|| "workspace-read-error-message".into())
                     .flex_1()
                     .min_w_0()
-                    .max_h(READ_ERROR_HEIGHT)
+                    .max_h(RECOVERY_MESSAGE_HEIGHT)
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
@@ -835,6 +850,7 @@ fn conflict_notice(
 ) -> Option<AnyElement> {
     let conflict = root.document_conflict.as_ref()?;
     let locale = root.ui.locale;
+    let scroll = root.scroll.document_conflict.clone();
     Some(
         div()
             .debug_selector(|| "document-conflict".into())
@@ -848,23 +864,34 @@ fn conflict_notice(
             .gap_3()
             .child(
                 div()
+                    .id("document-conflict-message")
+                    .debug_selector(|| "document-conflict-message".into())
+                    .relative()
                     .flex_1()
                     .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(div().text_sm().child(i18n::message(
-                        locale,
-                        "document_conflict",
-                        &conflict.title,
-                    )))
-                    .child(div().text_xs().child(tr(locale, "document_conflict_hint")))
-                    .child(div().text_xs().child(format!(
-                        "{} {} → {}",
-                        tr(locale, "detail_revision"),
-                        conflict.expected,
-                        conflict.actual
-                    ))),
+                    .max_h(RECOVERY_MESSAGE_HEIGHT)
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .child(
+                        div()
+                            .debug_selector(|| "document-conflict-text".into())
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_sm().child(i18n::message(
+                                locale,
+                                "document_conflict",
+                                &conflict.title,
+                            )))
+                            .child(div().text_xs().child(tr(locale, "document_conflict_hint")))
+                            .child(div().text_xs().child(format!(
+                                "{} {} → {}",
+                                tr(locale, "detail_revision"),
+                                conflict.expected,
+                                conflict.actual
+                            ))),
+                    )
+                    .child(Scrollbar::vertical("document-conflict-scrollbar", &scroll)),
             )
             .child(
                 Button::new("reload-conflicted-document", tr(locale, "reload"))

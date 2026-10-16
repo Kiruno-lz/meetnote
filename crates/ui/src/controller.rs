@@ -658,14 +658,14 @@ pub(crate) struct DocumentConflict {
     pub(crate) actual: u64,
 }
 
-/// The scroll positions of the lists that fade at their edges; each fade
-/// reads its list's handle at paint time.
+/// The scroll positions of independently scrollable page sections and panels.
 #[derive(Default)]
 pub(crate) struct ScrollAreas {
     pub(crate) assistant_results: ScrollHandle,
     pub(crate) project_tree: ScrollHandle,
     pub(crate) meeting_content: ScrollHandle,
     pub(crate) document_issues: ScrollHandle,
+    pub(crate) document_conflict: ScrollHandle,
     pub(crate) detail: ScrollHandle,
     pub(crate) models: ScrollHandle,
     pub(crate) settings: ScrollHandle,
@@ -3078,7 +3078,7 @@ impl RootView {
                     .find(|project| project.id() == &document_id)
                     .map_or_else(|| document_id.to_string(), |project| project.title().into());
                 self.ui.notice = i18n::message(self.ui.locale, "document_conflict", &title);
-                self.document_conflict = Some(DocumentConflict {
+                self.show_document_conflict(DocumentConflict {
                     document_id,
                     title,
                     expected,
@@ -3090,6 +3090,15 @@ impl RootView {
                 self.ui.notice = i18n::message(self.ui.locale, failure_key, &error.to_string())
             }
         }
+    }
+
+    /// Start a new conflict at its first line, retaining a repeated conflict's
+    /// reading position.
+    fn show_document_conflict(&mut self, conflict: DocumentConflict) {
+        if self.document_conflict.as_ref() != Some(&conflict) {
+            self.scroll.document_conflict.set_offset(Default::default());
+        }
+        self.document_conflict = Some(conflict);
     }
 
     /// The conflict notice's reload: reads the tree and the conflicting
@@ -4137,7 +4146,7 @@ impl RootView {
                                     || document_id.to_string(),
                                     |project| project.title().into(),
                                 );
-                            this.document_conflict = Some(DocumentConflict {
+                            this.show_document_conflict(DocumentConflict {
                                 document_id,
                                 title,
                                 expected,
@@ -4971,7 +4980,8 @@ impl Render for RootView {
         let body = match self.ui.route {
             Route::Assistant => pages::assistant::render(self, cx).into_any_element(),
             Route::Meetings => {
-                pages::meetings::render(self, selected.as_ref(), cx).into_any_element()
+                pages::meetings::render(self, selected.as_ref(), window.viewport_size().height, cx)
+                    .into_any_element()
             }
             Route::Models => pages::models::render(self, cx).into_any_element(),
             Route::Settings => pages::settings::render(self, cx).into_any_element(),

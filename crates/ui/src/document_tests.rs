@@ -1055,6 +1055,152 @@ fn a_save_after_an_external_change_conflicts_and_leaves_the_disk_unchanged(
     assert_eq!(saved.title(), "合并后的标题");
 }
 
+#[gpui::test]
+fn a_long_chinese_conflict_keeps_recovery_and_the_editor_visible(cx: &mut TestAppContext) {
+    long_conflict_recovery(cx, i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn a_long_english_conflict_keeps_recovery_beside_detail(cx: &mut TestAppContext) {
+    long_conflict_recovery(cx, i18n::Locale::EnUs, true);
+}
+
+fn long_conflict_recovery(cx: &mut TestAppContext, locale: i18n::Locale, detail: bool) {
+    let documents = DocumentsRoot::new();
+    let long_title = match locale {
+        i18n::Locale::ZhCn => "产品规划与用户访谈记录".repeat(80),
+        i18n::Locale::EnUs => "Product planning and customer interviews ".repeat(70),
+    };
+    documents.put(processed("weekly", &long_title), "# Original document\n");
+    let revision = documents.revision("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    select_row(cx, &view, "weekly");
+    open_editor(cx, &view, "weekly");
+    view.update(cx, |root, cx| {
+        root.ui.locale = locale;
+        cx.notify();
+    });
+    if detail {
+        click_selector(cx, "open-project-detail");
+    }
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "Local draft");
+    let mut external = documents.read("weekly").state;
+    external.content.summary = Some("External update".into());
+    documents.external_save(external);
+    let external_bytes = documents.package_bytes("weekly");
+    cx.simulate_keystrokes("cmd-s");
+    wait_for(cx, &view, |root| {
+        root.document_conflict.is_some()
+            && root
+                .projects
+                .iter()
+                .any(|p| p.id().as_str() == "weekly" && p.revision() == revision + 1)
+    });
+    // Acknowledge the global notification; the persistent conflict panel
+    // must keep recovery available after the notification is dismissed.
+    click_selector(cx, "notice-toast-close");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    wait_for(cx, &view, |root| root.ui.toast().is_none());
+    let notice = rendered(cx, "document-conflict");
+    let plane = rendered(cx, "meetings-page");
+    assert!(
+        within(notice, plane),
+        "the long conflict must stay in the content plane: {notice:?} in {plane:?}"
+    );
+    assert!(within(rendered(cx, "reload-conflicted-document"), notice));
+    let editor = rendered(cx, "meeting-content");
+    assert!(
+        editor.size.height >= px(80.),
+        "the conflict must leave room to keep editing: {editor:?} below {notice:?}"
+    );
+    let message = rendered(cx, "document-conflict-message");
+    assert_eq!(
+        rendered(cx, "document-conflict-scrollbar-viewport").right(),
+        message.right(),
+        "the recovery scrollbar stays at its reading area's right edge"
+    );
+    assert_eq!(
+        rendered(cx, "meeting-content-scrollbar-viewport").right(),
+        plane.right(),
+        "compact padding must not move the document scrollbar away from its container edge"
+    );
+    let text = rendered(cx, "document-conflict-text");
+    assert!(
+        text.size.height > message.size.height,
+        "the full title is kept in a bounded reading area"
+    );
+    focus_field(cx, &title);
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let editor_scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.offset());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: message.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-10000.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let text = rendered(cx, "document-conflict-text");
+    let message = rendered(cx, "document-conflict-message");
+    assert!(
+        text.top() < message.top() && text.bottom() <= message.bottom() + px(1.),
+        "scrolling reaches the full title, recovery hint and revision"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        editor_scroll
+    );
+    cx.simulate_input("!");
+    assert_eq!(
+        field_value(cx, &title),
+        "Local draft!",
+        "reading the conflict must not interrupt editing"
+    );
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        external_bytes,
+        "the refused save and later typing leave the external version intact"
+    );
+    click_selector(cx, "reload-conflicted-document");
+    wait_for(cx, &view, |root| {
+        root.document_conflict.is_none()
+            && root.editor.draft_revision(&ProjectId::new("weekly")) == Some(revision + 1)
+    });
+    assert_eq!(field_value(cx, &title), long_title);
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        external_bytes,
+        "reload is read-only"
+    );
+    // A later conflict gets its own reading position, rather than inheriting
+    // the bottom of the previous conflict's long message.
+    retype(cx, &title, "Second draft");
+    let mut external = documents.read("weekly").state;
+    external.content.summary = Some("Another external update".into());
+    documents.external_save(external);
+    let external_bytes = documents.package_bytes("weekly");
+    cx.simulate_keystrokes("cmd-s");
+    wait_for(cx, &view, |root| {
+        root.document_conflict
+            .as_ref()
+            .is_some_and(|c| c.expected == revision + 1 && c.actual == revision + 2)
+            && root
+                .projects
+                .iter()
+                .any(|p| p.id().as_str() == "weekly" && p.revision() == revision + 2)
+    });
+    assert!(
+        rendered(cx, "document-conflict-text").top()
+            >= rendered(cx, "document-conflict-message").top(),
+        "a new conflict starts at the beginning of its message"
+    );
+    assert_eq!(field_value(cx, &title), "Second draft");
+    assert_eq!(documents.package_bytes("weekly"), external_bytes);
+}
+
 /// `rec` with the children `a` and `b`, and a second recording `other`.
 fn tree_fixture(root: &DocumentsRoot) {
     let recording = DocumentState::new(ProjectId::new("rec"), "Recording", "rec.wav");
