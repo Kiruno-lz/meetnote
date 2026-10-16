@@ -930,6 +930,27 @@ impl RootView {
         if generation == self.projects_generation {
             match snapshot {
                 Ok(snapshot) => {
+                    // Metadata-only updates keep correction drafts, caret and
+                    // open menus while advancing their checked revision.
+                    if let Some(rows) = &mut self.speaker_rows {
+                        let (id, revision, locale) = rows.key().clone();
+                        let previous = self.projects.iter().find(|document| {
+                            document.id() == &id && document.revision() == revision
+                        });
+                        let current = snapshot
+                            .documents
+                            .iter()
+                            .find(|document| document.id() == &id);
+                        if let (Some(previous), Some(current)) = (previous, current) {
+                            if current.revision() != revision
+                                && previous.source == current.source
+                                && previous.results == current.results
+                                && previous.processing.latest == current.processing.latest
+                            {
+                                rows.set_key((id, current.revision(), locale));
+                            }
+                        }
+                    }
                     self.projects = snapshot.documents;
                     self.document_issues = snapshot.issues;
                     if let Some(error) = self.projects_error.take() {
@@ -2322,9 +2343,9 @@ impl RootView {
         .detach();
     }
 
-    /// Builds the rename and merge controls of the speakers of `document`
-    /// when the Original view shows it; they are rebuilt once its revision
-    /// or the locale changes.
+    /// Builds correction controls for Original. Metadata-only revisions
+    /// keep them; changed audio, processing records, results or locale
+    /// rebuild them.
     fn ensure_speaker_rows(
         &mut self,
         document: Option<&DocumentState>,
@@ -3129,6 +3150,13 @@ impl RootView {
         let Some(conflict) = self.document_conflict.take() else {
             return;
         };
+        if self
+            .speaker_rows
+            .as_ref()
+            .is_some_and(|rows| rows.key().0 == conflict.document_id)
+        {
+            self.speaker_rows = None;
+        }
         let had_draft = self.editor.has_draft(&conflict.document_id);
         self.editor.discard(&conflict.document_id);
         if had_draft {
