@@ -237,7 +237,10 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .flex_1()
                 .min_h_0()
                 .child(theme::scroll_faded(&scroll, tokens.sidebar, tree))
-                .child(Scrollbar::vertical("project-tree-scrollbar", &scroll)),
+                .child(
+                    Scrollbar::vertical("project-tree-scrollbar", &scroll)
+                        .outset_right(tokens.spacing.md),
+                ),
         )
 }
 
@@ -531,7 +534,10 @@ fn main_panel(
                 .child(
                     theme::scroll_faded(&scroll, tokens.surface, content).rounded(tokens.radius.md),
                 )
-                .child(Scrollbar::vertical("meeting-content-scrollbar", &scroll)),
+                .child(
+                    Scrollbar::vertical("meeting-content-scrollbar", &scroll)
+                        .outset_right(tokens.spacing.xl),
+                ),
         );
     } else if root.projects_error.is_none() {
         panel = panel
@@ -935,7 +941,10 @@ fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
                 div()
                     .relative()
                     .child(theme::scroll_faded(&scroll, tokens.warning_surface, list))
-                    .child(Scrollbar::vertical("document-issues-scrollbar", &scroll)),
+                    .child(
+                        Scrollbar::vertical("document-issues-scrollbar", &scroll)
+                            .outset_right(tokens.spacing.md),
+                    ),
             )
             .into_any_element(),
     )

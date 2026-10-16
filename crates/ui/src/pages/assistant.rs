@@ -294,7 +294,10 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         .size_full()
                         // The scrollbar stays outside the fade.
                         .child(theme::scroll_faded(&scroll, tokens.content, results))
-                        .child(Scrollbar::vertical("assistant-results-scrollbar", &scroll)),
+                        .child(
+                            Scrollbar::vertical("assistant-results-scrollbar", &scroll)
+                                .outset_right(tokens.spacing.xl),
+                        ),
                 )
                 .child(
                     div()

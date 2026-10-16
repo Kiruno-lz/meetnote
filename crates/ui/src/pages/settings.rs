@@ -202,14 +202,9 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .child(settings_error_text(root.ui.locale, error))
         }))
         // The scrollbar stays outside the scrolled form.
-        .child(
-            div()
-                .relative()
-                .flex_1()
-                .min_h_0()
-                .child(body)
-                .child(Scrollbar::vertical("settings-scrollbar", &scroll)),
-        )
+        .child(div().relative().flex_1().min_h_0().child(body).child(
+            Scrollbar::vertical("settings-scrollbar", &scroll).outset_right(tokens.spacing.xl),
+        ))
         .into_any_element()
 }
 

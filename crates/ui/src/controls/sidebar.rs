@@ -204,7 +204,8 @@ impl RenderOnce for SidebarPanel {
             .right_0()
             .top_0()
             .h_full()
-            .w(px(8.))
+            // Keep the divider in the edge gutter beside vertical thumbs.
+            .w(tokens.spacing.xs)
             .cursor_col_resize()
             .occlude()
             .on_hover(move |hovered, window, cx| {

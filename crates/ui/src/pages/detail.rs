@@ -71,7 +71,10 @@ pub(crate) fn render(
                 .flex_1()
                 .min_h_0()
                 .child(theme::scroll_faded(scroll, tokens.raised, body))
-                .child(Scrollbar::vertical("detail-scrollbar", scroll))
+                .child(
+                    Scrollbar::vertical("detail-scrollbar", scroll)
+                        .outset_right(tokens.spacing.lg + tokens.spacing.xs),
+                )
                 .into_any_element()
         })
         .unwrap_or_else(|| {

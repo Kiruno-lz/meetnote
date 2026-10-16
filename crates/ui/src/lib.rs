@@ -14,6 +14,8 @@ mod model_tests;
 mod pages;
 mod route;
 #[cfg(test)]
+mod scrollbar_tests;
+#[cfg(test)]
 mod shell_tests;
 #[cfg(test)]
 mod source_files;

@@ -11,13 +11,14 @@
 //! for overlay scrollers, under the pointer otherwise.
 
 use crate::theme::Tokens;
-use gpui::{div, prelude::*, App, ElementId, IntoElement, ScrollHandle, Window};
+use gpui::{div, prelude::*, px, App, ElementId, IntoElement, Pixels, ScrollHandle, Window};
 use gpui_base::{ScrollbarMode, ScrollbarStyles, ScrollbarTheme};
 
 #[derive(IntoElement)]
 pub(crate) struct Scrollbar {
     id: ElementId,
     scroll: ScrollHandle,
+    right_outset: Pixels,
 }
 
 impl Scrollbar {
@@ -26,7 +27,15 @@ impl Scrollbar {
         Self {
             id: id.into(),
             scroll: scroll.clone(),
+            right_outset: px(0.),
         }
+    }
+
+    /// Extend the track across its container's right padding without
+    /// changing the scrolled content or its viewport height.
+    pub(crate) fn outset_right(mut self, padding: Pixels) -> Self {
+        self.right_outset = padding;
+        self
     }
 }
 
@@ -34,11 +43,17 @@ impl RenderOnce for Scrollbar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         // The area reveals a control that keyboard focus moves to in it.
         super::window::register_scroll_area(&self.scroll, cx);
-        div().absolute().inset_0().child(
-            gpui_base::Scrollbar::vertical(&self.scroll)
-                .id(self.id)
-                .viewport_from_layout(),
-        )
+        let selector = self.id.clone();
+        div()
+            .debug_selector(move || format!("{selector}-viewport"))
+            .absolute()
+            .inset_0()
+            .right(-self.right_outset)
+            .child(
+                gpui_base::Scrollbar::vertical(&self.scroll)
+                    .id(self.id)
+                    .viewport_from_layout(),
+            )
     }
 }
 

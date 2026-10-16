@@ -183,7 +183,10 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .flex_1()
                 .min_h_0()
                 .child(theme::scroll_faded(&scroll, tokens.content, content))
-                .child(Scrollbar::vertical("models-scrollbar", &scroll)),
+                .child(
+                    Scrollbar::vertical("models-scrollbar", &scroll)
+                        .outset_right(tokens.spacing.xl),
+                ),
         )
 }
 
