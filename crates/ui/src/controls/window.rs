@@ -33,6 +33,7 @@ actions!(
         NavigateForward,
         ToggleSidebar,
         ImportAudio,
+        SaveDocument,
     ]
 );
 
@@ -48,6 +49,8 @@ pub(crate) enum Shortcut {
     Forward,
     ToggleSidebar,
     ImportAudio,
+    /// Saves the visible document editor, when its owner allows it.
+    SaveDocument,
 }
 
 impl Shortcut {
@@ -60,6 +63,7 @@ impl Shortcut {
             Self::Forward => "cmd-]",
             Self::ToggleSidebar => "ctrl-cmd-s",
             Self::ImportAudio => "cmd-o",
+            Self::SaveDocument => "cmd-s",
         }
     }
 }
@@ -97,6 +101,7 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new(Shortcut::Forward.keys(), NavigateForward, window),
         KeyBinding::new(Shortcut::ToggleSidebar.keys(), ToggleSidebar, window),
         KeyBinding::new(Shortcut::ImportAudio.keys(), ImportAudio, window),
+        KeyBinding::new(Shortcut::SaveDocument.keys(), SaveDocument, window),
         KeyBinding::new("space", Confirm { secondary: false }, Some(SELECT_CONTEXT)),
     ]);
 }
@@ -165,6 +170,7 @@ pub(crate) fn root(
         .on_action(shortcut::<NavigateForward>(&run, Shortcut::Forward))
         .on_action(shortcut::<ToggleSidebar>(&run, Shortcut::ToggleSidebar))
         .on_action(shortcut::<ImportAudio>(&run, Shortcut::ImportAudio))
+        .on_action(shortcut::<SaveDocument>(&run, Shortcut::SaveDocument))
         .relative()
         .size_full()
         .font_family(tokens.font_family)
