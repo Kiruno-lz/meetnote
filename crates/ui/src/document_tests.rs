@@ -395,6 +395,117 @@ fn the_editor_status_fits_beside_detail_and_remains_keyboard_operable(cx: &mut T
     }
 }
 
+#[gpui::test]
+fn a_long_status_menu_opens_with_the_current_choice_visible(cx: &mut TestAppContext) {
+    long_status_menu(cx, crate::pages::chrome::MIN_WINDOW_SIZE, true);
+}
+
+#[gpui::test]
+fn a_long_status_menu_opened_by_pointer_keeps_manual_scrolling(cx: &mut TestAppContext) {
+    long_status_menu(cx, gpui::size(px(1180.), px(760.)), false);
+}
+
+fn long_status_menu(cx: &mut TestAppContext, size: gpui::Size<Pixels>, keyboard: bool) {
+    let documents = DocumentsRoot::new();
+    let mut active = processed("active", "Active document");
+    active.document_status.value = "stage-19".into();
+    documents.put(active, "# Active document\n");
+    for index in 0..19 {
+        let mut document = processed(&format!("status-{index:02}"), &format!("Status {index:02}"));
+        document.document_status.value = format!("stage-{index:02}");
+        documents.put(document, "");
+    }
+    let before = documents.package_bytes("active");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "active");
+    open_editor(cx, &view, "active");
+    cx.simulate_resize(size);
+    let select = view.read_with(cx, |root, _| root.editor.status.clone());
+    let index = view.read_with(cx, |root, _| {
+        controls::SelectOption::position(
+            &crate::editor::status_options(&root.projects, "stage-19", root.ui.locale),
+            Some("stage-19"),
+        )
+        .unwrap()
+    });
+    cx.update(|window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx));
+    cx.run_until_parked();
+    if keyboard {
+        cx.simulate_keystrokes("enter");
+    } else {
+        click_selector(cx, "select-document-status");
+    }
+    cx.run_until_parked();
+    let menu = rendered(cx, "select-menu");
+    let current = rendered(cx, leak(format!("select-option-{index}")));
+    assert!(within(current, menu), "the current status must be visible when the long menu first opens: {current:?} in {menu:?}");
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("stage-19".into())
+    );
+    // Opening reveals once; later redraws must leave manual browsing alone.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+    let before_scroll = rendered(cx, leak(format!("select-option-{index}")));
+    let position = rendered(cx, "select-menu").center();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(100.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let scrolled = rendered(cx, leak(format!("select-option-{index}")));
+    assert!(
+        scrolled.top() > before_scroll.top(),
+        "the menu can be manually scrolled"
+    );
+    let scrolled_position = scrolled.top() - rendered(cx, "select-menu").top();
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(
+        rendered(cx, leak(format!("select-option-{index}"))).top()
+            - rendered(cx, "select-menu").top(),
+        scrolled_position,
+        "a redraw must not snap back to the selected status"
+    );
+    cx.simulate_keystrokes("up");
+    cx.run_until_parked();
+    assert!(
+        within(
+            rendered(cx, leak(format!("select-option-{}", index - 1))),
+            rendered(cx, "select-menu")
+        ),
+        "keyboard navigation reveals its next choice after manual scrolling"
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        select.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+        Some("stage-18".into())
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(
+        within(
+            rendered(cx, leak(format!("select-option-{}", index - 1))),
+            rendered(cx, "select-menu")
+        ),
+        "reopening keeps the new draft choice visible"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        documents.package_bytes("active"),
+        before,
+        "menu navigation only edits the draft"
+    );
+}
+
 /// Replaces a field's text as typing does.
 fn retype(cx: &mut VisualTestContext, field: &Field, text: &str) {
     focus_field(cx, field);

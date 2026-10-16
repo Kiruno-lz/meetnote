@@ -126,6 +126,7 @@ pub(crate) struct Dropdown {
     options: Vec<SelectOption>,
     selected: Option<usize>,
     open: bool,
+    reveal_on_open: bool,
     highlighted: Option<usize>,
     trigger_focus: FocusHandle,
     menu_focus: FocusHandle,
@@ -159,6 +160,7 @@ impl Dropdown {
             selected: SelectOption::position(&options, selected),
             options,
             open: false,
+            reveal_on_open: false,
             highlighted: None,
             trigger_focus: cx.focus_handle(),
             menu_focus: cx.focus_handle(),
@@ -241,10 +243,8 @@ impl Dropdown {
             return;
         }
         self.open = true;
+        self.reveal_on_open = true;
         self.highlighted = opening_highlight(&self.options, self.selected);
-        if let Some(index) = self.highlighted {
-            self.menu_scroll.scroll_to_item(index);
-        }
         cx.notify();
     }
 
@@ -479,6 +479,18 @@ impl Dropdown {
 
 impl Render for Dropdown {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.reveal_on_open) {
+            // The menu must publish its viewport before GPUI can reveal an
+            // option. Request it once after this opening layout.
+            cx.defer_in(window, |this, _, cx| {
+                if this.open {
+                    if let Some(index) = this.highlighted {
+                        this.menu_scroll.scroll_to_top_of_item(index);
+                        cx.notify();
+                    }
+                }
+            });
+        }
         let tokens = *theme::tokens(cx);
         let entity = cx.entity();
         let trigger_focus = self.trigger_focus.clone();
