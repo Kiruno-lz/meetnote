@@ -230,6 +230,8 @@ struct FakeModels {
     starts: Mutex<Vec<String>>,
     reprobes: Mutex<Vec<String>>,
     gate: Gate,
+    held_model: Mutex<Option<String>>,
+    references: Mutex<std::collections::BTreeMap<String, ModelRef>>,
     finish: Mutex<Option<oneshot::Sender<Result<ProbeRecord, ModelManagerError>>>>,
 }
 
@@ -268,8 +270,18 @@ impl ModelService for FakeModels {
         Ok(self.downloads.lock().unwrap().clone())
     }
 
-    fn model_ref(&self, model_id: &str, _: &str) -> Result<ModelRef, ModelManagerError> {
-        Err(ModelManagerError::ModelNotInstalled(model_id.into()))
+    fn model_ref(&self, model_id: &str, backend_id: &str) -> Result<ModelRef, ModelManagerError> {
+        let held = self.held_model.lock().unwrap().as_deref() == Some(model_id);
+        if held {
+            self.gate.pass();
+        }
+        self.references
+            .lock()
+            .unwrap()
+            .get(model_id)
+            .filter(|model| model.backend_id == backend_id)
+            .cloned()
+            .ok_or_else(|| ModelManagerError::ModelNotInstalled(model_id.into()))
     }
 
     fn start(&self, model_id: &str) -> Result<DownloadTask, ModelManagerError> {
@@ -1247,4 +1259,355 @@ fn a_real_reprobe_of_changed_files_reports_the_mismatch_and_keeps_the_model_inst
     assert!(shown(cx, "failure", "real-asr") && shown(cx, "reprobe", "real-asr"));
     assert!(!shown(cx, "retry", "real-asr") && !shown(cx, "download", "real-asr"));
     std::fs::remove_dir_all(root).ok();
+}
+
+/// Model references are service fixtures here; the settings repository is a
+/// real JSON file. These tests verify UI ordering, not native model loading.
+fn model_selection_fixture<'a>(
+    cx: &'a mut TestAppContext,
+    initial_asr: Option<&str>,
+) -> (
+    View,
+    &'a mut VisualTestContext,
+    Arc<FakeModels>,
+    settings::SettingsService,
+) {
+    let entries = [
+        ("choice-a", "asr", "choice-asr"),
+        ("choice-b", "asr", "choice-asr"),
+        ("choice-failed", "asr", "choice-asr"),
+        ("choice-old-error", "asr", "choice-asr"),
+        ("choice-dia-base", "diarization", "choice-dia"),
+        ("choice-dia-new", "diarization", "choice-dia"),
+    ]
+    .map(|(id, task, backend)| entry(id, task, "choices", &[backend]));
+    let models = FakeModels::new(catalog(entries.to_vec()));
+    for model in &entries {
+        if model.id.contains("failed") || model.id.contains("error") {
+            continue;
+        }
+        models.references.lock().unwrap().insert(
+            model.id.clone(),
+            ModelRef {
+                backend_id: model.candidate_backends[0].clone(),
+                model_id: model.id.clone(),
+                revision: model.revision.clone(),
+                artifact_path: format!("fixture/{}.bin", model.id),
+                artifacts: Vec::new(),
+            },
+        );
+    }
+    let settings = test_settings();
+    let mut value = settings.snapshot().unwrap();
+    value.asr_backend_id = Some("choice-asr".into());
+    value.asr_model = initial_asr.map(|id| models.references.lock().unwrap()[id].clone());
+    value.diarization_backend_id = Some("choice-dia".into());
+    value.diarization_model = Some(models.references.lock().unwrap()["choice-dia-base"].clone());
+    settings.update(value).unwrap();
+    let state = published(
+        entries
+            .into_iter()
+            .map(|model| availability(model, ModelInstallState::Installed))
+            .collect(),
+    );
+    let (view, cx) = open_models(cx, models.clone(), &state, settings.clone());
+    view.update(cx, |root, cx| {
+        let mut diarization = application::diarization_descriptor("choice-dia", &[]);
+        diarization.configurable_diarization_stages =
+            vec![contracts::DiarizationStageKind::Clustering];
+        diarization.diarization_stage_options = ["cluster-default", "cluster-new"]
+            .map(|id| contracts::DiarizationStageOption {
+                stage: contracts::DiarizationStageKind::Clustering,
+                id: id.into(),
+                model_id: None,
+                revision: Some("fixture-v1".into()),
+                artifact_files: Vec::new(),
+            })
+            .to_vec();
+        root.inventory = application::BackendInventory::new(
+            vec![
+                application::asr_descriptor("choice-asr", &[]),
+                application::asr_descriptor("next-asr", &[]),
+            ],
+            vec![diarization],
+        );
+        root.settings_selectors = None;
+        root.navigate(Route::Settings, cx);
+    });
+    cx.run_until_parked();
+    click_selector(cx, "settings-section-3");
+    (view, cx, models, settings)
+}
+
+fn choose_setting_value(
+    cx: &mut VisualTestContext,
+    select: &gpui::Entity<crate::controls::Dropdown>,
+    value: &str,
+) {
+    cx.update(|window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx));
+    cx.simulate_keystrokes("enter");
+    for step in 0..12 {
+        if select.read_with(cx, |select, _| select.highlighted_value() == Some(value)) {
+            break;
+        }
+        assert!(step < 11, "{value} is an enabled option");
+        cx.simulate_keystrokes("down");
+    }
+    cx.simulate_keystrokes("enter");
+}
+
+fn finish_model_selection(cx: &mut VisualTestContext, view: &View, task: gpui::Task<()>) {
+    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done = finished.clone();
+    cx.spawn(move |_| async move {
+        task.await;
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+    })
+    .detach();
+    wait_for(cx, view, |_| {
+        finished.load(std::sync::atomic::Ordering::SeqCst)
+    });
+}
+
+fn settle_model_settings(
+    cx: &mut VisualTestContext,
+    view: &View,
+    settings: &settings::SettingsService,
+) {
+    wait_for(cx, view, |root| {
+        let saved = settings.snapshot().unwrap();
+        saved.asr_backend_id == root.settings_draft.asr_backend_id
+            && saved.asr_model == root.settings_draft.asr_model
+            && saved.diarization_backend_id == root.settings_draft.diarization_backend_id
+            && saved.diarization_model == root.settings_draft.diarization_model
+            && saved.diarization_stages == root.settings_draft.diarization_stages
+    });
+}
+
+#[derive(Clone, Copy)]
+enum LaterModelChoice {
+    Model,
+    Backend,
+    SameBackend,
+    FailedModel,
+    OtherTask,
+}
+
+#[gpui::test]
+fn a_model_selection_keeps_a_newer_model_after_an_old_success(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::Model, false);
+}
+#[gpui::test]
+fn a_model_selection_keeps_a_newer_notice_after_an_old_failure(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::Model, true);
+}
+#[gpui::test]
+fn a_model_selection_keeps_a_later_backend_choice(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::Backend, false);
+}
+#[gpui::test]
+fn a_model_selection_keeps_a_repeated_backend_choice(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::SameBackend, false);
+}
+#[gpui::test]
+fn a_model_selection_does_not_fall_back_to_an_older_success_after_a_new_failure(
+    cx: &mut TestAppContext,
+) {
+    old_model_selection(cx, LaterModelChoice::FailedModel, false);
+}
+#[gpui::test]
+fn a_model_selection_keeps_the_other_tasks_pending_choice(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::OtherTask, false);
+}
+
+fn old_model_selection(cx: &mut TestAppContext, later: LaterModelChoice, old_error: bool) {
+    let _alone = hold_a_worker_alone();
+    let (view, cx, models, settings) = model_selection_fixture(cx, None);
+    let id = if old_error {
+        "choice-old-error"
+    } else {
+        "choice-a"
+    };
+    *models.held_model.lock().unwrap() = Some(id.into());
+    models.gate.arm();
+    let old = view.update(cx, |root, cx| {
+        root.use_model(id.into(), "asr".into(), "choice-asr".into(), cx)
+    });
+    wait_for(cx, &view, |_| models.gate.counts() == (1, 1));
+    let (select, value) = view.read_with(cx, |root, _| {
+        let selectors = root.settings_selectors.as_ref().unwrap();
+        match later {
+            LaterModelChoice::Model => (selectors.asr_model.clone(), "choice-b"),
+            LaterModelChoice::Backend => (selectors.asr_backend.clone(), "next-asr"),
+            LaterModelChoice::SameBackend => (selectors.asr_backend.clone(), "choice-asr"),
+            LaterModelChoice::FailedModel => (selectors.asr_model.clone(), "choice-failed"),
+            LaterModelChoice::OtherTask => (selectors.diarization_model.clone(), "choice-dia-new"),
+        }
+    });
+    if matches!(later, LaterModelChoice::OtherTask) {
+        click_selector(cx, "settings-section-4");
+    }
+    choose_setting_value(cx, &select, value);
+    let failed = matches!(later, LaterModelChoice::FailedModel);
+    let expected_notice = if failed {
+        crate::i18n::message(
+            crate::i18n::Locale::ZhCn,
+            "model_not_ready",
+            &ModelManagerError::ModelNotInstalled(value.into()).to_string(),
+        )
+    } else {
+        crate::i18n::text(crate::i18n::Locale::ZhCn, "settings_saved").into()
+    };
+    wait_for(cx, &view, |root| root.ui.notice == expected_notice);
+    settle_model_settings(cx, &view, &settings);
+    let latest = settings.snapshot().unwrap();
+    models.gate.release();
+    finish_model_selection(cx, &view, old);
+    settle_model_settings(cx, &view, &settings);
+    let saved = settings.snapshot().unwrap();
+    if matches!(later, LaterModelChoice::OtherTask) {
+        assert_eq!(
+            saved.asr_model.unwrap().model_id,
+            "choice-a",
+            "ASR selection remains independent"
+        );
+        assert_eq!(saved.diarization_model.unwrap().model_id, "choice-dia-new");
+    } else {
+        assert_eq!(
+            saved.asr_backend_id, latest.asr_backend_id,
+            "a late model reference cannot undo the latest backend choice"
+        );
+        assert_eq!(
+            saved.asr_model, latest.asr_model,
+            "a late reference cannot replace the latest model choice"
+        );
+        assert_eq!(
+            view.read_with(cx, |root, _| root.ui.notice.clone()),
+            expected_notice,
+            "an obsolete result cannot replace the latest outcome"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_model_selection_failure_restores_the_model_that_is_still_configured(cx: &mut TestAppContext) {
+    let (view, cx, _, settings) = model_selection_fixture(cx, Some("choice-b"));
+    let select = view.read_with(cx, |root, _| {
+        root.settings_selectors.as_ref().unwrap().asr_model.clone()
+    });
+    choose_setting_value(cx, &select, "choice-failed");
+    let error = crate::i18n::message(
+        crate::i18n::Locale::ZhCn,
+        "model_not_ready",
+        &ModelManagerError::ModelNotInstalled("choice-failed".into()).to_string(),
+    );
+    wait_for(cx, &view, |root| root.ui.notice == error);
+    assert_eq!(
+        settings.snapshot().unwrap().asr_model.unwrap().model_id,
+        "choice-b"
+    );
+    assert_eq!(
+        select.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+        Some("choice-b".into()),
+        "the dropdown must show the model still used for processing"
+    );
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).is_focused(window)
+    ));
+}
+
+#[gpui::test]
+fn a_model_selection_keeps_a_later_clustering_choice(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let (view, cx, models, settings) = model_selection_fixture(cx, None);
+    *models.held_model.lock().unwrap() = Some("choice-dia-new".into());
+    models.gate.arm();
+    let old = view.update(cx, |root, cx| {
+        root.use_model(
+            "choice-dia-new".into(),
+            "diarization".into(),
+            "choice-dia".into(),
+            cx,
+        )
+    });
+    wait_for(cx, &view, |_| models.gate.counts() == (1, 1));
+    click_selector(cx, "settings-section-4");
+    let select = view.read_with(cx, |root, _| {
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .diarization_clustering
+            .clone()
+    });
+    choose_setting_value(cx, &select, "cluster-new");
+    wait_for(cx, &view, |_| {
+        settings
+            .snapshot()
+            .unwrap()
+            .diarization_stages
+            .clustering_algorithm
+            .is_some()
+    });
+    models.gate.release();
+    finish_model_selection(cx, &view, old);
+    settle_model_settings(cx, &view, &settings);
+    let saved = settings.snapshot().unwrap();
+    assert_eq!(
+        saved
+            .diarization_stages
+            .clustering_algorithm
+            .as_ref()
+            .map(|a| a.id.as_str()),
+        Some("cluster-new"),
+        "a pending bundle must not clear a later stage choice"
+    );
+    assert_eq!(saved.diarization_model.unwrap().model_id, "choice-dia-base");
+}
+
+#[gpui::test]
+fn a_model_selection_refreshes_the_stages_cleared_by_a_new_bundle(cx: &mut TestAppContext) {
+    let (view, cx, _, settings) = model_selection_fixture(cx, None);
+    click_selector(cx, "settings-section-4");
+    let clustering = view.read_with(cx, |root, _| {
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .diarization_clustering
+            .clone()
+    });
+    choose_setting_value(cx, &clustering, "cluster-new");
+    wait_for(cx, &view, |_| {
+        settings
+            .snapshot()
+            .unwrap()
+            .diarization_stages
+            .clustering_algorithm
+            .is_some()
+    });
+    let model = view.read_with(cx, |root, _| {
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .diarization_model
+            .clone()
+    });
+    choose_setting_value(cx, &model, "choice-dia-new");
+    wait_for(cx, &view, |root| {
+        let saved = settings.snapshot().unwrap();
+        saved
+            .diarization_model
+            .as_ref()
+            .is_some_and(|m| m.model_id == "choice-dia-new")
+            && saved.diarization_stages.clustering_algorithm.is_none()
+            && root
+                .settings_draft
+                .diarization_stages
+                .clustering_algorithm
+                .is_none()
+    });
+    assert_eq!(
+        clustering.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+        Some("cluster-default".into()),
+        "the stage control must show the default after its explicit override is cleared"
+    );
 }
