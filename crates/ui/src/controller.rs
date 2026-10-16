@@ -2321,6 +2321,8 @@ impl RootView {
             self.ui.notice = i18n::message(self.ui.locale, "processing_failed", &error);
         }
         self.speaker_profiles.status = None;
+        self.profile_rows = None;
+        self.profile_removal_focus = None;
         self.reload_speaker_profiles(cx);
     }
 
@@ -2385,9 +2387,8 @@ impl RootView {
         ));
     }
 
-    /// Builds the rename and merge controls of the Speaker Library profiles
-    /// on the Settings route; they are rebuilt once the list or the locale
-    /// changes.
+    /// Builds the Speaker Library controls on Settings. Writes keep their
+    /// existing inputs until the saved profiles are acknowledged.
     fn ensure_profile_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ui.route != Route::Settings {
             self.profile_removal_focus = None;
@@ -2395,30 +2396,31 @@ impl RootView {
         }
         let locale = self.ui.locale;
         let key = (self.speaker_profiles.version, locale);
-        if self
-            .profile_rows
-            .as_ref()
-            .is_some_and(|rows| rows.is_for(&key))
-        {
-            return;
+        let keep_rows = self.profile_rows.as_ref().is_some_and(|rows| {
+            rows.is_for(&key)
+                || (rows.key().1 == locale
+                    && self.speaker_profiles.write_path.as_deref()
+                        == Some(self.speaker_library_path.as_str()))
+        });
+        if !keep_rows {
+            let entries = self
+                .speaker_profiles
+                .profiles
+                .iter()
+                .map(|profile| NameEntry::profile(profile, locale))
+                .collect::<Vec<_>>();
+            self.profile_rows = Some(NameRows::build(
+                key,
+                &entries,
+                i18n::text(locale, "merge_into_placeholder"),
+                (
+                    Self::rename_speaker_profile,
+                    Self::ask_merge_speaker_profiles,
+                ),
+                window,
+                cx,
+            ));
         }
-        let entries = self
-            .speaker_profiles
-            .profiles
-            .iter()
-            .map(|profile| NameEntry::profile(profile, locale))
-            .collect::<Vec<_>>();
-        self.profile_rows = Some(NameRows::build(
-            key,
-            &entries,
-            i18n::text(locale, "merge_into_placeholder"),
-            (
-                Self::rename_speaker_profile,
-                Self::ask_merge_speaker_profiles,
-            ),
-            window,
-            cx,
-        ));
         let removed = self.profile_removal_focus.as_ref().is_some_and(|request| {
             self.speaker_profiles.loaded
                 && self.speaker_profiles.read_error.is_none()
@@ -2647,9 +2649,15 @@ impl RootView {
             cx.notify();
             return;
         }
+        let submitted_field = self
+            .profile_rows
+            .as_ref()
+            .and_then(|rows| rows.row(&profile_id))
+            .map(|row| row.name.entity_id());
         let done = i18n::message(self.ui.locale, "speaker_profile_renamed", &name);
         self.run_speaker_library_call(
             move |library| library.rename(&profile_id, name).map(drop),
+            submitted_field,
             done,
             cx,
         );
@@ -2753,6 +2761,7 @@ impl RootView {
                             true => Ok(()),
                             false => Err(SpeakerLibraryError::ProfileNotFound(profile_id)),
                         },
+                        None,
                         done,
                         cx,
                     );
@@ -2776,6 +2785,7 @@ impl RootView {
                     );
                     self.run_speaker_library_call(
                         move |library| library.merge_profiles(&target_id, &source_id).map(drop),
+                        None,
                         done,
                         cx,
                     );
@@ -2812,26 +2822,38 @@ impl RootView {
         )
     }
 
-    /// Runs one Speaker Library call on a worker, shows its outcome and
-    /// reads the profiles again; calls run one at a time.
+    /// Runs one Speaker Library change and reads its saved profiles on a
+    /// worker. The acknowledgement keeps later input in this library only;
+    /// calls run one at a time.
     fn run_speaker_library_call(
         &mut self,
         call: impl FnOnce(&SpeakerLibraryService) -> Result<(), SpeakerLibraryError> + Send + 'static,
+        submitted_field: Option<gpui::EntityId>,
         done: String,
         cx: &mut Context<Self>,
     ) {
-        if self.speaker_profiles.busy {
+        if self.speaker_profiles.write_path.is_some() {
             return;
         }
-        self.speaker_profiles.busy = true;
+        let path = self.speaker_library_path.clone();
+        self.speaker_profiles.write_path = Some(path.clone());
         cx.notify();
         let library = self.services.speaker_library.clone();
         cx.spawn(async move |this, cx| {
-            let result =
-                runtime::spawn_blocking(move || call(&library).map_err(|error| error.to_string()))
-                    .await;
+            let (result, profiles) = runtime::spawn_blocking(move || {
+                let result = call(&library).map_err(|error| error.to_string());
+                let profiles = library.profiles().map_err(|error| error.to_string());
+                (result, profiles)
+            })
+            .await;
             this.update(cx, |this, cx| {
-                this.speaker_profiles.busy = false;
+                this.speaker_profiles.write_path = None;
+                if path != this.speaker_library_path {
+                    this.profile_removal_focus = None;
+                    this.reload_speaker_profiles(cx);
+                    cx.notify();
+                    return;
+                }
                 if result.is_err() {
                     this.profile_removal_focus = None;
                 }
@@ -2842,7 +2864,30 @@ impl RootView {
                         true,
                     ),
                 });
-                this.reload_speaker_profiles(cx);
+                // Supersede reads started before this completed write.
+                let generation = this.speaker_profiles.begin_read();
+                let locale = this.ui.locale;
+                this.speaker_profiles
+                    .apply_read(generation, profiles, locale);
+                if let Some(rows) = &mut this.profile_rows {
+                    if rows.key().1 == locale {
+                        let entries = this
+                            .speaker_profiles
+                            .profiles
+                            .iter()
+                            .map(|profile| NameEntry::profile(profile, locale))
+                            .collect::<Vec<_>>();
+                        if !rows.saved(
+                            (this.speaker_profiles.version, locale),
+                            &entries,
+                            submitted_field,
+                            i18n::text(locale, "merge_into_placeholder"),
+                            cx,
+                        ) {
+                            this.profile_rows = None;
+                        }
+                    }
+                }
                 cx.notify();
             })
             .ok();

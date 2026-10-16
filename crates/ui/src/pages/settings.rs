@@ -441,7 +441,7 @@ fn speaker_library_section(
                             .debug_selector(marked("rename-speaker-profile"))
                             .secondary()
                             .compact()
-                            .disabled(library.busy)
+                            .disabled(library.write_path.is_some())
                             .on_click(cx.listener(
                                 move |root, _, _, cx| {
                                     root.rename_speaker_profile(rename_id.clone(), cx)
@@ -463,7 +463,7 @@ fn speaker_library_section(
                             .debug_selector(marked("delete-speaker-profile"))
                             .danger()
                             .compact()
-                            .disabled(library.busy)
+                            .disabled(library.write_path.is_some())
                             .on_click(cx.listener(
                                 move |root, _, window, cx| {
                                     root.ask_delete_speaker_profile(delete_id.clone(), window, cx)
