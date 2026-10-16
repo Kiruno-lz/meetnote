@@ -664,6 +664,7 @@ pub(crate) struct ScrollAreas {
     pub(crate) assistant_results: ScrollHandle,
     pub(crate) project_tree: ScrollHandle,
     pub(crate) meeting_content: ScrollHandle,
+    pub(crate) meeting_context: Option<(u64, ProjectId, ContentMode)>,
     pub(crate) document_issues: ScrollHandle,
     pub(crate) workspace_read_error: ScrollHandle,
     pub(crate) document_conflict: ScrollHandle,
