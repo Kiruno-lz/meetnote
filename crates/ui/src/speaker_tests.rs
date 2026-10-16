@@ -10,13 +10,13 @@ use crate::document_tests::{
     leak, open_on, processed, rendered, select_row, within, DocumentsRoot, View,
 };
 use crate::tests::{
-    click_selector, desktop_services, open_desktop_on, temp_directory, test_settings, wait_for,
-    FakeAssistantUiService,
+    click_selector, desktop_services, field_value, open_desktop_on, temp_directory, test_settings,
+    wait_for, FakeAssistantUiService,
 };
 use crate::{i18n, route::Route, DesktopServices};
 use application::{
-    DocumentService, JsonSpeakerProfileStore, ProcessingService, SpeakerProfileStore as _,
-    WorkspaceService,
+    DocumentChange, DocumentService, JsonSpeakerProfileStore, ProcessingService,
+    SpeakerProfileStore as _, WorkspaceService,
 };
 use asr_whisper_rs::WhisperRsBackend;
 use contracts::{ModelRef, SpeakerLibraryDocument, SpeakerProfile};
@@ -199,6 +199,174 @@ fn renaming_a_speaker_writes_its_label_with_the_loaded_revision(cx: &mut TestApp
 }
 
 #[gpui::test]
+fn an_unrelated_refresh_keeps_a_speaker_name_draft_focus_and_caret(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("weekly"), "# Original body\n");
+    let (view, cx, changes) = open_on(cx, &documents);
+    open_original(cx, &view, "weekly");
+    retype_at(cx, "speaker-name-speaker-0", "主持人草稿");
+    cx.simulate_keystrokes("left left");
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let mut external = documents.read("weekly").state;
+    external.content.title = "Changed outside the speaker controls".into();
+    documents.external_save(external);
+    let before = documents.read("weekly");
+    let bytes = documents.package_bytes("weekly");
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|p| p.title() == "Changed outside the speaker controls")
+    });
+    let current = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(
+        field_value(cx, &current),
+        "主持人草稿",
+        "a title refresh must not erase a name draft"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    cx.simulate_input("的");
+    assert_eq!(
+        field_value(cx, &name),
+        "主持人的草稿",
+        "the insertion point survives the refresh"
+    );
+    assert_eq!(documents.package_bytes("weekly"), bytes);
+    click_selector(cx, "rename-speaker-speaker-0");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none()
+            && documents.revision("weekly") == before.state.revision() + 1
+    });
+    let after = documents.read("weekly");
+    assert_eq!(after.state.title(), "Changed outside the speaker controls");
+    assert_eq!(
+        speaker_of(&after.state, "t-0").1.as_deref(),
+        Some("主持人的草稿")
+    );
+    assert_eq!(
+        after.state.results.transcript,
+        before.state.results.transcript
+    );
+    assert_eq!(after.state.processing, before.state.processing);
+    assert_eq!(after.markdown, before.markdown);
+    assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
+}
+
+#[gpui::test]
+fn an_unrelated_refresh_keeps_a_speaker_merge_menu_open_on_the_latest_revision(
+    cx: &mut TestAppContext,
+) {
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("weekly"), "# Original body\n");
+    let (view, cx, changes) = open_on(cx, &documents);
+    open_original(cx, &view, "weekly");
+    click_selector(cx, "merge-speaker-speaker-0");
+    rendered(cx, "select-menu");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let mut external = documents.read("weekly").state;
+    external.document_status.value = "final".into();
+    documents.external_save(external);
+    let before = documents.read("weekly");
+    let bytes = documents.package_bytes("weekly");
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|p| p.document_status.value == "final")
+    });
+    assert!(
+        cx.debug_bounds("select-menu").is_some(),
+        "an unrelated status change must not close the merge menu"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    click_selector(cx, "select-option-0");
+    rendered(cx, "confirm-dialog");
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        bytes,
+        "selection still waits for confirmation"
+    );
+    click_selector(cx, "dialog-confirm");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none()
+            && documents.revision("weekly") == before.state.revision() + 1
+    });
+    let after = documents.read("weekly");
+    assert_eq!(after.state.document_status.value, "final");
+    assert!(after
+        .state
+        .results
+        .speaker_segments
+        .iter()
+        .all(|s| s.speaker_id == "speaker-1"));
+    assert_eq!(
+        after.state.results.transcript,
+        before.state.results.transcript
+    );
+    assert_eq!(after.state.processing, before.state.processing);
+    assert_eq!(after.markdown, before.markdown);
+    assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
+}
+
+#[gpui::test]
+fn an_external_speaker_correction_refreshes_the_name_controls(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(two_speakers("weekly"), "# Original body\n");
+    let (view, cx, changes) = open_on(cx, &documents);
+    open_original(cx, &view, "weekly");
+    let commands = application::DocumentCommandService::new(DocumentService::new(Arc::new(
+        documents.repository(),
+    )));
+    let external = commands
+        .set_speaker_label(
+            &ProjectId::new("weekly"),
+            documents.revision("weekly"),
+            "speaker-0",
+            Some("External name".into()),
+        )
+        .unwrap();
+    let before = documents.package_bytes("weekly");
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|p| p.revision() == external.state.revision())
+    });
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(
+        field_value(cx, &name),
+        "External name",
+        "changed speaker data must not be treated as unrelated metadata"
+    );
+    assert_eq!(documents.package_bytes("weekly"), before);
+}
+
+#[gpui::test]
 fn merging_a_speaker_attributes_its_segments_after_confirmation(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();
     root.put(two_speakers("weekly"), "# 产品周会\n");
@@ -281,6 +449,23 @@ fn a_speaker_correction_on_a_stale_revision_shows_the_conflict_notice(cx: &mut T
         "the refused correction wrote nothing"
     );
 
+    wait_for(cx, &view, |root| {
+        root.projects.iter().any(|p| p.title() == "外部修改的标题")
+    });
+    let draft = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(
+        field_value(cx, &draft),
+        "主持人",
+        "a refused correction keeps the draft through the following refresh"
+    );
     click_selector(cx, "reload-conflicted-document");
     wait_for(cx, &view, |root| {
         root.document_conflict.is_none()
@@ -289,8 +474,19 @@ fn a_speaker_correction_on_a_stale_revision_shows_the_conflict_notice(cx: &mut T
                 .iter()
                 .any(|project| project.title() == "外部修改的标题")
     });
-    // Renaming on the reloaded revision succeeds.
+    // An explicit reload discards the name draft, then renaming uses the
+    // revision just read.
     cx.run_until_parked();
+    let reloaded = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    assert_eq!(field_value(cx, &reloaded), "");
     retype_at(cx, "speaker-name-speaker-0", "主持人");
     click_selector(cx, "rename-speaker-speaker-0");
     wait_for(cx, &view, |_| root.revision("weekly") == loaded + 2);

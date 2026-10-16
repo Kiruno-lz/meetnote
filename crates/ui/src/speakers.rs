@@ -279,8 +279,8 @@ pub(crate) type OnRename = fn(&mut RootView, String, &mut Context<RootView>);
 /// Called with a row's id and the id chosen in its merge select.
 pub(crate) type OnMerge = fn(&mut RootView, String, String, &mut Window, &mut Context<RootView>);
 
-/// The rows built for `key`, which names what they show; the owner builds
-/// new rows when the key changes, dropping these and their subscriptions.
+/// The rows and subscriptions for a source key. The owner can advance that
+/// key after verifying that the controls' source data did not change.
 pub(crate) struct NameRows<K> {
     key: K,
     pub(crate) rows: Vec<NameRow>,
@@ -365,6 +365,11 @@ impl<K: PartialEq> NameRows<K> {
 
     pub(crate) fn key(&self) -> &K {
         &self.key
+    }
+
+    /// Advance a checked source key without replacing controls or their state.
+    pub(crate) fn set_key(&mut self, key: K) {
+        self.key = key;
     }
 
     pub(crate) fn row(&self, id: &str) -> Option<&NameRow> {
