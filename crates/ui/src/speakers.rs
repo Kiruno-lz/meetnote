@@ -91,7 +91,7 @@ pub(crate) fn profile_summary(profile: &SpeakerProfile, locale: Locale) -> Strin
 #[derive(Debug, Default)]
 pub(crate) struct SpeakerProfiles {
     pub(crate) profiles: Vec<SpeakerProfile>,
-    /// Whether a read has landed since the window opened.
+    /// Whether a read has landed for the current library.
     pub(crate) loaded: bool,
     /// Why the last read failed; the list is empty then.
     pub(crate) read_error: Option<String>,
@@ -107,6 +107,16 @@ pub(crate) struct SpeakerProfiles {
 }
 
 impl SpeakerProfiles {
+    /// Forget the previous library's displayed data. An in-flight write
+    /// keeps its path until its own acknowledgement arrives.
+    pub(crate) fn reset_for_path_change(&mut self) {
+        self.profiles.clear();
+        self.loaded = false;
+        self.read_error = None;
+        self.status = None;
+        self.version += 1;
+    }
+
     pub(crate) fn begin_read(&mut self) -> u64 {
         self.generation += 1;
         self.generation
