@@ -81,6 +81,7 @@ const REVEAL_MARGIN: Pixels = px(24.);
 pub(crate) fn init(cx: &mut App) {
     gpui_base::init(cx);
     super::tree::init(cx);
+    super::dialog::init(cx);
     let window = Some(KEY_CONTEXT);
     cx.bind_keys([
         KeyBinding::new("tab", FocusNext, window),
