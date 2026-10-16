@@ -665,6 +665,7 @@ pub(crate) struct ScrollAreas {
     pub(crate) project_tree: ScrollHandle,
     pub(crate) meeting_content: ScrollHandle,
     pub(crate) document_issues: ScrollHandle,
+    pub(crate) workspace_read_error: ScrollHandle,
     pub(crate) document_conflict: ScrollHandle,
     pub(crate) detail: ScrollHandle,
     pub(crate) models: ScrollHandle,
@@ -954,6 +955,11 @@ impl RootView {
                     self.check_selected_audio(cx);
                 }
                 Err(error) => {
+                    if self.projects_error.as_ref() != Some(&error) {
+                        self.scroll
+                            .workspace_read_error
+                            .set_offset(Default::default());
+                    }
                     self.projects_error_locale = self.ui.locale;
                     self.ui.notice = i18n::message(self.ui.locale, "documents_load_failed", &error);
                     self.projects_error = Some(error);
