@@ -272,6 +272,7 @@ pub(crate) struct NameRow {
     /// The entries this one can merge into; none when it is the only entry.
     pub(crate) merge_into: Option<Entity<Dropdown>>,
     options: Vec<SelectOption>,
+    _subscriptions: Vec<Subscription>,
 }
 
 /// Called with a row's id when Enter is pressed in its name field.
@@ -284,7 +285,6 @@ pub(crate) type OnMerge = fn(&mut RootView, String, String, &mut Window, &mut Co
 pub(crate) struct NameRows<K> {
     key: K,
     pub(crate) rows: Vec<NameRow>,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl<K: PartialEq> NameRows<K> {
@@ -297,8 +297,8 @@ impl<K: PartialEq> NameRows<K> {
         cx: &mut Context<RootView>,
     ) -> Self {
         let mut rows = Vec::with_capacity(entries.len());
-        let mut subscriptions = Vec::new();
         for entry in entries {
+            let mut subscriptions = Vec::new();
             let name = cx.new(|cx| {
                 let mut field = TextField::new(
                     entry.field_label.clone(),
@@ -350,13 +350,10 @@ impl<K: PartialEq> NameRows<K> {
                 name,
                 merge_into,
                 options,
+                _subscriptions: subscriptions,
             });
         }
-        Self {
-            key,
-            rows,
-            _subscriptions: subscriptions,
-        }
+        Self { key, rows }
     }
 
     pub(crate) fn is_for(&self, key: &K) -> bool {
@@ -370,6 +367,58 @@ impl<K: PartialEq> NameRows<K> {
     /// Advance a checked source key without replacing controls or their state.
     pub(crate) fn set_key(&mut self, key: K) {
         self.key = key;
+    }
+
+    /// Accept a committed correction without replacing its inputs. A rename
+    /// keeps the submitted input even if later typing restored its old value;
+    /// other untouched inputs follow the saved names. Merges may remove rows.
+    pub(crate) fn saved(
+        &mut self,
+        key: K,
+        entries: &[NameEntry],
+        submitted_field: Option<gpui::EntityId>,
+        merge_placeholder: &str,
+        cx: &mut Context<RootView>,
+    ) -> bool {
+        if entries.iter().any(|entry| self.row(&entry.id).is_none()) {
+            return false;
+        }
+        self.rows
+            .retain(|row| entries.iter().any(|entry| entry.id == row.id));
+        for row in &mut self.rows {
+            let entry = entries.iter().find(|entry| entry.id == row.id).unwrap();
+            let current = row.name.read(cx).value(cx);
+            let follow_saved = Some(row.name.entity_id()) != submitted_field
+                && current == row.initial
+                && current != entry.name;
+            row.name.update(cx, |field, cx| {
+                if follow_saved {
+                    field.set_value(entry.name.clone(), cx);
+                }
+                field.set_label(entry.field_label.clone(), cx);
+                field.set_placeholder(entry.placeholder.clone(), cx);
+            });
+            row.initial = entry.name.clone();
+            let options = entries
+                .iter()
+                .filter(|other| other.id != entry.id)
+                .map(|other| other.option.clone())
+                .collect::<Vec<_>>();
+            if options.is_empty() {
+                row.merge_into = None;
+            } else if let Some(select) = &row.merge_into {
+                let options = options.clone();
+                select.update(cx, |select, cx| {
+                    select.set_label(entry.merge_label.clone(), merge_placeholder.to_string(), cx);
+                    select.set_options(options, None, cx);
+                });
+            } else {
+                return false;
+            }
+            row.options = options;
+        }
+        self.key = key;
+        true
     }
 
     pub(crate) fn row(&self, id: &str) -> Option<&NameRow> {
