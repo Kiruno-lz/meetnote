@@ -1464,8 +1464,8 @@ mod tests {
         assert!(inside(panel), "Detail is inside the content plane");
 
         let close = cx
-            .debug_bounds("close-detail")
-            .expect("Detail can be closed");
+            .debug_bounds("open-project-detail")
+            .expect("the document's detail trigger can close its panel");
         cx.simulate_click(close.center(), Modifiers::none());
         cx.run_until_parked();
         assert!(cx.debug_bounds("detail-panel").is_none(), "Detail closed");

@@ -328,6 +328,55 @@ fn editor_fields(cx: &mut VisualTestContext, view: &View) -> (Field, Field, Area
 }
 
 #[gpui::test]
+fn the_detail_trigger_closes_and_reopens_without_interrupting_the_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "Weekly"), "# Original document\n");
+    let before = documents.package_bytes("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    open_editor(cx, &view, "weekly");
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "A draft to keep");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    click_selector(cx, "open-project-detail");
+    assert!(cx.debug_bounds("detail-panel").is_some());
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    click_selector(cx, "open-project-detail");
+    assert!(
+        cx.debug_bounds("detail-panel").is_none(),
+        "the same detail trigger must close the panel it opened"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    cx.simulate_input("!");
+    assert_eq!(field_value(cx, &title), "A draft to keep!");
+    // Keyboard users can operate the same stable tab stop in both states.
+    view.update_in(cx, |root, window, cx| root.detail_trigger.focus(window, cx));
+    cx.run_until_parked();
+    for (key, open) in [("enter", true), ("space", false)] {
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("detail-panel").is_some(), open);
+    }
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        Some(view.read_with(cx, |root, _| root.detail_trigger.clone()))
+    );
+    click_selector(cx, "open-project-detail");
+    let close = rendered(cx, "close-detail");
+    assert!(close.size.width > px(0.));
+    click_selector(cx, "close-detail");
+    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert_eq!(field_value(cx, &title), "A draft to keep!");
+    assert_eq!(documents.package_bytes("weekly"), before);
+}
+
+#[gpui::test]
 fn the_editor_status_fits_beside_detail_and_remains_keyboard_operable(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
     let audio = documents.path().join("weekly/recording.wav");
