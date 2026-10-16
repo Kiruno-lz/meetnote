@@ -856,8 +856,13 @@ impl RootView {
                     if installation != this.installation {
                         this.installation = installation;
                         this.settle_reprobes();
-                        // Model selects show install state; rebuild them.
-                        this.settings_selectors = None;
+                        // Refresh model availability without replacing a menu
+                        // the user is currently browsing.
+                        let asr = this.settings_draft.asr_backend_id.clone();
+                        let diarization = this.settings_draft.diarization_backend_id.clone();
+                        this.refresh_model_selector("asr", asr.as_deref(), cx);
+                        this.refresh_model_selector("diarization", diarization.as_deref(), cx);
+                        this.refresh_stage_selectors(cx);
                         cx.notify();
                     }
                 });

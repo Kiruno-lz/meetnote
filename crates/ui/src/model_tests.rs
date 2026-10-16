@@ -8,9 +8,10 @@
 //! Most tests render installation states they build, as
 //! `InstallationService` would publish them, through a probe that returns
 //! the state the test holds, with a fake `ModelService` that records the
-//! calls the page makes. The last test re-probes through a real
-//! `ModelManager` on files in a temporary model root, so the record it shows
-//! is the one the manager wrote and the service published.
+//! calls the page makes. Real-manager tests re-probe fixture files in a
+//! temporary model root, so the records shown come from the manager and the
+//! installation service. They also check that background results leave an
+//! active Settings menu and its keyboard choice intact.
 
 use crate::controller::{ModelService, ReprobeWait};
 use crate::document_tests::{leak, rendered, within, View};
@@ -969,6 +970,79 @@ fn a_written_reprobe_settles_once_the_published_state_carries_its_record() {
     assert!(!ReprobeWait::Running.settled_by(None));
 }
 
+#[gpui::test]
+fn an_installation_update_enables_the_new_model_without_resetting_the_open_menu(
+    cx: &mut TestAppContext,
+) {
+    let entries =
+        ["menu-a", "menu-b", "menu-c"].map(|id| entry(id, "asr", "menu", &["whisper-rs"]));
+    let models = FakeModels::new(catalog(entries.to_vec()));
+    let state = published(
+        entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, model)| {
+                availability(
+                    model,
+                    if index == 2 {
+                        ModelInstallState::Missing
+                    } else {
+                        ModelInstallState::Installed
+                    },
+                )
+            })
+            .collect(),
+    );
+    let (view, cx) = open_models(cx, models, &state, test_settings());
+    click_selector(cx, "nav-Settings");
+    click_selector(cx, "settings-section-3");
+    let select = view.read_with(cx, |root, _| {
+        root.settings_selectors.as_ref().unwrap().asr_model.clone()
+    });
+    cx.update(|window, cx| {
+        gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx);
+    });
+    cx.simulate_keystrokes("enter down");
+    cx.run_until_parked();
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("menu-b".into())
+    );
+    let focus = cx.update(|window, cx| window.focused(cx));
+    // Publish availability through the service, as after a download. This
+    // checks UI projection; FakeModels does not perform a model download.
+    state.lock().unwrap().catalog[2].install_state = ModelInstallState::Installed;
+    view.read_with(cx, |root, _| root.refresh_installation());
+    wait_for(cx, &view, |root| {
+        root.installation.catalog[2].install_state == ModelInstallState::Installed
+    });
+    assert!(
+        cx.debug_bounds("select-menu").is_some(),
+        "installation must leave the active menu open"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("menu-b".into())
+    );
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("menu-c".into()),
+        "the newly installed model must become available in the existing menu"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("select-menu").is_none());
+}
+
 /// Every candidate backend accepts the files.
 struct AcceptingBackend;
 
@@ -976,6 +1050,111 @@ impl models::BackendProbe for AcceptingBackend {
     fn probe(&self, _: &str, _: &ModelRef) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// Hold the real manager after it checks the fixture's bytes, before its
+/// backend outcome is written and published. No model inference is performed.
+struct HeldBackend(Gate);
+
+impl models::BackendProbe for HeldBackend {
+    fn probe(&self, _: &str, _: &ModelRef) -> Result<(), String> {
+        self.0.pass();
+        Ok(())
+    }
+}
+
+#[gpui::test]
+fn a_real_model_probe_keeps_an_open_settings_menu_and_its_keyboard_choice(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let root = temp_directory();
+    let model = ModelCatalogEntry {
+        source: "local/fixture.bin".into(),
+        sha256: Some(MODEL_SHA256.into()),
+        ..entry("menu-asr", "asr", "a-real", &["fake-asr"])
+    };
+    let file = root.join("asr/menu-asr/fixture.bin");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, MODEL_BYTES).unwrap();
+    let gate = Gate::default();
+    let manager = ModelManager::with_backend_probe(
+        catalog(vec![model]),
+        &root,
+        Some(Arc::new(HeldBackend(gate.clone()))),
+    );
+    let settings = test_settings();
+    let mut services = desktop_services(
+        Arc::new(FakeAssistantUiService::default()),
+        settings.clone(),
+    );
+    services.installation = InstallationService::new(manager.clone());
+    services.model_manager = Arc::new(manager);
+    let (view, cx) = open_on_models(cx, services);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    cx.run_until_parked();
+    gate.arm();
+    click_selector(cx, "model-reprobe-menu-asr");
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    click_selector(cx, "nav-Settings");
+    click_selector(cx, "settings-section-6");
+    let select = view.read_with(cx, |root, _| {
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .compute_device
+            .clone()
+    });
+    cx.update(|window, cx| {
+        gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx);
+    });
+    cx.simulate_keystrokes("enter down");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("select-menu").is_some());
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("CPU".into())
+    );
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let revision = settings.revision().unwrap();
+    gate.release();
+    wait_for(cx, &view, |root| {
+        root.model_reprobes.is_empty()
+            && root.installation.catalog[0]
+                .probe
+                .as_ref()
+                .is_some_and(|probe| probe.kind == ModelOperation::Reprobe)
+    });
+    assert!(
+        cx.debug_bounds("select-menu").is_some(),
+        "a real probe result must not dismiss the menu being browsed"
+    );
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        focus,
+        "background model results must leave focus in the menu"
+    );
+    assert_eq!(
+        settings.revision().unwrap(),
+        revision,
+        "browsing has not saved a choice"
+    );
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("CPU".into())
+    );
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |_| {
+        settings.snapshot().unwrap().compute_device == contracts::ComputeDevice::Cpu
+    });
+    assert!(cx.debug_bounds("select-menu").is_none());
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).is_focused(window)
+    ));
+    assert_eq!(std::fs::read(&file).unwrap(), MODEL_BYTES);
+    std::fs::remove_dir_all(root).ok();
 }
 
 #[gpui::test]
