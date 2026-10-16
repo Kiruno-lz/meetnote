@@ -210,10 +210,26 @@ impl Dropdown {
         selected: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        self.selected = SelectOption::position(&options, selected);
+        let selected = SelectOption::position(&options, selected);
+        if self.options == options && self.selected == selected {
+            return;
+        }
+        let highlighted = self
+            .highlighted
+            .and_then(|index| self.options.get(index))
+            .and_then(|previous| SelectOption::position(&options, Some(&previous.value)))
+            .filter(|index| !options[*index].disabled);
+        self.selected = selected;
         self.options = options;
         if self.open {
-            self.highlighted = opening_highlight(&self.options, self.selected);
+            let highlighted =
+                highlighted.or_else(|| opening_highlight(&self.options, self.selected));
+            if highlighted != self.highlighted {
+                if let Some(index) = highlighted {
+                    self.menu_scroll.scroll_to_item(index);
+                }
+            }
+            self.highlighted = highlighted;
         }
         cx.notify();
     }
@@ -558,6 +574,56 @@ mod tests {
         );
         assert_eq!(opening_highlight(&options, None), Some(1));
         assert_eq!(opening_highlight(&options, Some(9)), Some(1));
+    }
+
+    #[gpui::test]
+    fn refreshed_options_keep_the_keyboard_choice_and_update_install_details(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let menu = cx.new(|cx| {
+                Dropdown::new(
+                    "Model",
+                    "Choose",
+                    options(&[false, false, true]),
+                    Some("0"),
+                    cx,
+                )
+            });
+            menu.update(cx, |menu, cx| {
+                menu.open_menu(cx);
+                menu.move_highlight(1, cx);
+                assert_eq!(menu.highlighted_value(), Some("1"));
+                let mut updated = options(&[false, false, false]);
+                updated[2] = updated[2].clone().detail("Downloaded");
+                updated.rotate_right(1);
+                menu.set_options(updated.clone(), Some("0"), cx);
+                assert!(menu.is_open());
+                assert_eq!(menu.options[0].detail.as_deref(), Some("Downloaded"));
+                assert_eq!(menu.selected_value(), Some("0"));
+                assert_eq!(
+                    menu.highlighted_value(),
+                    Some("1"),
+                    "keep the choice by value"
+                );
+                menu.set_options(updated, Some("0"), cx);
+                assert_eq!(
+                    menu.highlighted_value(),
+                    Some("1"),
+                    "an unchanged refresh is inert"
+                );
+                menu.set_options(options(&[false, true, false]), Some("0"), cx);
+                assert_eq!(
+                    menu.highlighted_value(),
+                    Some("0"),
+                    "skip a newly disabled choice"
+                );
+                menu.set_options(Vec::new(), None, cx);
+                assert_eq!(menu.highlighted_value(), None);
+                menu.confirm_highlighted(cx);
+                assert!(!menu.is_open());
+            });
+        });
     }
 
     #[test]
