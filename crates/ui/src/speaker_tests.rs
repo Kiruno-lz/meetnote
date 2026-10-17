@@ -1837,7 +1837,7 @@ fn a_profile_save_does_not_publish_its_outcome_in_another_library(cx: &mut TestA
     click_selector(cx, "rename-speaker-profile-alpha");
     wait_for(cx, &view, |_| gate.counts() == (1, 1));
     view.update(cx, |root, cx| {
-        root.change_speaker_library_path(other.path(), cx)
+        root.change_speaker_library_path(other.path(), cx).detach()
     });
     wait_for(cx, &view, |root| {
         root.settings_draft.speaker_library_path == other.path().display().to_string()
@@ -2110,7 +2110,7 @@ fn switched_library_confirmation(cx: &mut TestAppContext, merge: bool) {
     }
     rendered(cx, "confirm-dialog");
     view.update(cx, |root, cx| {
-        root.change_speaker_library_path(second.path(), cx)
+        root.change_speaker_library_path(second.path(), cx).detach()
     });
     wait_for(cx, &view, |root| {
         root.settings_draft.speaker_library_path == second.path().display().to_string()
@@ -2160,12 +2160,13 @@ fn a_library_switch_clears_old_profiles_before_reading_the_new_path(cx: &mut Tes
     let before = std::fs::read(first.path()).unwrap();
     view.update(cx, |root, cx| {
         root.change_speaker_library_path(destination.clone(), cx)
+            .detach()
     });
     wait_rendered(cx, "confirm-dialog", true);
     // The real migration callback changes the path synchronously, while
     // its new file read and settings write are still queued on workers.
     let (loaded, old_names, rows_cleared) = view.update(cx, |root, cx| {
-        root.answer_speaker_library_prompt(false, cx);
+        root.answer_speaker_library_prompt(false, cx).detach();
         (
             root.speaker_profiles.loaded,
             root.speaker_profiles.profiles.len(),
@@ -2206,7 +2207,7 @@ fn a_library_switch_keeps_an_unrelated_document_speaker_confirmation(cx: &mut Te
     open_original(cx, &view, "weekly");
     choose(cx, "merge-speaker-speaker-0", 0);
     view.update(cx, |root, cx| {
-        root.change_speaker_library_path(second.path(), cx)
+        root.change_speaker_library_path(second.path(), cx).detach()
     });
     wait_for(cx, &view, |root| {
         root.speaker_profiles.find("new").is_some()
@@ -2243,7 +2244,7 @@ fn changing_the_library_path_rebuilds_the_service_and_the_processing_options(
 
     // The new path already holds a library, so it is used without migrating.
     view.update(cx, |root, cx| {
-        root.change_speaker_library_path(second.path(), cx)
+        root.change_speaker_library_path(second.path(), cx).detach()
     });
     let expected = second.path().display().to_string();
     wait_for(cx, &view, |_| {

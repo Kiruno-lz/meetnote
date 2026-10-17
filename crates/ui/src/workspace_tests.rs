@@ -44,9 +44,9 @@ const OTHER_SHA256: &str = "13c12877ebfb2e7edafd47f9c0b765a656e85a055c2b5cb35c3f
 
 /// Holds a successful real settings save after file IO, while the switch
 /// still waits to return its result to the desktop.
-struct HeldSettingsSave {
-    inner: JsonSettingsRepository,
-    gate: crate::tests::Gate,
+pub(crate) struct HeldSettingsSave {
+    pub(crate) inner: JsonSettingsRepository,
+    pub(crate) gate: crate::tests::Gate,
 }
 
 impl settings::SettingsRepository for HeldSettingsSave {
