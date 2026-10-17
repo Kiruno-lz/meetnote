@@ -600,6 +600,8 @@ pub(crate) struct RootView {
     pub(crate) speaker_profiles: SpeakerProfiles,
     /// The path `services.speaker_library` was opened on.
     speaker_library_path: String,
+    /// A newer path choice invalidates an earlier probe or migration result.
+    speaker_library_selection_generation: u64,
     /// The rename and merge controls of the speakers of the document shown
     /// in the Original view, and the revision they were read at.
     pub(crate) speaker_rows: Option<NameRows<(ProjectId, u64, i18n::Locale)>>,
@@ -825,6 +827,7 @@ impl RootView {
             document_conflict: None,
             speaker_profiles: SpeakerProfiles::default(),
             speaker_library_path,
+            speaker_library_selection_generation: 0,
             speaker_rows: None,
             speaker_removal_focus: None,
             profile_rows: None,
@@ -1687,6 +1690,9 @@ impl RootView {
         if let Some(latest) = reloaded {
             self.settings_base = latest;
         }
+        if self.settings_base.speaker_library_path != self.settings_draft.speaker_library_path {
+            self.invalidate_speaker_library_selection(cx);
+        }
         self.settings_draft = AppSettings {
             documents_root: self.settings_draft.documents_root.clone(),
             assistant: self.settings_draft.assistant.clone(),
@@ -2196,7 +2202,7 @@ impl RootView {
             };
             let destination = directory.join("library.json");
             this.update(cx, move |this, cx| {
-                this.change_speaker_library_path(destination, cx);
+                this.change_speaker_library_path(destination, cx).detach();
             })
             .ok();
         })
@@ -2205,15 +2211,18 @@ impl RootView {
 
     /// Switches the Speaker Library to `destination`, offering to migrate the
     /// current library when only the current path has one. Both paths are
-    /// probed off the main thread.
+    /// probed off the main thread. The returned task completes when the
+    /// probe's UI result has been handled.
     pub(crate) fn change_speaker_library_path(
         &mut self,
         destination: std::path::PathBuf,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Task<()> {
+        self.invalidate_speaker_library_selection(cx);
+        let generation = self.speaker_library_selection_generation;
         let source = std::path::PathBuf::from(&self.settings_draft.speaker_library_path);
         if source == destination {
-            return;
+            return Task::ready(());
         }
         cx.spawn(async move |this, cx| {
             let paths = (source.clone(), destination.clone());
@@ -2222,6 +2231,9 @@ impl RootView {
             })
             .await;
             this.update_in(cx, move |this, window, cx| {
+                if generation != this.speaker_library_selection_generation {
+                    return;
+                }
                 if presence.destination_exists || !presence.source_exists {
                     this.commit_speaker_library_path(destination, cx);
                 } else {
@@ -2230,7 +2242,6 @@ impl RootView {
             })
             .ok();
         })
-        .detach();
     }
 
     fn ask_speaker_library_migration(
@@ -2280,22 +2291,28 @@ impl RootView {
         }
     }
 
-    /// Closes the migration question: `migrate` moves the library to the new
+    /// Closes the migration question: `migrate` copies the library to the new
     /// path, otherwise only the path changes.
-    pub(crate) fn answer_speaker_library_prompt(&mut self, migrate: bool, cx: &mut Context<Self>) {
+    pub(crate) fn answer_speaker_library_prompt(
+        &mut self,
+        migrate: bool,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
         let Some(SpeakerLibraryPrompt {
             source,
             destination,
         }) = self.speaker_library_prompt.take()
         else {
-            return;
+            return Task::ready(());
         };
-        if migrate {
-            self.migrate_speaker_library(source, destination, cx);
+        let task = if migrate {
+            self.migrate_speaker_library(source, destination, cx)
         } else {
             self.commit_speaker_library_path(destination, cx);
-        }
+            Task::ready(())
+        };
         cx.notify();
+        task
     }
 
     fn speaker_library_dialog(&self, cx: &mut Context<Self>) -> Option<ConfirmDialog> {
@@ -2317,7 +2334,7 @@ impl RootView {
             .on_confirm(i18n::text(locale, "migrate"), move |window, cx| {
                 migrate
                     .update(cx, |this, cx| {
-                        this.answer_speaker_library_prompt(true, cx);
+                        this.answer_speaker_library_prompt(true, cx).detach();
                         this.return_focus_from_dialog(window, cx);
                     })
                     .ok();
@@ -2325,7 +2342,7 @@ impl RootView {
             .on_cancel(i18n::text(locale, "use_new_path"), move |window, cx| {
                 switch
                     .update(cx, |this, cx| {
-                        this.answer_speaker_library_prompt(false, cx);
+                        this.answer_speaker_library_prompt(false, cx).detach();
                         this.return_focus_from_dialog(window, cx);
                     })
                     .ok();
@@ -2338,22 +2355,30 @@ impl RootView {
         source: std::path::PathBuf,
         destination: std::path::PathBuf,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Task<()> {
+        let generation = self.speaker_library_selection_generation;
         cx.spawn(async move |this, cx| {
             let target = destination.clone();
             let result =
                 runtime::spawn_blocking(move || application::migrate_file(&source, &target)).await;
-            this.update(cx, |this, cx| match result {
-                Ok(()) => this.commit_speaker_library_path(destination, cx),
-                Err(error) => {
-                    this.ui.notice =
-                        i18n::message(this.ui.locale, "speaker_library_migration_failed", &error);
-                    cx.notify();
+            this.update(cx, |this, cx| {
+                if generation != this.speaker_library_selection_generation {
+                    return;
+                }
+                match result {
+                    Ok(()) => this.commit_speaker_library_path(destination, cx),
+                    Err(error) => {
+                        this.ui.notice = i18n::message(
+                            this.ui.locale,
+                            "speaker_library_migration_failed",
+                            &error,
+                        );
+                        cx.notify();
+                    }
                 }
             })
             .ok();
         })
-        .detach();
     }
 
     fn commit_speaker_library_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
@@ -2393,27 +2418,46 @@ impl RootView {
             )
         ) {
             self.speaker_confirmation = None;
-            self.dialog_return = None;
-            cx.spawn(async move |this, cx| {
-                this.update_in(cx, |this, window, cx| {
-                    if this.ui.route == Route::Settings
-                        && this.speaker_confirmation.is_none()
-                        && this.speaker_library_prompt.is_none()
-                        && (this.dialog_focus.contains_focused(window, cx)
-                            || this.window_focus.is_focused(window))
-                    {
-                        this.scroll
-                            .settings
-                            .scroll_to_top_of_item(pages::settings::SPEAKER_LIBRARY_SECTION);
-                        this.speaker_library_focus.focus(window, cx);
-                        cx.notify();
-                    }
-                })
-                .ok();
-            })
-            .detach();
+            self.focus_after_library_dialog_closed(cx);
         }
         self.reload_speaker_profiles(cx);
+    }
+
+    /// Invalidate a choice on a new user selection or a reloaded path;
+    /// ordinary acknowledgements of our own settings writes are not choices.
+    fn invalidate_speaker_library_selection(&mut self, cx: &mut Context<Self>) {
+        self.speaker_library_selection_generation += 1;
+        if self.speaker_library_prompt.take().is_some() {
+            self.focus_after_library_dialog_closed(cx);
+        }
+    }
+
+    /// A discarded library question must not leave focus on a hidden dialog.
+    /// Keep any focus the user has since moved to another control.
+    fn focus_after_library_dialog_closed(&mut self, cx: &mut Context<Self>) {
+        if self.speaker_confirmation.is_some() {
+            return;
+        }
+        self.dialog_return = None;
+        cx.spawn(async move |this, cx| {
+            this.update_in(cx, |this, window, cx| {
+                if this.ui.route == Route::Settings
+                    && this.speaker_confirmation.is_none()
+                    && this.speaker_library_prompt.is_none()
+                    && (this.dialog_focus.contains_focused(window, cx)
+                        || this.window_focus.is_focused(window))
+                {
+                    this.scroll
+                        .settings
+                        .scroll_to_top_of_item(pages::settings::SPEAKER_LIBRARY_SECTION);
+                    this.speaker_library_focus.focus(window, cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Reads the Speaker Library profiles on a worker.
