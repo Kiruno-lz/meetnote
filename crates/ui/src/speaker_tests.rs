@@ -86,11 +86,14 @@ fn spoken(state: &DocumentState) -> Vec<(String, u64, u64, String)> {
         .collect()
 }
 
-/// Shows the Original view of `id`.
+/// Shows the Original view of `id` with its speakers expanded.
 fn open_original(cx: &mut VisualTestContext, view: &View, id: &str) {
     select_row(cx, view, id);
     click_selector(cx, "content-mode-original");
     cx.run_until_parked();
+    if !view.read_with(cx, |root, _| root.ui.speakers_expanded) {
+        click_selector(cx, "document-speakers-toggle");
+    }
 }
 
 /// Replaces the text of the field rendered at `selector` as typing does.
@@ -132,6 +135,33 @@ fn speaker_of(state: &DocumentState, transcript_segment_id: &str) -> (String, Op
         .find(|segment| segment.transcript_segment_id == transcript_segment_id)
         .unwrap();
     (segment.speaker_id.clone(), segment.speaker_label.clone())
+}
+
+#[gpui::test]
+fn the_speakers_fold_to_one_line_over_the_transcript(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    root.put(two_speakers("weekly"), "# 产品周会\n");
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+
+    // Folded: one line, and the transcript right under it.
+    let list = rendered(cx, "document-speakers");
+    let toggle = rendered(cx, "document-speakers-toggle");
+    assert!(within(toggle, list));
+    assert!(cx.debug_bounds("speaker-row-speaker-0").is_none());
+    assert!(list.size.height < gpui::px(56.), "{list:?}");
+    assert!(list.bottom() <= rendered(cx, "transcript-turn-0").top());
+
+    click_selector(cx, "document-speakers-toggle");
+    for id in ["speaker-0", "speaker-1"] {
+        assert!(within(
+            rendered(cx, leak(format!("speaker-row-{id}"))),
+            rendered(cx, "document-speakers")
+        ));
+    }
+    click_selector(cx, "document-speakers-toggle");
+    assert!(cx.debug_bounds("speaker-row-speaker-0").is_none());
 }
 
 #[gpui::test]

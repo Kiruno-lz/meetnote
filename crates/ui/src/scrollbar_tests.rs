@@ -52,6 +52,7 @@ fn document_scrollbar_tracks_reach_each_panel_edge(cx: &mut TestAppContext) {
     std::fs::write(files.path().join("broken/state.json"), b"{invalid").unwrap();
     let (view, cx, _changes) = open_on(cx, &files);
     select_row(cx, &view, "first");
+    click_selector(cx, "document-issues-toggle");
     for dimensions in [size(px(900.), px(600.)), size(px(1180.), px(760.))] {
         cx.simulate_resize(dimensions);
         cx.run_until_parked();

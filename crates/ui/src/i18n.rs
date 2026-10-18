@@ -57,14 +57,29 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "documents_unavailable") => "暂时无法读取项目列表。",
         (Locale::ZhCn, "retry_workspace_read") => "重新读取",
         (Locale::ZhCn, "open_detail") => "打开详情",
+        (Locale::ZhCn, "show_detail") => "显示详情",
+        (Locale::ZhCn, "hide_detail") => "隐藏详情",
         (Locale::ZhCn, "process") => "处理项目",
+        (Locale::ZhCn, "reprocess") => "重新处理",
         (Locale::ZhCn, "cancel") => "取消",
-        (Locale::ZhCn, "summary") => "总结文",
-        (Locale::ZhCn, "original") => "原始文",
+        (Locale::ZhCn, "summary") => "摘要",
+        (Locale::ZhCn, "original") => "转录",
         (Locale::ZhCn, "no_summary") => "还没有总结。可以使用助手整理这个项目。",
         (Locale::ZhCn, "need_process") => "请先处理项目以生成带 speaker 的转录。",
         (Locale::ZhCn, "empty_meetings_title") => "从一段音频开始",
         (Locale::ZhCn, "empty_meetings") => "导入录音，转录后即可阅读和整理。",
+        (Locale::ZhCn, "transcript_empty_title") => "尚未处理",
+        (Locale::ZhCn, "transcript_empty_hint") => "处理后，这里会显示带说话人的逐字稿",
+        (Locale::ZhCn, "processing_empty_title") => "正在处理",
+        (Locale::ZhCn, "processing_empty_hint") => "完成后，这里会显示带说话人的逐字稿",
+        (Locale::ZhCn, "audio_missing_title") => "找不到音频文件",
+        (Locale::ZhCn, "audio_missing_hint") => "重新关联音频后即可处理",
+        (Locale::ZhCn, "show_issues") => "展开",
+        (Locale::ZhCn, "hide_issues") => "收起",
+        (Locale::ZhCn, "no_projects_title") => "还没有项目",
+        (Locale::ZhCn, "no_projects_hint") => "导入一段录音，开始整理",
+        (Locale::ZhCn, "no_selection_title") => "未选择项目",
+        (Locale::ZhCn, "no_selection_hint") => "从左侧选择一个项目查看",
         (Locale::ZhCn, "project_detail") => "项目详情",
         (Locale::ZhCn, "close_detail") => "关闭详情",
         (Locale::ZhCn, "models_ready") => "语音识别和说话人分离模型均已就绪",
@@ -84,6 +99,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "downloading") => "下载中",
         (Locale::ZhCn, "download_paused") => "已暂停",
         (Locale::ZhCn, "verifying") => "校验中",
+        (Locale::ZhCn, "download_preparing") => "准备下载",
         (Locale::ZhCn, "download_waiting") => "等待开始",
         (Locale::ZhCn, "download_verifying") => "正在校验下载的文件",
         (Locale::ZhCn, "no_models") => "模型目录中没有可用模型。",
@@ -148,6 +164,17 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "processing_stage_completed") => "已完成",
         (Locale::ZhCn, "processing_stage_cancelled") => "已取消",
         (Locale::ZhCn, "ready_to_process") => "等待处理",
+        (Locale::ZhCn, "processing_progress") => "处理进度",
+        (Locale::ZhCn, "processing_preparing") => "正在准备……",
+        (Locale::ZhCn, "transcribing") => "正在转录",
+        (Locale::ZhCn, "transcription_done") => "转录完成",
+        (Locale::ZhCn, "transcription_failed") => "转录失败",
+        (Locale::ZhCn, "transcription_cancelled") => "转录已取消",
+        (Locale::ZhCn, "diarizing") => "正在分离说话人",
+        (Locale::ZhCn, "diarization_waiting") => "等待说话人分离",
+        (Locale::ZhCn, "diarization_done") => "说话人分离完成",
+        (Locale::ZhCn, "diarization_failed") => "说话人分离失败",
+        (Locale::ZhCn, "diarization_cancelled") => "说话人分离已取消",
         (Locale::ZhCn, "models_active") => "下载中",
         (Locale::ZhCn, "model_status") => "模型状态",
         (Locale::ZhCn, "choose_audio") => "选择音频",
@@ -164,7 +191,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "speaker_library_loading") => "正在读取声纹库……",
         (Locale::ZhCn, "speaker_library_empty") => "声纹库中还没有说话人档案。",
         (Locale::ZhCn, "speaker_profile_name_placeholder") => "档案名称",
-        (Locale::ZhCn, "speakers") => "说话人",
         (Locale::ZhCn, "speakers_hint") => {
             "重命名只改变显示名称；合并把一位说话人的全部片段归给另一位。转录文字、时间和处理记录保持不变。"
         }
@@ -388,6 +414,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "detail_revision") => "版本",
         (Locale::ZhCn, "detail_processing_record") => "处理记录",
         (Locale::ZhCn, "detail_not_processed") => "未处理",
+        (Locale::ZhCn, "detail_no_results") => "尚未处理",
         (Locale::ZhCn, "detail_asr") => "ASR",
         (Locale::ZhCn, "detail_diarization") => "说话人分离",
         (Locale::ZhCn, "detail_device") => "设备",
@@ -453,19 +480,35 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "documents_unavailable") => "The project list cannot be read right now.",
         (Locale::EnUs, "retry_workspace_read") => "Retry",
         (Locale::EnUs, "open_detail") => "Open detail",
+        (Locale::EnUs, "show_detail") => "Show details",
+        (Locale::EnUs, "hide_detail") => "Hide details",
         (Locale::EnUs, "process") => "Process project",
+        (Locale::EnUs, "reprocess") => "Reprocess",
         (Locale::EnUs, "cancel") => "Cancel",
         (Locale::EnUs, "summary") => "Summary",
-        (Locale::EnUs, "original") => "Original",
+        (Locale::EnUs, "original") => "Transcript",
         (Locale::EnUs, "no_summary") => {
             "No summary yet. Use the Assistant to organize this project."
         }
-        (Locale::EnUs, "need_process") => {
-            "Run processing to generate a speaker-labelled transcript."
+        (Locale::EnUs, "transcript_empty_title") => "Not processed yet",
+        (Locale::EnUs, "transcript_empty_hint") => {
+            "Process it to see the transcript with speakers here"
         }
         (Locale::EnUs, "empty_meetings_title") => "Start with a recording",
         (Locale::EnUs, "empty_meetings") => "Import audio to transcribe, read and organize.",
-        (Locale::EnUs, "project_detail") => "PROJECT DETAIL",
+        (Locale::EnUs, "processing_empty_title") => "Processing",
+        (Locale::EnUs, "processing_empty_hint") => {
+            "The transcript with speakers appears here when it finishes"
+        }
+        (Locale::EnUs, "audio_missing_title") => "Audio file not found",
+        (Locale::EnUs, "audio_missing_hint") => "Relink the audio to process it",
+        (Locale::EnUs, "show_issues") => "Show",
+        (Locale::EnUs, "hide_issues") => "Hide",
+        (Locale::EnUs, "no_projects_title") => "No projects yet",
+        (Locale::EnUs, "no_projects_hint") => "Import a recording to get started",
+        (Locale::EnUs, "no_selection_title") => "No project selected",
+        (Locale::EnUs, "no_selection_hint") => "Choose a project on the left",
+        (Locale::EnUs, "project_detail") => "Project details",
         (Locale::EnUs, "close_detail") => "Close detail",
         (Locale::EnUs, "models_ready") => {
             "Speech recognition and speaker diarization models are ready"
@@ -486,6 +529,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "downloading") => "Downloading",
         (Locale::EnUs, "download_paused") => "Paused",
         (Locale::EnUs, "verifying") => "Verifying",
+        (Locale::EnUs, "download_preparing") => "Preparing",
         (Locale::EnUs, "download_waiting") => "Waiting to start",
         (Locale::EnUs, "download_verifying") => "Checking the downloaded files",
         (Locale::EnUs, "no_models") => "No models are available in the catalog.",
@@ -554,6 +598,17 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "processing_stage_completed") => "Completed",
         (Locale::EnUs, "processing_stage_cancelled") => "Cancelled",
         (Locale::EnUs, "ready_to_process") => "Ready to process",
+        (Locale::EnUs, "processing_progress") => "Processing progress",
+        (Locale::EnUs, "processing_preparing") => "Preparing…",
+        (Locale::EnUs, "transcribing") => "Transcribing",
+        (Locale::EnUs, "transcription_done") => "Transcribed",
+        (Locale::EnUs, "transcription_failed") => "Transcription failed",
+        (Locale::EnUs, "transcription_cancelled") => "Transcription cancelled",
+        (Locale::EnUs, "diarizing") => "Identifying speakers",
+        (Locale::EnUs, "diarization_waiting") => "Waiting to identify speakers",
+        (Locale::EnUs, "diarization_done") => "Speakers identified",
+        (Locale::EnUs, "diarization_failed") => "Speaker identification failed",
+        (Locale::EnUs, "diarization_cancelled") => "Speaker identification cancelled",
         (Locale::EnUs, "models_active") => "Downloads active",
         (Locale::EnUs, "model_status") => "Model status",
         (Locale::EnUs, "choose_audio") => "Choose audio",
@@ -574,7 +629,6 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "speaker_library_loading") => "Reading the speaker library…",
         (Locale::EnUs, "speaker_library_empty") => "The speaker library has no profiles yet.",
         (Locale::EnUs, "speaker_profile_name_placeholder") => "Profile name",
-        (Locale::EnUs, "speakers") => "Speakers",
         (Locale::EnUs, "speakers_hint") => {
             "Renaming changes only the displayed name; merging gives every segment of one speaker to another. Transcript text, timings and the processing record stay as they are."
         }
@@ -806,6 +860,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "detail_revision") => "Revision",
         (Locale::EnUs, "detail_processing_record") => "Processing record",
         (Locale::EnUs, "detail_not_processed") => "Not processed",
+        (Locale::EnUs, "detail_no_results") => "Not processed yet",
         (Locale::EnUs, "detail_asr") => "ASR",
         (Locale::EnUs, "detail_diarization") => "Diarization",
         (Locale::EnUs, "detail_device") => "Device",
@@ -889,6 +944,13 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::EnUs, "import_failed") => format!("Import failed: {value}"),
         (Locale::ZhCn, "processing") => format!("正在处理 {value}……"),
         (Locale::EnUs, "processing") => format!("Processing {value}…"),
+        (Locale::ZhCn, "speaker_number") => format!("说话人 {value}"),
+        (Locale::ZhCn, "speakers_summary") => format!("说话人 · {value}"),
+        (Locale::EnUs, "speakers_summary") => format!("Speakers · {value}"),
+        (Locale::EnUs, "speaker_number") => format!("Speaker {value}"),
+        (Locale::ZhCn, "speaker_count") => format!("{value} 位说话人"),
+        (Locale::EnUs, "speaker_count") if value == "1" => "1 speaker".into(),
+        (Locale::EnUs, "speaker_count") => format!("{value} speakers"),
         (Locale::ZhCn, "finished") => format!("已完成 {value}"),
         (Locale::EnUs, "finished") => format!("Finished {value}"),
         (Locale::ZhCn, "processing_failed") => format!("处理失败：{value}"),
@@ -991,28 +1053,10 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::EnUs, "diarization_model_required") => {
             format!("Select an installed diarization model for {value} first.")
         }
-        (Locale::ZhCn, "job_started") => format!("{value} 已开始……"),
-        (Locale::EnUs, "job_started") => format!("{value} started…"),
-        (Locale::ZhCn, "job_completed") => format!("{value} 已完成……"),
-        (Locale::EnUs, "job_completed") => format!("{value} completed…"),
-        (Locale::ZhCn, "job_cancelled") => format!("{value} 已取消……"),
-        (Locale::EnUs, "job_cancelled") => format!("{value} cancelled…"),
-        (Locale::ZhCn, "job_failed") => {
-            let mut parts = value.splitn(2, '|');
-            format!(
-                "{} 失败：{}",
-                parts.next().unwrap_or("Job"),
-                parts.next().unwrap_or(value)
-            )
-        }
-        (Locale::EnUs, "job_failed") => {
-            let mut parts = value.splitn(2, '|');
-            format!(
-                "{} failed: {}",
-                parts.next().unwrap_or("Job"),
-                parts.next().unwrap_or(value)
-            )
-        }
+        (Locale::ZhCn, "transcribing_count") => format!("正在转录 {value}"),
+        (Locale::EnUs, "transcribing_count") => format!("Transcribing {value}"),
+        (Locale::ZhCn, "diarizing_count") => format!("正在分离说话人 {value}"),
+        (Locale::EnUs, "diarizing_count") => format!("Identifying speakers {value}"),
         (Locale::ZhCn, "job_progress_total") => {
             let mut parts = value.splitn(3, '|');
             format!(
@@ -1045,6 +1089,28 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
                 "{} progress: {}",
                 parts.next().unwrap_or("Job"),
                 parts.next().unwrap_or("0")
+            )
+        }
+        (Locale::ZhCn, "job_started") => format!("{value} 已开始……"),
+        (Locale::EnUs, "job_started") => format!("{value} started…"),
+        (Locale::ZhCn, "job_completed") => format!("{value} 已完成……"),
+        (Locale::EnUs, "job_completed") => format!("{value} completed…"),
+        (Locale::ZhCn, "job_cancelled") => format!("{value} 已取消……"),
+        (Locale::EnUs, "job_cancelled") => format!("{value} cancelled…"),
+        (Locale::ZhCn, "job_failed") => {
+            let mut parts = value.splitn(2, '|');
+            format!(
+                "{} 失败：{}",
+                parts.next().unwrap_or("Job"),
+                parts.next().unwrap_or(value)
+            )
+        }
+        (Locale::EnUs, "job_failed") => {
+            let mut parts = value.splitn(2, '|');
+            format!(
+                "{} failed: {}",
+                parts.next().unwrap_or("Job"),
+                parts.next().unwrap_or(value)
             )
         }
         (Locale::ZhCn, "document_saved") => format!("已保存「{value}」。"),

@@ -1,4 +1,5 @@
 use crate::{
+    audio::AudioProblem,
     controller::RootView,
     controls::{Button, Separator, TreeShift, TreeStep},
     i18n,
@@ -45,6 +46,47 @@ pub(crate) fn empty_card(message: impl Into<SharedString>, tokens: &Tokens) -> i
         .text_color(tokens.text_muted)
         .child(message.into())
 }
+
+/// A short note centered where content will appear: an icon, a title, one
+/// sentence on what comes next and the action that brings it, if any.
+pub(crate) fn empty_state(
+    icon: &'static str,
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    action: Option<Button>,
+    tokens: &Tokens,
+) -> gpui::Div {
+    div()
+        .max_w(EMPTY_STATE_WIDTH)
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap(tokens.spacing.sm)
+        .child(
+            gpui::svg()
+                .path(icon)
+                .size(px(28.))
+                .text_color(tokens.text_subtle),
+        )
+        .child(
+            div()
+                .mt(tokens.spacing.xs)
+                .text_size(tokens.font_size.md)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title.into()),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_center()
+                .text_color(tokens.text_muted)
+                .child(description.into()),
+        )
+        .children(action.map(|action| div().mt(tokens.spacing.sm).child(action)))
+}
+
+/// The widest an empty state's sentence runs.
+const EMPTY_STATE_WIDTH: Pixels = px(360.);
 
 pub(crate) fn settings_section(
     title: impl Into<SharedString>,
@@ -282,20 +324,64 @@ pub(crate) fn tree_shift(
     }
 }
 
+/// What a tree row shows at its end: a spinner while its document is
+/// processed, a warning while its audio is missing or changed, the word
+/// for a failure, or else a dot in its status color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RowIndicator {
+    Spinner,
+    Audio,
+    Failed,
+    Dot(ProjectStatus),
+}
+
+pub(crate) fn row_indicator(
+    status: ProjectStatus,
+    processing: bool,
+    audio: Option<AudioProblem>,
+) -> RowIndicator {
+    if processing {
+        RowIndicator::Spinner
+    } else if audio.is_some() {
+        RowIndicator::Audio
+    } else if status == ProjectStatus::Failed {
+        RowIndicator::Failed
+    } else {
+        RowIndicator::Dot(status)
+    }
+}
+
+/// A tree row's name for assistive technology: its title, status and any
+/// audio problem.
+pub(crate) fn tree_row_label(
+    locale: i18n::Locale,
+    title: &str,
+    status: ProjectStatus,
+    audio: Option<AudioProblem>,
+) -> String {
+    let separator = match locale {
+        i18n::Locale::ZhCn => "，",
+        i18n::Locale::EnUs => ", ",
+    };
+    let mut parts = vec![title, status_label(locale, status)];
+    parts.extend(audio.map(|problem| i18n::text(locale, problem.label_key())));
+    parts.join(separator)
+}
+
 pub(crate) fn status_label(locale: i18n::Locale, status: ProjectStatus) -> &'static str {
     i18n::status(locale, status)
 }
 
+/// A time or duration as a clock reads it: `m:ss`, or `h:mm:ss` from an
+/// hour on, in whole seconds rounded down.
 pub(crate) fn timestamp(milliseconds: u64) -> String {
     let seconds = milliseconds / 1_000;
-    let total_minutes = seconds / 60;
-    let hours = total_minutes / 60;
-    let minutes = total_minutes % 60;
-    let seconds = seconds % 60;
-    format!(
-        "{hours:02}:{minutes:02}:{seconds:02}.{:03}",
-        milliseconds % 1_000
-    )
+    let (hours, minutes, seconds) = (seconds / 3_600, seconds / 60 % 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
 }
 
 /// A Unix-millisecond instant as its minute in UTC, `2026-08-29 10:40 UTC`:
@@ -330,11 +416,46 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (year_of_era + era * 400 + i64::from(month <= 2), month, day)
 }
 
+/// The quiet line under a document's title: its audio file's name, then
+/// how long its results run and how many speakers they name, once there are
+/// results.
+pub(crate) fn document_meta(document: &DocumentState, locale: i18n::Locale) -> String {
+    let path = document.audio_path();
+    let mut parts = vec![path.rsplit(['/', '\\']).next().unwrap_or(path).to_string()];
+    let results = &document.results;
+    let end = results
+        .transcript
+        .iter()
+        .map(|segment| segment.end_ms)
+        .chain(results.diarization.iter().map(|segment| segment.end_ms))
+        .max();
+    if let Some(end) = end {
+        parts.push(timestamp(
+            end.saturating_sub(document.source.audio_start_ms),
+        ));
+    }
+    let speakers = domain::document_result_statistics(document).speakers;
+    if speakers > 0 {
+        parts.push(i18n::message(
+            locale,
+            "speaker_count",
+            &speakers.to_string(),
+        ));
+    }
+    parts.join(" · ")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{tree_move, tree_shift, utc_time, TreeMove, TreeShiftMove};
+    use super::{
+        document_meta, row_indicator, timestamp, tree_move, tree_row_label, tree_shift, utc_time,
+        RowIndicator, TreeMove, TreeShiftMove,
+    };
+    use crate::audio::AudioProblem;
     use crate::controls::{TreeShift, TreeStep};
-    use domain::{DocumentState, ProjectId};
+    use crate::i18n::Locale;
+    use domain::ProjectStatus;
+    use domain::{DocumentState, ProjectId, SpeakerTaggedSegment, TranscriptSegment};
     use std::collections::BTreeSet;
 
     /// Two roots, the first with two children; the second child has a
@@ -496,6 +617,125 @@ mod tests {
                 before: false
             })
         );
+    }
+
+    #[test]
+    fn the_meta_line_names_the_audio_file_then_the_length_and_speakers() {
+        let mut document = DocumentState::new(
+            ProjectId::new("weekly"),
+            "Weekly",
+            "fixtures/weekly-sync.wav",
+        );
+        assert_eq!(document_meta(&document, Locale::ZhCn), "weekly-sync.wav");
+
+        let spoken = |id: &str, speaker: &str, start_ms, end_ms| SpeakerTaggedSegment {
+            transcript_segment_id: id.into(),
+            speaker_id: speaker.into(),
+            speaker_profile_id: None,
+            speaker_label: None,
+            start_ms,
+            end_ms,
+            text: id.into(),
+        };
+        document.results.speaker_segments = vec![
+            spoken("t-1", "speaker-0", 0, 42_000),
+            spoken("t-2", "speaker-1", 42_000, 95_000),
+        ];
+        document.results.transcript = document
+            .results
+            .speaker_segments
+            .iter()
+            .map(|segment| TranscriptSegment {
+                id: segment.transcript_segment_id.clone(),
+                start_ms: segment.start_ms,
+                end_ms: segment.end_ms,
+                text: segment.text.clone(),
+            })
+            .collect();
+        document.results.diarization = document
+            .results
+            .speaker_segments
+            .iter()
+            .map(|segment| domain::DiarizationSegment {
+                id: segment.transcript_segment_id.clone(),
+                speaker_id: segment.speaker_id.clone(),
+                speaker_profile_id: None,
+                speaker_label: None,
+                start_ms: segment.start_ms,
+                end_ms: segment.end_ms,
+                confidence: None,
+            })
+            .collect();
+        assert_eq!(
+            document_meta(&document, Locale::ZhCn),
+            "weekly-sync.wav · 1:35 · 2 位说话人"
+        );
+        assert_eq!(
+            document_meta(&document, Locale::EnUs),
+            "weekly-sync.wav · 1:35 · 2 speakers"
+        );
+
+        // A part of the recording counts from where it starts.
+        let child = document.semantic_child(ProjectId::new("part"), "Part", 42_000, 95_000, vec![]);
+        assert_eq!(
+            document_meta(&child, Locale::EnUs),
+            "weekly-sync.wav · 0:53 · 1 speaker"
+        );
+    }
+
+    #[test]
+    fn a_row_shows_its_most_pressing_state_and_names_all_of_it() {
+        use ProjectStatus::{Failed, Imported, Ready};
+        assert_eq!(row_indicator(Ready, false, None), RowIndicator::Dot(Ready));
+        assert_eq!(
+            row_indicator(Imported, false, None),
+            RowIndicator::Dot(Imported)
+        );
+        assert_eq!(row_indicator(Failed, false, None), RowIndicator::Failed);
+        assert_eq!(
+            row_indicator(Failed, false, Some(AudioProblem::Missing)),
+            RowIndicator::Audio,
+            "missing audio comes before an old failure"
+        );
+        assert_eq!(
+            row_indicator(Imported, true, Some(AudioProblem::Missing)),
+            RowIndicator::Spinner,
+            "a running job comes first"
+        );
+
+        assert_eq!(
+            tree_row_label(Locale::ZhCn, "产品周会", Ready, None),
+            "产品周会，就绪"
+        );
+        assert_eq!(
+            tree_row_label(
+                Locale::ZhCn,
+                "客户访谈",
+                Imported,
+                Some(AudioProblem::Missing)
+            ),
+            "客户访谈，等待处理，音频缺失"
+        );
+        assert_eq!(
+            tree_row_label(Locale::EnUs, "Weekly", ProjectStatus::Processing, None),
+            "Weekly, Processing"
+        );
+    }
+
+    #[test]
+    fn a_timestamp_reads_like_a_clock_in_whole_seconds() {
+        for (milliseconds, expected) in [
+            (0, "0:00"),
+            (999, "0:00"),
+            (42_999, "0:42"),
+            (95_000, "1:35"),
+            (599_000, "9:59"),
+            (3_599_999, "59:59"),
+            (3_600_000, "1:00:00"),
+            (36_005_000, "10:00:05"),
+        ] {
+            assert_eq!(timestamp(milliseconds), expected, "{milliseconds} ms");
+        }
     }
 
     #[test]

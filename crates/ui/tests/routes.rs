@@ -266,6 +266,152 @@ fn the_meetings_route_shows_the_tree_content_and_process_button(cx: &mut TestApp
     );
 }
 
+/// The fixture's models are not installed: the action waits, a short
+/// sentence beside it says why and leads to Models. The page has no
+/// notice footer; window feedback belongs to the global toast.
+#[gpui::test]
+fn missing_models_lead_to_the_models_page_from_the_header(cx: &mut TestAppContext) {
+    let (window, cx, page) = open_route(cx, Route::Meetings);
+    let process = visible(cx, "process-project");
+    let hint = visible(cx, "models-required");
+    assert!(within(hint, page));
+    assert!(
+        hint.left() >= process.right() || hint.top() >= process.bottom(),
+        "the hint follows the action: {hint:?} after {process:?}"
+    );
+    assert!(within(visible(cx, "go-to-models"), hint));
+    assert!(cx.debug_bounds("meetings-notice").is_none());
+    cx.simulate_click(process.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("processing-progress").is_none(),
+        "missing models keep the processing action disabled"
+    );
+    assert!(
+        cx.debug_bounds("notice-toast").is_none(),
+        "a disabled action does not start processing or raise a model error"
+    );
+
+    // Selecting the document keeps the inline model hint available.
+    let row = visible(cx, leak(format!("project-row-{}", DOCUMENT_IDS[0])));
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("meetings-notice").is_none());
+
+    let go = visible(cx, "go-to-models");
+    cx.simulate_click(go.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Models);
+}
+
+/// The content views are the segments of one control: adjacent segments
+/// inset in a track one control tall.
+#[gpui::test]
+fn the_content_views_form_one_segmented_control(cx: &mut TestAppContext) {
+    let (_window, cx, page) = open_route(cx, Route::Meetings);
+    let track = visible(cx, "content-mode-group");
+    assert!(within(track, page));
+    assert_eq!(track.size.height, gpui::px(32.), "one control tall");
+    let segments = [
+        "content-mode-summary",
+        "content-mode-original",
+        "content-mode-edit",
+    ]
+    .map(|selector| visible(cx, selector));
+    for (index, segment) in segments.iter().enumerate() {
+        assert!(
+            segment.top() > track.top() && segment.bottom() < track.bottom(),
+            "segment {index} is inset in the track: {segment:?} in {track:?}"
+        );
+        assert!(segment.left() > track.left() && segment.right() < track.right());
+        if let Some(before) = index.checked_sub(1).map(|before| segments[before]) {
+            let gap = segment.left() - before.right();
+            assert!(
+                gap >= gpui::px(0.) && gap <= gpui::px(2.),
+                "segments {before:?} and {segment:?} adjoin"
+            );
+        }
+    }
+}
+
+/// The document header beside an open Detail: the title with the Detail
+/// toggle at its right, the file line under it, and the status and actions
+/// of a document whose audio is missing on one line.
+#[gpui::test]
+fn the_document_header_keeps_its_actions_on_one_line_beside_detail(cx: &mut TestAppContext) {
+    let (window, cx, page) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::MissingAudio(DOCUMENT_IDS[2]), cx));
+    wait_for(cx, |cx| cx.debug_bounds("relink-audio").is_some());
+    let detail = visible(cx, "detail-panel");
+    let title = visible(cx, "document-title");
+    let toggle = visible(cx, "open-project-detail");
+    assert!(
+        toggle.left() >= title.right() && toggle.top() < title.bottom(),
+        "the Detail toggle sits at the right of the title: {toggle:?} / {title:?}"
+    );
+    assert!(
+        toggle.right() <= detail.left(),
+        "the toggle stays left of Detail"
+    );
+    let meta = visible(cx, "document-meta");
+    assert!(title.bottom() <= meta.top());
+    let actions = [
+        "document-status",
+        "audio-problem",
+        "process-project",
+        "relink-audio",
+    ]
+    .map(|selector| visible(cx, selector));
+    for action in &actions {
+        assert!(
+            meta.bottom() <= action.top(),
+            "actions follow the file line"
+        );
+        assert!(within(*action, page) && action.right() <= detail.left());
+        assert!(
+            (action.center().y - actions[2].center().y).abs() < gpui::px(1.),
+            "the status and actions share one line: {actions:?}"
+        );
+    }
+
+    // The toggle closes Detail again.
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("detail-panel").is_none(),
+        "the toggle closes Detail"
+    );
+    let toggle = visible(cx, "open-project-detail");
+    cx.simulate_click(toggle.center(), Modifiers::none());
+    cx.run_until_parked();
+    visible(cx, "detail-panel");
+}
+
+/// Each tree row is one line: the drag handle, the title and, at the end,
+/// a dot in its status color.
+#[gpui::test]
+fn tree_rows_are_one_line_with_the_status_at_the_end(cx: &mut TestAppContext) {
+    let (_window, cx, _page) = open_route(cx, Route::Meetings);
+    for id in DOCUMENT_IDS {
+        let row = visible(cx, leak(format!("project-row-{id}")));
+        let title = visible(cx, leak(format!("project-title-{id}")));
+        let dot = visible(cx, leak(format!("status-dot-{id}")));
+        assert!(within(visible(cx, leak(format!("drag-{id}"))), row));
+        assert!(
+            within(dot, row) && dot.left() >= title.right(),
+            "{id}: the dot ends the row"
+        );
+        assert!(
+            (dot.center().y - title.center().y).abs() < gpui::px(1.),
+            "{id}: the dot sits on the title's line"
+        );
+        assert!(
+            row.size.height < gpui::px(36.),
+            "{id}: the row is one line: {row:?}"
+        );
+    }
+}
+
 #[gpui::test]
 fn the_models_route_shows_the_catalog_and_aligned_status_chips(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Models);

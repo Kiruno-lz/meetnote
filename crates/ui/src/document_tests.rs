@@ -681,6 +681,7 @@ fn scanner_issues_list_path_and_reason_until_the_files_are_fixed(cx: &mut TestAp
     let stray = root.path().join("notes.txt");
     std::fs::write(&stray, "stray").unwrap();
     let (view, cx, changes) = open_on(cx, &root);
+    click_selector(cx, "document-issues-toggle");
 
     let issues = view.read_with(cx, |root, _| root.document_issues.clone());
     assert_eq!(issues.len(), 2, "{issues:#?}");
@@ -745,6 +746,7 @@ fn scanner_issues_read_in_the_ui_locale_and_keep_their_kind_after_a_move(cx: &mu
     std::fs::write(broken.join("state.json"), "{ not json").unwrap();
     std::fs::write(root.path().join("notes.txt"), "stray").unwrap();
     let (view, cx, _changes) = open_on(cx, &root);
+    click_selector(cx, "document-issues-toggle");
     for index in 0..2 {
         rendered(cx, leak(format!("document-issue-{index}")));
     }
@@ -851,7 +853,7 @@ fn detail_shows_revision_status_provenance_and_statistics(cx: &mut TestAppContex
             .map(|row| row.value.clone())
     };
     assert_eq!(value("detail_revision").as_deref(), Some("3"));
-    assert_eq!(value("detail_document_status").as_deref(), Some("review"));
+    assert_eq!(value("detail_document_status").as_deref(), Some("待复核"));
     assert_eq!(
         value("detail_asr").as_deref(),
         Some("whisper-rs · large-v3-turbo · r1")
@@ -1097,6 +1099,7 @@ fn a_failed_later_attempt_keeps_saved_results_readable_and_correctable(cx: &mut 
         "a failed later attempt must not hide the last successful transcript"
     );
     rendered(cx, "document-status-Failed");
+    click_selector(cx, "document-speakers-toggle");
     rendered(cx, "document-speakers");
     assert_eq!(
         view.read_with(cx, |root, _| root.ui.content_mode),
@@ -3186,4 +3189,273 @@ fn first_import_is_selected_by_a_reload_before_its_completion(cx: &mut TestAppCo
         documents.read(imported.as_str()).state.audio_path(),
         audio.display().to_string()
     );
+}
+
+#[gpui::test]
+fn the_transcript_reads_as_turns_in_a_measured_column(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let mut weekly = processed("weekly", "产品周会");
+    let said = [
+        ("speaker-0", 0, 4_000, "先过一下页面"),
+        ("speaker-0", 4_000, 9_000, "然后看截图"),
+        ("speaker-1", 9_000, 12_000, "那就开始迁移"),
+    ];
+    weekly.results.transcript = said
+        .iter()
+        .enumerate()
+        .map(|(index, (_, start_ms, end_ms, text))| TranscriptSegment {
+            id: format!("t-{index}"),
+            start_ms: *start_ms,
+            end_ms: *end_ms,
+            text: (*text).into(),
+        })
+        .collect();
+    weekly.results.diarization = said
+        .iter()
+        .enumerate()
+        .map(
+            |(index, (speaker, start_ms, end_ms, _))| DiarizationSegment {
+                id: format!("d-{index}"),
+                speaker_id: (*speaker).into(),
+                speaker_profile_id: None,
+                speaker_label: None,
+                start_ms: *start_ms,
+                end_ms: *end_ms,
+                confidence: None,
+            },
+        )
+        .collect();
+    weekly.results.speaker_segments = domain::align_transcript_and_speakers(
+        &weekly.results.transcript,
+        &weekly.results.diarization,
+    );
+    root.put(weekly, "# 产品周会\n");
+    let (view, cx, _changes) = open_on(cx, &root);
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+
+    // Two turns: speaker-0's two segments, then speaker-1's.
+    let content = rendered(cx, "meeting-content");
+    let turns = [0, 1].map(|index| rendered(cx, leak(format!("transcript-turn-{index}"))));
+    assert!(cx.debug_bounds("transcript-turn-2").is_none());
+    assert!(turns[0].bottom() <= turns[1].top());
+    for turn in turns {
+        assert!(within(turn, content));
+        assert!(
+            turn.size.width <= meetings::READING_WIDTH,
+            "the transcript keeps to the reading width: {turn:?}"
+        );
+    }
+    assert!(
+        content.size.width > meetings::READING_WIDTH,
+        "the column is narrower than the plane"
+    );
+}
+
+fn assert_centered_empty_state(cx: &mut VisualTestContext, action: Option<&'static str>) {
+    let region = rendered(cx, "meeting-content");
+    let empty = rendered(cx, "document-empty");
+    assert!(within(empty, region));
+    assert!(
+        (empty.center().x - region.center().x).abs() < px(1.)
+            && (empty.center().y - region.center().y).abs() < px(1.),
+        "the empty state is centered: {empty:?} in {region:?}"
+    );
+    assert!(empty.size.height < region.size.height / 2., "and compact");
+    for selector in [
+        "empty-process",
+        "empty-relink-audio",
+        "go-to-models",
+        "empty-import-audio",
+    ] {
+        let shown = cx.debug_bounds(selector);
+        if Some(selector) == action {
+            assert!(within(shown.expect("the action is shown"), empty));
+        } else {
+            assert!(shown.is_none(), "`{selector}` is not offered");
+        }
+    }
+}
+
+#[gpui::test]
+fn an_unprocessed_document_offers_its_next_step_in_place(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let audio = root.path().join("present.wav");
+    std::fs::write(&audio, b"audio").unwrap();
+    root.put(
+        DocumentState::new(
+            ProjectId::new("present"),
+            "Present",
+            audio.display().to_string(),
+        ),
+        "# Present\n",
+    );
+    let mut gone = DocumentState::new(ProjectId::new("gone"), "Gone", "gone.wav");
+    gone.hierarchy.sibling_order = 1;
+    root.put(gone, "# Gone\n");
+    let (view, cx, _changes) = open_on(cx, &root);
+
+    select_row(cx, &view, "present");
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    cx.run_until_parked();
+    // The test settings choose backends without models.
+    assert_centered_empty_state(cx, Some("go-to-models"));
+    let before = view.read_with(cx, |root, _| root.ui.notice.clone());
+    click_selector(cx, "process-project");
+    assert!(
+        !view.read_with(cx, |root, _| root.ui.processing),
+        "processing waits for the models"
+    );
+    assert_eq!(view.read_with(cx, |root, _| root.ui.notice.clone()), before);
+
+    // With the default models ready, the document can be processed.
+    view.update(cx, |root, cx| {
+        root.settings_draft.asr_backend_id = None;
+        root.settings_draft.diarization_backend_id = None;
+        root.installation.default_asr_ready = true;
+        root.installation.default_diarization_ready = true;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_centered_empty_state(cx, Some("empty-process"));
+    click_selector(cx, "empty-process");
+    wait_for(cx, &view, |root| {
+        !root.ui.processing && root.ui.notice != before
+    });
+
+    // Missing audio is relinked first.
+    select_row(cx, &view, "gone");
+    wait_for(cx, &view, |root| {
+        root.audio.missing(&ProjectId::new("gone"))
+    });
+    cx.run_until_parked();
+    assert_centered_empty_state(cx, Some("empty-relink-audio"));
+
+    // While it is processed, the state says so and offers nothing.
+    view.update(cx, |root, cx| {
+        root.ui.begin_processing(ProjectId::new("gone"));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_centered_empty_state(cx, None);
+}
+
+#[gpui::test]
+fn an_empty_workspace_offers_to_import_audio(cx: &mut TestAppContext) {
+    let root = DocumentsRoot::new();
+    let (_view, cx, _changes) = open_on(cx, &root);
+    assert_centered_empty_state(cx, Some("empty-import-audio"));
+}
+
+#[gpui::test]
+fn switching_from_a_transcript_to_an_imported_document_selects_summary(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "周会"), "# 周会\n");
+    let mut imported = DocumentState::new(ProjectId::new("new"), "新录音", "new.wav");
+    imported.hierarchy.sibling_order = 1;
+    documents.put(imported, "# 新录音\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+    rendered(cx, "transcript-turn-0");
+    select_row(cx, &view, "new");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "the imported document has no Original tab, so Summary must be selected"
+    );
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    rendered(cx, "document-empty");
+
+    select_row(cx, &view, "weekly");
+    click_selector(cx, "content-mode-original");
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "history navigation also keeps a visible tab selected"
+    );
+}
+
+#[gpui::test]
+fn switching_documents_and_reading_modes_starts_at_the_top(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    for (index, id) in ["a", "b"].into_iter().enumerate() {
+        let mut document = processed(id, id);
+        document.hierarchy.sibling_order = index as u32;
+        document.content.summary = Some("一段很长的会议总结。\n".repeat(120));
+        documents.put(document, "# Meeting\n");
+    }
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    assert!(scroll.max_offset().y > px(200.));
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(scroll.offset().y, px(-200.));
+    select_row(cx, &view, "a");
+    assert_eq!(
+        scroll.offset().y,
+        px(-200.),
+        "selecting the current document keeps its reading position"
+    );
+    select_row(cx, &view, "b");
+    assert_eq!(
+        scroll.offset().y,
+        px(0.),
+        "another document opens at its beginning"
+    );
+
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        scroll.offset().y,
+        px(0.),
+        "history opens the document at its beginning"
+    );
+    click_selector(cx, "navigate-forward");
+
+    scroll.set_offset(point(px(0.), px(-200.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("b"))
+    });
+    assert_eq!(scroll.offset().y, px(0.), "the editor opens at its title");
+}
+
+#[gpui::test]
+fn document_actions_fit_beside_detail_in_both_locales(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "产品周会"), "# 产品周会\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    select_row(cx, &view, "weekly");
+    wait_for(cx, &view, |root| {
+        root.audio.missing(&ProjectId::new("weekly"))
+    });
+    click_selector(cx, "open-project-detail");
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| root.set_locale(locale, cx));
+        cx.run_until_parked();
+        let page = rendered(cx, "meetings-page");
+        for selector in [
+            "document-status",
+            "audio-problem",
+            "process-project",
+            "relink-audio",
+        ] {
+            let control = rendered(cx, selector);
+            assert!(
+                within(control, page),
+                "{locale:?}: {selector} overflows the reading plane: {control:?} in {page:?}"
+            );
+        }
+    }
 }

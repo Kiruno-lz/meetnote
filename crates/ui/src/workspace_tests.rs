@@ -1336,6 +1336,9 @@ fn late_speaker_command_keeps_the_new_workspace(cx: &mut TestAppContext, merge: 
     view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
     cx.run_until_parked();
     click_selector(cx, "content-mode-original");
+    if cx.debug_bounds("speaker-name-speaker-1").is_none() {
+        click_selector(cx, "document-speakers-toggle");
+    }
     old_gate.arm();
     if merge {
         click_selector(cx, "merge-speaker-speaker-1");
@@ -1356,6 +1359,9 @@ fn late_speaker_command_keeps_the_new_workspace(cx: &mut TestAppContext, merge: 
         "a previous workspace's correction must not disable the new workspace"
     );
     click_selector(cx, "content-mode-original");
+    if cx.debug_bounds("speaker-name-speaker-1").is_none() {
+        click_selector(cx, "document-speakers-toggle");
+    }
     new_gate.arm();
     rename_document_speaker(cx, "New name");
     wait_for(cx, &view, |_| new_gate.counts().0 == 1);
@@ -1435,6 +1441,9 @@ fn a_speaker_correction_in_a_rolled_back_workspace_still_completes(cx: &mut Test
     view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
     cx.run_until_parked();
     click_selector(cx, "content-mode-original");
+    if cx.debug_bounds("speaker-name-speaker-1").is_none() {
+        click_selector(cx, "document-speakers-toggle");
+    }
     gate.arm();
     rename_document_speaker(cx, "Still saved");
     wait_for(cx, &view, |_| gate.counts().0 == 1);
@@ -2272,6 +2281,9 @@ fn a_pending_root_choice_keeps_speaker_input_and_resumes_actions(cx: &mut TestAp
     view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
     cx.run_until_parked();
     click_selector(cx, "content-mode-original");
+    if cx.debug_bounds("speaker-name-speaker-1").is_none() {
+        click_selector(cx, "document-speakers-toggle");
+    }
     click_selector(cx, "speaker-name-speaker-1");
     cx.simulate_keystrokes("cmd-a");
     cx.simulate_input("Keep this name draft");

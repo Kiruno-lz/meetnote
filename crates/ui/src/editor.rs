@@ -109,6 +109,17 @@ pub(crate) fn draft_patch(
     })
 }
 
+/// How `value` reads: a suggested status in `locale`, any other as stored.
+pub(crate) fn status_label(value: &str, locale: Locale) -> String {
+    SUGGESTED_STATUSES
+        .iter()
+        .find(|(known, _)| *known == value)
+        .map_or_else(
+            || value.to_string(),
+            |(_, key)| i18n::text(locale, key).into(),
+        )
+}
+
 /// The status select's options: the suggested statuses, then the other
 /// statuses the documents use, then `current` if it is neither.
 pub(crate) fn status_options(
@@ -130,13 +141,7 @@ pub(crate) fn status_options(
     }
     values
         .into_iter()
-        .map(|value| {
-            let option = SelectOption::text(value);
-            match SUGGESTED_STATUSES.iter().find(|(known, _)| *known == value) {
-                Some((_, key)) => option.detail(i18n::text(locale, key)),
-                None => option,
-            }
-        })
+        .map(|value| SelectOption::labelled(value, status_label(value, locale)))
         .collect()
 }
 
@@ -516,6 +521,13 @@ mod tests {
             status_options(&[], "inbox", Locale::EnUs).len(),
             SUGGESTED_STATUSES.len()
         );
+    }
+
+    #[test]
+    fn a_suggested_status_reads_in_the_locale_and_any_other_as_stored() {
+        assert_eq!(status_label("review", Locale::ZhCn), "待复核");
+        assert_eq!(status_label("in-progress", Locale::EnUs), "In progress");
+        assert_eq!(status_label("客户跟进", Locale::EnUs), "客户跟进");
     }
 
     #[test]

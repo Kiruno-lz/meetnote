@@ -44,7 +44,7 @@ use settings::{
     AssistantSettings, CredentialUpdate, LlmProtocol, MaterialPreference, SettingsService,
     ThemePreference,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -621,6 +621,8 @@ pub(crate) struct RootView {
     pub(crate) audio: AudioCheck,
     /// The Workspace section's documents-root switch.
     pub(crate) documents_root_switch: DocumentsRootSwitch,
+    /// Models whose download task is being created off the UI thread.
+    pub(crate) model_download_starts: BTreeSet<String>,
     /// The models the Models page shows re-probing.
     pub(crate) model_reprobes: BTreeMap<String, ReprobeWait>,
 }
@@ -837,6 +839,7 @@ impl RootView {
             speaker_confirmation: None,
             audio: AudioCheck::default(),
             documents_root_switch: DocumentsRootSwitch::default(),
+            model_download_starts: Default::default(),
             model_reprobes: Default::default(),
         };
         // Every update that sets a notice opens its toast.
@@ -2689,7 +2692,7 @@ impl RootView {
             speakers
                 .iter()
                 .find(|speaker| speaker.id == id)
-                .map_or_else(|| id.to_string(), |speaker| speaker.name().to_string())
+                .map_or_else(|| id.to_string(), |speaker| speaker.name(self.ui.locale))
         };
         self.speaker_confirmation = Some(SpeakerConfirmation::MergeDocumentSpeaker {
             document_id,
@@ -3105,6 +3108,12 @@ impl RootView {
     }
 
     pub(crate) fn select_project(&mut self, project_id: ProjectId, cx: &mut Context<Self>) {
+        if self.ui.selected_project.as_ref() != Some(&project_id) {
+            self.scroll
+                .meeting_content
+                .set_offset(gpui::Point::default());
+            self.scroll.detail.set_offset(gpui::Point::default());
+        }
         self.ui.selected_project = Some(project_id);
         self.ui.remember_navigation();
         self.ui.notice.clear();
@@ -3126,7 +3135,14 @@ impl RootView {
     }
 
     pub(crate) fn travel(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let previous_document = self.ui.selected_project.clone();
         if self.ui.travel(forward) {
+            if self.ui.selected_project != previous_document {
+                self.scroll
+                    .meeting_content
+                    .set_offset(gpui::Point::default());
+                self.scroll.detail.set_offset(gpui::Point::default());
+            }
             self.sidebar_sizing
                 .update(cx, |state, _| state.reset_interaction());
             if self.ui.route == Route::Settings {
@@ -3192,6 +3208,8 @@ impl RootView {
         self.sync_locale(cx);
     }
 
+    /// The header's Detail toggle: opens Detail, or closes it like its own
+    /// close button.
     pub(crate) fn toggle_detail(
         &mut self,
         event: &ClickEvent,
@@ -3221,7 +3239,24 @@ impl RootView {
         cx.notify();
     }
 
+    /// Shows or folds the path and reason of each scanner issue.
+    pub(crate) fn toggle_issues(&mut self, cx: &mut Context<Self>) {
+        self.ui.issues_expanded = !self.ui.issues_expanded;
+        cx.notify();
+    }
+
+    /// Shows or folds the rename and merge rows of the transcript's speakers.
+    pub(crate) fn toggle_speakers(&mut self, cx: &mut Context<Self>) {
+        self.ui.speakers_expanded = !self.ui.speakers_expanded;
+        cx.notify();
+    }
+
     pub(crate) fn set_content_mode(&mut self, mode: ContentMode, cx: &mut Context<Self>) {
+        if self.ui.content_mode != mode {
+            self.scroll
+                .meeting_content
+                .set_offset(gpui::Point::default());
+        }
         self.ui.content_mode = mode;
         cx.notify();
     }
@@ -4723,11 +4758,16 @@ impl RootView {
 
     /// Starts the download off the main thread and follows its progress.
     pub(crate) fn download_model(&mut self, model_id: String, cx: &mut Context<Self>) {
+        if !self.model_download_starts.insert(model_id.clone()) {
+            return;
+        }
+        cx.notify();
         let models = self.services.model_manager.clone();
         cx.spawn(async move |this, cx| {
             let id = model_id.clone();
             let started = runtime::spawn_blocking(move || models.start(&id)).await;
             this.update(cx, |this, cx| {
+                this.model_download_starts.remove(&model_id);
                 match started {
                     Ok(task) => {
                         this.ui.notice =

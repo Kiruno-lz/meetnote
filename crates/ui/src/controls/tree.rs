@@ -22,8 +22,9 @@
 use super::{keyboard_focused, window, with_focus_ring};
 use crate::theme;
 use gpui::{
-    actions, div, prelude::*, px, AnyElement, App, ClickEvent, Div, ElementId, FocusHandle,
-    Interactivity, IntoElement, KeyBinding, Role, SharedString, Stateful, StyleRefinement, Window,
+    actions, div, prelude::*, px, svg, AnyElement, App, ClickEvent, Div, ElementId, FocusHandle,
+    Hsla, Interactivity, IntoElement, KeyBinding, Pixels, Role, SharedString, Stateful,
+    StyleRefinement, Window,
 };
 use gpui_base::actions::{SelectDown, SelectLeft, SelectRight, SelectUp};
 use std::rc::Rc;
@@ -333,23 +334,40 @@ impl RenderOnce for TreeItem {
     }
 }
 
-/// The expand arrow of an item with children: a press toggles it.
+/// The width of an item's expand arrow.
+const DISCLOSURE: Pixels = px(16.);
+
+/// The expand arrow of an item with children, a chevron in `color`: a
+/// press toggles it.
 pub(crate) fn disclosure(
     id: impl Into<ElementId>,
     expanded: bool,
+    color: Hsla,
     on_toggle: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> Stateful<Div> {
     div()
         .id(id)
+        .flex_shrink_0()
+        .w(DISCLOSURE)
+        .flex()
+        .justify_center()
         .cursor_pointer()
-        .mr_1()
-        .child(if expanded { "▾" } else { "▸" })
+        .child(
+            svg()
+                .path(if expanded {
+                    "icons/chevron-down.svg"
+                } else {
+                    "icons/chevron-right.svg"
+                })
+                .size(px(12.))
+                .text_color(color),
+        )
         .on_click(on_toggle)
 }
 
 /// The room a leaf leaves where an item with children has its arrow.
 pub(crate) fn disclosure_space() -> Div {
-    div().w(px(10.))
+    div().flex_shrink_0().w(DISCLOSURE)
 }
 
 #[cfg(test)]

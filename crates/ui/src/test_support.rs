@@ -42,7 +42,7 @@ pub enum Overlay {
     /// notice of a save another writer's change refused.
     EditorConflict,
     /// On Meetings: the Original view of the selected document, its
-    /// speakers above the transcript.
+    /// speakers expanded above the transcript.
     OriginalSpeakers,
     /// On Meetings: fixture-only processing of the selected document, with
     /// transcription completed and diarization at 1/4 reported units.
@@ -367,7 +367,10 @@ impl MainWindow {
                 });
                 cx.notify();
             }
-            Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Original, cx),
+            Overlay::OriginalSpeakers => {
+                root.ui.speakers_expanded = true;
+                root.set_content_mode(ContentMode::Original, cx)
+            }
             Overlay::ProcessingFeedback => {
                 let Some(owner) = root.ui.selected_project.clone() else {
                     return;
@@ -490,7 +493,10 @@ impl MainWindow {
                 root.document_conflict = None;
                 cx.notify();
             }
-            Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Summary, cx),
+            Overlay::OriginalSpeakers => {
+                root.ui.speakers_expanded = false;
+                root.set_content_mode(ContentMode::Summary, cx)
+            }
             Overlay::ProcessingFeedback => {
                 root.ui.finish_processing();
                 cx.notify();

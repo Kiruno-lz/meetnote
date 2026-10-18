@@ -30,6 +30,8 @@ pub struct UiState {
     pub notice: String,
     pub(crate) toast: ToastState,
     pub processing: bool,
+    pub(crate) speakers_expanded: bool,
+    pub(crate) issues_expanded: bool,
     /// The document owned by the one active processing task.
     pub(crate) processing_project: Option<ProjectId>,
     /// Stage feedback belongs to `processing_project`; it has no second owner.
@@ -58,6 +60,8 @@ impl UiState {
             notice: String::new(),
             toast: ToastState::default(),
             processing: false,
+            speakers_expanded: false,
+            issues_expanded: false,
             processing_project: None,
             processing_feedback: ProcessingFeedback::default(),
         }

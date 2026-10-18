@@ -556,7 +556,7 @@ fn context_parts(
 
 /// The context beside the scope: its parts and the write mode in muted
 /// text, separated by dots. The first part, a document title, fades out
-/// when it is too long.
+/// when it is too long; so does the connection name.
 fn context_line(
     parts: Vec<String>,
     write_mode: contracts::AgentWriteMode,
@@ -595,6 +595,15 @@ fn context_line(
             first,
             tokens.content,
         )));
+    }
+    if let Some(connection) = parts.next() {
+        line = line
+            .child(separator())
+            .child(div().min_w_0().child(theme::tail_faded_label(
+                "assistant-context-connection",
+                connection,
+                tokens.content,
+            )));
     }
     for part in parts {
         line = line

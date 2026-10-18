@@ -249,16 +249,21 @@ fn model_card(
                 | DownloadState::Verifying
         )
     });
+    let starting = root.model_download_starts.contains(&model_id);
     let reprobing = root.model_reprobes.contains_key(&model_id);
     let expanded = root.ui.expanded_model_details.contains(&model_id);
     let action = card_action(&entry, progress.as_ref(), reprobing);
     let facts = model_facts(&entry, locale);
     let downloaded = matches!(entry.install_state, ModelInstallState::Installed);
-    let (chip_key, chip_tone) = status_key(
-        downloaded,
-        progress.as_ref().map(|progress| &progress.state),
-        reprobing,
-    );
+    let (chip_key, chip_tone) = if starting {
+        ("download_preparing", ChipTone::Busy)
+    } else {
+        status_key(
+            downloaded,
+            progress.as_ref().map(|progress| &progress.state),
+            reprobing,
+        )
+    };
     let marked = |name: &str| {
         let selector = format!("model-{name}-{model_id}");
         move || selector.clone()
@@ -269,7 +274,8 @@ fn model_card(
         match action {
             CardAction::Download => Some(
                 Button::new(format!("download-{id}"), tr(locale, "download"))
-                    .debug_selector(marked("download"))
+                    .debug_selector(marked(if starting { "starting" } else { "download" }))
+                    .disabled(starting)
                     .primary()
                     .on_click(
                         cx.listener(move |this, _, _, cx| this.download_model(id.clone(), cx)),
@@ -277,7 +283,8 @@ fn model_card(
             ),
             CardAction::Retry => Some(
                 Button::new(format!("retry-{id}"), tr(locale, "retry_download"))
-                    .debug_selector(marked("retry"))
+                    .debug_selector(marked(if starting { "starting" } else { "retry" }))
+                    .disabled(starting)
                     .primary()
                     .on_click(
                         cx.listener(move |this, _, _, cx| this.download_model(id.clone(), cx)),
@@ -422,7 +429,7 @@ fn model_card(
         );
 
     // A running download or re-probe supersedes the last failure.
-    let busy = progress.is_some() || reprobing;
+    let busy = progress.is_some() || reprobing || starting;
     let failure = facts.failure.clone().filter(|_| !busy).map(|failure| {
         notice(&tokens)
             .debug_selector(marked("failure"))
