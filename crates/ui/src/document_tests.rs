@@ -8,8 +8,8 @@
 //! would.
 
 use crate::tests::{
-    click_selector, desktop_services, field_value, focus_field, open_desktop_on, temp_directory,
-    test_settings, wait_for, FakeAssistantUiService, Field,
+    click_selector, desktop_services, field_value, focus_field, open_desktop_on,
+    stored_key_settings, temp_directory, test_settings, wait_for, FakeAssistantUiService, Field,
 };
 use crate::{
     controller::RootView,
@@ -91,6 +91,29 @@ impl Drop for DocumentsRoot {
     }
 }
 
+/// Makes a real repository unreadable without altering its document packages.
+pub(crate) struct UnreadableDocumentsRoot {
+    path: PathBuf,
+    moved: PathBuf,
+}
+
+impl UnreadableDocumentsRoot {
+    pub(crate) fn new(documents: &DocumentsRoot) -> Self {
+        let path = documents.path().to_path_buf();
+        let moved = temp_directory();
+        std::fs::rename(&path, &moved).unwrap();
+        std::fs::write(&path, b"root temporarily occupied").unwrap();
+        Self { path, moved }
+    }
+}
+
+impl Drop for UnreadableDocumentsRoot {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.path).unwrap();
+        std::fs::rename(&self.moved, &self.path).unwrap();
+    }
+}
+
 /// The desktop on `root`, on the Meetings route once the list has loaded,
 /// and the change stream that reloads it.
 pub(crate) fn open_on<'a>(
@@ -111,12 +134,13 @@ pub(crate) fn open_on<'a>(
         DocumentService::new(Arc::new(root.repository())),
     );
     let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.installation.catalog.is_empty());
     let (changes, receiver) = futures::channel::mpsc::unbounded();
     view.update(cx, |root, cx| {
         root.follow_document_changes(receiver, cx);
         root.navigate(Route::Meetings, cx);
     });
-    cx.run_until_parked();
+    wait_for(cx, &view, |root| !root.audio.pending());
     (view, cx, changes)
 }
 
@@ -141,7 +165,7 @@ pub(crate) fn select_row(cx: &mut VisualTestContext, view: &View, id: &str) {
     click_selector(cx, leak(format!("project-row-{id}")));
     let id = ProjectId::new(id);
     wait_for(cx, view, |root| {
-        root.ui.selected_project.as_ref() == Some(&id)
+        root.ui.selected_project.as_ref() == Some(&id) && !root.audio.pending()
     });
 }
 
@@ -153,6 +177,145 @@ fn open_editor(cx: &mut VisualTestContext, view: &View, id: &str) {
     cx.run_until_parked();
 }
 
+#[gpui::test]
+fn unavailable_processing_models_offer_models_without_starting_or_reporting_an_error(
+    cx: &mut TestAppContext,
+) {
+    let root = DocumentsRoot::new();
+    let audio = root.path().join("first/recording.wav");
+    root.put(
+        DocumentState::new(
+            ProjectId::new("first"),
+            "First recording",
+            audio.display().to_string(),
+        ),
+        "",
+    );
+    std::fs::write(&audio, b"recording").unwrap();
+    let (view, cx, _changes) = open_on(cx, &root);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    let before = view.read_with(cx, |root, _| root.ui.notice.clone());
+    click_selector(cx, "process-project");
+    view.update_in(cx, |root, window, cx| {
+        root.process_selected(&gpui::ClickEvent::default(), window, cx);
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        before,
+        "missing setup is explained in place before a job starts"
+    );
+    assert!(!view.read_with(cx, |root, _| root.ui.processing));
+    assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_none()));
+    rendered(cx, "models-required");
+    click_selector(cx, "go-to-models");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Models);
+
+    // A model disappearing must never disable cancellation of a running job.
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Meetings, cx);
+        root.ui.begin_processing(ProjectId::new("first"));
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("models-required").is_none());
+    click_selector(cx, "process-project");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        i18n::text(i18n::Locale::ZhCn, "cancellation_requested")
+    );
+}
+
+#[gpui::test]
+fn model_setup_actions_fit_beside_detail_at_the_minimum_window_size(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let audio = documents.path().join("first/recording.wav");
+    documents.put(
+        DocumentState::new(
+            ProjectId::new("first"),
+            "First",
+            audio.display().to_string(),
+        ),
+        "",
+    );
+    std::fs::write(&audio, b"recording").unwrap();
+    let mut ready = processed("second", "Second");
+    ready.source.audio_path = audio.display().to_string();
+    ready
+        .processing
+        .latest
+        .as_mut()
+        .unwrap()
+        .input_audio_checksum = None;
+    ready.hierarchy.sibling_order = 1;
+    documents.put(ready, "# Second\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    assert!(
+        view.read_with(cx, |root, _| root.document_issues.is_empty()),
+        "the source audio is a valid document attachment"
+    );
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    cx.run_until_parked();
+    click_selector(cx, "open-project-detail");
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let body = rendered(cx, "meeting-content");
+        let guidance = rendered(cx, "models-required");
+        let page = rendered(cx, "meetings-page");
+        let title = rendered(cx, "document-title");
+        let path = rendered(cx, "document-audio-path");
+        let actions = rendered(cx, "document-actions");
+        let modes = rendered(cx, "content-mode-group");
+        let issues = cx.debug_bounds("document-issues");
+        assert!(
+            body.size.width >= px(192.),
+            "Detail leaves a usable document column: {body:?}"
+        );
+        assert!(within(rendered(cx, "process-project"), page));
+        assert!(within(rendered(cx, "open-project-detail"), page));
+        assert!(
+            within(guidance, body),
+            "the unprocessed document explains its next step in the body: {guidance:?} in {body:?} ({locale:?}); page={page:?}, title={title:?}, path={path:?}, actions={actions:?}, modes={modes:?}, issues={issues:?}"
+        );
+        let action = rendered(cx, "go-to-models");
+        assert!(
+            within(action, body),
+            "the setup action fits the narrow body: {action:?} in {body:?}"
+        );
+        assert!(action.size.width >= px(48.) && action.size.height >= px(24.));
+    }
+
+    select_row(cx, &view, "second");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let page = rendered(cx, "meetings-page");
+        let guidance = rendered(cx, "models-required");
+        let action = rendered(cx, "go-to-models");
+        let body = rendered(cx, "meeting-content");
+        assert!(within(guidance, page) && within(action, page), "the ready document keeps its compact setup guidance inside the content plane: {guidance:?}, {action:?}, {page:?}");
+        assert!(action.size.width >= px(48.) && action.size.height >= px(24.));
+        assert!(
+            body.size.height >= px(96.),
+            "the ready document keeps room for readable content: {body:?} ({locale:?})"
+        );
+    }
+    click_selector(cx, "go-to-models");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Models);
+}
+
 fn editor_fields(cx: &mut VisualTestContext, view: &View) -> (Field, Field, Area, Area) {
     view.read_with(cx, |root, _| {
         (
@@ -162,6 +325,264 @@ fn editor_fields(cx: &mut VisualTestContext, view: &View) -> (Field, Field, Area
             root.editor.body.clone(),
         )
     })
+}
+
+#[gpui::test]
+fn the_detail_trigger_closes_and_reopens_without_interrupting_the_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "Weekly"), "# Original document\n");
+    let before = documents.package_bytes("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    open_editor(cx, &view, "weekly");
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "A draft to keep");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    click_selector(cx, "open-project-detail");
+    assert!(cx.debug_bounds("detail-panel").is_some());
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    click_selector(cx, "open-project-detail");
+    assert!(
+        cx.debug_bounds("detail-panel").is_none(),
+        "the same detail trigger must close the panel it opened"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    cx.simulate_input("!");
+    assert_eq!(field_value(cx, &title), "A draft to keep!");
+    // Keyboard users can operate the same stable tab stop in both states.
+    view.update_in(cx, |root, window, cx| root.detail_trigger.focus(window, cx));
+    cx.run_until_parked();
+    for (key, open) in [("enter", true), ("space", false)] {
+        let keystroke = gpui::Keystroke::parse(key).unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.run_until_parked();
+        assert_eq!(cx.debug_bounds("detail-panel").is_some(), open);
+    }
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        Some(view.read_with(cx, |root, _| root.detail_trigger.clone()))
+    );
+    click_selector(cx, "open-project-detail");
+    let close = rendered(cx, "close-detail");
+    assert!(close.size.width > px(0.));
+    click_selector(cx, "close-detail");
+    assert!(cx.debug_bounds("detail-panel").is_none());
+    assert_eq!(field_value(cx, &title), "A draft to keep!");
+    assert_eq!(documents.package_bytes("weekly"), before);
+}
+
+#[gpui::test]
+fn the_editor_status_fits_beside_detail_and_remains_keyboard_operable(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let audio = documents.path().join("weekly/recording.wav");
+    let mut document = processed("weekly", "产品周会");
+    document.source.audio_path = audio.display().to_string();
+    document
+        .processing
+        .latest
+        .as_mut()
+        .unwrap()
+        .input_audio_checksum = None;
+    documents.put(document, "# 产品周会\n");
+    std::fs::write(audio, b"fixture recording").unwrap();
+    let before = documents.package_bytes("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    open_editor(cx, &view, "weekly");
+    click_selector(cx, "open-project-detail");
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    for (locale, expected) in [
+        (i18n::Locale::ZhCn, "final"),
+        (i18n::Locale::EnUs, "archived"),
+    ] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            root.editor.follow_locale(locale, &root.projects, cx);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let body = rendered(cx, "meeting-content");
+        let status = rendered(cx, "select-document-status");
+        assert!(status.left() >= body.left() && status.right() <= body.right(),
+            "the entire status control fits its reading column: {status:?} in {body:?} ({locale:?})");
+        let select = view.read_with(cx, |root, _| root.editor.status.clone());
+        let tags = view.read_with(cx, |root, _| root.editor.tags.clone());
+        focus_field(cx, &tags);
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        assert!(
+            cx.update(
+                |window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).is_focused(window)
+            ),
+            "Tab from tags reaches the status select"
+        );
+        let focused_status = rendered(cx, "select-document-status");
+        let focused_body = rendered(cx, "meeting-content");
+        assert!(within(focused_status, focused_body),
+            "keyboard focus reveals the whole status trigger: {focused_status:?} in {focused_body:?} ({locale:?})");
+        cx.simulate_keystrokes("enter");
+        let viewport = Bounds::from_corners(point(px(0.), px(0.)), point(px(900.), px(600.)));
+        assert!(
+            within(rendered(cx, "select-menu"), viewport),
+            "the keyboard menu remains within the window"
+        );
+        cx.simulate_keystrokes("down");
+        cx.simulate_keystrokes("enter");
+        assert_eq!(
+            select.read_with(cx, |select, _| select.selected_value().map(str::to_string)),
+            Some(expected.into())
+        );
+        assert_eq!(
+            documents.package_bytes("weekly"),
+            before,
+            "choosing a status only edits the draft"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_long_status_menu_opens_with_the_current_choice_visible(cx: &mut TestAppContext) {
+    long_status_menu(cx, crate::pages::chrome::MIN_WINDOW_SIZE, true);
+}
+
+#[gpui::test]
+fn a_long_status_menu_opened_by_pointer_keeps_manual_scrolling(cx: &mut TestAppContext) {
+    long_status_menu(cx, gpui::size(px(1180.), px(760.)), false);
+}
+
+fn long_status_menu(cx: &mut TestAppContext, size: gpui::Size<Pixels>, keyboard: bool) {
+    let documents = DocumentsRoot::new();
+    let mut active = processed("active", "Active document");
+    active.document_status.value = "stage-19".into();
+    documents.put(active, "# Active document\n");
+    for index in 0..19 {
+        let mut document = processed(&format!("status-{index:02}"), &format!("Status {index:02}"));
+        document.document_status.value = format!("stage-{index:02}");
+        documents.put(document, "");
+    }
+    let before = documents.package_bytes("active");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "active");
+    open_editor(cx, &view, "active");
+    cx.simulate_resize(size);
+    let select = view.read_with(cx, |root, _| root.editor.status.clone());
+    let index = view.read_with(cx, |root, _| {
+        controls::SelectOption::position(
+            &crate::editor::status_options(&root.projects, "stage-19", root.ui.locale),
+            Some("stage-19"),
+        )
+        .unwrap()
+    });
+    cx.update(|window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx));
+    cx.run_until_parked();
+    if keyboard {
+        cx.simulate_keystrokes("enter");
+    } else {
+        click_selector(cx, "select-document-status");
+    }
+    cx.run_until_parked();
+    let menu = rendered(cx, "select-menu");
+    let current = rendered(cx, leak(format!("select-option-{index}")));
+    assert!(within(current, menu), "the current status must be visible when the long menu first opens: {current:?} in {menu:?}");
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("stage-19".into())
+    );
+    // Opening reveals once; later redraws must leave manual browsing alone.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+    let before_scroll = rendered(cx, leak(format!("select-option-{index}")));
+    let position = rendered(cx, "select-menu").center();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(100.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let scrolled = rendered(cx, leak(format!("select-option-{index}")));
+    assert!(
+        scrolled.top() > before_scroll.top(),
+        "the menu can be manually scrolled"
+    );
+    let scrolled_position = scrolled.top() - rendered(cx, "select-menu").top();
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(
+        rendered(cx, leak(format!("select-option-{index}"))).top()
+            - rendered(cx, "select-menu").top(),
+        scrolled_position,
+        "a redraw must not snap back to the selected status"
+    );
+    cx.simulate_keystrokes("up");
+    cx.run_until_parked();
+    assert!(
+        within(
+            rendered(cx, leak(format!("select-option-{}", index - 1))),
+            rendered(cx, "select-menu")
+        ),
+        "keyboard navigation reveals its next choice after manual scrolling"
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        select.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+        Some("stage-18".into())
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(
+        within(
+            rendered(cx, leak(format!("select-option-{}", index - 1))),
+            rendered(cx, "select-menu")
+        ),
+        "reopening keeps the new draft choice visible"
+    );
+    // Choose a visible item in the middle of the list, away from either
+    // end. Reopening must not move that already visible choice to the top.
+    let position = rendered(cx, "select-menu").center();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(300.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let middle = leak(format!("select-option-{}", index - 12));
+    let item = rendered(cx, middle);
+    let menu = rendered(cx, "select-menu");
+    assert!(
+        within(item, menu),
+        "the middle choice is fully visible before selecting"
+    );
+    let previous_position = item.top() - menu.top();
+    click_selector(cx, middle);
+    assert_eq!(
+        select.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+        Some("stage-07".into())
+    );
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert_eq!(
+        rendered(cx, middle).top() - rendered(cx, "select-menu").top(),
+        previous_position,
+        "reopening must preserve the position of an already visible choice"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert_eq!(
+        documents.package_bytes("active"),
+        before,
+        "menu navigation only edits the draft"
+    );
 }
 
 /// Replaces a field's text as typing does.
@@ -444,6 +865,283 @@ fn detail_shows_revision_status_provenance_and_statistics(cx: &mut TestAppContex
     assert!(cx.debug_bounds("detail-revision").is_some());
 }
 
+/// Wheel over the reading area's padding so nested editor inputs do not
+/// consume a gesture meant for the document itself.
+pub(crate) fn scroll_document(cx: &mut VisualTestContext, view: &View) -> gpui::Point<Pixels> {
+    let area = rendered(cx, "meeting-content");
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: point(area.left() + px(4.), area.center().y),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-240.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let offset = view.read_with(cx, |root, _| root.scroll.meeting_content.offset());
+    assert!(offset.y < px(0.), "the document really scrolls: {offset:?}");
+    offset
+}
+
+#[gpui::test]
+fn a_new_document_starts_at_the_top_without_resetting_the_current_read(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    for (index, id) in ["first", "second"].into_iter().enumerate() {
+        let mut document = processed(id, id);
+        document.hierarchy.sibling_order = index as u32;
+        document.content.summary = Some(format!("Reading {id} document.\n").repeat(120));
+        documents.put(document, "# Original document\n");
+    }
+    let (view, cx, changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    select_row(cx, &view, "first");
+    let offset = scroll_document(cx, &view);
+    select_row(cx, &view, "first");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        offset,
+        "selecting the current document keeps its reading position"
+    );
+    let mut external = documents.read("first").state;
+    external.content.title = "Refreshed externally".into();
+    documents.external_save(external);
+    let first_bytes = documents.package_bytes("first");
+    let second_bytes = documents.package_bytes("second");
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|p| p.title() == "Refreshed externally")
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        offset,
+        "a background refresh of the same document preserves the current read"
+    );
+    select_row(cx, &view, "second");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default(),
+        "a newly selected document must not inherit the previous document's middle"
+    );
+    let offset = scroll_document(cx, &view);
+    click_selector(cx, "nav-Settings");
+    click_selector(cx, "nav-Meetings");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        offset,
+        "visiting another route keeps the same document's reading position"
+    );
+    assert_eq!(documents.package_bytes("first"), first_bytes);
+    assert_eq!(documents.package_bytes("second"), second_bytes);
+}
+
+#[gpui::test]
+fn switching_document_views_starts_at_the_top_and_keeps_the_edit_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let mut document = processed("weekly", "Weekly");
+    document.content.summary = Some("A long summary paragraph.\n".repeat(120));
+    document.results.transcript = (0..100)
+        .map(|index| TranscriptSegment {
+            id: format!("t-{index}"),
+            start_ms: index * 4000,
+            end_ms: (index + 1) * 4000,
+            text: format!("Transcript paragraph {index}."),
+        })
+        .collect();
+    document.results.diarization[0].end_ms = 400000;
+    document.results.speaker_segments = domain::align_transcript_and_speakers(
+        &document.results.transcript,
+        &document.results.diarization,
+    );
+    documents.put(document, "# Original body\n");
+    let before = documents.package_bytes("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    view.update(cx, |root, cx| {
+        root.ui.locale = i18n::Locale::EnUs;
+        cx.notify();
+    });
+    select_row(cx, &view, "weekly");
+    scroll_document(cx, &view);
+    click_selector(cx, "content-mode-original");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default(),
+        "Original starts at its first speaker and sentence"
+    );
+    let offset = scroll_document(cx, &view);
+    click_selector(cx, "content-mode-original");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        offset
+    );
+    open_editor(cx, &view, "weekly");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default()
+    );
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "Keep my draft across views");
+    scroll_document(cx, &view);
+    click_selector(cx, "content-mode-summary");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default()
+    );
+    open_editor(cx, &view, "weekly");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default()
+    );
+    assert_eq!(field_value(cx, &title), "Keep my draft across views");
+    assert_eq!(documents.package_bytes("weekly"), before);
+}
+
+#[gpui::test]
+fn an_unprocessed_selection_has_a_selected_view_and_keeps_its_edit_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("ready", "Ready"), "# Processed body\n");
+    let audio = documents.path().join("new/recording.wav");
+    let mut imported = DocumentState::new(
+        ProjectId::new("new"),
+        "New recording",
+        audio.display().to_string(),
+    );
+    imported.hierarchy.sibling_order = 1;
+    documents.put(imported, "# New recording\n");
+    std::fs::write(audio, b"fixture recording").unwrap();
+    let ready_bytes = documents.package_bytes("ready");
+    let new_bytes = documents.package_bytes("new");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    select_row(cx, &view, "ready");
+    click_selector(cx, "content-mode-original");
+    select_row(cx, &view, "new");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "the hidden Original option must not leave every visible choice unselected"
+    );
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    assert!(within(
+        rendered(cx, "models-required"),
+        rendered(cx, "meeting-content")
+    ));
+    click_selector(cx, "go-to-models");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Models);
+    click_selector(cx, "nav-Meetings");
+    open_editor(cx, &view, "new");
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "Keep the unprocessed draft");
+    select_row(cx, &view, "ready");
+    select_row(cx, &view, "new");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("new"))
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Edit
+    );
+    assert_eq!(field_value(cx, &title), "Keep the unprocessed draft");
+    assert_eq!(documents.package_bytes("ready"), ready_bytes);
+    assert_eq!(documents.package_bytes("new"), new_bytes);
+}
+
+#[gpui::test]
+fn removing_the_stored_processing_record_reselects_an_available_view(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "Weekly"), "# Original body\n");
+    let (view, cx, changes) = open_on(cx, &documents);
+    click_selector(cx, "content-mode-original");
+    let mut external = documents.read("weekly").state;
+    external.processing = Default::default();
+    external.results = Default::default();
+    documents.external_save(external);
+    let before = documents.package_bytes("weekly");
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.projects
+            .iter()
+            .any(|p| p.id().as_str() == "weekly" && p.processing.latest.is_none())
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Summary,
+        "an external refresh must not leave the disappeared Original option selected"
+    );
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    open_editor(cx, &view, "weekly");
+    let (title, ..) = editor_fields(cx, &view);
+    assert_eq!(field_value(cx, &title), "Weekly");
+    assert_eq!(documents.package_bytes("weekly"), before);
+}
+
+#[gpui::test]
+fn a_failed_later_attempt_keeps_saved_results_readable_and_correctable(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "Weekly"), "# Original body\n");
+    let (view, cx, changes) = open_on(cx, &documents);
+    click_selector(cx, "content-mode-original");
+    let mut external = documents.read("weekly").state;
+    external.set_processing_error("A later processing attempt failed");
+    documents.external_save(external);
+    let failed = documents.read("weekly");
+    let before = documents.package_bytes("weekly");
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.projects.iter().any(|p| {
+            p.processing.last_error.as_deref() == Some("A later processing attempt failed")
+        })
+    });
+    assert!(
+        cx.debug_bounds("content-mode-original").is_some(),
+        "a failed later attempt must not hide the last successful transcript"
+    );
+    rendered(cx, "document-status-Failed");
+    rendered(cx, "document-speakers");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Original
+    );
+    click_selector(cx, "content-mode-summary");
+    rendered(cx, "document-summary");
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        before,
+        "reading writes nothing"
+    );
+    click_selector(cx, "content-mode-original");
+    let name = view.read_with(cx, |root, _| {
+        root.speaker_rows
+            .as_ref()
+            .unwrap()
+            .row("speaker-0")
+            .unwrap()
+            .name
+            .clone()
+    });
+    retype(cx, &name, "Host");
+    click_selector(cx, "rename-speaker-speaker-0");
+    wait_for(cx, &view, |root| {
+        root.speaker_command.is_none()
+            && documents.revision("weekly") == failed.state.revision() + 1
+    });
+    let after = documents.read("weekly");
+    assert_eq!(after.state.processing, failed.state.processing);
+    assert_eq!(after.markdown, failed.markdown);
+    assert_eq!(
+        after.state.results.transcript,
+        failed.state.results.transcript
+    );
+    assert!(after
+        .state
+        .results
+        .speaker_segments
+        .iter()
+        .all(|s| s.speaker_label.as_deref() == Some("Host")));
+    assert!(view.read_with(cx, |root, _| root.document_conflict.is_none()));
+    rendered(cx, "document-status-Failed");
+}
+
 #[gpui::test]
 fn the_editor_saves_every_semantic_field_with_the_loaded_revision(cx: &mut TestAppContext) {
     let root = DocumentsRoot::new();
@@ -505,6 +1203,123 @@ fn the_editor_saves_every_semantic_field_with_the_loaded_revision(cx: &mut TestA
 }
 
 #[gpui::test]
+fn the_save_shortcut_keeps_the_editor_focus_scroll_and_insertion_point(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("weekly", "Weekly"), "# Weekly\n");
+    let revision = documents.revision("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    select_row(cx, &view, "weekly");
+    open_editor(cx, &view, "weekly");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    focus_field(cx, &title);
+    cx.simulate_keystrokes("ctrl-tab ctrl-tab ctrl-tab ctrl-tab");
+    assert!(
+        cx.update(|window, cx| gpui::Focusable::focus_handle(body.read(cx), cx).is_focused(window)),
+        "keyboard traversal reaches the Markdown field"
+    );
+    let edited = format!(
+        "# Weekly\n\n{}pending",
+        "A paragraph in a long document.\n\n".repeat(30)
+    );
+    retype_area(cx, &body, &edited);
+    cx.simulate_keystrokes("left left left");
+    cx.run_until_parked();
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.offset());
+    cx.simulate_keystrokes("cmd-s");
+    wait_for(cx, &view, |root| {
+        root.editor.saving.is_none()
+            && root.editor.draft_revision(&ProjectId::new("weekly")) == Some(revision + 1)
+            && root
+                .projects
+                .iter()
+                .any(|p| p.id().as_str() == "weekly" && p.revision() == revision + 1)
+    });
+    assert_eq!(documents.read("weekly").markdown, edited);
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        scroll
+    );
+    cx.simulate_input("!");
+    assert_eq!(
+        area_value(cx, &body),
+        format!("{}pend!ing", edited.strip_suffix("pending").unwrap()),
+        "save completion preserves the insertion point"
+    );
+    assert_eq!(
+        documents.read("weekly").markdown,
+        edited,
+        "new typing stays a draft"
+    );
+    let saved = documents.package_bytes("weekly");
+    click_selector(cx, "content-mode-summary");
+    cx.simulate_keystrokes("cmd-s");
+    assert!(view.read_with(cx, |root, _| root.editor.saving.is_none()));
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        saved,
+        "Summary does not save hidden fields"
+    );
+    cx.simulate_keystrokes("cmd-4 cmd-s");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Settings);
+    assert!(view.read_with(cx, |root, _| root.editor.saving.is_none()));
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        saved,
+        "Settings does not save a document draft"
+    );
+}
+
+#[gpui::test]
+fn the_save_shortcut_does_not_write_a_draft_hidden_by_another_documents_read_error(
+    cx: &mut TestAppContext,
+) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    documents.put(processed("b", "B"), "# B\n");
+    let a = documents.package_bytes("a");
+    let b = documents.package_bytes("b");
+    let revision = documents.revision("a");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    open_editor(cx, &view, "a");
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "A draft");
+    std::fs::remove_file(documents.path().join("b/state.json")).unwrap();
+    select_row(cx, &view, "b");
+    wait_for(cx, &view, |root| {
+        root.editor.read_errors.contains_key(&ProjectId::new("b"))
+    });
+    std::fs::write(documents.path().join("b/state.json"), &b[0]).unwrap();
+    select_row(cx, &view, "a");
+    open_editor(cx, &view, "a");
+    assert_eq!(field_value(cx, &title), "A draft");
+    select_row(cx, &view, "b");
+    rendered(cx, "document-editor-read-failed");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.editor.shown().cloned()),
+        Some(ProjectId::new("a")),
+        "the retained editor belongs to A while B shows its read error"
+    );
+    cx.simulate_keystrokes("cmd-s");
+    assert!(view.read_with(cx, |root, _| root.editor.saving.is_none()));
+    assert_eq!(
+        documents.package_bytes("a"),
+        a,
+        "an invisible draft must not be saved"
+    );
+    assert_eq!(documents.package_bytes("b"), b);
+    select_row(cx, &view, "a");
+    cx.simulate_keystrokes("cmd-s");
+    wait_for(cx, &view, |root| {
+        root.editor.draft_revision(&ProjectId::new("a")) == Some(revision + 1)
+    });
+    assert_eq!(documents.read("a").state.title(), "A draft");
+}
+
+#[gpui::test]
 fn a_save_after_an_external_change_conflicts_and_leaves_the_disk_unchanged(
     cx: &mut TestAppContext,
 ) {
@@ -523,7 +1338,7 @@ fn a_save_after_an_external_change_conflicts_and_leaves_the_disk_unchanged(
     root.external_save(external);
     let on_disk = root.package_bytes("weekly");
 
-    click_selector(cx, "save-document");
+    cx.simulate_keystrokes("cmd-s");
     wait_for(cx, &view, |root| root.document_conflict.is_some());
     let conflict = view.read_with(cx, |root, _| root.document_conflict.clone().unwrap());
     assert_eq!(conflict.document_id.as_str(), "weekly");
@@ -564,6 +1379,152 @@ fn a_save_after_an_external_change_conflicts_and_leaves_the_disk_unchanged(
     let saved = root.read("weekly").state;
     assert_eq!(saved.revision(), loaded + 2);
     assert_eq!(saved.title(), "合并后的标题");
+}
+
+#[gpui::test]
+fn a_long_chinese_conflict_keeps_recovery_and_the_editor_visible(cx: &mut TestAppContext) {
+    long_conflict_recovery(cx, i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn a_long_english_conflict_keeps_recovery_beside_detail(cx: &mut TestAppContext) {
+    long_conflict_recovery(cx, i18n::Locale::EnUs, true);
+}
+
+fn long_conflict_recovery(cx: &mut TestAppContext, locale: i18n::Locale, detail: bool) {
+    let documents = DocumentsRoot::new();
+    let long_title = match locale {
+        i18n::Locale::ZhCn => "产品规划与用户访谈记录".repeat(80),
+        i18n::Locale::EnUs => "Product planning and customer interviews ".repeat(70),
+    };
+    documents.put(processed("weekly", &long_title), "# Original document\n");
+    let revision = documents.revision("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    select_row(cx, &view, "weekly");
+    open_editor(cx, &view, "weekly");
+    view.update(cx, |root, cx| {
+        root.ui.locale = locale;
+        cx.notify();
+    });
+    if detail {
+        click_selector(cx, "open-project-detail");
+    }
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "Local draft");
+    let mut external = documents.read("weekly").state;
+    external.content.summary = Some("External update".into());
+    documents.external_save(external);
+    let external_bytes = documents.package_bytes("weekly");
+    cx.simulate_keystrokes("cmd-s");
+    wait_for(cx, &view, |root| {
+        root.document_conflict.is_some()
+            && root
+                .projects
+                .iter()
+                .any(|p| p.id().as_str() == "weekly" && p.revision() == revision + 1)
+    });
+    // Acknowledge the global notification; the persistent conflict panel
+    // must keep recovery available after the notification is dismissed.
+    click_selector(cx, "notice-toast-close");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    wait_for(cx, &view, |root| root.ui.toast().is_none());
+    let notice = rendered(cx, "document-conflict");
+    let plane = rendered(cx, "meetings-page");
+    assert!(
+        within(notice, plane),
+        "the long conflict must stay in the content plane: {notice:?} in {plane:?}"
+    );
+    assert!(within(rendered(cx, "reload-conflicted-document"), notice));
+    let editor = rendered(cx, "meeting-content");
+    assert!(
+        editor.size.height >= px(80.),
+        "the conflict must leave room to keep editing: {editor:?} below {notice:?}"
+    );
+    let message = rendered(cx, "document-conflict-message");
+    assert_eq!(
+        rendered(cx, "document-conflict-scrollbar-viewport").right(),
+        message.right(),
+        "the recovery scrollbar stays at its reading area's right edge"
+    );
+    assert_eq!(
+        rendered(cx, "meeting-content-scrollbar-viewport").right(),
+        plane.right(),
+        "compact padding must not move the document scrollbar away from its container edge"
+    );
+    let text = rendered(cx, "document-conflict-text");
+    assert!(
+        text.size.height > message.size.height,
+        "the full title is kept in a bounded reading area"
+    );
+    focus_field(cx, &title);
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let editor_scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.offset());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: message.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-10000.))),
+        modifiers: Default::default(),
+        touch_phase: gpui::TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let text = rendered(cx, "document-conflict-text");
+    let message = rendered(cx, "document-conflict-message");
+    assert!(
+        text.top() < message.top() && text.bottom() <= message.bottom() + px(1.),
+        "scrolling reaches the full title, recovery hint and revision"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        editor_scroll
+    );
+    cx.simulate_input("!");
+    assert_eq!(
+        field_value(cx, &title),
+        "Local draft!",
+        "reading the conflict must not interrupt editing"
+    );
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        external_bytes,
+        "the refused save and later typing leave the external version intact"
+    );
+    click_selector(cx, "reload-conflicted-document");
+    wait_for(cx, &view, |root| {
+        root.document_conflict.is_none()
+            && root.editor.draft_revision(&ProjectId::new("weekly")) == Some(revision + 1)
+    });
+    assert_eq!(field_value(cx, &title), long_title);
+    assert_eq!(
+        documents.package_bytes("weekly"),
+        external_bytes,
+        "reload is read-only"
+    );
+    // A later conflict gets its own reading position, rather than inheriting
+    // the bottom of the previous conflict's long message.
+    retype(cx, &title, "Second draft");
+    let mut external = documents.read("weekly").state;
+    external.content.summary = Some("Another external update".into());
+    documents.external_save(external);
+    let external_bytes = documents.package_bytes("weekly");
+    cx.simulate_keystrokes("cmd-s");
+    wait_for(cx, &view, |root| {
+        root.document_conflict
+            .as_ref()
+            .is_some_and(|c| c.expected == revision + 1 && c.actual == revision + 2)
+            && root
+                .projects
+                .iter()
+                .any(|p| p.id().as_str() == "weekly" && p.revision() == revision + 2)
+    });
+    assert!(
+        rendered(cx, "document-conflict-text").top()
+            >= rendered(cx, "document-conflict-message").top(),
+        "a new conflict starts at the beginning of its message"
+    );
+    assert_eq!(field_value(cx, &title), "Second draft");
+    assert_eq!(documents.package_bytes("weekly"), external_bytes);
 }
 
 /// `rec` with the children `a` and `b`, and a second recording `other`.
@@ -837,5 +1798,1392 @@ fn every_editor_control_carries_its_label_in_the_current_locale(cx: &mut TestApp
         labels(cx),
         expected(i18n::Locale::EnUs),
         "a locale change relabels the editor"
+    );
+}
+
+/// Real runtime events with a gated processing outcome; no model inference.
+fn pending_processing(
+    cx: &mut VisualTestContext,
+    view: &View,
+) -> futures::channel::oneshot::Sender<Result<DocumentState, contracts::BackendError>> {
+    let jobs = runtime::JobRuntime::default();
+    let (asr_context, asr_events) = jobs.create_job();
+    let (diarization_context, diarization_events) = jobs.create_job();
+    let (outcome, result) = futures::channel::oneshot::channel();
+    let job = application::ProjectProcessingJob {
+        future: Box::pin(async move { result.await.unwrap() }),
+        asr_context: asr_context.clone(),
+        diarization_context: diarization_context.clone(),
+        asr_events,
+        diarization_events,
+    };
+    view.update(cx, |root, cx| {
+        root.ui
+            .begin_processing(root.ui.selected_project.clone().unwrap());
+        root.cancel_contexts = Some((asr_context, diarization_context));
+        cx.notify();
+        cx.spawn(async move |this, cx| RootView::follow_processing(this, job, cx).await)
+            .detach();
+    });
+    cx.run_until_parked();
+    outcome
+}
+
+#[gpui::test]
+fn processing_completion_keeps_another_documents_draft_focus_and_history(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    b.content.summary = Some("继续整理会议记录。\n".repeat(120));
+    documents.put(b, "# B\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(1180.), px(600.)));
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    select_row(cx, &view, "b");
+    open_editor(cx, &view, "b");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    retype(cx, &title, "B 未保存的标题");
+    retype_area(cx, &body, "继续编辑 B");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    scroll.set_offset(point(px(0.), px(-100.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let position = scroll.offset();
+    assert!(position.y < px(0.));
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let before = documents.package_bytes("b");
+    let mut finished = documents.read("a").state;
+    finished.content.summary = Some("A 的新结果".into());
+    documents.external_save(finished);
+    outcome.send(Ok(documents.read("a").state)).unwrap();
+    wait_for(cx, &view, |root| {
+        !root.ui.processing
+            && root.projects.iter().any(|p| {
+                p.id().as_str() == "a" && p.content.summary.as_deref() == Some("A 的新结果")
+            })
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.selected_project,
+            Some(ProjectId::new("b")),
+            "A must not replace B"
+        );
+        assert_eq!(root.editor.shown(), Some(&ProjectId::new("b")));
+        assert_eq!(root.ui.content_mode, crate::state::ContentMode::Edit);
+        assert_eq!(root.ui.notice, "已完成 A");
+        assert!(root.ui.processing_project.is_none());
+    });
+    assert_eq!(scroll.offset(), position);
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(field_value(cx, &title), "B 未保存的标题");
+    assert_eq!(area_value(cx, &body), "继续编辑 B");
+    assert_eq!(documents.package_bytes("b"), before);
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    click_selector(cx, "navigate-forward");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("b"))
+    );
+    assert_eq!(field_value(cx, &title), "B 未保存的标题");
+}
+
+#[gpui::test]
+fn processing_completion_refreshes_the_still_selected_document(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(
+        DocumentState::new(ProjectId::new("a"), "A", "a.wav"),
+        "# A\n",
+    );
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    assert!(cx.debug_bounds("content-mode-original").is_none());
+    let mut finished = processed("a", "A");
+    finished.schema.revision = documents.revision("a");
+    documents.external_save(finished);
+    outcome.send(Ok(documents.read("a").state)).unwrap();
+    wait_for(cx, &view, |root| {
+        !root.ui.processing
+            && root.projects.iter().any(|p| {
+                p.id().as_str() == "a" && p.processing_status() == domain::ProjectStatus::Ready
+            })
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    rendered(cx, "content-mode-original");
+}
+
+#[gpui::test]
+fn a_failed_document_read_waits_for_retry_and_recovers_restored_files(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let before = documents.package_bytes("a");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    // An external editor moves the package between list loading and Edit.
+    std::fs::remove_file(documents.path().join("a/state.json")).unwrap();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.ui.notice.contains("state.json") && root.editor.loading.is_empty()
+    });
+    cx.run_until_parked();
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    cx.run_until_parked();
+    assert!(within(
+        rendered(cx, "retry-document-read"),
+        rendered(cx, "meeting-content")
+    ));
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    assert!(
+        notice.contains("state.json"),
+        "the failed read keeps its source path"
+    );
+    assert!(cx.debug_bounds("document-editor-loading").is_none());
+    assert!(view.read_with(cx, |root, _| root.editor.shown().is_none()));
+    std::fs::write(documents.path().join("a/state.json"), &before[0]).unwrap();
+    // Redrawing after the file returns does not silently restart a read.
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |root, _| root.editor.shown().is_none()));
+    rendered(cx, "retry-document-read");
+    // The failed read's stored text remains Chinese across a locale change.
+    view.update(cx, |root, cx| {
+        root.ui.locale = i18n::Locale::EnUs;
+        cx.notify();
+    });
+    let reached = (0..40).any(|_| {
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        cx.debug_bounds("focus-ring")
+            .is_some_and(|ring| within(ring, rendered(cx, "retry-document-read")))
+    });
+    assert!(reached, "Tab reaches the document read recovery action");
+    let enter = gpui::Keystroke::parse("enter").unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: enter.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke: enter });
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("a"))
+    });
+    cx.run_until_parked();
+    let (title, _, _, body) = editor_fields(cx, &view);
+    assert_eq!(field_value(cx, &title), "A");
+    assert_eq!(area_value(cx, &body), "# A\n");
+    assert_eq!(documents.package_bytes("a"), before);
+    assert!(
+        view.read_with(cx, |root, _| root.ui.notice.is_empty()),
+        "the restored document must not retain its failed-read notice"
+    );
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |root, _| root.ui.toast().is_none()));
+}
+
+fn document_retry_after_locale_change(
+    cx: &mut TestAppContext,
+    first: i18n::Locale,
+    next: i18n::Locale,
+    newer_error: bool,
+) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let before = documents.package_bytes("a");
+    let settings = test_settings();
+    let mut initial = settings.snapshot().unwrap();
+    initial.ui_locale = first.code().into();
+    settings.update(initial).unwrap();
+    let mut services = desktop_services(
+        Arc::new(FakeAssistantUiService::default()),
+        settings.clone(),
+    );
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(Arc::new(documents.repository())),
+    );
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.audio.pending());
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    std::fs::remove_file(documents.path().join("a/state.json")).unwrap();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.read_errors.contains_key(&ProjectId::new("a"))
+    });
+    cx.run_until_parked();
+    let old_toast = view.read_with(cx, |root, _| root.ui.toast().unwrap().notice.clone());
+    assert!(old_toast.contains("state.json"));
+    // Apply the real Settings language operation while the read error is shown.
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Settings, cx);
+        root.set_locale(next, cx);
+    });
+    wait_for(cx, &view, |root| {
+        root.ui.notice == i18n::text(next, "language_changed")
+    });
+    assert_eq!(settings.snapshot().unwrap().ui_locale, next.code());
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.toast().unwrap().notice.clone()),
+        old_toast
+    );
+    std::fs::write(documents.path().join("a/state.json"), &before[0]).unwrap();
+    let expected_notice = if newer_error {
+        i18n::message(next, "document_read_failed", "another/state.json")
+    } else {
+        i18n::text(next, "language_changed").into()
+    };
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Meetings, cx);
+        if newer_error {
+            root.ui.notice = expected_notice.clone();
+        }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_selector(cx, "retry-document-read");
+    wait_for(cx, &view, |root| {
+        root.editor.shown() == Some(&ProjectId::new("a"))
+    });
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert!(root.editor.read_errors.is_empty());
+        assert_eq!(
+            root.ui.notice, expected_notice,
+            "a newer notice is retained"
+        );
+        if newer_error {
+            assert_eq!(root.ui.toast().unwrap().notice, expected_notice);
+        } else {
+            assert!(
+                root.ui.toast().is_none(),
+                "the restored document must not retain its old-language read error toast"
+            );
+        }
+    });
+    assert_eq!(documents.package_bytes("a"), before);
+}
+
+#[gpui::test]
+fn document_retry_clears_the_chinese_error_after_settings_switches_to_english(
+    cx: &mut TestAppContext,
+) {
+    document_retry_after_locale_change(cx, i18n::Locale::ZhCn, i18n::Locale::EnUs, false);
+}
+
+#[gpui::test]
+fn document_retry_clears_the_english_error_after_settings_switches_to_chinese(
+    cx: &mut TestAppContext,
+) {
+    document_retry_after_locale_change(cx, i18n::Locale::EnUs, i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn document_retry_preserves_a_newer_error_after_settings_changes_language(cx: &mut TestAppContext) {
+    document_retry_after_locale_change(cx, i18n::Locale::ZhCn, i18n::Locale::EnUs, true);
+}
+
+#[gpui::test]
+fn a_document_read_retry_preserves_a_newer_notice_and_moved_focus(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let before = documents.package_bytes("a");
+    let read_gate = crate::tests::Gate::default();
+    let mut services =
+        desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(gated_read_repository(documents.repository(), &read_gate)),
+    );
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.audio.pending());
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    std::fs::remove_file(documents.path().join("a/state.json")).unwrap();
+    click_selector(cx, "content-mode-edit");
+    wait_for(cx, &view, |root| {
+        root.editor.read_errors.contains_key(&ProjectId::new("a"))
+    });
+    std::fs::write(documents.path().join("a/state.json"), &before[0]).unwrap();
+    read_gate.arm();
+    click_selector(cx, "retry-document-read");
+    wait_for(cx, &view, |_| read_gate.counts().0 == 1);
+
+    // The user moves to a different field; a later error has the same
+    // translated prefix but belongs to another document.
+    let later_notice = i18n::message(
+        i18n::Locale::ZhCn,
+        "document_read_failed",
+        "another/state.json",
+    );
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Assistant, cx);
+        // A same-root list refresh must not invalidate this editor read.
+        root.reload_projects(cx);
+        root.ui.notice = later_notice.clone();
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "continue this question");
+    let moved_focus = cx.update(|window, cx| window.focused(cx));
+    read_gate.release();
+    wait_for(cx, &view, |root| root.editor.loading.is_empty());
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        later_notice
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), moved_focus);
+    assert_eq!(field_value(cx, &prompt), "continue this question");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Assistant);
+        assert!(root.editor.read_errors.is_empty());
+        assert_eq!(root.editor.shown(), Some(&ProjectId::new("a")));
+        assert_eq!(root.ui.toast().unwrap().notice, later_notice);
+    });
+    assert_eq!(documents.package_bytes("a"), before);
+}
+
+#[gpui::test]
+fn processing_status_and_cancel_belong_to_the_running_document(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    documents.put(b, "# B\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    select_row(cx, &view, "b");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    cx.run_until_parked();
+    rendered(cx, "project-status-a-Processing");
+    rendered(cx, "project-status-b-Ready");
+    rendered(cx, "document-status-Ready");
+    let contexts = view.read_with(cx, |root, _| root.cancel_contexts.clone().unwrap());
+    click_selector(cx, "process-project");
+    assert!(
+        !contexts.0.is_cancelled() && !contexts.1.is_cancelled(),
+        "B must not cancel A"
+    );
+    select_row(cx, &view, "a");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    cx.run_until_parked();
+    rendered(cx, "document-status-Processing");
+    click_selector(cx, "process-project");
+    assert!(
+        contexts.0.is_cancelled() && contexts.1.is_cancelled(),
+        "A can still be cancelled: {:?}",
+        view.read_with(cx, |root, _| (
+            root.ui.selected_project.clone(),
+            root.ui.processing_project.clone(),
+            root.ui.notice.clone()
+        ))
+    );
+    outcome
+        .send(Err(contracts::BackendError {
+            code: contracts::BackendErrorCode::Cancelled,
+            message: "cancelled".into(),
+        }))
+        .unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    rendered(cx, "project-status-a-Ready");
+    assert!(cx.debug_bounds("project-status-a-Processing").is_none());
+    assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_none()));
+}
+
+#[gpui::test]
+fn processing_failure_clears_the_document_identity(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    let context = view.read_with(cx, |root, _| {
+        root.cancel_contexts.as_ref().unwrap().0.clone()
+    });
+    context.failed("fixture failure");
+    cx.run_until_parked();
+    rendered(cx, "processing-transcription-failed");
+    assert!(view.read_with(cx, |root, _| root.ui.notice.is_empty()));
+    outcome
+        .send(Err(contracts::BackendError {
+            code: contracts::BackendErrorCode::InferenceFailed,
+            message: "fixture failure".into(),
+        }))
+        .unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    rendered(cx, "project-status-a-Ready");
+    assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_none()));
+}
+
+#[gpui::test]
+fn processing_feedback_stays_visible_in_default_and_minimum_windows(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    wait_for(cx, &view, |root| !root.audio.pending());
+    let outcome = pending_processing(cx, &view);
+    let contexts = view.read_with(cx, |root, _| root.cancel_contexts.clone().unwrap());
+    contexts.0.started();
+    contexts.1.started();
+    cx.run_until_parked();
+    let progress = rendered(cx, "processing-progress");
+    assert!(within(rendered(cx, "processing-transcription"), progress));
+    assert!(within(rendered(cx, "processing-diarization"), progress));
+    rendered(cx, "processing-transcription-indeterminate");
+    rendered(cx, "processing-diarization-indeterminate");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.notice.clone()), "");
+    contexts.0.report(runtime::Progress {
+        completed: 1,
+        total: Some(4),
+    });
+    contexts.1.report(runtime::Progress {
+        completed: 3,
+        total: None,
+    });
+    cx.run_until_parked();
+    rendered(cx, "processing-transcription-determinate");
+    rendered(cx, "processing-diarization-indeterminate");
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    cx.run_until_parked();
+    let progress = rendered(cx, "processing-progress");
+    assert!(within(progress, rendered(cx, "meetings-page")));
+    assert!(progress.bottom() <= rendered(cx, "content-mode-group").top());
+    assert!(rendered(cx, "meeting-content").size.height > px(0.));
+    contexts.0.report(runtime::Progress {
+        completed: 4,
+        total: Some(4),
+    });
+    cx.run_until_parked();
+    rendered(cx, "processing-transcription-running");
+    contexts.0.completed();
+    cx.run_until_parked();
+    rendered(cx, "processing-transcription-completed");
+    outcome.send(Ok(documents.read("a").state)).unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("processing-progress").is_none());
+}
+
+#[gpui::test]
+fn background_processing_feedback_preserves_the_active_edit_and_notice(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    documents.put(b, "# B\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    let contexts = view.read_with(cx, |root, _| root.cancel_contexts.clone().unwrap());
+    select_row(cx, &view, "b");
+    open_editor(cx, &view, "b");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    retype(cx, &title, "B 的草稿");
+    retype_area(cx, &body, "继续编辑 B");
+    let focus = cx.update(|window, cx| window.focused(cx));
+    view.update(cx, |root, cx| {
+        root.ui.notice = i18n::message(root.ui.locale, "document_saved", "B");
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let toast = view.read_with(cx, |root, _| root.ui.toast().map(|toast| toast.generation));
+    contexts.0.started();
+    contexts.1.started();
+    contexts.0.report(runtime::Progress {
+        completed: 2,
+        total: Some(5),
+    });
+    contexts.1.report(runtime::Progress {
+        completed: 1,
+        total: Some(3),
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("processing-progress").is_none());
+    assert_eq!(view.read_with(cx, |root, _| root.ui.notice.clone()), notice);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.toast().map(|toast| toast.generation)),
+        toast
+    );
+    assert_eq!(field_value(cx, &title), "B 的草稿");
+    assert_eq!(area_value(cx, &body), "继续编辑 B");
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    outcome.send(Ok(documents.read("a").state)).unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+}
+
+#[gpui::test]
+fn completed_processing_cancellation_is_one_neutral_owner_notice(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    documents.put(b, "# B\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let outcome = pending_processing(cx, &view);
+    let contexts = view.read_with(cx, |root, _| root.cancel_contexts.clone().unwrap());
+    contexts.0.cancel();
+    contexts.1.cancel();
+    cx.run_until_parked();
+    assert!(
+        view.read_with(cx, |root, _| root.ui.notice.is_empty()),
+        "stage cancellation does not replace the final outcome notice"
+    );
+    select_row(cx, &view, "b");
+    outcome
+        .send(Err(contracts::BackendError {
+            code: contracts::BackendErrorCode::Cancelled,
+            message: "cancelled".into(),
+        }))
+        .unwrap();
+    wait_for(cx, &view, |root| !root.ui.processing);
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        let toast = root.ui.toast().unwrap();
+        assert_eq!(toast.notice, "已取消 A");
+        assert_eq!(toast.tone, crate::state::NoticeTone::Info);
+        assert!(root.ui.processing_project.is_none());
+    });
+}
+
+/// Gates real repository returns after package IO and its locks are finished.
+struct GatedDocumentRepository {
+    inner: FileDocumentRepository,
+    gate: crate::tests::Gate,
+    snapshot_failure_gate: crate::tests::Gate,
+    read_gate: crate::tests::Gate,
+}
+
+pub(crate) fn gated_read_repository(
+    inner: FileDocumentRepository,
+    read_gate: &crate::tests::Gate,
+) -> Arc<dyn application::DocumentRepository> {
+    Arc::new(GatedDocumentRepository {
+        inner,
+        gate: Default::default(),
+        snapshot_failure_gate: Default::default(),
+        read_gate: read_gate.clone(),
+    })
+}
+
+pub(crate) fn gated_save_repository(
+    inner: FileDocumentRepository,
+    gate: &crate::tests::Gate,
+) -> Arc<dyn application::DocumentRepository> {
+    gated_import_repository(inner, gate, &crate::tests::Gate::default())
+}
+
+pub(crate) fn gated_import_repository(
+    inner: FileDocumentRepository,
+    gate: &crate::tests::Gate,
+    snapshot_failure_gate: &crate::tests::Gate,
+) -> Arc<dyn application::DocumentRepository> {
+    Arc::new(GatedDocumentRepository {
+        inner,
+        gate: gate.clone(),
+        snapshot_failure_gate: snapshot_failure_gate.clone(),
+        read_gate: Default::default(),
+    })
+}
+
+impl application::DocumentRepository for GatedDocumentRepository {
+    fn snapshot(&self) -> Result<application::DocumentSnapshot, String> {
+        let snapshot = self.inner.snapshot();
+        if snapshot.is_err() {
+            self.snapshot_failure_gate.pass();
+        }
+        snapshot
+    }
+
+    fn get(&self, id: &domain::DocumentId) -> Result<Option<DocumentState>, String> {
+        self.inner.get(id)
+    }
+
+    fn read(&self, id: &domain::DocumentId) -> Result<Option<DocumentRecord>, String> {
+        let record = self.inner.read(id);
+        self.read_gate.pass();
+        record
+    }
+
+    fn watch(&self) -> Result<std::sync::mpsc::Receiver<DocumentChange>, String> {
+        self.inner.watch()
+    }
+
+    fn subscribe_changes(&self) -> Result<application::DocumentChanges, String> {
+        self.inner.subscribe_changes()
+    }
+
+    fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
+        self.inner.save(document, markdown)?;
+        self.gate.pass();
+        Ok(())
+    }
+}
+
+fn open_import_on<'a>(
+    cx: &'a mut TestAppContext,
+    documents: &DocumentsRoot,
+    gate: &crate::tests::Gate,
+) -> (View, &'a mut VisualTestContext) {
+    open_import_with_snapshot_gate_on(cx, documents, gate, &crate::tests::Gate::default())
+}
+
+fn open_import_with_snapshot_gate_on<'a>(
+    cx: &'a mut TestAppContext,
+    documents: &DocumentsRoot,
+    gate: &crate::tests::Gate,
+    snapshot_failure_gate: &crate::tests::Gate,
+) -> (View, &'a mut VisualTestContext) {
+    let mut services =
+        desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(Arc::new(GatedDocumentRepository {
+            inner: documents.repository(),
+            gate: gate.clone(),
+            snapshot_failure_gate: snapshot_failure_gate.clone(),
+            read_gate: Default::default(),
+        })),
+    );
+    open_desktop_on(cx, services)
+}
+
+#[gpui::test]
+fn background_import_preserves_the_document_chosen_while_completion_waits(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let mut b = processed("b", "B");
+    b.hierarchy.sibling_order = 1;
+    b.content.summary = Some("继续阅读与编辑这份记录。\n".repeat(100));
+    documents.put(b, "# B\n");
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("arriving.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    select_row(cx, &view, "a");
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    assert_eq!(
+        documents.repository().snapshot().unwrap().documents.len(),
+        3,
+        "the real import committed its package before returning"
+    );
+    assert_eq!(view.read_with(cx, |root, _| root.projects.len()), 2);
+    select_row(cx, &view, "b");
+    open_editor(cx, &view, "b");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    retype(cx, &title, "B 等待导入时的草稿");
+    retype_area(cx, &body, "继续整理 B，保持这里的输入");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    scroll.set_offset(point(px(0.), px(-100.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let position = scroll.offset();
+    assert!(position.y < px(0.));
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let before = documents.package_bytes("b");
+    gate.release();
+    wait_for(cx, &view, |root| root.projects.len() == 3);
+    cx.run_until_parked();
+    let imported = view.read_with(cx, |root, _| {
+        root.projects
+            .iter()
+            .find(|doc| doc.title() == "arriving")
+            .unwrap()
+            .id()
+            .clone()
+    });
+    let record = documents.read(imported.as_str());
+    assert_eq!(record.state.audio_path(), audio.display().to_string());
+    assert!(
+        !record.markdown.is_empty(),
+        "the WorkspaceService created a real document package"
+    );
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.selected_project,
+            Some(ProjectId::new("b")),
+            "import must not replace the document chosen while it waited"
+        );
+        assert_eq!(root.ui.route, Route::Meetings);
+        assert_eq!(root.ui.content_mode, crate::state::ContentMode::Edit);
+        assert_eq!(root.editor.shown(), Some(&ProjectId::new("b")));
+        assert_eq!(
+            root.ui.toast().unwrap().notice,
+            i18n::message(root.ui.locale, "imported", "arriving")
+        );
+    });
+    assert_eq!(field_value(cx, &title), "B 等待导入时的草稿");
+    assert_eq!(area_value(cx, &body), "继续整理 B，保持这里的输入");
+    assert_eq!(scroll.offset(), position);
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(documents.package_bytes("b"), before);
+    click_selector(cx, "navigate-back");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    click_selector(cx, "navigate-forward");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("b"))
+    );
+    assert_eq!(field_value(cx, &title), "B 等待导入时的草稿");
+}
+
+#[gpui::test]
+fn first_import_selects_its_real_document_without_leaving_the_current_route(
+    cx: &mut TestAppContext,
+) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("first.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    view.read_with(cx, |root, _| {
+        assert!(root.projects_loaded);
+        assert!(root.projects.is_empty());
+        assert!(root.ui.selected_project.is_none());
+        assert_eq!(root.ui.route, Route::Assistant);
+    });
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    gate.release();
+    wait_for(cx, &view, |root| {
+        root.projects.len() == 1 && !root.audio.pending()
+    });
+    cx.run_until_parked();
+    let id = view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Assistant);
+        assert_eq!(
+            root.ui.selected_project.as_ref(),
+            Some(root.projects[0].id())
+        );
+        root.projects[0].id().clone()
+    });
+    let imported = documents.read(id.as_str());
+    assert_eq!(imported.state.title(), "first");
+    assert_eq!(imported.state.audio_path(), audio.display().to_string());
+    assert!(!imported.markdown.is_empty());
+}
+
+#[gpui::test]
+fn a_stale_import_snapshot_does_not_choose_a_document(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("late.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    documents.put(
+        DocumentState::new(ProjectId::new("external"), "External", "external.wav"),
+        "# External\n",
+    );
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| root.projects.len() == 2);
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    select_row(cx, &view, "external");
+    gate.release();
+    let notice = i18n::message(i18n::Locale::ZhCn, "imported", "late");
+    wait_for(cx, &view, |root| root.ui.notice == notice);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("external")),
+        "an outdated completion cannot replace the user's newer selection"
+    );
+    assert_eq!(
+        documents.repository().snapshot().unwrap().documents.len(),
+        2
+    );
+}
+
+#[gpui::test]
+fn an_import_snapshot_failure_preserves_the_selection(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("saved.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    wait_for(cx, &view, |root| !root.audio.pending());
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    // The import already wrote its package. Temporarily occupying its root
+    // with a file makes the real repository's following snapshot fail.
+    let repository = documents.repository();
+    let moved = audio_files.path().join("temporarily-moved-workspace");
+    std::fs::rename(documents.path(), &moved).unwrap();
+    std::fs::write(documents.path(), b"root temporarily occupied").unwrap();
+    let error = repository.snapshot().unwrap_err();
+    gate.release();
+    let expected = i18n::message(i18n::Locale::ZhCn, "documents_load_failed", &error);
+    wait_for(cx, &view, |root| root.ui.notice == expected);
+    let (selected, notice) = view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.projects.len(),
+            1,
+            "a failed read retains the last list"
+        );
+        assert_eq!(root.projects_error.as_deref(), Some(error.as_str()));
+        (root.ui.selected_project.clone(), root.ui.notice.clone())
+    });
+    std::fs::remove_file(documents.path()).unwrap();
+    std::fs::rename(moved, documents.path()).unwrap();
+    assert_eq!(
+        notice,
+        i18n::message(i18n::Locale::ZhCn, "documents_load_failed", &error),
+        "import success must not hide the following snapshot failure"
+    );
+    assert_eq!(
+        selected,
+        Some(ProjectId::new("a")),
+        "a read failure is not evidence that the user has no selection"
+    );
+    assert_eq!(
+        documents.repository().snapshot().unwrap().documents.len(),
+        2,
+        "the import was really persisted"
+    );
+}
+
+#[gpui::test]
+fn workspace_read_failure_keeps_the_editor_and_retry_keeps_its_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let mut a = processed("a", "A");
+    let audio = documents.path().join("a/recording.wav");
+    a.source.audio_path = audio.display().to_string();
+    a.processing.latest.as_mut().unwrap().input_audio_checksum = None;
+    a.content.summary = Some("继续阅读与编辑这份记录。\n".repeat(100));
+    documents.put(a, "# A\n");
+    std::fs::write(audio, b"fixture audio").unwrap();
+    std::fs::create_dir_all(documents.path().join("broken")).unwrap();
+    std::fs::write(documents.path().join("broken/state.json"), b"{").unwrap();
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(1100.), px(700.)));
+    cx.run_until_parked();
+    open_editor(cx, &view, "a");
+    let (title, _, _, body) = editor_fields(cx, &view);
+    retype(cx, &title, "目录暂不可读时的草稿");
+    retype_area(cx, &body, "仍在编辑这里的内容");
+    let scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.clone());
+    scroll.set_offset(point(px(0.), px(-20.)));
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    let position = scroll.offset();
+    assert!(position.y < px(0.));
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let (issues, audio) = view.read_with(cx, |root, _| {
+        (root.document_issues.clone(), format!("{:?}", root.audio))
+    });
+    assert!(!issues.is_empty());
+    let before = documents.package_bytes("a");
+    let repository = documents.repository();
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    let error = repository.snapshot().unwrap_err();
+    let expected = i18n::message(i18n::Locale::ZhCn, "documents_load_failed", &error);
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| root.ui.notice == expected);
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.projects.len(),
+            1,
+            "a read error is not an empty workspace"
+        );
+        assert_eq!(root.document_issues, issues);
+        assert_eq!(root.ui.selected_project, Some(ProjectId::new("a")));
+        assert_eq!(root.editor.shown(), Some(&ProjectId::new("a")));
+        assert_eq!(
+            format!("{:?}", root.audio),
+            audio,
+            "failed reads do not recheck audio"
+        );
+    });
+    assert_eq!(field_value(cx, &title), "目录暂不可读时的草稿");
+    assert_eq!(area_value(cx, &body), "仍在编辑这里的内容");
+    assert_eq!(scroll.offset(), position);
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert!(cx.debug_bounds("empty-import-audio").is_none());
+    let banner = rendered(cx, "workspace-read-error");
+    assert!(within(rendered(cx, "retry-workspace-read"), banner));
+    drop(unreadable);
+    assert_eq!(documents.package_bytes("a"), before);
+    // Other valid facts may change while the user's unsaved draft remains open.
+    documents.put(
+        DocumentState::new(ProjectId::new("b"), "B", "b.wav"),
+        "# B\n",
+    );
+    click_selector(cx, "open-project-detail");
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    cx.run_until_parked();
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let page = rendered(cx, "meetings-page");
+        let banner = rendered(cx, "workspace-read-error");
+        assert!(within(banner, page), "{banner:?} in {page:?}");
+        assert!(within(rendered(cx, "workspace-read-error-message"), banner));
+        assert!(within(rendered(cx, "retry-workspace-read"), banner));
+        let body = rendered(cx, "meeting-content");
+        assert!(within(body, page), "{body:?} in {page:?}");
+        assert!(
+            body.size.height >= px(72.),
+            "the editor remains usable beside Detail: {body:?} ({locale:?}); error={banner:?}"
+        );
+    }
+    let later_notice = i18n::message(i18n::Locale::ZhCn, "document_saved", "另一份记录");
+    view.update(cx, |root, cx| {
+        root.ui.notice = later_notice.clone();
+        cx.notify();
+    });
+    click_selector(cx, "retry-workspace-read");
+    let retry_focus = cx.update(|window, cx| window.focused(cx));
+    wait_for(cx, &view, |root| {
+        root.projects.len() == 2 && !root.audio.pending()
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("workspace-read-error").is_none());
+    assert_eq!(field_value(cx, &title), "目录暂不可读时的草稿");
+    assert_eq!(area_value(cx, &body), "仍在编辑这里的内容");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("a"))
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), retry_focus);
+    assert_eq!(documents.package_bytes("a"), before);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        later_notice
+    );
+}
+
+#[gpui::test]
+fn a_long_workspace_error_can_be_read_with_its_edge_scrollbar(cx: &mut TestAppContext) {
+    long_workspace_error_reading(cx, i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn a_long_workspace_error_remains_readable_beside_detail(cx: &mut TestAppContext) {
+    long_workspace_error_reading(cx, i18n::Locale::EnUs, true);
+}
+
+fn long_workspace_error_reading(cx: &mut TestAppContext, locale: i18n::Locale, detail: bool) {
+    let container = DocumentsRoot::new();
+    let mut path = container.path().to_path_buf();
+    for index in 0..7 {
+        path.push(format!(
+            "{} {index}",
+            "planning and customer interview materials ".repeat(2)
+        ));
+    }
+    std::fs::create_dir_all(&path).unwrap();
+    let documents = DocumentsRoot(path);
+    documents.put(processed("weekly", "Weekly"), "# Original document\n");
+    let before = documents.package_bytes("weekly");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    open_editor(cx, &view, "weekly");
+    view.update(cx, |root, cx| {
+        root.ui.locale = locale;
+        cx.notify();
+    });
+    if detail {
+        click_selector(cx, "open-project-detail");
+    }
+    let (title, ..) = editor_fields(cx, &view);
+    retype(cx, &title, "Keep this draft");
+    let repository = documents.repository();
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    let error = repository.snapshot().unwrap_err();
+    assert!(error.contains(&documents.path().display().to_string()));
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| {
+        root.projects_error.as_deref() == Some(&error)
+    });
+    click_selector(cx, "notice-toast-close");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    wait_for(cx, &view, |root| root.ui.toast().is_none());
+    let message = rendered(cx, "workspace-read-error-message");
+    let banner = rendered(cx, "workspace-read-error");
+    let page = rendered(cx, "meetings-page");
+    assert!(within(banner, page));
+    assert!(within(rendered(cx, "retry-workspace-read"), banner));
+    assert!(rendered(cx, "meeting-content").size.height >= px(80.));
+    let track = cx
+        .debug_bounds("workspace-read-error-scrollbar-viewport")
+        .expect("the long error must expose a draggable scrollbar");
+    let text = rendered(cx, "workspace-read-error-text");
+    assert!(
+        text.size.height > message.size.height,
+        "the real path needs scrolling"
+    );
+    assert_eq!(track.right(), message.right());
+    assert!(within(track, message));
+    focus_field(cx, &title);
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let editor_scroll = view.read_with(cx, |root, _| root.scroll.meeting_content.offset());
+    let start = point(track.right() - px(7.), track.top() + px(8.));
+    let end = point(start.x, track.bottom() - px(4.));
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    let text = rendered(cx, "workspace-read-error-text");
+    assert!(
+        text.top() < message.top() && text.bottom() <= message.bottom() + px(1.),
+        "dragging the edge reaches the end of the full error: {text:?} in {message:?}"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        editor_scroll
+    );
+    cx.simulate_input("!");
+    assert_eq!(field_value(cx, &title), "Keep this draft!");
+    assert!(view.read_with(cx, |root, _| root.ui.notice.is_empty()));
+    click_selector(cx, "retry-workspace-read");
+    let repeated_notice = i18n::message(locale, "documents_load_failed", &error);
+    wait_for(cx, &view, |root| root.ui.notice == repeated_notice);
+    assert_eq!(
+        rendered(cx, "workspace-read-error-text").top(),
+        text.top(),
+        "a repeated failure keeps the error's reading position"
+    );
+    // A repeated failure reports a new notification. Dismiss it before
+    // using the persistent panel's retry again, as with the first failure.
+    click_selector(cx, "notice-toast-close");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    wait_for(cx, &view, |root| root.ui.toast().is_none());
+    drop(unreadable);
+    click_selector(cx, "retry-workspace-read");
+    wait_for(cx, &view, |root| root.projects_error.is_none());
+    assert!(cx.debug_bounds("workspace-read-error").is_none());
+    assert_eq!(field_value(cx, &title), "Keep this draft!");
+    assert_eq!(documents.package_bytes("weekly"), before);
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| root.projects_error.is_some());
+    assert!(
+        rendered(cx, "workspace-read-error-text").top()
+            >= rendered(cx, "workspace-read-error-message").top(),
+        "a new failure starts at the beginning of its message"
+    );
+    assert_eq!(field_value(cx, &title), "Keep this draft!");
+    drop(unreadable);
+    assert_eq!(documents.package_bytes("weekly"), before);
+}
+
+#[gpui::test]
+fn an_initial_workspace_read_failure_does_not_claim_the_workspace_is_empty(
+    cx: &mut TestAppContext,
+) {
+    let documents = DocumentsRoot::new();
+    let repository = documents.repository();
+    let mut services = desktop_services(
+        Arc::new(FakeAssistantUiService::default()),
+        stored_key_settings(),
+    );
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(Arc::new(repository.clone())),
+    );
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    let error = repository.snapshot().unwrap_err();
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.installation.catalog.is_empty());
+    assert!(
+        cx.debug_bounds("assistant-first-import").is_none(),
+        "an unreadable root is not known to need its first import"
+    );
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.notice.clone()),
+        i18n::message(i18n::Locale::ZhCn, "documents_load_failed", &error)
+    );
+    assert!(
+        cx.debug_bounds("empty-import-audio").is_none(),
+        "an unreadable root is not known to be empty"
+    );
+    rendered(cx, "workspace-read-error");
+    rendered(cx, "project-tree-unavailable");
+    drop(unreadable);
+    let notified = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = notified.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    click_selector(cx, "retry-workspace-read");
+    wait_for(cx, &view, |_| notified.get());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("workspace-read-error").is_none());
+    assert!(cx.debug_bounds("project-tree-unavailable").is_none());
+    assert!(
+        view.read_with(cx, |root, _| root.ui.notice.is_empty()),
+        "a successful retry removes its previous failure notice"
+    );
+    rendered(cx, "empty-import-audio");
+    view.update(cx, |root, cx| root.navigate(Route::Assistant, cx));
+    cx.run_until_parked();
+    rendered(cx, "assistant-first-import");
+}
+
+fn workspace_retry_after_locale_change(
+    cx: &mut TestAppContext,
+    first: i18n::Locale,
+    next: i18n::Locale,
+    newer_error: bool,
+) {
+    let documents = DocumentsRoot::new();
+    let repository = documents.repository();
+    let settings = test_settings();
+    let mut initial = settings.snapshot().unwrap();
+    initial.ui_locale = first.code().into();
+    settings.update(initial).unwrap();
+    let mut services = desktop_services(
+        Arc::new(FakeAssistantUiService::default()),
+        settings.clone(),
+    );
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(Arc::new(repository)),
+    );
+    let unreadable = UnreadableDocumentsRoot::new(&documents);
+    let (view, cx) = open_desktop_on(cx, services);
+    wait_for(cx, &view, |root| !root.installation.catalog.is_empty());
+    let old_toast = view.read_with(cx, |root, _| root.ui.toast().unwrap().notice.clone());
+    drop(unreadable);
+    // Use the same controller path as the Settings language control and
+    // wait for its actual settings write, not just the immediate relabel.
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Settings, cx);
+        root.set_locale(next, cx);
+    });
+    wait_for(cx, &view, |root| {
+        root.ui.notice == i18n::text(next, "language_changed")
+    });
+    assert_eq!(settings.snapshot().unwrap().ui_locale, next.code());
+    assert_eq!(view.read_with(cx, |root, _| root.ui.locale), next);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.toast().unwrap().notice.clone()),
+        old_toast
+    );
+    let expected_notice = if newer_error {
+        i18n::message(next, "document_read_failed", "another/state.json")
+    } else {
+        i18n::text(next, "language_changed").into()
+    };
+    view.update(cx, |root, cx| {
+        root.navigate(Route::Meetings, cx);
+        if newer_error {
+            root.ui.notice = expected_notice.clone();
+        }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    click_selector(cx, "retry-workspace-read");
+    wait_for(cx, &view, |root| root.projects_error.is_none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_secs(1));
+    cx.run_until_parked();
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.notice, expected_notice,
+            "a newer notice is retained"
+        );
+        if newer_error {
+            assert_eq!(root.ui.toast().unwrap().notice, expected_notice);
+        } else {
+            assert!(
+                root.ui.toast().is_none(),
+                "the recovered workspace must not retain its old-language error toast"
+            );
+        }
+    });
+    rendered(cx, "empty-import-audio");
+}
+
+#[gpui::test]
+fn workspace_retry_clears_the_chinese_error_after_settings_switches_to_english(
+    cx: &mut TestAppContext,
+) {
+    workspace_retry_after_locale_change(cx, i18n::Locale::ZhCn, i18n::Locale::EnUs, false);
+}
+
+#[gpui::test]
+fn workspace_retry_clears_the_english_error_after_settings_switches_to_chinese(
+    cx: &mut TestAppContext,
+) {
+    workspace_retry_after_locale_change(cx, i18n::Locale::EnUs, i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn workspace_retry_preserves_a_newer_error_after_settings_changes_language(
+    cx: &mut TestAppContext,
+) {
+    workspace_retry_after_locale_change(cx, i18n::Locale::ZhCn, i18n::Locale::EnUs, true);
+}
+
+#[gpui::test]
+fn a_successfully_read_empty_workspace_offers_import(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let (_view, cx, _changes) = open_on(cx, &documents);
+    rendered(cx, "empty-import-audio");
+    assert!(cx.debug_bounds("workspace-read-error").is_none());
+    assert!(cx.debug_bounds("project-tree-unavailable").is_none());
+}
+
+#[gpui::test]
+fn a_stale_import_snapshot_failure_preserves_the_newer_feedback(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("late-failure.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let write_gate = crate::tests::Gate::default();
+    let snapshot_gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_with_snapshot_gate_on(cx, &documents, &write_gate, &snapshot_gate);
+    wait_for(cx, &view, |root| {
+        !root.audio.pending() && !root.installation.catalog.is_empty()
+    });
+    write_gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| write_gate.counts().1 == 1);
+    let moved = audio_files.path().join("temporarily-moved-workspace");
+    std::fs::rename(documents.path(), &moved).unwrap();
+    std::fs::write(documents.path(), b"root temporarily occupied").unwrap();
+    snapshot_gate.arm();
+    write_gate.release();
+    wait_for(cx, &view, |_| snapshot_gate.counts().1 == 1);
+    // The old snapshot has genuinely failed, but cannot return yet. A
+    // newer successful reload must remain authoritative when it does.
+    std::fs::remove_file(documents.path()).unwrap();
+    std::fs::rename(moved, documents.path()).unwrap();
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| {
+        root.projects.len() == 2 && !root.audio.pending()
+    });
+    cx.run_until_parked();
+    let notice = view.read_with(cx, |root, _| root.ui.notice.clone());
+    let notified = std::rc::Rc::new(std::cell::Cell::new(false));
+    let observed = notified.clone();
+    let _completion = cx.update(|_, cx| cx.observe(&view, move |_, _| observed.set(true)));
+    snapshot_gate.release();
+    // Import completion always notifies even when its stale snapshot is
+    // ignored, so this waits for that callback rather than sleeping.
+    wait_for(cx, &view, |_| notified.get());
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.notice, notice);
+        assert!(
+            root.projects_error.is_none(),
+            "the old failure is not the latest read outcome"
+        );
+        assert_eq!(root.projects.len(), 2);
+        assert_eq!(root.ui.selected_project, Some(ProjectId::new("a")));
+    });
+    assert_eq!(
+        documents.repository().snapshot().unwrap().documents.len(),
+        2
+    );
+}
+
+#[gpui::test]
+fn first_import_is_selected_by_a_reload_before_its_completion(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    let audio_files = DocumentsRoot::new();
+    let audio = audio_files.path().join("watcher-first.wav");
+    std::fs::write(&audio, b"fixture audio").unwrap();
+    let gate = crate::tests::Gate::default();
+    let (view, cx) = open_import_on(cx, &documents, &gate);
+    gate.arm();
+    view.update(cx, |root, cx| root.import_audio_path(audio.clone(), cx));
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    // As a watcher does, reload the real committed package before the
+    // still-blocked import service is allowed to publish its completion.
+    view.update(cx, |root, cx| root.reload_projects(cx));
+    wait_for(cx, &view, |root| {
+        root.projects.len() == 1 && !root.audio.pending()
+    });
+    let (chosen_before_completion, imported) = view.read_with(cx, |root, _| {
+        (
+            root.ui.selected_project.clone(),
+            root.projects[0].id().clone(),
+        )
+    });
+    gate.release();
+    let notice = i18n::message(i18n::Locale::ZhCn, "imported", "watcher-first");
+    wait_for(cx, &view, |root| root.ui.notice == notice);
+    assert_eq!(chosen_before_completion, Some(imported.clone()), "the latest successful snapshot initializes selection, independently of the late import callback");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.selected_project, Some(imported.clone()));
+        assert_eq!(root.ui.route, Route::Assistant);
+        assert!(
+            !root.ui.can_go_back(),
+            "initial selection adds no history entry"
+        );
+        assert!(root.ui.expanded_projects.contains(&imported));
+    });
+    assert_eq!(
+        documents.read(imported.as_str()).state.audio_path(),
+        audio.display().to_string()
     );
 }

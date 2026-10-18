@@ -37,6 +37,8 @@ pub(crate) type FieldInput = InputState;
 /// What a `TextField` reports to its owner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TextFieldEvent {
+    /// The input value changed.
+    Change,
     /// Enter was pressed in the field.
     Submit,
 }
@@ -117,10 +119,10 @@ impl TextField {
             input.set_editor_style(editor_style(&tokens));
             input
         });
-        let subscription = cx.subscribe(&input, |_, _, event: &InputEvent, cx| {
-            if let InputEvent::PressEnter { .. } = event {
-                cx.emit(TextFieldEvent::Submit);
-            }
+        let subscription = cx.subscribe(&input, |_, _, event: &InputEvent, cx| match event {
+            InputEvent::PressEnter { .. } => cx.emit(TextFieldEvent::Submit),
+            InputEvent::Change => cx.emit(TextFieldEvent::Change),
+            _ => {}
         });
         Self {
             label,

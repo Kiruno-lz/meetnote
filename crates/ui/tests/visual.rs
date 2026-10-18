@@ -30,9 +30,10 @@
 //! Speaker Library, Meetings with Detail on a document whose audio is
 //! missing, Settings at the Workspace under a refused documents-root
 //! switch, the Assistant with the receipts of a stopped run above its
-//! first pending review, and the focus ring of a button and of a select
-//! that Tab reached), into `<overlay>-<appearance>.png`, once their
-//! entrance animation has finished. Under glass the window background is
+//! first pending review, the focus ring of a button and of a select that
+//! Tab reached, and the toasts of a fading and of a staying notice), into
+//! `<overlay>-<appearance>.png`, once their entrance animation has
+//! finished. Under glass the window background is
 //! clear, so the chrome's pixels carry the glass alpha: the capture has no
 //! desktop behind it, and the desktop blur is checked by hand.
 //!
@@ -140,7 +141,29 @@ mod screenshots {
         (Route::Settings, "settings"),
     ];
     /// Overlays captured over a route, with their baseline file name prefix.
-    const OVERLAYS: [(Route, Overlay, &str); 11] = [
+    const OVERLAYS: [(Route, Overlay, &str); 20] = [
+        (Route::Meetings, Overlay::EmptyWorkspace, "meetings-empty"),
+        (
+            Route::Meetings,
+            Overlay::WorkspaceReadFailure,
+            "meetings-read-failed",
+        ),
+        (
+            Route::Meetings,
+            Overlay::InitialWorkspaceReadFailure,
+            "meetings-unavailable",
+        ),
+        (Route::Assistant, Overlay::AssistantSetup, "assistant-setup"),
+        (
+            Route::Assistant,
+            Overlay::AssistantImported,
+            "assistant-imported",
+        ),
+        (
+            Route::Assistant,
+            Overlay::AssistantImport,
+            "assistant-import",
+        ),
         (Route::Settings, Overlay::ThemeSelect, "settings-select"),
         (
             Route::Settings,
@@ -149,6 +172,11 @@ mod screenshots {
         ),
         (Route::Meetings, Overlay::IssuesAndDetail, "meetings-detail"),
         (Route::Meetings, Overlay::EditorConflict, "meetings-edit"),
+        (
+            Route::Meetings,
+            Overlay::ProcessingFeedback,
+            "meetings-processing",
+        ),
         (
             Route::Meetings,
             Overlay::OriginalSpeakers,
@@ -176,6 +204,8 @@ mod screenshots {
         ),
         (Route::Meetings, Overlay::FocusedButton, "meetings-focus"),
         (Route::Settings, Overlay::FocusedSelect, "settings-focus"),
+        (Route::Assistant, Overlay::SuccessToast, "assistant-toast"),
+        (Route::Meetings, Overlay::ErrorToast, "meetings-toast"),
     ];
     /// Frames drawn at most while waiting for two identical ones.
     const MAX_FRAMES: usize = 8;

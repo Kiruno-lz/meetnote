@@ -8,9 +8,10 @@
 //! Most tests render installation states they build, as
 //! `InstallationService` would publish them, through a probe that returns
 //! the state the test holds, with a fake `ModelService` that records the
-//! calls the page makes. The last test re-probes through a real
-//! `ModelManager` on files in a temporary model root, so the record it shows
-//! is the one the manager wrote and the service published.
+//! calls the page makes. Real-manager tests re-probe fixture files in a
+//! temporary model root, so the records shown come from the manager and the
+//! installation service. They also check that background results leave an
+//! active Settings menu and its keyboard choice intact.
 
 use crate::controller::{ModelService, ReprobeWait};
 use crate::document_tests::{leak, rendered, within, View};
@@ -229,6 +230,8 @@ struct FakeModels {
     starts: Mutex<Vec<String>>,
     reprobes: Mutex<Vec<String>>,
     gate: Gate,
+    held_model: Mutex<Option<String>>,
+    references: Mutex<std::collections::BTreeMap<String, ModelRef>>,
     finish: Mutex<Option<oneshot::Sender<Result<ProbeRecord, ModelManagerError>>>>,
 }
 
@@ -267,8 +270,18 @@ impl ModelService for FakeModels {
         Ok(self.downloads.lock().unwrap().clone())
     }
 
-    fn model_ref(&self, model_id: &str, _: &str) -> Result<ModelRef, ModelManagerError> {
-        Err(ModelManagerError::ModelNotInstalled(model_id.into()))
+    fn model_ref(&self, model_id: &str, backend_id: &str) -> Result<ModelRef, ModelManagerError> {
+        let held = self.held_model.lock().unwrap().as_deref() == Some(model_id);
+        if held {
+            self.gate.pass();
+        }
+        self.references
+            .lock()
+            .unwrap()
+            .get(model_id)
+            .filter(|model| model.backend_id == backend_id)
+            .cloned()
+            .ok_or_else(|| ModelManagerError::ModelNotInstalled(model_id.into()))
     }
 
     fn start(&self, model_id: &str) -> Result<DownloadTask, ModelManagerError> {
@@ -540,6 +553,69 @@ fn running(id: u64, model_id: &str, state: DownloadState) -> DownloadProgress {
         artifact_count: 2,
         eta_seconds: Some(9),
         retry_count: 0,
+    }
+}
+
+#[gpui::test]
+fn retry_controls_follow_the_current_download_after_terminal_history(cx: &mut TestAppContext) {
+    let models = FakeModels::new(catalog(vec![bundle_asr(), native_diarization()]));
+    *models.downloads.lock().unwrap() = vec![
+        running(
+            1,
+            "bundle-asr",
+            DownloadState::Failed("connection lost".into()),
+        ),
+        running(2, "bundle-asr", DownloadState::Cancelled),
+        running(3, "native-diarization", DownloadState::Completed),
+        running(8, "native-diarization", DownloadState::Paused),
+        running(7, "bundle-asr", DownloadState::Downloading),
+    ];
+    let state = published(vec![
+        availability(bundle_asr(), ModelInstallState::Partial),
+        failed_download(),
+    ]);
+    let (view, cx) = open_models(cx, models.clone(), &state, test_settings());
+
+    assert_in_header(cx, "pause", "bundle-asr");
+    assert_in_header(cx, "resume", "native-diarization");
+    for model_id in ["bundle-asr", "native-diarization"] {
+        assert!(shown(cx, "download-progress", model_id));
+        assert!(!shown(cx, "download", model_id) && !shown(cx, "retry", model_id));
+        assert!(
+            !shown(cx, "failure", model_id),
+            "the new attempt supersedes its failure"
+        );
+    }
+    click_selector(cx, "model-pause-bundle-asr");
+    click_selector(cx, "model-resume-native-diarization");
+    click_selector(cx, "model-cancel-native-diarization");
+    wait_for(cx, &view, |_| models.controls().len() == 3);
+    let mut controls = models.controls();
+    controls.sort();
+    assert_eq!(
+        controls,
+        [
+            ("cancel", DownloadId(8)),
+            ("pause", DownloadId(7)),
+            ("resume", DownloadId(8)),
+        ]
+    );
+
+    // Cancelling the new attempt leaves only history; its controls must
+    // disappear and the original failure can offer retry again.
+    for download in models.downloads.lock().unwrap().iter_mut() {
+        if !download.state.is_terminal() {
+            download.state = DownloadState::Cancelled;
+        }
+    }
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert!(shown(cx, "download", "bundle-asr"));
+    assert!(shown(cx, "retry", "native-diarization"));
+    assert!(shown(cx, "failure", "native-diarization"));
+    for model_id in ["bundle-asr", "native-diarization"] {
+        assert!(!shown(cx, "download-progress", model_id));
+        assert!(!shown(cx, "cancel", model_id));
     }
 }
 
@@ -906,6 +982,79 @@ fn a_written_reprobe_settles_once_the_published_state_carries_its_record() {
     assert!(!ReprobeWait::Running.settled_by(None));
 }
 
+#[gpui::test]
+fn an_installation_update_enables_the_new_model_without_resetting_the_open_menu(
+    cx: &mut TestAppContext,
+) {
+    let entries =
+        ["menu-a", "menu-b", "menu-c"].map(|id| entry(id, "asr", "menu", &["whisper-rs"]));
+    let models = FakeModels::new(catalog(entries.to_vec()));
+    let state = published(
+        entries
+            .into_iter()
+            .enumerate()
+            .map(|(index, model)| {
+                availability(
+                    model,
+                    if index == 2 {
+                        ModelInstallState::Missing
+                    } else {
+                        ModelInstallState::Installed
+                    },
+                )
+            })
+            .collect(),
+    );
+    let (view, cx) = open_models(cx, models, &state, test_settings());
+    click_selector(cx, "nav-Settings");
+    click_selector(cx, "settings-section-3");
+    let select = view.read_with(cx, |root, _| {
+        root.settings_selectors.as_ref().unwrap().asr_model.clone()
+    });
+    cx.update(|window, cx| {
+        gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx);
+    });
+    cx.simulate_keystrokes("enter down");
+    cx.run_until_parked();
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("menu-b".into())
+    );
+    let focus = cx.update(|window, cx| window.focused(cx));
+    // Publish availability through the service, as after a download. This
+    // checks UI projection; FakeModels does not perform a model download.
+    state.lock().unwrap().catalog[2].install_state = ModelInstallState::Installed;
+    view.read_with(cx, |root, _| root.refresh_installation());
+    wait_for(cx, &view, |root| {
+        root.installation.catalog[2].install_state == ModelInstallState::Installed
+    });
+    assert!(
+        cx.debug_bounds("select-menu").is_some(),
+        "installation must leave the active menu open"
+    );
+    assert_eq!(cx.update(|window, cx| window.focused(cx)), focus);
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("menu-b".into())
+    );
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("menu-c".into()),
+        "the newly installed model must become available in the existing menu"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("select-menu").is_none());
+}
+
 /// Every candidate backend accepts the files.
 struct AcceptingBackend;
 
@@ -913,6 +1062,111 @@ impl models::BackendProbe for AcceptingBackend {
     fn probe(&self, _: &str, _: &ModelRef) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// Hold the real manager after it checks the fixture's bytes, before its
+/// backend outcome is written and published. No model inference is performed.
+struct HeldBackend(Gate);
+
+impl models::BackendProbe for HeldBackend {
+    fn probe(&self, _: &str, _: &ModelRef) -> Result<(), String> {
+        self.0.pass();
+        Ok(())
+    }
+}
+
+#[gpui::test]
+fn a_real_model_probe_keeps_an_open_settings_menu_and_its_keyboard_choice(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let root = temp_directory();
+    let model = ModelCatalogEntry {
+        source: "local/fixture.bin".into(),
+        sha256: Some(MODEL_SHA256.into()),
+        ..entry("menu-asr", "asr", "a-real", &["fake-asr"])
+    };
+    let file = root.join("asr/menu-asr/fixture.bin");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, MODEL_BYTES).unwrap();
+    let gate = Gate::default();
+    let manager = ModelManager::with_backend_probe(
+        catalog(vec![model]),
+        &root,
+        Some(Arc::new(HeldBackend(gate.clone()))),
+    );
+    let settings = test_settings();
+    let mut services = desktop_services(
+        Arc::new(FakeAssistantUiService::default()),
+        settings.clone(),
+    );
+    services.installation = InstallationService::new(manager.clone());
+    services.model_manager = Arc::new(manager);
+    let (view, cx) = open_on_models(cx, services);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    cx.run_until_parked();
+    gate.arm();
+    click_selector(cx, "model-reprobe-menu-asr");
+    wait_for(cx, &view, |_| gate.counts().1 == 1);
+    click_selector(cx, "nav-Settings");
+    click_selector(cx, "settings-section-6");
+    let select = view.read_with(cx, |root, _| {
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .compute_device
+            .clone()
+    });
+    cx.update(|window, cx| {
+        gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx);
+    });
+    cx.simulate_keystrokes("enter down");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("select-menu").is_some());
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("CPU".into())
+    );
+    let focus = cx.update(|window, cx| window.focused(cx));
+    let revision = settings.revision().unwrap();
+    gate.release();
+    wait_for(cx, &view, |root| {
+        root.model_reprobes.is_empty()
+            && root.installation.catalog[0]
+                .probe
+                .as_ref()
+                .is_some_and(|probe| probe.kind == ModelOperation::Reprobe)
+    });
+    assert!(
+        cx.debug_bounds("select-menu").is_some(),
+        "a real probe result must not dismiss the menu being browsed"
+    );
+    assert_eq!(
+        cx.update(|window, cx| window.focused(cx)),
+        focus,
+        "background model results must leave focus in the menu"
+    );
+    assert_eq!(
+        settings.revision().unwrap(),
+        revision,
+        "browsing has not saved a choice"
+    );
+    assert_eq!(
+        select.read_with(cx, |select, _| select
+            .highlighted_value()
+            .map(str::to_owned)),
+        Some("CPU".into())
+    );
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |_| {
+        settings.snapshot().unwrap().compute_device == contracts::ComputeDevice::Cpu
+    });
+    assert!(cx.debug_bounds("select-menu").is_none());
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).is_focused(window)
+    ));
+    assert_eq!(std::fs::read(&file).unwrap(), MODEL_BYTES);
+    std::fs::remove_dir_all(root).ok();
 }
 
 #[gpui::test]
@@ -1005,4 +1259,586 @@ fn a_real_reprobe_of_changed_files_reports_the_mismatch_and_keeps_the_model_inst
     assert!(shown(cx, "failure", "real-asr") && shown(cx, "reprobe", "real-asr"));
     assert!(!shown(cx, "retry", "real-asr") && !shown(cx, "download", "real-asr"));
     std::fs::remove_dir_all(root).ok();
+}
+
+/// Model references are service fixtures here; the settings repository is a
+/// real JSON file. These tests verify UI ordering, not native model loading.
+fn model_selection_fixture<'a>(
+    cx: &'a mut TestAppContext,
+    initial_asr: Option<&str>,
+) -> (
+    View,
+    &'a mut VisualTestContext,
+    Arc<FakeModels>,
+    settings::SettingsService,
+) {
+    let entries = [
+        ("choice-a", "asr", "choice-asr"),
+        ("choice-b", "asr", "choice-asr"),
+        ("choice-failed", "asr", "choice-asr"),
+        ("choice-old-error", "asr", "choice-asr"),
+        ("choice-dia-base", "diarization", "choice-dia"),
+        ("choice-dia-new", "diarization", "choice-dia"),
+    ]
+    .map(|(id, task, backend)| entry(id, task, "choices", &[backend]));
+    let models = FakeModels::new(catalog(entries.to_vec()));
+    for model in &entries {
+        if model.id.contains("failed") || model.id.contains("error") {
+            continue;
+        }
+        models.references.lock().unwrap().insert(
+            model.id.clone(),
+            ModelRef {
+                backend_id: model.candidate_backends[0].clone(),
+                model_id: model.id.clone(),
+                revision: model.revision.clone(),
+                artifact_path: format!("fixture/{}.bin", model.id),
+                artifacts: Vec::new(),
+            },
+        );
+    }
+    let settings = test_settings();
+    let mut value = settings.snapshot().unwrap();
+    value.asr_backend_id = Some("choice-asr".into());
+    value.asr_model = initial_asr.map(|id| models.references.lock().unwrap()[id].clone());
+    value.diarization_backend_id = Some("choice-dia".into());
+    value.diarization_model = Some(models.references.lock().unwrap()["choice-dia-base"].clone());
+    settings.update(value).unwrap();
+    let state = published(
+        entries
+            .into_iter()
+            .map(|model| availability(model, ModelInstallState::Installed))
+            .collect(),
+    );
+    let (view, cx) = open_models(cx, models.clone(), &state, settings.clone());
+    view.update(cx, |root, cx| {
+        let mut diarization = application::diarization_descriptor("choice-dia", &[]);
+        diarization.configurable_diarization_stages =
+            vec![contracts::DiarizationStageKind::Clustering];
+        diarization.diarization_stage_options = ["cluster-default", "cluster-new"]
+            .map(|id| contracts::DiarizationStageOption {
+                stage: contracts::DiarizationStageKind::Clustering,
+                id: id.into(),
+                model_id: None,
+                revision: Some("fixture-v1".into()),
+                artifact_files: Vec::new(),
+            })
+            .to_vec();
+        root.inventory = application::BackendInventory::new(
+            vec![
+                application::asr_descriptor("choice-asr", &[]),
+                application::asr_descriptor("next-asr", &[]),
+            ],
+            vec![diarization],
+        );
+        root.settings_selectors = None;
+        root.navigate(Route::Settings, cx);
+    });
+    cx.run_until_parked();
+    click_selector(cx, "settings-section-3");
+    (view, cx, models, settings)
+}
+
+fn choose_setting_value(
+    cx: &mut VisualTestContext,
+    select: &gpui::Entity<crate::controls::Dropdown>,
+    value: &str,
+) {
+    cx.update(|window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).focus(window, cx));
+    cx.simulate_keystrokes("enter");
+    for step in 0..12 {
+        if select.read_with(cx, |select, _| select.highlighted_value() == Some(value)) {
+            break;
+        }
+        assert!(step < 11, "{value} is an enabled option");
+        cx.simulate_keystrokes("down");
+    }
+    cx.simulate_keystrokes("enter");
+}
+
+fn finish_model_selection(cx: &mut VisualTestContext, view: &View, task: gpui::Task<()>) {
+    let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done = finished.clone();
+    cx.spawn(move |_| async move {
+        task.await;
+        done.store(true, std::sync::atomic::Ordering::SeqCst);
+    })
+    .detach();
+    wait_for(cx, view, |_| {
+        finished.load(std::sync::atomic::Ordering::SeqCst)
+    });
+}
+
+fn settle_model_settings(
+    cx: &mut VisualTestContext,
+    view: &View,
+    settings: &settings::SettingsService,
+) {
+    wait_for(cx, view, |root| {
+        let saved = settings.snapshot().unwrap();
+        saved.asr_backend_id == root.settings_draft.asr_backend_id
+            && saved.asr_model == root.settings_draft.asr_model
+            && saved.diarization_backend_id == root.settings_draft.diarization_backend_id
+            && saved.diarization_model == root.settings_draft.diarization_model
+            && saved.diarization_stages == root.settings_draft.diarization_stages
+    });
+}
+
+#[derive(Clone, Copy)]
+enum LaterModelChoice {
+    Model,
+    Backend,
+    SameBackend,
+    FailedModel,
+    OtherTask,
+}
+
+#[gpui::test]
+fn a_model_selection_keeps_a_newer_model_after_an_old_success(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::Model, false);
+}
+#[gpui::test]
+fn a_model_selection_keeps_a_newer_notice_after_an_old_failure(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::Model, true);
+}
+#[gpui::test]
+fn a_model_selection_keeps_a_later_backend_choice(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::Backend, false);
+}
+#[gpui::test]
+fn a_model_selection_keeps_a_repeated_backend_choice(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::SameBackend, false);
+}
+#[gpui::test]
+fn a_model_selection_does_not_fall_back_to_an_older_success_after_a_new_failure(
+    cx: &mut TestAppContext,
+) {
+    old_model_selection(cx, LaterModelChoice::FailedModel, false);
+}
+#[gpui::test]
+fn a_model_selection_keeps_the_other_tasks_pending_choice(cx: &mut TestAppContext) {
+    old_model_selection(cx, LaterModelChoice::OtherTask, false);
+}
+
+fn old_model_selection(cx: &mut TestAppContext, later: LaterModelChoice, old_error: bool) {
+    let _alone = hold_a_worker_alone();
+    let (view, cx, models, settings) = model_selection_fixture(cx, None);
+    let id = if old_error {
+        "choice-old-error"
+    } else {
+        "choice-a"
+    };
+    *models.held_model.lock().unwrap() = Some(id.into());
+    models.gate.arm();
+    let old = view.update(cx, |root, cx| {
+        root.use_model(id.into(), "asr".into(), "choice-asr".into(), cx)
+    });
+    wait_for(cx, &view, |_| models.gate.counts() == (1, 1));
+    let (select, value) = view.read_with(cx, |root, _| {
+        let selectors = root.settings_selectors.as_ref().unwrap();
+        match later {
+            LaterModelChoice::Model => (selectors.asr_model.clone(), "choice-b"),
+            LaterModelChoice::Backend => (selectors.asr_backend.clone(), "next-asr"),
+            LaterModelChoice::SameBackend => (selectors.asr_backend.clone(), "choice-asr"),
+            LaterModelChoice::FailedModel => (selectors.asr_model.clone(), "choice-failed"),
+            LaterModelChoice::OtherTask => (selectors.diarization_model.clone(), "choice-dia-new"),
+        }
+    });
+    if matches!(later, LaterModelChoice::OtherTask) {
+        click_selector(cx, "settings-section-4");
+    }
+    choose_setting_value(cx, &select, value);
+    let failed = matches!(later, LaterModelChoice::FailedModel);
+    let expected_notice = if failed {
+        crate::i18n::message(
+            crate::i18n::Locale::ZhCn,
+            "model_not_ready",
+            &ModelManagerError::ModelNotInstalled(value.into()).to_string(),
+        )
+    } else {
+        crate::i18n::text(crate::i18n::Locale::ZhCn, "settings_saved").into()
+    };
+    wait_for(cx, &view, |root| root.ui.notice == expected_notice);
+    settle_model_settings(cx, &view, &settings);
+    let latest = settings.snapshot().unwrap();
+    models.gate.release();
+    finish_model_selection(cx, &view, old);
+    settle_model_settings(cx, &view, &settings);
+    let saved = settings.snapshot().unwrap();
+    if matches!(later, LaterModelChoice::OtherTask) {
+        assert_eq!(
+            saved.asr_model.unwrap().model_id,
+            "choice-a",
+            "ASR selection remains independent"
+        );
+        assert_eq!(saved.diarization_model.unwrap().model_id, "choice-dia-new");
+    } else {
+        assert_eq!(
+            saved.asr_backend_id, latest.asr_backend_id,
+            "a late model reference cannot undo the latest backend choice"
+        );
+        assert_eq!(
+            saved.asr_model, latest.asr_model,
+            "a late reference cannot replace the latest model choice"
+        );
+        assert_eq!(
+            view.read_with(cx, |root, _| root.ui.notice.clone()),
+            expected_notice,
+            "an obsolete result cannot replace the latest outcome"
+        );
+    }
+}
+
+#[gpui::test]
+fn a_model_selection_failure_restores_the_model_that_is_still_configured(cx: &mut TestAppContext) {
+    let (view, cx, _, settings) = model_selection_fixture(cx, Some("choice-b"));
+    let select = view.read_with(cx, |root, _| {
+        root.settings_selectors.as_ref().unwrap().asr_model.clone()
+    });
+    choose_setting_value(cx, &select, "choice-failed");
+    let error = crate::i18n::message(
+        crate::i18n::Locale::ZhCn,
+        "model_not_ready",
+        &ModelManagerError::ModelNotInstalled("choice-failed".into()).to_string(),
+    );
+    wait_for(cx, &view, |root| root.ui.notice == error);
+    assert_eq!(
+        settings.snapshot().unwrap().asr_model.unwrap().model_id,
+        "choice-b"
+    );
+    assert_eq!(
+        select.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+        Some("choice-b".into()),
+        "the dropdown must show the model still used for processing"
+    );
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(select.read(cx), cx).is_focused(window)
+    ));
+}
+
+#[gpui::test]
+fn a_model_selection_keeps_a_later_clustering_choice(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let (view, cx, models, settings) = model_selection_fixture(cx, None);
+    *models.held_model.lock().unwrap() = Some("choice-dia-new".into());
+    models.gate.arm();
+    let old = view.update(cx, |root, cx| {
+        root.use_model(
+            "choice-dia-new".into(),
+            "diarization".into(),
+            "choice-dia".into(),
+            cx,
+        )
+    });
+    wait_for(cx, &view, |_| models.gate.counts() == (1, 1));
+    click_selector(cx, "settings-section-4");
+    let select = view.read_with(cx, |root, _| {
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .diarization_clustering
+            .clone()
+    });
+    choose_setting_value(cx, &select, "cluster-new");
+    wait_for(cx, &view, |_| {
+        settings
+            .snapshot()
+            .unwrap()
+            .diarization_stages
+            .clustering_algorithm
+            .is_some()
+    });
+    models.gate.release();
+    finish_model_selection(cx, &view, old);
+    settle_model_settings(cx, &view, &settings);
+    let saved = settings.snapshot().unwrap();
+    assert_eq!(
+        saved
+            .diarization_stages
+            .clustering_algorithm
+            .as_ref()
+            .map(|a| a.id.as_str()),
+        Some("cluster-new"),
+        "a pending bundle must not clear a later stage choice"
+    );
+    assert_eq!(saved.diarization_model.unwrap().model_id, "choice-dia-base");
+}
+
+#[gpui::test]
+fn a_model_selection_refreshes_the_stages_cleared_by_a_new_bundle(cx: &mut TestAppContext) {
+    let (view, cx, _, settings) = model_selection_fixture(cx, None);
+    click_selector(cx, "settings-section-4");
+    let clustering = view.read_with(cx, |root, _| {
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .diarization_clustering
+            .clone()
+    });
+    choose_setting_value(cx, &clustering, "cluster-new");
+    wait_for(cx, &view, |_| {
+        settings
+            .snapshot()
+            .unwrap()
+            .diarization_stages
+            .clustering_algorithm
+            .is_some()
+    });
+    let model = view.read_with(cx, |root, _| {
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .diarization_model
+            .clone()
+    });
+    choose_setting_value(cx, &model, "choice-dia-new");
+    wait_for(cx, &view, |root| {
+        let saved = settings.snapshot().unwrap();
+        saved
+            .diarization_model
+            .as_ref()
+            .is_some_and(|m| m.model_id == "choice-dia-new")
+            && saved.diarization_stages.clustering_algorithm.is_none()
+            && root
+                .settings_draft
+                .diarization_stages
+                .clustering_algorithm
+                .is_none()
+    });
+    assert_eq!(
+        clustering.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+        Some("cluster-default".into()),
+        "the stage control must show the default after its explicit override is cleared"
+    );
+}
+
+/// Open a real document package while keeping the fixture's published model
+/// facts and reference service. No audio inference is performed here.
+fn model_setup_document(
+    cx: &mut VisualTestContext,
+    view: &View,
+) -> crate::document_tests::DocumentsRoot {
+    let documents = crate::document_tests::DocumentsRoot::new();
+    let audio = documents.path().join("setup/recording.wav");
+    documents.put(
+        domain::DocumentState::new(
+            domain::ProjectId::new("setup"),
+            "Setup recording",
+            audio.display().to_string(),
+        ),
+        "# Keep this document\n",
+    );
+    std::fs::write(&audio, b"fixture recording").unwrap();
+    let workspace = application::WorkspaceService::new(
+        application::ProcessingService::new(
+            Arc::new(asr_whisper_rs::WhisperRsBackend::default()),
+            Arc::new(diarization_sherpa_onnx::SherpaOnnxDiarizationBackend::default()),
+        ),
+        application::DocumentService::new(Arc::new(documents.repository())),
+    );
+    view.update(cx, |root, cx| {
+        root.services.workspace = workspace;
+        root.reload_projects(cx);
+        root.navigate(Route::Meetings, cx);
+    });
+    wait_for(cx, view, |root| {
+        root.ui
+            .selected_project
+            .as_ref()
+            .is_some_and(|id| id == &domain::ProjectId::new("setup"))
+            && !root.audio.pending()
+    });
+    documents
+}
+
+#[gpui::test]
+fn model_setup_opens_the_installed_transcription_choice_and_keeps_the_document(
+    cx: &mut TestAppContext,
+) {
+    model_setup_opens_installed_choice(cx, false, false);
+}
+
+#[gpui::test]
+fn model_setup_opens_the_installed_diarization_choice_from_the_keyboard(cx: &mut TestAppContext) {
+    model_setup_opens_installed_choice(cx, true, true);
+}
+
+fn model_setup_opens_installed_choice(cx: &mut TestAppContext, diarization: bool, keyboard: bool) {
+    use crate::document_tests::{rendered, within};
+    let (view, cx, _, settings) = model_selection_fixture(cx, diarization.then_some("choice-b"));
+    if diarization {
+        view.update(cx, |root, cx| {
+            root.select_diarization_backend("next-dia".into(), cx)
+        });
+        wait_for(cx, &view, |_| {
+            settings
+                .snapshot()
+                .unwrap()
+                .diarization_backend_id
+                .as_deref()
+                == Some("next-dia")
+        });
+        view.update(cx, |root, cx| {
+            root.select_diarization_backend("choice-dia".into(), cx)
+        });
+        wait_for(cx, &view, |_| {
+            settings
+                .snapshot()
+                .unwrap()
+                .diarization_backend_id
+                .as_deref()
+                == Some("choice-dia")
+        });
+        settle_model_settings(cx, &view, &settings);
+    }
+    let documents = model_setup_document(cx, &view);
+    let before = documents.package_bytes("setup");
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    if diarization {
+        view.update(cx, |root, cx| {
+            root.set_locale(crate::i18n::Locale::EnUs, cx)
+        });
+        wait_for(cx, &view, |root| {
+            root.ui.notice == crate::i18n::text(crate::i18n::Locale::EnUs, "language_changed")
+        });
+    }
+    click_selector(cx, "open-project-detail");
+    let action = if cx.debug_bounds("go-to-model-settings").is_some() {
+        "go-to-model-settings"
+    } else {
+        "go-to-models"
+    };
+    assert!(within(
+        rendered(cx, action),
+        rendered(cx, "meeting-content")
+    ));
+    if keyboard {
+        let bounds = rendered(cx, action);
+        cx.update(|window, cx| {
+            view.read(cx).window_focus.clone().focus(window, cx);
+        });
+        for step in 0..24 {
+            cx.simulate_keystrokes("tab");
+            if cx
+                .debug_bounds("focus-ring")
+                .is_some_and(|ring| within(ring, bounds))
+            {
+                break;
+            }
+            assert!(step < 23, "the setup action is keyboard reachable");
+        }
+        let keystroke = gpui::Keystroke::parse("enter").unwrap();
+        cx.simulate_event(gpui::KeyDownEvent {
+            keystroke: keystroke.clone(),
+            is_held: false,
+            prefer_character_input: false,
+        });
+        cx.simulate_event(gpui::KeyUpEvent { keystroke });
+        cx.run_until_parked();
+    } else {
+        click_selector(cx, action);
+    }
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.route),
+        Route::Settings,
+        "an installed choice belongs in Settings, where it can be selected"
+    );
+    let section = if diarization { 4 } else { 3 };
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.settings_section),
+        section
+    );
+    let label_key = if diarization {
+        "diarization_model"
+    } else {
+        "asr_model"
+    };
+    let locale = if diarization {
+        crate::i18n::Locale::EnUs
+    } else {
+        crate::i18n::Locale::ZhCn
+    };
+    let label = crate::document_tests::leak(format!(
+        "setting-label-{}",
+        crate::i18n::text(locale, label_key)
+    ));
+    assert!(
+        within(rendered(cx, label), rendered(cx, "settings-scroll")),
+        "the destination reveals the actual model control"
+    );
+    let model_id = if diarization {
+        "choice-dia-new"
+    } else {
+        "choice-b"
+    };
+    let model = view.read_with(cx, |root, _| {
+        let selectors = root.settings_selectors.as_ref().unwrap();
+        if diarization {
+            selectors.diarization_model.clone()
+        } else {
+            selectors.asr_model.clone()
+        }
+    });
+    choose_setting_value(cx, &model, model_id);
+    wait_for(cx, &view, |_| {
+        let saved = settings.snapshot().unwrap();
+        let model = if diarization {
+            saved.diarization_model
+        } else {
+            saved.asr_model
+        };
+        model.is_some_and(|model| model.model_id == model_id)
+    });
+    settle_model_settings(cx, &view, &settings);
+    click_selector(cx, "nav-Meetings");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(domain::ProjectId::new("setup"))
+    );
+    assert!(
+        cx.debug_bounds("models-required").is_none(),
+        "choosing the model clears the prerequisite guidance"
+    );
+    assert!(!view.read_with(cx, |root, _| root.ui.processing));
+    assert_eq!(documents.package_bytes("setup"), before);
+}
+
+#[gpui::test]
+fn model_setup_keeps_the_download_destination_when_no_compatible_model_is_installed(
+    cx: &mut TestAppContext,
+) {
+    model_setup_needs_a_download(cx, false);
+}
+
+#[gpui::test]
+fn model_setup_does_not_offer_an_installed_model_for_another_backend(cx: &mut TestAppContext) {
+    model_setup_needs_a_download(cx, true);
+}
+
+fn model_setup_needs_a_download(cx: &mut TestAppContext, incompatible: bool) {
+    let (view, cx, _, _) = model_selection_fixture(cx, None);
+    let mut state = view.read_with(cx, |root, _| root.installation.clone());
+    for entry in state
+        .catalog
+        .iter_mut()
+        .filter(|entry| entry.model.task == "asr")
+    {
+        if incompatible {
+            entry.model.candidate_backends = vec!["another-backend".into()];
+        } else {
+            entry.install_state = ModelInstallState::Missing;
+        }
+    }
+    // Vary only the published installation facts; this case checks the
+    // destination offered by the UI, not a filesystem probe.
+    view.update(cx, |root, cx| {
+        root.installation = state;
+        cx.notify();
+    });
+    let documents = model_setup_document(cx, &view);
+    let before = documents.package_bytes("setup");
+    assert!(cx.debug_bounds("go-to-model-settings").is_none());
+    click_selector(cx, "go-to-models");
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Models);
+    assert_eq!(documents.package_bytes("setup"), before);
 }

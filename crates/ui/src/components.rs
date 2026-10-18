@@ -8,12 +8,13 @@ use crate::{
 use domain::{DocumentState, ProjectId, ProjectStatus};
 use gpui::{div, prelude::*, px, Context, Pixels, Render, SharedString, Window};
 
-/// A tree row being dragged, with the revision the row showed when the drag
-/// started; the move is checked against it.
+/// A tree row being dragged, with its workspace and revision when the drag
+/// started; the move is checked against both.
 #[derive(Clone)]
 pub(crate) struct ProjectDrag {
     pub(crate) project_id: ProjectId,
     pub(crate) revision: u64,
+    pub(crate) root_generation: u64,
 }
 
 pub(crate) struct DragGhost {
@@ -103,6 +104,8 @@ pub(crate) fn setting_control_row(
     control: gpui::AnyElement,
     tokens: &Tokens,
 ) -> impl IntoElement {
+    let label = label.into();
+    let debug_label = label.clone();
     div()
         .min_h(px(52.))
         .flex()
@@ -111,11 +114,12 @@ pub(crate) fn setting_control_row(
         .text_sm()
         .child(
             div()
+                .debug_selector(move || format!("setting-label-{debug_label}"))
                 .w(SETTING_LABEL_WIDTH)
                 .min_w(px(110.))
                 .flex_shrink(1.)
                 .text_color(tokens.text)
-                .child(label.into()),
+                .child(label),
         )
         .child(
             div()
@@ -324,14 +328,6 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
         month_from_march - 9
     } as u32;
     (year_of_era + era * 400 + i64::from(month <= 2), month, day)
-}
-
-pub(crate) fn backend_ids(descriptors: &[application::BackendDescriptor]) -> String {
-    descriptors
-        .iter()
-        .map(|descriptor| descriptor.id.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[cfg(test)]

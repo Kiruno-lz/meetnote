@@ -91,22 +91,32 @@ pub(crate) fn profile_summary(profile: &SpeakerProfile, locale: Locale) -> Strin
 #[derive(Debug, Default)]
 pub(crate) struct SpeakerProfiles {
     pub(crate) profiles: Vec<SpeakerProfile>,
-    /// Whether a read has landed since the window opened.
+    /// Whether a read has landed for the current library.
     pub(crate) loaded: bool,
     /// Why the last read failed; the list is empty then.
     pub(crate) read_error: Option<String>,
     /// The outcome of the last library call: its message and whether it
     /// failed.
     pub(crate) status: Option<(String, bool)>,
-    /// Whether a library call is in flight.
-    pub(crate) busy: bool,
-    /// Bumped whenever `profiles` changes, so the rows are rebuilt.
+    /// The library path of the one call in flight, including its saved read.
+    pub(crate) write_path: Option<String>,
+    /// Bumped whenever `profiles` changes, so controls can follow the saved list.
     pub(crate) version: u64,
     /// The latest read; an older one that lands later is dropped.
     generation: u64,
 }
 
 impl SpeakerProfiles {
+    /// Forget the previous library's displayed data. An in-flight write
+    /// keeps its path until its own acknowledgement arrives.
+    pub(crate) fn reset_for_path_change(&mut self) {
+        self.profiles.clear();
+        self.loaded = false;
+        self.read_error = None;
+        self.status = None;
+        self.version += 1;
+    }
+
     pub(crate) fn begin_read(&mut self) -> u64 {
         self.generation += 1;
         self.generation
@@ -272,6 +282,7 @@ pub(crate) struct NameRow {
     /// The entries this one can merge into; none when it is the only entry.
     pub(crate) merge_into: Option<Entity<Dropdown>>,
     options: Vec<SelectOption>,
+    _subscriptions: Vec<Subscription>,
 }
 
 /// Called with a row's id when Enter is pressed in its name field.
@@ -279,12 +290,11 @@ pub(crate) type OnRename = fn(&mut RootView, String, &mut Context<RootView>);
 /// Called with a row's id and the id chosen in its merge select.
 pub(crate) type OnMerge = fn(&mut RootView, String, String, &mut Window, &mut Context<RootView>);
 
-/// The rows built for `key`, which names what they show; the owner builds
-/// new rows when the key changes, dropping these and their subscriptions.
+/// The rows and subscriptions for a source key. The owner can advance that
+/// key after verifying that the controls' source data did not change.
 pub(crate) struct NameRows<K> {
     key: K,
     pub(crate) rows: Vec<NameRow>,
-    _subscriptions: Vec<Subscription>,
 }
 
 impl<K: PartialEq> NameRows<K> {
@@ -297,8 +307,8 @@ impl<K: PartialEq> NameRows<K> {
         cx: &mut Context<RootView>,
     ) -> Self {
         let mut rows = Vec::with_capacity(entries.len());
-        let mut subscriptions = Vec::new();
         for entry in entries {
+            let mut subscriptions = Vec::new();
             let name = cx.new(|cx| {
                 let mut field = TextField::new(
                     entry.field_label.clone(),
@@ -315,6 +325,7 @@ impl<K: PartialEq> NameRows<K> {
                 window,
                 move |root, _, event: &TextFieldEvent, _, cx| match event {
                     TextFieldEvent::Submit => on_rename(root, id.clone(), cx),
+                    TextFieldEvent::Change => {}
                 },
             ));
             let options = entries
@@ -349,13 +360,10 @@ impl<K: PartialEq> NameRows<K> {
                 name,
                 merge_into,
                 options,
+                _subscriptions: subscriptions,
             });
         }
-        Self {
-            key,
-            rows,
-            _subscriptions: subscriptions,
-        }
+        Self { key, rows }
     }
 
     pub(crate) fn is_for(&self, key: &K) -> bool {
@@ -364,6 +372,78 @@ impl<K: PartialEq> NameRows<K> {
 
     pub(crate) fn key(&self) -> &K {
         &self.key
+    }
+
+    /// Advance a checked source key without replacing controls or their state.
+    pub(crate) fn set_key(&mut self, key: K) {
+        self.key = key;
+    }
+
+    /// Accept a committed correction without replacing its inputs. A rename
+    /// keeps the submitted input even if later typing restored its old value;
+    /// other untouched inputs follow the saved names. Merges may remove rows.
+    pub(crate) fn saved(
+        &mut self,
+        key: K,
+        entries: &[NameEntry],
+        submitted_field: Option<gpui::EntityId>,
+        merge_placeholder: &str,
+        cx: &mut Context<RootView>,
+    ) -> bool {
+        if entries.iter().any(|entry| self.row(&entry.id).is_none()) {
+            return false;
+        }
+        self.rows
+            .retain(|row| entries.iter().any(|entry| entry.id == row.id));
+        for row in &mut self.rows {
+            let entry = entries.iter().find(|entry| entry.id == row.id).unwrap();
+            let current = row.name.read(cx).value(cx);
+            let follow_saved = Some(row.name.entity_id()) != submitted_field
+                && current == row.initial
+                && current != entry.name;
+            row.name.update(cx, |field, cx| {
+                if follow_saved {
+                    field.set_value(entry.name.clone(), cx);
+                }
+                field.set_label(entry.field_label.clone(), cx);
+                field.set_placeholder(entry.placeholder.clone(), cx);
+            });
+            row.initial = entry.name.clone();
+            let options = entries
+                .iter()
+                .filter(|other| other.id != entry.id)
+                .map(|other| other.option.clone())
+                .collect::<Vec<_>>();
+            if options.is_empty() {
+                row.merge_into = None;
+            } else if let Some(select) = &row.merge_into {
+                let options = options.clone();
+                select.update(cx, |select, cx| {
+                    select.set_label(entry.merge_label.clone(), merge_placeholder.to_string(), cx);
+                    select.set_options(options, None, cx);
+                });
+            } else {
+                return false;
+            }
+            row.options = options;
+        }
+        self.key = key;
+        true
+    }
+
+    /// Keep merge controls consistent with write availability while names
+    /// remain editable. Updating an unchanged state leaves the widgets alone.
+    pub(crate) fn set_merge_disabled(
+        &self,
+        disabled: bool,
+        window: &mut Window,
+        cx: &mut Context<RootView>,
+    ) {
+        for row in &self.rows {
+            if let Some(select) = &row.merge_into {
+                select.update(cx, |select, cx| select.set_disabled(disabled, window, cx));
+            }
+        }
     }
 
     pub(crate) fn row(&self, id: &str) -> Option<&NameRow> {

@@ -169,6 +169,8 @@ pub(crate) struct DocumentEditor {
     drafts: BTreeMap<ProjectId, Draft>,
     /// Documents whose draft is being read.
     pub(crate) loading: BTreeSet<ProjectId>,
+    /// Failed reads wait for the user to retry instead of restarting on render.
+    pub(crate) read_errors: BTreeMap<ProjectId, String>,
     /// The document whose save is in flight.
     pub(crate) saving: Option<ProjectId>,
 }
@@ -206,6 +208,7 @@ impl DocumentEditor {
             status_value: String::new(),
             drafts: BTreeMap::new(),
             loading: BTreeSet::new(),
+            read_errors: BTreeMap::new(),
             saving: None,
         }
     }
@@ -290,6 +293,7 @@ impl DocumentEditor {
         let document_id = record.state.id().clone();
         let values = DraftValues::from_record(record);
         self.loading.remove(&document_id);
+        self.read_errors.remove(&document_id);
         if show && self.shown.as_ref() != Some(&document_id) {
             self.stash(cx);
         }
@@ -319,6 +323,7 @@ impl DocumentEditor {
     /// Drops `document_id`'s draft; the fields hide it if they show it.
     pub(crate) fn discard(&mut self, document_id: &ProjectId) {
         self.drafts.remove(document_id);
+        self.read_errors.remove(document_id);
         if self.shown.as_ref() == Some(document_id) {
             self.shown = None;
         }
@@ -328,6 +333,7 @@ impl DocumentEditor {
     pub(crate) fn discard_all(&mut self) {
         self.drafts.clear();
         self.loading.clear();
+        self.read_errors.clear();
         self.shown = None;
     }
 

@@ -53,7 +53,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         .track_scroll(&scroll)
         .flex()
         .flex_col()
-        .gap(tokens.spacing.xl)
+        .gap(tokens.spacing.xl + tokens.spacing.lg)
         .max_w(px(960.))
         .mx_auto()
         .child(settings_section(
@@ -202,14 +202,9 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .child(settings_error_text(root.ui.locale, error))
         }))
         // The scrollbar stays outside the scrolled form.
-        .child(
-            div()
-                .relative()
-                .flex_1()
-                .min_h_0()
-                .child(body)
-                .child(Scrollbar::vertical("settings-scrollbar", &scroll)),
-        )
+        .child(div().relative().flex_1().min_h_0().child(body).child(
+            Scrollbar::vertical("settings-scrollbar", &scroll).outset_right(tokens.spacing.xl),
+        ))
         .into_any_element()
 }
 
@@ -236,8 +231,11 @@ fn workspace_section(
     let mut rows = vec![setting_control_row(
         tr(locale, "documents_root"),
         div()
+            .w_full()
+            .min_w_0()
             .flex()
             .items_center()
+            .justify_end()
             .gap_2()
             .child(
                 div()
@@ -247,14 +245,18 @@ fn workspace_section(
                     .flex_shrink(1.)
                     .text_xs()
                     .text_color(tokens.text_muted)
-                    .child(root.settings_draft.documents_root.clone()),
+                    .child(theme::tail_faded_label(
+                        "documents-root-path-label",
+                        root.settings_draft.documents_root.clone(),
+                        tokens.content,
+                    )),
             )
             .child(
                 Button::new("choose-documents-root", tr(locale, "choose_directory"))
                     .debug_selector(|| "choose-documents-root".into())
                     .secondary()
                     .compact()
-                    .disabled(switch.switching)
+                    .disabled(switch.switching || root.documents_root_busy())
                     .on_click(cx.listener(RootView::choose_documents_root_directory)),
             )
             .into_any_element(),
@@ -263,6 +265,11 @@ fn workspace_section(
     .into_any_element()];
     let status = if switch.switching {
         Some((tr(locale, "documents_root_switching").to_string(), false))
+    } else if root.documents_root_busy() {
+        Some((
+            tr(locale, "documents_root_operation_pending").to_string(),
+            false,
+        ))
     } else {
         switch.status.clone()
     };
@@ -306,17 +313,25 @@ fn speaker_library_section(
     let mut rows = vec![setting_control_row(
         tr(locale, "speaker_library_path"),
         div()
+            .w_full()
+            .min_w_0()
             .flex()
             .items_center()
+            .justify_end()
             .gap_2()
             .child(
                 div()
+                    .debug_selector(|| "speaker-library-path".into())
                     .w(PATH_WIDTH)
                     .min_w_0()
                     .flex_shrink(1.)
                     .text_xs()
                     .text_color(tokens.text_muted)
-                    .child(root.settings_draft.speaker_library_path.clone()),
+                    .child(theme::tail_faded_label(
+                        "speaker-library-path-label",
+                        root.settings_draft.speaker_library_path.clone(),
+                        tokens.content,
+                    )),
             )
             .child(
                 Button::new("choose-speaker-library", tr(locale, "choose_directory"))
@@ -426,7 +441,7 @@ fn speaker_library_section(
                             .debug_selector(marked("rename-speaker-profile"))
                             .secondary()
                             .compact()
-                            .disabled(library.busy)
+                            .disabled(library.write_path.is_some())
                             .on_click(cx.listener(
                                 move |root, _, _, cx| {
                                     root.rename_speaker_profile(rename_id.clone(), cx)
@@ -448,7 +463,7 @@ fn speaker_library_section(
                             .debug_selector(marked("delete-speaker-profile"))
                             .danger()
                             .compact()
-                            .disabled(library.busy)
+                            .disabled(library.write_path.is_some())
                             .on_click(cx.listener(
                                 move |root, _, window, cx| {
                                     root.ask_delete_speaker_profile(delete_id.clone(), window, cx)
@@ -509,9 +524,11 @@ fn assistant_settings_section(
         .map(|profile| {
             let id = profile.id.clone();
             let selected = active == Some(id.as_str());
+            let selector = format!("assistant-profile-{id}");
             (
                 selected,
-                Button::new(format!("assistant-profile-{id}"), profile.name.clone())
+                Button::new(selector.clone(), profile.name.clone())
+                    .debug_selector(move || selector.clone())
                     .compact()
                     .on_click(
                         cx.listener(move |root, _, _, cx| root.edit_assistant_profile(&id, cx)),
@@ -641,6 +658,7 @@ fn assistant_settings_section(
                     .child(
                         Button::new("assistant-save-settings", tr(locale, "save"))
                             .debug_selector(|| "assistant-save-settings".into())
+                            .disabled(root.assistant_save_pending)
                             .primary()
                             .compact()
                             .on_click(cx.listener(RootView::save_assistant_settings)),

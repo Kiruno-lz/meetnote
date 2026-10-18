@@ -1,10 +1,11 @@
 use crate::{
-    components::{backend_ids, ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
+    components::{ordered_projects, status_label, timestamp, DragGhost, ProjectDrag},
     controller::RootView,
-    controls::{tree, Button, RadioGroup, Scrollbar, Tree, TreeItem},
+    controls::{tree, Button, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
+    route::Route,
     speakers::{document_speakers, DocumentSpeaker},
-    state::{self, ContentMode},
+    state::{self, ContentMode, ProcessingFeedback, ProcessingStage, StageFeedback},
     theme::{self, Tokens},
 };
 use domain::{DocumentState, ProjectStatus};
@@ -12,6 +13,8 @@ use gpui::{div, prelude::*, px, AnyElement, Context, IntoElement, Pixels};
 
 /// The tallest the issue list grows before it scrolls.
 const ISSUE_LIST_HEIGHT: Pixels = px(168.);
+/// Long recovery messages scroll so their action and document stay reachable.
+const RECOVERY_MESSAGE_HEIGHT: Pixels = px(96.);
 /// The width of the document status select.
 const STATUS_SELECT_WIDTH: Pixels = px(240.);
 /// The name column of a speaker row.
@@ -24,9 +27,10 @@ const SPEAKER_FIELD_WIDTH: Pixels = px(200.);
 pub(crate) fn render(
     root: &mut RootView,
     selected: Option<&DocumentState>,
+    viewport_height: Pixels,
     cx: &mut Context<RootView>,
 ) -> impl IntoElement {
-    main_panel(root, selected, cx).debug_selector(|| "meetings-page".into())
+    main_panel(root, selected, viewport_height, cx).debug_selector(|| "meetings-page".into())
 }
 
 /// The three-level project tree the sidebar shows on the Meetings route:
@@ -52,7 +56,9 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
     .has_selection(has_selection)
     .reveal_selection(std::mem::take(&mut root.reveal_tree_selection))
     .on_step(cx.listener(|this, step, window, cx| this.step_project_tree(*step, window, cx)))
-    .on_shift(cx.listener(|this, shift, _, cx| this.shift_project(*shift, cx)))
+    .when(!root.documents_root_switch.switching, |tree| {
+        tree.on_shift(cx.listener(|this, shift, _, cx| this.shift_project(*shift, cx)))
+    })
     .size_full()
     .overflow_y_scroll()
     .track_scroll(&scroll)
@@ -64,16 +70,23 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .p_3()
                 .text_sm()
                 .text_color(tokens.text_muted)
-                .child(tr(root.ui.locale, "no_projects")),
+                .when(root.projects_error.is_some(), |empty| {
+                    empty.debug_selector(|| "project-tree-unavailable".into())
+                })
+                .child(tr(
+                    root.ui.locale,
+                    if root.projects_error.is_some() {
+                        "documents_unavailable"
+                    } else {
+                        "no_projects"
+                    },
+                )),
         );
     } else {
         for (project, depth) in rows {
             let selected = root.ui.selected_project.as_ref() == Some(project.id());
-            let display_status = if selected && root.ui.processing {
-                ProjectStatus::Processing
-            } else {
-                project.processing_status()
-            };
+            let display_status = root.ui.processing_status(&project);
+            let status_selector = format!("project-status-{}-{:?}", project.id(), display_status);
             let project_id = project.id().clone();
             let drag_id = project.id().clone();
             let drag_title = project.title().to_string();
@@ -94,6 +107,7 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                     ProjectDrag {
                         project_id: drag_id,
                         revision: project.revision(),
+                        root_generation: root.documents_root_generation,
                     },
                     move |_, _, _, cx| {
                         cx.new(|_| DragGhost {
@@ -175,16 +189,19 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                             )),
                     ),
             )
-            .child(status_line(
-                status_label(root.ui.locale, display_status),
-                root.audio.problem(project.id()).map(|problem| {
-                    (
-                        format!("audio-indicator-{}", project.id().as_str()),
-                        tr(root.ui.locale, problem.label_key()),
-                    )
-                }),
-                &tokens,
-            ))
+            .child(
+                status_line(
+                    status_label(root.ui.locale, display_status),
+                    root.audio.problem(project.id()).map(|problem| {
+                        (
+                            format!("audio-indicator-{}", project.id().as_str()),
+                            tr(root.ui.locale, problem.label_key()),
+                        )
+                    }),
+                    &tokens,
+                )
+                .debug_selector(move || status_selector.clone()),
+            )
             .on_click(
                 cx.listener(move |this, _, _, cx| this.select_project(project_id.clone(), cx)),
             )
@@ -221,7 +238,10 @@ pub(crate) fn project_tree(root: &mut RootView, cx: &mut Context<RootView>) -> i
                 .flex_1()
                 .min_h_0()
                 .child(theme::scroll_faded(&scroll, tokens.sidebar, tree))
-                .child(Scrollbar::vertical("project-tree-scrollbar", &scroll)),
+                .child(
+                    Scrollbar::vertical("project-tree-scrollbar", &scroll)
+                        .outset_right(tokens.spacing.md),
+                ),
         )
 }
 
@@ -249,42 +269,114 @@ fn status_line(
     }
 }
 
+fn model_guidance(
+    hint: &'static str,
+    settings_section: Option<&'static str>,
+    locale: i18n::Locale,
+    in_body: bool,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> gpui::Div {
+    let (action, label) = if settings_section.is_some() {
+        ("go-to-model-settings", "choose_model")
+    } else {
+        ("go-to-models", "go_to_models")
+    };
+    div()
+        .debug_selector(|| "models-required".into())
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(tokens.spacing.sm)
+        .text_sm()
+        .when(!in_body, |row| {
+            row.flex_row().flex_wrap().items_center().text_xs()
+        })
+        .child(
+            div()
+                .min_w_0()
+                .max_w_full()
+                .text_color(tokens.text_muted)
+                .child(tr(locale, hint)),
+        )
+        .child(
+            Button::new(action, tr(locale, label))
+                .debug_selector(move || action.into())
+                .compact()
+                .when(in_body, |button| button.primary())
+                .when(!in_body, |button| button.ghost())
+                .on_click(cx.listener(move |this, _, _, cx| match settings_section {
+                    Some(section) => this.open_settings_section(section, cx),
+                    None => this.navigate(Route::Models, cx),
+                })),
+        )
+}
+
 fn main_panel(
     root: &mut RootView,
     project: Option<&DocumentState>,
+    viewport_height: Pixels,
     cx: &mut Context<RootView>,
 ) -> gpui::Div {
     let locale = root.ui.locale;
     let tokens = *theme::tokens(cx);
-    let display_status = project.map(|project| {
-        if root.ui.processing {
-            ProjectStatus::Processing
-        } else {
-            project.processing_status()
-        }
+    // A different workspace, document or view starts at its beginning;
+    // refreshing the same content keeps the user's reading position.
+    let context = project.map(|project| {
+        (
+            root.documents_root_generation,
+            project.id().clone(),
+            root.ui.content_mode,
+        )
     });
+    if root.scroll.meeting_context != context {
+        root.scroll.meeting_context = context;
+        root.scroll.meeting_content.set_offset(Default::default());
+    }
+    // Compact the metadata beside Detail in a short window so recovery
+    // feedback still leaves room for reading and editing.
+    let compact = root.ui.detail_open
+        && viewport_height < super::chrome::MIN_WINDOW_SIZE.height + RECOVERY_MESSAGE_HEIGHT;
+    let inset = if compact {
+        tokens.spacing.md
+    } else {
+        tokens.spacing.xl
+    };
+    let gap = if compact {
+        tokens.spacing.xs
+    } else {
+        tokens.spacing.lg
+    };
+    let display_status = project.map(|project| root.ui.processing_status(project));
     let mut panel = div()
         .flex_1()
         .min_w_0()
         .h_full()
-        .p_6()
+        .p(inset)
         .flex()
         .flex_col()
-        .gap_4()
+        .gap(gap)
+        .children(workspace_read_error(root, &tokens, cx))
         .children(conflict_notice(root, &tokens, cx))
         .children(issues_panel(root, &tokens));
     if let Some(project) = project {
-        let ready = project.processing_status() == ProjectStatus::Ready;
+        // A later failed attempt does not remove the last successful result.
+        let has_results = project.processing.latest.is_some();
         let audio_problem = root.audio.problem(project.id());
-        let process_label = tr(
-            locale,
-            if root.ui.processing {
-                "cancel"
-            } else {
-                "process"
-            },
+        let processing_here = root.ui.is_processing_document(project.id());
+        let missing_models = state::missing_models(
+            &root.installation,
+            &root.settings_draft,
+            (&root.services.asr_model, &root.services.diarization_model),
         );
+        let process_label = tr(locale, if processing_here { "cancel" } else { "process" });
         let mode = root.ui.content_mode;
+        let model_settings_section = root.model_setup_section(missing_models);
+        let model_hint = missing_models.hint_key().filter(|_| {
+            !processing_here && audio_problem.is_none() && root.projects_error.is_none()
+        });
         let scroll = root.scroll.meeting_content.clone();
         let mut content = div()
             .id("meeting-content")
@@ -297,16 +389,19 @@ fn main_panel(
             .bg(tokens.surface);
         content = match mode {
             ContentMode::Edit => content.child(editor_form(root, project, &tokens, cx)),
-            ContentMode::Summary if ready => content.child(
-                div().text_sm().child(
-                    project
-                        .content
-                        .summary
-                        .clone()
-                        .unwrap_or_else(|| tr(locale, "no_summary").into()),
-                ),
+            ContentMode::Summary if has_results => content.child(
+                div()
+                    .debug_selector(|| "document-summary".into())
+                    .text_sm()
+                    .child(
+                        project
+                            .content
+                            .summary
+                            .clone()
+                            .unwrap_or_else(|| tr(locale, "no_summary").into()),
+                    ),
             ),
-            ContentMode::Original if ready => content
+            ContentMode::Original if has_results => content
                 .child(speakers_panel(root, project, &tokens, cx))
                 .children(project.results.speaker_segments.iter().map(|segment| {
                     div()
@@ -326,30 +421,55 @@ fn main_panel(
                         )
                         .child(div().text_sm().child(segment.text.clone()))
                 })),
-            _ => content.child(
-                div()
-                    .text_color(tokens.text_muted)
-                    .child(tr(locale, "need_process")),
-            ),
+            _ => match model_hint {
+                Some(hint) => content.child(model_guidance(
+                    hint,
+                    model_settings_section,
+                    locale,
+                    true,
+                    &tokens,
+                    cx,
+                )),
+                None => content.child(
+                    div()
+                        .text_color(tokens.text_muted)
+                        .child(tr(locale, "need_process")),
+                ),
+            },
         };
         panel = panel
             .child(
                 div()
+                    .debug_selector(|| "document-title".into())
                     .flex_shrink_0()
+                    .min_w_0()
+                    .flex()
                     .text_2xl()
-                    .child(project.title().to_string()),
+                    .child(theme::tail_faded_label(
+                        format!("document-title-{}", project.id()),
+                        project.title().to_string(),
+                        tokens.content,
+                    )),
             )
             .child(
                 div()
+                    .debug_selector(|| "document-audio-path".into())
                     .flex_shrink_0()
+                    .min_w_0()
+                    .flex()
                     .text_sm()
                     .text_color(tokens.text_muted)
-                    .child(project.audio_path().to_string()),
+                    .child(theme::tail_faded_label(
+                        format!("document-audio-path-{}", project.id()),
+                        project.audio_path().to_string(),
+                        tokens.content,
+                    )),
             )
             // The status and actions wrap beside an open Detail rather than
             // run past the content column.
             .child(
                 div()
+                    .debug_selector(|| "document-actions".into())
                     .flex_shrink_0()
                     .flex()
                     .flex_wrap()
@@ -360,6 +480,12 @@ fn main_panel(
                             .px_3()
                             .py_1()
                             .rounded(tokens.radius.sm)
+                            .debug_selector(move || {
+                                format!(
+                                    "document-status-{:?}",
+                                    display_status.unwrap_or(ProjectStatus::Imported)
+                                )
+                            })
                             .bg(tokens.status(display_status.unwrap_or(ProjectStatus::Imported)))
                             .text_sm()
                             .child(status_label(
@@ -383,8 +509,14 @@ fn main_panel(
                             .debug_selector(|| "process-project".into())
                             .primary()
                             .compact()
-                            // Missing audio cannot be processed; relink it.
-                            .disabled(!root.ui.processing && root.audio.missing(project.id()))
+                            // Cancelling remains available while this document runs.
+                            .disabled(
+                                (root.ui.processing && !processing_here)
+                                    || (!root.ui.processing
+                                        && (root.documents_root_switch.switching
+                                            || root.audio.missing(project.id())
+                                            || missing_models.any())),
+                            )
                             .on_click(cx.listener(RootView::process_or_cancel)),
                     )
                     .children(audio_problem.map(|_| {
@@ -392,31 +524,66 @@ fn main_panel(
                             .debug_selector(|| "relink-audio".into())
                             .secondary()
                             .compact()
-                            .disabled(root.audio.relinking.is_some())
+                            .disabled(
+                                root.audio.relinking.is_some()
+                                    || root.documents_root_switch.switching,
+                            )
                             .on_click(cx.listener(RootView::relink_audio))
                     }))
                     .child(
-                        Button::new("open-project-detail", tr(locale, "open_detail"))
-                            .debug_selector(|| "open-project-detail".into())
-                            .focus_handle(&root.detail_trigger)
-                            .secondary()
-                            .compact()
-                            .on_click(cx.listener(RootView::open_detail)),
+                        Button::new(
+                            "open-project-detail",
+                            tr(
+                                locale,
+                                if root.ui.detail_open {
+                                    "close_detail"
+                                } else {
+                                    "open_detail"
+                                },
+                            ),
+                        )
+                        .debug_selector(|| "open-project-detail".into())
+                        .focus_handle(&root.detail_trigger)
+                        .secondary()
+                        .compact()
+                        .on_click(cx.listener(RootView::toggle_detail)),
+                    )
+                    .children(
+                        model_hint
+                            .filter(|_| has_results || mode == ContentMode::Edit)
+                            .map(|hint| {
+                                model_guidance(
+                                    hint,
+                                    model_settings_section,
+                                    locale,
+                                    false,
+                                    &tokens,
+                                    cx,
+                                )
+                            }),
                     ),
             );
+        if processing_here {
+            panel = panel.child(processing_feedback(
+                &root.ui.processing_feedback,
+                locale,
+                &tokens,
+            ));
+        }
         // Summary and Edit always; the speaker-labelled original once
         // processed.
         let mut controls = RadioGroup::new("content-mode", tr(locale, "content_mode"))
             .debug_selector(|| "content-mode-group".into())
             .flex_shrink_0()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_2()
             .option(
                 mode == ContentMode::Summary,
                 crate::components::mode_button(tr(locale, "summary"), ContentMode::Summary, cx),
             );
-        if ready {
+        if has_results {
             controls = controls.option(
                 mode == ContentMode::Original,
                 crate::components::mode_button(tr(locale, "original"), ContentMode::Original, cx),
@@ -436,9 +603,11 @@ fn main_panel(
                 .child(
                     theme::scroll_faded(&scroll, tokens.surface, content).rounded(tokens.radius.md),
                 )
-                .child(Scrollbar::vertical("meeting-content-scrollbar", &scroll)),
+                .child(
+                    Scrollbar::vertical("meeting-content-scrollbar", &scroll).outset_right(inset),
+                ),
         );
-    } else {
+    } else if root.projects_error.is_none() {
         panel = panel
             .child(
                 div()
@@ -446,31 +615,163 @@ fn main_panel(
                     .text_2xl()
                     .child(tr(locale, "meetings")),
             )
-            .child(crate::components::empty_card(
-                tr(locale, "empty_meetings"),
-                &tokens,
-            ));
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .gap(tokens.spacing.md)
+                    .text_center()
+                    .child(
+                        gpui::svg()
+                            .path("icons/file.svg")
+                            .size(tokens.control_height.lg)
+                            .text_color(tokens.text_muted),
+                    )
+                    .child(
+                        div()
+                            .text_size(tokens.font_size.lg)
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(tr(locale, "empty_meetings_title")),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(tokens.text_muted)
+                            .child(tr(locale, "empty_meetings")),
+                    )
+                    .child(
+                        Button::new("empty-import-audio", tr(locale, "import_audio"))
+                            .disabled(root.documents_root_switch.switching)
+                            .debug_selector(|| "empty-import-audio".into())
+                            .primary()
+                            .on_click(cx.listener(RootView::import_audio)),
+                    ),
+            );
     }
-    panel.child(
+    panel
+}
+
+fn workspace_read_error(
+    root: &RootView,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> Option<AnyElement> {
+    let error = root.projects_error.as_ref()?;
+    let locale = root.ui.locale;
+    let scroll = root.scroll.workspace_read_error.clone();
+    Some(
         div()
+            .debug_selector(|| "workspace-read-error".into())
             .flex_shrink_0()
-            .border_t_1()
-            .border_color(tokens.hairline)
-            .pt_3()
-            .text_xs()
-            .text_color(tokens.text_muted)
-            .child(format!(
-                "{}   •   ASR: {}   •   DIA: {}",
-                root.ui.notice,
-                backend_ids(&root.inventory.asr),
-                backend_ids(&root.inventory.diarization)
-            ))
-            .child(format!(
-                "{}: {}",
-                tr(locale, "models"),
-                state::model_status(&root.installation, locale)
-            )),
+            .min_w_0()
+            .p_2()
+            .rounded(tokens.radius.sm)
+            .bg(tokens.warning_surface)
+            .text_color(tokens.warning_text)
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .id("workspace-read-error-message")
+                    .debug_selector(|| "workspace-read-error-message".into())
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .max_h(RECOVERY_MESSAGE_HEIGHT)
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .child(
+                        div()
+                            .debug_selector(|| "workspace-read-error-text".into())
+                            .text_sm()
+                            .child(i18n::message(locale, "workspace_read_failed", error)),
+                    )
+                    .child(Scrollbar::vertical(
+                        "workspace-read-error-scrollbar",
+                        &scroll,
+                    )),
+            )
+            .child(
+                Button::new("retry-workspace-read", tr(locale, "retry_workspace_read"))
+                    .disabled(root.documents_root_switch.switching)
+                    .debug_selector(|| "retry-workspace-read".into())
+                    .secondary()
+                    .compact()
+                    .on_click(cx.listener(|this, _, _, cx| this.reload_projects(cx))),
+            )
+            .into_any_element(),
     )
+}
+
+/// Persistent feedback for the shown task's runtime jobs. Each bar uses
+/// only its own reported units; unknown extents remain indeterminate.
+fn processing_feedback(
+    feedback: &ProcessingFeedback,
+    locale: i18n::Locale,
+    tokens: &Tokens,
+) -> impl IntoElement {
+    div()
+        .debug_selector(|| "processing-progress".into())
+        .w_full()
+        .max_w(px(360.))
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.sm)
+        .children(
+            [ProcessingStage::Transcription, ProcessingStage::Diarization].map(|stage| {
+                let state = feedback.stage(stage);
+                let value = state.value();
+                let stage_id = stage.name();
+                div()
+                    .debug_selector(move || format!("processing-{stage_id}"))
+                    .flex()
+                    .flex_col()
+                    .gap(tokens.spacing.xs)
+                    .child(
+                        div()
+                            .debug_selector(move || {
+                                format!("processing-{stage_id}-{}", state.name())
+                            })
+                            .flex()
+                            .justify_between()
+                            .text_xs()
+                            .text_color(tokens.text_muted)
+                            .child(tr(locale, stage.label_key()))
+                            .child(tr(locale, state.status_key())),
+                    )
+                    .children(
+                        matches!(state, StageFeedback::Waiting | StageFeedback::Running(_)).then(
+                            || {
+                                div()
+                                    .debug_selector(move || {
+                                        format!(
+                                            "processing-{stage_id}-{}",
+                                            if value.is_some() {
+                                                "determinate"
+                                            } else {
+                                                "indeterminate"
+                                            }
+                                        )
+                                    })
+                                    .child(
+                                        ProgressBar::new(
+                                            format!("processing-{stage_id}-bar"),
+                                            tr(locale, stage.label_key()),
+                                        )
+                                        .value(value.unwrap_or(0.))
+                                        .indeterminate(value.is_none()),
+                                    )
+                            },
+                        ),
+                    )
+            }),
+        )
 }
 
 /// The speakers of the document above its transcript, each with its
@@ -483,7 +784,7 @@ fn speakers_panel(
     cx: &mut Context<RootView>,
 ) -> AnyElement {
     let locale = root.ui.locale;
-    let busy = root.speaker_command.is_some();
+    let busy = root.speaker_command.is_some() || root.documents_root_switch.switching;
     // Built for this document during the same render.
     let rows = root
         .speaker_rows
@@ -607,6 +908,7 @@ fn conflict_notice(
 ) -> Option<AnyElement> {
     let conflict = root.document_conflict.as_ref()?;
     let locale = root.ui.locale;
+    let scroll = root.scroll.document_conflict.clone();
     Some(
         div()
             .debug_selector(|| "document-conflict".into())
@@ -620,26 +922,38 @@ fn conflict_notice(
             .gap_3()
             .child(
                 div()
+                    .id("document-conflict-message")
+                    .debug_selector(|| "document-conflict-message".into())
+                    .relative()
                     .flex_1()
                     .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(div().text_sm().child(i18n::message(
-                        locale,
-                        "document_conflict",
-                        &conflict.title,
-                    )))
-                    .child(div().text_xs().child(tr(locale, "document_conflict_hint")))
-                    .child(div().text_xs().child(format!(
-                        "{} {} → {}",
-                        tr(locale, "detail_revision"),
-                        conflict.expected,
-                        conflict.actual
-                    ))),
+                    .max_h(RECOVERY_MESSAGE_HEIGHT)
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .child(
+                        div()
+                            .debug_selector(|| "document-conflict-text".into())
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(div().text_sm().child(i18n::message(
+                                locale,
+                                "document_conflict",
+                                &conflict.title,
+                            )))
+                            .child(div().text_xs().child(tr(locale, "document_conflict_hint")))
+                            .child(div().text_xs().child(format!(
+                                "{} {} → {}",
+                                tr(locale, "detail_revision"),
+                                conflict.expected,
+                                conflict.actual
+                            ))),
+                    )
+                    .child(Scrollbar::vertical("document-conflict-scrollbar", &scroll)),
             )
             .child(
                 Button::new("reload-conflicted-document", tr(locale, "reload"))
+                    .disabled(root.documents_root_switch.switching)
                     .debug_selector(|| "reload-conflicted-document".into())
                     .secondary()
                     .compact()
@@ -661,7 +975,7 @@ pub(crate) fn issue_sentence(issue: &application::DocumentIssue, locale: i18n::L
 /// The scanner's issues of the documents directory, each with its path and
 /// reason, as the last reload read them. Nothing when there are none.
 fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
-    if root.document_issues.is_empty() {
+    if root.projects_error.is_some() || root.document_issues.is_empty() {
         return None;
     }
     let scroll = root.scroll.document_issues.clone();
@@ -712,7 +1026,10 @@ fn issues_panel(root: &RootView, tokens: &Tokens) -> Option<AnyElement> {
                 div()
                     .relative()
                     .child(theme::scroll_faded(&scroll, tokens.warning_surface, list))
-                    .child(Scrollbar::vertical("document-issues-scrollbar", &scroll)),
+                    .child(
+                        Scrollbar::vertical("document-issues-scrollbar", &scroll)
+                            .outset_right(tokens.spacing.md),
+                    ),
             )
             .into_any_element(),
     )
@@ -728,6 +1045,31 @@ fn editor_form(
 ) -> AnyElement {
     let locale = root.ui.locale;
     let editor = &root.editor;
+    if let Some(error) = editor.read_errors.get(project.id()) {
+        return div()
+            .debug_selector(|| "document-editor-read-failed".into())
+            .w_full()
+            .flex()
+            .flex_col()
+            .items_start()
+            .gap(tokens.spacing.md)
+            .child(
+                div()
+                    .w_full()
+                    .text_sm()
+                    .text_color(tokens.warning_text)
+                    .child(error.clone()),
+            )
+            .child(
+                Button::new("retry-document-read", tr(locale, "retry_document_read"))
+                    .disabled(root.documents_root_switch.switching)
+                    .debug_selector(|| "retry-document-read".into())
+                    .secondary()
+                    .compact()
+                    .on_click(cx.listener(RootView::retry_document_read)),
+            )
+            .into_any_element();
+    }
     if editor.shown() != Some(project.id()) {
         return div()
             .debug_selector(|| "document-editor-loading".into())
@@ -763,6 +1105,7 @@ fn editor_form(
             div()
                 .debug_selector(|| "select-document-status".into())
                 .w(STATUS_SELECT_WIDTH)
+                .max_w_full()
                 .child(editor.status.clone())
                 .into_any_element(),
         ))
@@ -780,7 +1123,7 @@ fn editor_form(
                     .debug_selector(|| "save-document".into())
                     .primary()
                     .compact()
-                    .disabled(saving)
+                    .disabled(saving || root.documents_root_switch.switching)
                     .on_click(cx.listener(RootView::save_document_draft)),
             ),
         )

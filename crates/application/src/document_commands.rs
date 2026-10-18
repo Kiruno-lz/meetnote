@@ -56,6 +56,8 @@ struct SemanticChildRequest {
 }
 
 impl DocumentCommandService {
+    /// Follows `documents` between commands, while each command keeps one
+    /// repository from its first read through its final result.
     pub fn new(documents: DocumentService) -> Self {
         Self { documents }
     }
@@ -70,22 +72,23 @@ impl DocumentCommandService {
                 expected: DOCUMENT_COMMAND_SCHEMA_VERSION,
             });
         }
+        let commands = Self::new(self.documents.frozen());
         match envelope.command {
-            DocumentCommand::List => self.list(),
-            DocumentCommand::Read { document_id } => {
-                Ok(DocumentCommandResult::Document(self.read(&document_id)?))
-            }
+            DocumentCommand::List => commands.list(),
+            DocumentCommand::Read { document_id } => Ok(DocumentCommandResult::Document(
+                commands.read(&document_id)?,
+            )),
             DocumentCommand::Create {
                 title,
                 audio_path,
                 markdown,
                 tags,
-            } => self.create(title, audio_path, markdown, tags),
+            } => commands.create(title, audio_path, markdown, tags),
             DocumentCommand::Update {
                 document_id,
                 expected_revision,
                 patch,
-            } => Ok(DocumentCommandResult::Updated(self.update_document(
+            } => Ok(DocumentCommandResult::Updated(commands.update_document(
                 &document_id,
                 expected_revision,
                 patch,
@@ -98,7 +101,7 @@ impl DocumentCommandService {
                 end_ms,
                 tags,
                 markdown,
-            } => self.create_semantic_child(SemanticChildRequest {
+            } => commands.create_semantic_child(SemanticChildRequest {
                 parent_id,
                 expected_parent_revision,
                 title,
@@ -113,13 +116,13 @@ impl DocumentCommandService {
                 new_parent_id,
                 sibling_order,
             } => {
-                self.reparent_document(
+                commands.reparent_document(
                     &document_id,
                     expected_revision,
                     new_parent_id.as_ref(),
                     sibling_order,
                 )?;
-                self.list()
+                commands.list()
             }
             DocumentCommand::Reorder {
                 document_id,
@@ -127,15 +130,15 @@ impl DocumentCommandService {
                 target_id,
                 before,
             } => {
-                self.reorder_document(&document_id, expected_revision, &target_id, before)?;
-                self.list()
+                commands.reorder_document(&document_id, expected_revision, &target_id, before)?;
+                commands.list()
             }
             DocumentCommand::MergeSpeaker {
                 document_id,
                 expected_revision,
                 from_speaker_id,
                 into_speaker_id,
-            } => Ok(DocumentCommandResult::Updated(self.merge_speaker(
+            } => Ok(DocumentCommandResult::Updated(commands.merge_speaker(
                 &document_id,
                 expected_revision,
                 &from_speaker_id,
@@ -146,7 +149,7 @@ impl DocumentCommandService {
                 expected_revision,
                 speaker_id,
                 label,
-            } => Ok(DocumentCommandResult::Updated(self.set_speaker_label(
+            } => Ok(DocumentCommandResult::Updated(commands.set_speaker_label(
                 &document_id,
                 expected_revision,
                 &speaker_id,
@@ -164,13 +167,15 @@ impl DocumentCommandService {
         expected_revision: u64,
         patch: DocumentPatch,
     ) -> Result<DocumentRecord, DocumentCommandError> {
-        let record = self.require(document_id)?;
+        let commands = Self::new(self.documents.frozen());
+        let record = commands.require(document_id)?;
         ensure_revision(&record.state, expected_revision)?;
         let mut state = record.state;
         apply_patch(&mut state, &patch)?;
-        self.documents
+        commands
+            .documents
             .save_expecting_revision(state, expected_revision, patch.markdown)?;
-        self.require(document_id)
+        commands.require(document_id)
     }
 
     /// Moves a document under `new_parent_id` (a root for `None`) at
@@ -184,7 +189,8 @@ impl DocumentCommandService {
         new_parent_id: Option<&DocumentId>,
         sibling_order: u32,
     ) -> Result<Vec<DocumentState>, DocumentCommandError> {
-        let read = self.read_tree(document_id, expected_revision)?;
+        let commands = Self::new(self.documents.frozen());
+        let read = commands.read_tree(document_id, expected_revision)?;
         let mut moved = read.clone();
         reparent_project(&mut moved, document_id, new_parent_id, sibling_order)
             .map_err(DocumentCommandError::Tree)?;
@@ -192,7 +198,7 @@ impl DocumentCommandService {
             .into_iter()
             .flatten()
             .collect();
-        self.write_tree_change(&read, moved, &anchors)
+        commands.write_tree_change(&read, moved, &anchors)
     }
 
     /// Places a document before or after its sibling `target_id` and
@@ -211,11 +217,12 @@ impl DocumentCommandService {
         target_id: &DocumentId,
         before: bool,
     ) -> Result<Vec<DocumentState>, DocumentCommandError> {
-        let read = self.read_tree(document_id, expected_revision)?;
+        let commands = Self::new(self.documents.frozen());
+        let read = commands.read_tree(document_id, expected_revision)?;
         let mut moved = read.clone();
         reorder_project(&mut moved, document_id, target_id, before)
             .map_err(DocumentCommandError::Tree)?;
-        self.write_tree_change(&read, moved, &[document_id, target_id])
+        commands.write_tree_change(&read, moved, &[document_id, target_id])
     }
 
     /// Manual correction: attributes every segment of `from_speaker_id` to
@@ -227,7 +234,7 @@ impl DocumentCommandService {
         from_speaker_id: &str,
         into_speaker_id: &str,
     ) -> Result<DocumentRecord, DocumentCommandError> {
-        self.correct_speakers(
+        Self::new(self.documents.frozen()).correct_speakers(
             document_id,
             expected_revision,
             &SpeakerCorrection::Merge {
@@ -246,7 +253,7 @@ impl DocumentCommandService {
         speaker_id: &str,
         label: Option<String>,
     ) -> Result<DocumentRecord, DocumentCommandError> {
-        self.correct_speakers(
+        Self::new(self.documents.frozen()).correct_speakers(
             document_id,
             expected_revision,
             &SpeakerCorrection::Label {

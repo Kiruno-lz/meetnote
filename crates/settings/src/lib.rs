@@ -469,6 +469,30 @@ pub struct AssistantConnectionPatch {
     pub credential: Option<CredentialUpdate>,
 }
 
+impl AssistantConnectionPatch {
+    fn changes_target(&self) -> bool {
+        self.protocol.is_some()
+            || self.base_url.is_some()
+            || self.model.is_some()
+            || self.auth_mode.is_some()
+    }
+
+    /// A stored credential cannot follow an edited target without an explicit
+    /// credential decision. Probes and writes use this same Settings rule.
+    pub fn validate_credential_target(
+        &self,
+        connection: &AssistantConnectionProfile,
+    ) -> Result<(), SettingsError> {
+        if self.changes_target()
+            && (connection.api_key.is_some() || connection.api_key_file.is_some())
+            && self.credential.is_none()
+        {
+            return Err(SettingsError::CredentialTargetConflict);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPatch {
@@ -1427,10 +1451,7 @@ fn apply_patch(
     // Each field is written under the grant whose section reads it back.
     // Budgets belong to connectionTargets but do not redirect the credential,
     // so only endpoint changes are bound to an explicit credential decision.
-    let target_changed = connection_patch.protocol.is_some()
-        || connection_patch.base_url.is_some()
-        || connection_patch.model.is_some()
-        || connection_patch.auth_mode.is_some();
+    let target_changed = connection_patch.changes_target();
     let budget_changed = connection_patch.context_window_tokens.is_some()
         || connection_patch.timeout_ms.is_some()
         || connection_patch.max_output_tokens.is_some();
@@ -1449,12 +1470,7 @@ fn apply_patch(
             field: "assistant.credentials".into(),
         });
     }
-    if target_changed
-        && (connection.api_key.is_some() || connection.api_key_file.is_some())
-        && connection_patch.credential.is_none()
-    {
-        return Err(SettingsError::CredentialTargetConflict);
-    }
+    connection_patch.validate_credential_target(connection)?;
 
     if let Some(value) = connection_patch.name {
         connection.name = value;

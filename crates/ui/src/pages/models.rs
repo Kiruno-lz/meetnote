@@ -72,7 +72,11 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .map(|entry| {
                     let progress = downloads
                         .iter()
-                        .find(|progress| progress.model_id == entry.model.id)
+                        // The manager keeps earlier attempts in its history.
+                        // Only the current attempt owns this card's controls.
+                        .find(|progress| {
+                            progress.model_id == entry.model.id && !progress.state.is_terminal()
+                        })
                         .cloned();
                     model_card(root, entry, progress, cx)
                 })
@@ -179,15 +183,10 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .flex_1()
                 .min_h_0()
                 .child(theme::scroll_faded(&scroll, tokens.content, content))
-                .child(Scrollbar::vertical("models-scrollbar", &scroll)),
-        )
-        .child(
-            div()
-                .flex_shrink_0()
-                .pt_2()
-                .text_xs()
-                .text_color(tokens.text_muted)
-                .child(root.ui.notice.clone()),
+                .child(
+                    Scrollbar::vertical("models-scrollbar", &scroll)
+                        .outset_right(tokens.spacing.xl),
+                ),
         )
 }
 

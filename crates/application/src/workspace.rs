@@ -469,9 +469,10 @@ impl WorkspaceService {
 
     /// Revision-checked update, tree move and speaker correction commands on
     /// this workspace's documents; a stale revision fails with
-    /// [`crate::DocumentCommandError::RevisionConflict`].
+    /// [`crate::DocumentCommandError::RevisionConflict`]. The handle keeps the
+    /// current repository if execution is queued across a documents-root switch.
     pub fn document_commands(&self) -> crate::DocumentCommandService {
-        crate::DocumentCommandService::new(self.documents.clone())
+        crate::DocumentCommandService::new(self.documents.frozen())
     }
 
     pub fn processing(&self) -> ProcessingService {
@@ -502,24 +503,7 @@ impl WorkspaceService {
     }
 
     pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<DocumentState, String> {
-        let audio_path = audio_path.into();
-        let path = Path::new(&audio_path);
-        let title = path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty())
-            .unwrap_or("Untitled meeting")
-            .to_string();
-        let id = ProjectId::new(format!("project-{}", unique_suffix()));
-        let project = DocumentState::new(id, title, audio_path);
-        let project = self.documents.save_with_markdown(
-            project.clone(),
-            render_markdown(
-                Path::new(project.audio_path()),
-                &project.results.speaker_segments,
-            ),
-        )?;
-        Ok(project)
+        self.documents.import_audio(audio_path)
     }
 
     pub fn project(&self, project_id: &ProjectId) -> Result<Option<DocumentState>, String> {
@@ -657,13 +641,18 @@ impl WorkspaceService {
         diarization_model: ModelRef,
         speaker_library_path: Option<String>,
     ) -> Result<ProjectProcessingJob, contracts::BackendError> {
+        // Request construction and job admission must read the same workspace.
+        let _no_switch = self
+            .documents_root
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let request = self.processing_request(
             &project_id,
             asr_model,
             diarization_model,
             speaker_library_path,
         )?;
-        self.start_project_processing_with_request(project_id, request)
+        self.start_project_processing_inner(project_id, request)
     }
 
     pub fn processing_request(
@@ -706,6 +695,16 @@ impl WorkspaceService {
             .documents_root
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.start_project_processing_inner(project_id, request)
+    }
+
+    // Both public admission paths hold documents_root across request reads,
+    // probe and registration; do not acquire the read lock recursively here.
+    fn start_project_processing_inner(
+        &self,
+        project_id: ProjectId,
+        request: ProcessingRequest,
+    ) -> Result<ProjectProcessingJob, contracts::BackendError> {
         let mut project = self
             .documents
             .get(&project_id)
@@ -987,6 +986,31 @@ fn collect_files(root: &Path, files: &mut Vec<std::path::PathBuf>) -> std::io::R
         }
     }
     Ok(())
+}
+
+impl DocumentService {
+    /// Creates the document for an external audio path. Capture a frozen
+    /// service before queueing the import to retain its chosen workspace.
+    pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<DocumentState, String> {
+        let audio_path = audio_path.into();
+        let path = Path::new(&audio_path);
+        let title = path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Untitled meeting")
+            .to_string();
+        let id = ProjectId::new(format!("project-{}", unique_suffix()));
+        let project = DocumentState::new(id, title, audio_path);
+        let project = self.save_with_markdown(
+            project.clone(),
+            render_markdown(
+                Path::new(project.audio_path()),
+                &project.results.speaker_segments,
+            ),
+        )?;
+        Ok(project)
+    }
 }
 
 fn unique_suffix() -> u128 {

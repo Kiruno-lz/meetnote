@@ -58,24 +58,62 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         state,
         position: root.assistant.pending_position(),
     });
-    let busy = root.assistant_busy();
+    let switching = root.documents_root_switch.switching;
+    let busy = switching || root.assistant_busy();
     let cancellable = root.assistant_cancellable();
     let retry = root.assistant.retry_prompt().is_some();
     let review_focus = root.review_focus.clone();
     let scroll = root.scroll.assistant_results.clone();
-    // Results, diffs and pending cards stay on the opaque plane and scroll
-    // under the frosted input bar, ending with it; the padding lets the
-    // last card clear it.
+    let first_use = (matches!(root.assistant.task, AssistantTaskState::Idle)
+        && root.assistant.sent_request().is_none()
+        && root.assistant.result.is_none()
+        && root.assistant.pending.is_none())
+    .then(|| {
+        if root.saved_assistant().active_connection().is_none() {
+            Some(render_first_use(
+                FirstUseStep::Connection,
+                root.ui.locale,
+                &tokens,
+                switching,
+                cx,
+            ))
+        } else if root.projects_loaded && root.projects_error.is_none() && root.projects.is_empty()
+        {
+            Some(render_first_use(
+                FirstUseStep::Import,
+                root.ui.locale,
+                &tokens,
+                switching,
+                cx,
+            ))
+        } else if selected.is_some_and(|document| {
+            root.ui.processing_status(document) == domain::ProjectStatus::Imported
+        }) {
+            Some(render_first_use(
+                FirstUseStep::OpenProject,
+                root.ui.locale,
+                &tokens,
+                switching,
+                cx,
+            ))
+        } else {
+            None
+        }
+    })
+    .flatten();
+    // Results, diffs and pending cards scroll on the opaque plane above
+    // the input bar. Reserve its space outside the viewport so keyboard
+    // focus and pointer scrolling reveal the same visible area.
     let results = div()
         .id("assistant-results")
         .debug_selector(|| "assistant-results".into())
         .size_full()
         .overflow_y_scroll()
         .track_scroll(&scroll)
-        .pb(input_bar_height(&tokens, status) + tokens.spacing.md)
         .flex()
         .flex_col()
         .gap_3()
+        .children(first_use)
         .children(
             root.assistant
                 .sent_request()
@@ -88,27 +126,33 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
             _ => None,
         })
         .children(result.map(|result| render_result(result, warnings, root.ui.locale, cx)))
-        .children(
-            (!receipts.is_empty())
-                .then(|| render_receipts(receipts, &titles, root.ui.locale, cx, &root.assistant)),
-        )
-        .children(
-            pending
-                .map(|pending| render_pending(pending, &titles, &review_focus, root.ui.locale, cx)),
-        )
+        .children((!receipts.is_empty()).then(|| {
+            render_receipts(
+                receipts,
+                &titles,
+                root.ui.locale,
+                cx,
+                &root.assistant,
+                switching,
+            )
+        }))
+        .children(pending.map(|pending| {
+            render_pending(
+                pending,
+                &titles,
+                &review_focus,
+                root.ui.locale,
+                switching,
+                cx,
+            )
+        }))
         .children((root.assistant.pending_overflow_count() > 0).then(|| {
             render_pending_overflow(
                 root.assistant.pending_overflow_count(),
                 root.ui.locale,
                 &tokens,
             )
-        }))
-        .child(
-            div()
-                .text_xs()
-                .text_color(tokens.text_subtle)
-                .child(root.ui.notice.clone()),
-        );
+        }));
     let input_bar = div()
         .flex()
         .flex_col()
@@ -241,16 +285,19 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                 .relative()
                 .flex_1()
                 .min_h_0()
-                // The results end at the bar's bottom edge, so nothing
-                // scrolls into view below the bar.
-                .pb(tokens.spacing.xl)
+                // Keep the bar and its gap outside the scroll viewport;
+                // the status line grows upward from the same bottom edge.
+                .pb(tokens.spacing.xl + input_bar_height(&tokens, status) + tokens.spacing.md)
                 .child(
                     div()
                         .relative()
                         .size_full()
                         // The scrollbar stays outside the fade.
                         .child(theme::scroll_faded(&scroll, tokens.content, results))
-                        .child(Scrollbar::vertical("assistant-results-scrollbar", &scroll)),
+                        .child(
+                            Scrollbar::vertical("assistant-results-scrollbar", &scroll)
+                                .outset_right(tokens.spacing.xl),
+                        ),
                 )
                 .child(
                     div()
@@ -266,6 +313,77 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         )),
                 ),
         )
+}
+
+/// One next action before the first run, using the existing recovery paths.
+enum FirstUseStep {
+    Connection,
+    Import,
+    OpenProject,
+}
+
+fn render_first_use(
+    step: FirstUseStep,
+    locale: Locale,
+    tokens: &Tokens,
+    switching: bool,
+    cx: &mut Context<RootView>,
+) -> gpui::AnyElement {
+    let (title, hint, action) = match step {
+        FirstUseStep::Connection => (
+            tr(locale, "assistant_first_connection_title"),
+            tr(locale, "assistant_first_connection_hint"),
+            Button::new(
+                "assistant-first-settings",
+                tr(locale, "assistant_open_settings"),
+            )
+            .debug_selector(|| "assistant-first-settings".into())
+            .primary()
+            .compact()
+            .on_click(cx.listener(|root, _, _, cx| root.open_assistant_settings(cx))),
+        ),
+        FirstUseStep::Import => (
+            tr(locale, "assistant_first_document_title"),
+            tr(locale, "assistant_first_document_hint"),
+            Button::new("assistant-first-import", tr(locale, "import_audio"))
+                .debug_selector(|| "assistant-first-import".into())
+                .primary()
+                .compact()
+                .disabled(switching)
+                .on_click(cx.listener(RootView::import_audio)),
+        ),
+        FirstUseStep::OpenProject => (
+            tr(locale, "assistant_imported_title"),
+            tr(locale, "assistant_imported_hint"),
+            Button::new(
+                "assistant-first-project",
+                tr(locale, "assistant_open_project"),
+            )
+            .debug_selector(|| "assistant-first-project".into())
+            .primary()
+            .compact()
+            .on_click(
+                cx.listener(|root, _, _, cx| root.navigate(crate::route::Route::Meetings, cx)),
+            ),
+        ),
+    };
+    div()
+        .debug_selector(|| "assistant-first-use".into())
+        .flex_shrink_0()
+        .py(tokens.spacing.md)
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(tokens.spacing.sm)
+        .child(
+            div()
+                .text_lg()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(title),
+        )
+        .child(div().text_sm().text_color(tokens.text_muted).child(hint))
+        .child(action)
+        .into_any_element()
 }
 
 /// The status line under the prompt in the input bar.
@@ -672,6 +790,7 @@ fn render_receipts(
     locale: Locale,
     cx: &mut Context<RootView>,
     controller: &AssistantController,
+    switching: bool,
 ) -> gpui::AnyElement {
     let tokens = *theme::tokens(cx);
     div()
@@ -702,6 +821,7 @@ fn render_receipts(
                 cx,
                 controller.is_mutation_undone(&mutation_id),
                 controller.is_mutation_undo_in_flight(&mutation_id),
+                switching,
             )
         }))
         .into_any_element()
@@ -1055,6 +1175,7 @@ fn render_mutation(
     cx: &mut Context<RootView>,
     undone: bool,
     undo_in_flight: bool,
+    switching: bool,
 ) -> gpui::AnyElement {
     let summary = receipt_summary(locale, &mutation, &|id| titles.get(id).cloned());
     let details = receipt_details(&mutation);
@@ -1125,7 +1246,7 @@ fn render_mutation(
                         })
                         .ghost()
                         .compact()
-                        .disabled(undone || undo_in_flight)
+                        .disabled(switching || undone || undo_in_flight)
                         .on_click(cx.listener(move |root, _, _window, cx| {
                             root.undo_assistant_mutation_for(mutation_id.clone(), cx)
                         })),
@@ -1255,6 +1376,7 @@ fn render_pending(
     titles: &DocumentTitles,
     focus: &FocusHandle,
     locale: Locale,
+    switching: bool,
     cx: &mut Context<RootView>,
 ) -> gpui::AnyElement {
     let tokens = *theme::tokens(cx);
@@ -1445,7 +1567,7 @@ fn render_pending(
                 Button::new("assistant-confirm", accept_label)
                     .debug_selector(|| "assistant-confirm".into())
                     .primary()
-                    .disabled(busy)
+                    .disabled(switching || busy)
                     .on_click(cx.listener(RootView::accept_assistant_pending)),
             ),
     )
@@ -1454,13 +1576,13 @@ fn render_pending(
 
 /// A field's old or new value: the old one muted and struck through, the
 /// new one in full color, each marked by a thin bar in its semantic color.
+/// Keep both complete: the page scrolls through the proposal before its decisions.
 fn diff_value(value: String, added: bool, tokens: &Tokens) -> gpui::Div {
     div()
         .border_l_2()
         .border_color(if added { tokens.success } else { tokens.danger })
         .pl(tokens.spacing.sm)
         .text_sm()
-        .line_clamp(4)
         .map(|value| {
             if added {
                 value.text_color(tokens.text)

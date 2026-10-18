@@ -9,7 +9,7 @@ use crate::assistant_ui::{
     AssistantUiError, AssistantUsage,
 };
 use crate::controller::{self, DocumentConflict, RootView, SpeakerLibraryPrompt};
-use crate::state::ContentMode;
+use crate::state::{ContentMode, StageFeedback};
 use application::{BackendInventory, DocumentIssue, DocumentIssueKind};
 use gpui::{AnyWindowHandle, App, Entity, WindowOptions};
 use std::path::Path;
@@ -19,6 +19,18 @@ pub use crate::route::Route;
 /// An overlay the tests open over a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
+    /// On Meetings: a loaded workspace with no documents.
+    EmptyWorkspace,
+    /// On Meetings: fixture-only read failure over the last loaded document.
+    WorkspaceReadFailure,
+    /// On Meetings: fixture-only read failure before any document was loaded.
+    InitialWorkspaceReadFailure,
+    /// On Assistant: the first run needs an active model connection.
+    AssistantSetup,
+    /// On Assistant: the connection is configured and the workspace is empty.
+    AssistantImport,
+    /// On Assistant: a selected imported recording, before audio processing.
+    AssistantImported,
     /// The Settings theme select with its menu open.
     ThemeSelect,
     /// The Speaker Library migration question.
@@ -32,6 +44,9 @@ pub enum Overlay {
     /// On Meetings: the Original view of the selected document, its
     /// speakers above the transcript.
     OriginalSpeakers,
+    /// On Meetings: fixture-only processing of the selected document, with
+    /// transcription completed and diarization at 1/4 reported units.
+    ProcessingFeedback,
     /// On Settings: the form scrolled to the Speaker Library section.
     SpeakerLibrary,
     /// On Meetings: the document with this id selected, with Detail open;
@@ -44,12 +59,17 @@ pub enum Overlay {
     /// with its warnings and both receipts (the first undone), paused at the
     /// first of three reviews; the results scrolled to the receipts.
     AssistantReview,
-    /// On Meetings: keyboard focus on the Process button, reached with Tab
-    /// from the project tree.
+    /// On Meetings: keyboard focus on the first available document action,
+    /// reached with Tab from the project tree.
     FocusedButton,
     /// On Settings: keyboard focus on the theme select, reached with Tab
     /// from the Settings entry.
     FocusedSelect,
+    /// The toast of a notice that fades: an import that succeeded.
+    SuccessToast,
+    /// The toast of a notice that stays until closed: an import that
+    /// failed.
+    ErrorToast,
 }
 
 /// A receipt of the fixture run: `document` moved from `revision` to the
@@ -253,6 +273,50 @@ impl MainWindow {
             return;
         }
         self.view.update(cx, |root, cx| match overlay {
+            Overlay::AssistantSetup => {
+                root.set_fixture_assistant_connection(None);
+                cx.notify();
+            }
+            Overlay::AssistantImport => {
+                root.projects.clear();
+                root.ui.selected_project = None;
+                cx.notify();
+            }
+            Overlay::AssistantImported => {
+                // UI projection only: keep the fixture document's identity and
+                // audio, with its processing facts cleared in memory.
+                if let Some(document) = root
+                    .projects
+                    .iter_mut()
+                    .find(|document| Some(document.id()) == root.ui.selected_project.as_ref())
+                {
+                    document.processing = Default::default();
+                    document.results = Default::default();
+                }
+                cx.notify();
+            }
+            Overlay::EmptyWorkspace => {
+                root.projects.clear();
+                root.ui.selected_project = None;
+                root.ui.detail_open = false;
+                root.editor.discard_all();
+                cx.notify();
+            }
+            Overlay::WorkspaceReadFailure | Overlay::InitialWorkspaceReadFailure => {
+                // Only the UI projection fails; the fixture service stays valid
+                // so Retry can load its documents. Filesystem failures are
+                // exercised separately in document_tests.
+                root.projects_error = Some("Not a directory (os error 20)".into());
+                root.ui.notice.clear();
+                root.ui.content_mode = ContentMode::Summary;
+                root.ui.detail_open = overlay == Overlay::WorkspaceReadFailure;
+                if overlay == Overlay::InitialWorkspaceReadFailure {
+                    root.projects.clear();
+                    root.ui.selected_project = None;
+                    root.editor.discard_all();
+                }
+                cx.notify();
+            }
             Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
                 let select = root
@@ -304,6 +368,20 @@ impl MainWindow {
                 cx.notify();
             }
             Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Original, cx),
+            Overlay::ProcessingFeedback => {
+                let Some(owner) = root.ui.selected_project.clone() else {
+                    return;
+                };
+                // Fixed visual state only: no backend or runtime job is started.
+                root.ui.begin_processing(owner);
+                root.ui.processing_feedback.transcription = StageFeedback::Completed;
+                root.ui.processing_feedback.diarization =
+                    StageFeedback::Running(Some(runtime::Progress {
+                        completed: 1,
+                        total: Some(4),
+                    }));
+                cx.notify();
+            }
             Overlay::SpeakerLibrary => {
                 root.scroll
                     .settings
@@ -338,6 +416,18 @@ impl MainWindow {
                     .scroll_to_top_of_item(crate::pages::assistant::RECEIPTS_ITEM);
                 cx.notify();
             }
+            Overlay::SuccessToast => {
+                root.ui.notice = crate::i18n::message(root.ui.locale, "imported", "产品周会");
+                cx.notify();
+            }
+            Overlay::ErrorToast => {
+                root.ui.notice = crate::i18n::message(
+                    root.ui.locale,
+                    "import_failed",
+                    "无法解码 weekly-sync.m4a：不支持的编码",
+                );
+                cx.notify();
+            }
             Overlay::WorkspaceBusy => {
                 let busy = application::DocumentsRootError::WorkspaceBusy {
                     job_ids: vec![runtime::JobId(1), runtime::JobId(2)],
@@ -363,6 +453,21 @@ impl MainWindow {
             return;
         }
         self.view.update(cx, |root, cx| match overlay {
+            Overlay::AssistantSetup => {
+                root.set_fixture_assistant_connection(
+                    root.settings_draft.assistant.active_connection_id.clone(),
+                );
+                cx.notify();
+            }
+            Overlay::EmptyWorkspace | Overlay::AssistantImport | Overlay::AssistantImported => {
+                root.reload_projects(cx)
+            }
+            Overlay::WorkspaceReadFailure | Overlay::InitialWorkspaceReadFailure => {
+                root.projects_error = None;
+                root.ui.detail_open = false;
+                root.ui.content_mode = ContentMode::Summary;
+                root.reload_projects(cx);
+            }
             Overlay::FocusedButton | Overlay::FocusedSelect => {}
             Overlay::ThemeSelect => {
                 if let Some(selectors) = &root.settings_selectors {
@@ -386,12 +491,20 @@ impl MainWindow {
                 cx.notify();
             }
             Overlay::OriginalSpeakers => root.set_content_mode(ContentMode::Summary, cx),
+            Overlay::ProcessingFeedback => {
+                root.ui.finish_processing();
+                cx.notify();
+            }
             Overlay::SpeakerLibrary => {
                 root.scroll.settings.set_offset(gpui::Point::default());
                 cx.notify();
             }
             Overlay::MissingAudio(_) => {
                 root.ui.detail_open = false;
+                cx.notify();
+            }
+            Overlay::SuccessToast | Overlay::ErrorToast => {
+                root.ui.notice.clear();
                 cx.notify();
             }
             Overlay::WorkspaceBusy => {
@@ -407,6 +520,12 @@ impl MainWindow {
                 cx.notify();
             }
         });
+    }
+
+    /// Whether the window root holds keyboard focus, as it does whenever no
+    /// control has it.
+    pub fn root_holds_focus(&self, window: &gpui::Window, cx: &App) -> bool {
+        self.view.read(cx).window_focus.is_focused(window)
     }
 
     /// Whether the startup installation probe, project list, Speaker

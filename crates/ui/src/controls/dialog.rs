@@ -5,15 +5,38 @@
 //! a scrim, a frosted sheet (`BlurLevel::Sheet`) and, on the sheet, the
 //! opaque panel that holds the question and its two buttons.
 
-use super::{entrance, Button};
+use super::{entrance, Button, Scrollbar};
 use crate::theme::{self, BlurLevel};
 use gpui::{
-    div, prelude::*, px, App, FocusHandle, IntoElement, Pixels, Role, SharedString, Window,
+    actions, div, point, prelude::*, px, App, FocusHandle, IntoElement, KeyBinding, Pixels, Role,
+    ScrollHandle, SharedString, Window,
 };
 use gpui_base::{
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogDescription, AlertDialogTitle,
 };
 use std::rc::Rc;
+
+actions!(meetnote_confirmation, [ScrollPageUp, ScrollPageDown]);
+
+const KEY_CONTEXT: &str = "MeetNoteConfirmation";
+
+pub(super) fn init(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("pageup", ScrollPageUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("pagedown", ScrollPageDown, Some(KEY_CONTEXT)),
+    ]);
+}
+
+/// Leave a little overlap between pages so reading keeps its context.
+fn scroll_page(scroll: &ScrollHandle, direction: f32, window: &mut Window) {
+    let offset = scroll.offset();
+    let step = scroll.bounds().size.height * 0.9;
+    let next = (offset.y - step * direction).clamp(-scroll.max_offset().y, px(0.));
+    if next != offset.y {
+        scroll.set_offset(point(offset.x, next));
+        window.refresh();
+    }
+}
 
 const PANEL_WIDTH: Pixels = px(460.);
 /// How far the sheet rises into place as it fades in.
@@ -80,12 +103,19 @@ impl RenderOnce for ConfirmDialog {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let tokens = *theme::tokens(cx);
         let viewport = window.viewport_size();
+        let scroll = window
+            .use_keyed_state("confirm-dialog-content", cx, |_, _| ScrollHandle::new())
+            .read(cx)
+            .clone();
+        // Leave room for the sheet's padding, border and the window margin.
+        let max_height = viewport.height - (tokens.spacing.xl + tokens.spacing.md) * 2. - px(2.);
         let panel = div()
             .id("confirm-dialog")
             .debug_selector(|| "confirm-dialog".into())
             .role(Role::Group)
             .aria_label(self.title.clone())
             .w(PANEL_WIDTH)
+            .max_h(max_height)
             .p(tokens.spacing.xl)
             .rounded(tokens.radius.lg)
             .bg(tokens.content)
@@ -94,18 +124,39 @@ impl RenderOnce for ConfirmDialog {
             .flex_col()
             .gap(tokens.spacing.md)
             .child(
-                AlertDialogTitle::new()
-                    .text_size(tokens.font_size.lg)
-                    .child(self.title),
-            )
-            .child(
-                AlertDialogDescription::new()
-                    .text_sm()
-                    .text_color(tokens.text_muted)
-                    .child(self.description),
+                div()
+                    .id("confirm-dialog-content")
+                    .debug_selector(|| "confirm-dialog-content".into())
+                    .relative()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&scroll)
+                    .child(
+                        div()
+                            .debug_selector(|| "confirm-dialog-text".into())
+                            .flex()
+                            .flex_col()
+                            .gap(tokens.spacing.md)
+                            .child(
+                                AlertDialogTitle::new()
+                                    .text_size(tokens.font_size.lg)
+                                    .child(self.title),
+                            )
+                            .child(
+                                AlertDialogDescription::new()
+                                    .text_sm()
+                                    .text_color(tokens.text_muted)
+                                    .child(self.description),
+                            ),
+                    )
+                    .child(
+                        Scrollbar::vertical("confirm-dialog-scrollbar", &scroll)
+                            .outset_right(tokens.spacing.xl),
+                    ),
             )
             .child(
                 div()
+                    .flex_none()
                     .mt(tokens.spacing.sm)
                     .flex()
                     .justify_end()
@@ -143,7 +194,7 @@ impl RenderOnce for ConfirmDialog {
                 SHEET_RISE,
             ));
         let (on_confirm, on_cancel) = (self.on_confirm, self.on_cancel);
-        AlertDialog::new(cx)
+        let dialog = AlertDialog::new(cx)
             .focus_handle(self.focus)
             // Presses on the scrim neither close the dialog nor reach the
             // page behind it. The host wraps the backdrop in a div of its
@@ -165,6 +216,16 @@ impl RenderOnce for ConfirmDialog {
             .on_cancel(move |_, window, cx| {
                 on_cancel(window, cx);
                 true
+            });
+        div()
+            .absolute()
+            .inset_0()
+            .key_context(KEY_CONTEXT)
+            .on_action({
+                let scroll = scroll.clone();
+                move |_: &ScrollPageUp, window, _| scroll_page(&scroll, -1., window)
             })
+            .on_action(move |_: &ScrollPageDown, window, _| scroll_page(&scroll, 1., window))
+            .child(dialog)
     }
 }

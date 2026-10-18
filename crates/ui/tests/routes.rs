@@ -213,7 +213,7 @@ fn page_in_content_plane(cx: &mut VisualTestContext, route: Route) -> Bounds<Pix
 }
 
 #[gpui::test]
-fn the_assistant_route_floats_the_input_bar_over_the_results(cx: &mut TestAppContext) {
+fn the_assistant_route_keeps_results_clear_of_the_floating_input_bar(cx: &mut TestAppContext) {
     let (_window, cx, page) = open_route(cx, Route::Assistant);
     let body = visible(cx, "assistant-body");
     let results = scroll_content(cx, "assistant-results", body);
@@ -229,11 +229,11 @@ fn the_assistant_route_floats_the_input_bar_over_the_results(cx: &mut TestAppCon
         prompt.right() <= send.left(),
         "send sits right of the prompt"
     );
-    // The results fill the body, bar included, so they scroll under it; the
-    // bar floats above the body's bottom edge.
+    // The scroll viewport ends above the bar, so pointer and keyboard
+    // navigation both keep the final result visible.
     assert!(
-        results.top() < bar.top() && results.bottom() >= bar.bottom(),
-        "the results run under the bar: {results:?} and {bar:?}"
+        results.top() < bar.top() && results.bottom() < bar.top(),
+        "the results stay above the bar: {results:?} and {bar:?}"
     );
     assert!(
         bar.bottom() < body.bottom() && body.bottom() == page.bottom(),
@@ -661,8 +661,9 @@ fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
     expected.extend([
         // The tree is one stop, on its selected row.
         leak(format!("project-row-{}", DOCUMENT_IDS[0])),
-        "process-project",
+        // Processing waits for models; the next steps remain reachable.
         "open-project-detail",
+        "go-to-models",
         "content-mode-summary",
         "content-mode-original",
         "content-mode-edit",
@@ -740,6 +741,46 @@ fn tab_traverses_the_settings_route_in_order(cx: &mut TestAppContext) {
     let mut backward = cycle(cx, "shift-tab", &listed);
     backward.reverse();
     assert_eq!(from_the_first_entry(backward), forward, "Shift-Tab order");
+}
+
+#[gpui::test]
+fn tab_starts_at_the_first_entry_when_no_control_has_focus(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    assert!(
+        cx.update(|gpui_window, cx| window.root_holds_focus(gpui_window, cx)),
+        "no control has focus at launch: the window root holds it"
+    );
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        focused_control(cx, &SIDEBAR_STOPS),
+        Some("nav-Assistant"),
+        "Tab with nothing focused"
+    );
+
+    // The focused field leaves with its route.
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    window_navigate(cx, &window, Route::Models);
+    assert!(
+        cx.update(|gpui_window, cx| window.root_holds_focus(gpui_window, cx)),
+        "focus returns to the root with the field gone"
+    );
+    cx.simulate_keystrokes("tab");
+    // With history to go back to, the toolbar's Back comes first.
+    let stops = [&["navigate-back"], SIDEBAR_STOPS.as_slice()].concat();
+    assert_eq!(
+        focused_control(cx, &stops),
+        Some("navigate-back"),
+        "Tab from a control the route no longer shows"
+    );
+}
+
+/// Opens `route` the way a shortcut or history would, leaving focus where
+/// it was.
+fn window_navigate(cx: &mut VisualTestContext, window: &MainWindow, route: Route) {
+    cx.update(|_, cx| window.navigate(route, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
 }
 
 #[gpui::test]
@@ -971,6 +1012,13 @@ fn ctrl_tab_leaves_a_text_area_that_takes_tab(cx: &mut TestAppContext) {
     assert_eq!(height(cx), Some(summary), "Ctrl-Shift-Tab moves back");
 }
 
+/// Runs the sidebar fold for `milliseconds` of the test clock, then draws.
+fn fold_for(cx: &mut VisualTestContext, milliseconds: u64) {
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(milliseconds));
+    cx.update(|window, cx| window.draw(cx).clear());
+}
+
 #[gpui::test]
 fn project_sidebar_collapses_without_hiding_the_icon_rail(cx: &mut TestAppContext) {
     let (window, cx) = open_window(cx);
@@ -985,15 +1033,13 @@ fn project_sidebar_collapses_without_hiding_the_icon_rail(cx: &mut TestAppContex
     let toggle = visible(cx, "toggle-sidebar");
     cx.simulate_click(toggle.center(), Modifiers::none());
     cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert!(cx.debug_bounds("project-sidebar").is_none());
     assert_eq!(visible(cx, "navigation-rail"), rail);
     assert!(visible(cx, "content-plane").size.width > plane.size.width);
     cx.simulate_click(toggle.center(), Modifiers::none());
     cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert_eq!(visible(cx, "project-sidebar"), sidebar);
 }
 
@@ -1016,6 +1062,122 @@ fn toolbar_back_forward_and_new_navigation_follow_history(cx: &mut TestAppContex
     click_entry(cx, &window, Route::Models);
     click(cx, "navigate-forward");
     assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Models);
+}
+
+/// Rests the pointer on `selector` for `rest` of the test clock, then
+/// draws.
+fn rest_on(cx: &mut VisualTestContext, selector: &'static str, rest: std::time::Duration) {
+    let bounds = visible(cx, selector);
+    cx.simulate_mouse_move(bounds.center(), None, Modifiers::none());
+    cx.executor().advance_clock(rest);
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+}
+
+#[gpui::test]
+fn every_icon_only_control_names_itself_in_a_tooltip(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    click_entry(cx, &window, Route::Meetings);
+    let delay = std::time::Duration::from_millis(500);
+    for selector in [
+        "nav-Assistant",
+        "nav-Meetings",
+        "nav-Models",
+        "nav-Settings",
+        "import-audio",
+        "navigate-back",
+        "navigate-forward",
+        "toggle-sidebar",
+    ] {
+        // Off every control, so each rest starts its own delay.
+        let plane = visible(cx, "content-plane");
+        cx.simulate_mouse_move(plane.center(), None, Modifiers::none());
+        cx.run_until_parked();
+        rest_on(cx, selector, delay - std::time::Duration::from_millis(1));
+        assert!(
+            cx.debug_bounds("tooltip").is_none(),
+            "{selector}: no tooltip before the pointer rests"
+        );
+        rest_on(cx, selector, delay);
+        let pointer = visible(cx, selector).center();
+        let tooltip = visible(cx, "tooltip");
+        // Below the pointer, or above it where the window ends.
+        let beside = tooltip.left() > pointer.x
+            && tooltip.left() < pointer.x + gpui::px(24.)
+            && (tooltip.top() > pointer.y && tooltip.top() < pointer.y + gpui::px(32.)
+                || tooltip.bottom() < pointer.y && tooltip.bottom() > pointer.y - gpui::px(32.));
+        assert!(
+            beside,
+            "{selector}: the tooltip sits beside the pointer: {tooltip:?} {pointer:?}"
+        );
+    }
+    let plane = visible(cx, "content-plane");
+    cx.simulate_mouse_move(plane.center(), None, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| window.draw(cx).clear());
+    assert!(
+        cx.debug_bounds("tooltip").is_none(),
+        "leaving the control hides it"
+    );
+}
+
+#[gpui::test]
+fn shortcuts_open_routes_travel_fold_the_sidebar_and_import(cx: &mut TestAppContext) {
+    let (window, cx) = open_window(cx);
+    let route = |cx: &mut VisualTestContext| cx.update(|_, cx| window.route(cx));
+    assert!(
+        cx.update(|gpui_window, cx| window.root_holds_focus(gpui_window, cx)),
+        "the shortcuts work before any control has focus"
+    );
+    for (keys, expected) in [
+        ("cmd-2", Route::Meetings),
+        ("cmd-3", Route::Models),
+        ("cmd-4", Route::Settings),
+        ("cmd-1", Route::Assistant),
+        ("cmd-,", Route::Settings),
+    ] {
+        cx.simulate_keystrokes(keys);
+        assert_eq!(route(cx), expected, "{keys}");
+    }
+    cx.simulate_keystrokes("cmd-[");
+    assert_eq!(route(cx), Route::Assistant, "⌘[ goes back");
+    cx.simulate_keystrokes("cmd-]");
+    assert_eq!(route(cx), Route::Settings, "⌘] goes forward");
+
+    cx.simulate_keystrokes("cmd-2");
+    cx.update(|window, cx| window.draw(cx).clear());
+    let sidebar = visible(cx, "project-sidebar");
+    cx.simulate_keystrokes("ctrl-cmd-s");
+    fold_for(cx, 350);
+    assert!(
+        cx.debug_bounds("project-sidebar").is_none(),
+        "⌃⌘S folds the sidebar"
+    );
+    cx.simulate_keystrokes("ctrl-cmd-s");
+    fold_for(cx, 350);
+    assert_eq!(visible(cx, "project-sidebar"), sidebar, "and unfolds it");
+
+    assert!(!cx.cx.did_prompt_for_paths());
+    cx.simulate_keystrokes("cmd-o");
+    assert!(
+        cx.cx.did_prompt_for_paths(),
+        "⌘O asks for the audio to import"
+    );
+}
+
+#[gpui::test]
+fn shortcuts_pass_by_a_focused_field(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    click_entry(cx, &window, Route::Assistant);
+    let prompt = visible(cx, "assistant-input");
+    cx.simulate_click(prompt.center(), Modifiers::none());
+    cx.simulate_input("周会");
+    let field = cx.update(|window, cx| window.focused(cx));
+    assert!(field.is_some(), "the press focuses the field");
+    cx.simulate_keystrokes("cmd-[");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    cx.simulate_keystrokes("cmd-1");
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Assistant);
 }
 
 #[gpui::test]
@@ -1057,6 +1219,8 @@ fn dragging_the_sidebar_divider_resizes_and_clamps_then_returns(cx: &mut TestApp
         visible(cx, "project-sidebar").size.width > gpui::px(360.),
         "the release starts from the resisted width"
     );
+    // The rebound is a GPUI animation on the wall clock; the wait only has
+    // to outlast it.
     std::thread::sleep(std::time::Duration::from_millis(350));
     cx.update(|window, cx| window.draw(cx).clear());
     assert_eq!(visible(cx, "project-sidebar").size.width, gpui::px(360.));
@@ -1079,8 +1243,7 @@ fn settings_categories_reveal_their_sections_and_collapse(cx: &mut TestAppContex
     let toggle = visible(cx, "toggle-sidebar");
     cx.simulate_click(toggle.center(), Modifiers::none());
     cx.run_until_parked();
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert!(cx.debug_bounds("settings-sidebar").is_none());
     assert!(cx.debug_bounds("navigation-rail").is_some());
 }
@@ -1142,8 +1305,7 @@ fn sidebar_fold_keeps_content_stable_and_can_reverse_mid_animation(cx: &mut Test
         cx.debug_bounds("project-sidebar").is_some(),
         "the sidebar must remain while folding"
     );
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 100);
     let partial = rendered(cx, "project-sidebar").size.width;
     assert!(
         partial > gpui::px(0.) && partial < original.size.width,
@@ -1163,8 +1325,7 @@ fn sidebar_fold_keeps_content_stable_and_can_reverse_mid_animation(cx: &mut Test
         (reversed - partial).abs() < gpui::px(12.),
         "reversal must begin at the current width: {partial:?} -> {reversed:?}"
     );
-    std::thread::sleep(std::time::Duration::from_millis(350));
-    cx.update(|window, cx| window.draw(cx).clear());
+    fold_for(cx, 350);
     assert_eq!(
         visible(cx, "project-sidebar").size.width,
         original.size.width
@@ -1181,4 +1342,207 @@ fn the_focused_select_visual_fixture_reaches_the_theme_control(cx: &mut TestAppC
         ring(cx).expect("keyboard focus ring"),
         visible(cx, "select-theme")
     ));
+}
+
+#[gpui::test]
+fn an_empty_workspace_offers_import_where_the_work_begins(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::EmptyWorkspace, cx));
+    cx.run_until_parked();
+    let action = visible(cx, "empty-import-audio");
+    assert!(within(action, visible(cx, "content-plane")));
+    assert!(!cx.cx.did_prompt_for_paths());
+    cx.simulate_click(action.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.cx.did_prompt_for_paths(),
+        "the main action opens the audio picker"
+    );
+}
+
+#[gpui::test]
+fn an_empty_workspace_import_is_reachable_by_keyboard_at_minimum_size(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::EmptyWorkspace, cx));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.run_until_parked();
+    let viewport = Bounds::from_corners(
+        gpui::point(gpui::px(0.), gpui::px(0.)),
+        gpui::point(gpui::px(900.), gpui::px(600.)),
+    );
+    assert!(within(rendered(cx, "empty-import-audio"), viewport));
+    tab_to(cx, "empty-import-audio", &["empty-import-audio"]);
+    press(cx, "enter");
+    assert!(
+        cx.cx.did_prompt_for_paths(),
+        "Enter imports from the empty workspace"
+    );
+}
+
+#[gpui::test]
+fn the_processing_overlay_owns_its_document_and_restores_it_when_closed(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    let owner = cx.update(|_, cx| window.selected_document(cx)).unwrap();
+    cx.update(|_, cx| window.open_overlay(Overlay::ProcessingFeedback, cx));
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    assert_eq!(
+        cx.update(|_, cx| window.selected_document(cx)),
+        Some(owner.clone())
+    );
+    visible(cx, "processing-progress");
+    visible(cx, "processing-transcription-completed");
+    visible(cx, "processing-diarization-running");
+    visible(cx, "processing-diarization-determinate");
+    assert_eq!(owner, DOCUMENT_IDS[0]);
+    visible(cx, "project-status-doc-1-weekly-sync-Processing");
+    assert!(cx.debug_bounds("notice-toast").is_none());
+    let cancel = visible(cx, "process-project");
+    // This static fixture covers the UI request; gated lib tests cover
+    // cancellation of actual runtime tokens.
+    cx.simulate_click(cancel.center(), Modifiers::none());
+    cx.run_until_parked();
+    visible(cx, "notice-toast");
+    visible(cx, "processing-progress");
+    cx.update(|_, cx| window.close_overlay(Overlay::ProcessingFeedback, cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("processing-progress").is_none());
+    visible(cx, "document-status-Ready");
+    assert_eq!(cx.update(|_, cx| window.selected_document(cx)), Some(owner));
+}
+
+#[gpui::test]
+fn processing_feedback_leaves_reading_space_beside_detail_at_minimum_size(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::ProcessingFeedback, cx));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.run_until_parked();
+    let detail_action = visible(cx, "open-project-detail");
+    cx.simulate_click(detail_action.center(), Modifiers::none());
+    cx.run_until_parked();
+    let page = visible(cx, "meetings-page");
+    for selector in [
+        "processing-progress",
+        "processing-transcription-completed",
+        "processing-diarization-running",
+        "process-project",
+        "content-mode-group",
+    ] {
+        assert!(
+            within(visible(cx, selector), page),
+            "{selector} fits beside Detail"
+        );
+    }
+    let body = visible(cx, "meeting-content");
+    assert!(
+        body.size.width >= gpui::px(192.),
+        "a readable document column remains: {body:?}"
+    );
+    assert!(
+        body.size.height >= gpui::px(96.),
+        "progress leaves room for document content: {body:?}"
+    );
+    assert!(body.right() <= visible(cx, "detail-panel").left());
+    let cancel = visible(cx, "process-project");
+    cx.simulate_click(cancel.center(), Modifiers::none());
+    cx.run_until_parked();
+    // The fixture proves the UI request, not cancellation of a backend task.
+    visible(cx, "notice-toast");
+    visible(cx, "processing-progress");
+}
+
+#[gpui::test]
+fn first_use_fixtures_reach_settings_and_import_at_minimum_size(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.update(|_, cx| window.open_overlay(Overlay::AssistantSetup, cx));
+    cx.run_until_parked();
+    let setup = rendered(cx, "assistant-first-settings");
+    assert!(within(setup, rendered(cx, "assistant-results")));
+    cx.simulate_click(setup.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Settings);
+    cx.update(|_, cx| {
+        window.close_overlay(Overlay::AssistantSetup, cx);
+        window.navigate(Route::Assistant, cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("assistant-first-settings").is_none());
+    cx.update(|_, cx| window.open_overlay(Overlay::AssistantImport, cx));
+    cx.run_until_parked();
+    assert!(within(
+        rendered(cx, "assistant-first-import"),
+        rendered(cx, "assistant-results")
+    ));
+    tab_to(cx, "assistant-first-import", &["assistant-first-import"]);
+    press(cx, "enter");
+    assert!(cx.cx.did_prompt_for_paths());
+    cx.update(|_, cx| window.close_overlay(Overlay::AssistantImport, cx));
+    wait_for(cx, |cx| cx.debug_bounds("assistant-first-import").is_none());
+}
+
+#[gpui::test]
+fn imported_audio_fixture_opens_the_existing_project_at_minimum_size(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Assistant);
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.update(|_, cx| window.open_overlay(Overlay::AssistantImported, cx));
+    cx.run_until_parked();
+    let action = rendered(cx, "assistant-first-project");
+    assert!(within(action, rendered(cx, "assistant-results")));
+    assert!(action.bottom() <= rendered(cx, "assistant-input-bar").top());
+    cx.simulate_click(action.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(cx.update(|_, cx| window.route(cx)), Route::Meetings);
+    visible(cx, "process-project");
+    cx.update(|_, cx| {
+        window.close_overlay(Overlay::AssistantImported, cx);
+        window.navigate(Route::Assistant, cx);
+    });
+    wait_for(cx, |cx| {
+        cx.debug_bounds("assistant-first-project").is_none()
+    });
+}
+
+#[gpui::test]
+fn a_read_failure_fixture_keeps_reading_space_beside_detail(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    let selected = cx.update(|_, cx| window.selected_document(cx));
+    cx.update(|_, cx| window.open_overlay(Overlay::WorkspaceReadFailure, cx));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.run_until_parked();
+    let page = rendered(cx, "meetings-page");
+    let error = rendered(cx, "workspace-read-error");
+    assert!(within(error, page));
+    assert!(within(rendered(cx, "retry-workspace-read"), error));
+    assert!(within(rendered(cx, "meeting-content"), page));
+    assert!(rendered(cx, "meeting-content").size.height >= gpui::px(72.));
+    assert_eq!(cx.update(|_, cx| window.selected_document(cx)), selected);
+    assert!(cx.debug_bounds("empty-import-audio").is_none());
+    visible(cx, "detail-panel");
+    cx.update(|_, cx| window.close_overlay(Overlay::WorkspaceReadFailure, cx));
+    wait_for(cx, |cx| cx.debug_bounds("workspace-read-error").is_none());
+    assert_eq!(cx.update(|_, cx| window.selected_document(cx)), selected);
+    assert!(cx.debug_bounds("detail-panel").is_none());
+}
+
+#[gpui::test]
+fn an_initial_read_failure_fixture_recovers_with_keyboard_retry(cx: &mut TestAppContext) {
+    let (window, cx, _) = open_route(cx, Route::Meetings);
+    cx.update(|_, cx| window.open_overlay(Overlay::InitialWorkspaceReadFailure, cx));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    cx.run_until_parked();
+    assert!(cx.update(|_, cx| window.selected_document(cx)).is_none());
+    assert!(cx.debug_bounds("empty-import-audio").is_none());
+    visible(cx, "project-tree-unavailable");
+    assert!(within(
+        rendered(cx, "retry-workspace-read"),
+        rendered(cx, "meetings-page")
+    ));
+    tab_to(cx, "retry-workspace-read", &["retry-workspace-read"]);
+    press(cx, "enter");
+    wait_for(cx, |cx| cx.debug_bounds("workspace-read-error").is_none());
+    assert!(cx.update(|_, cx| window.selected_document(cx)).is_some());
+    visible(cx, "document-title");
+    assert!(cx.debug_bounds("project-tree-unavailable").is_none());
+    cx.update(|_, cx| window.close_overlay(Overlay::InitialWorkspaceReadFailure, cx));
 }

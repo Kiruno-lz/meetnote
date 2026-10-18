@@ -2500,16 +2500,31 @@ fn write_atomic_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 fn acquire_repository_lock_at(root: &Path) -> Result<RepositoryLock, String> {
     let mutation_root = root.join(AGENT_MUTATION_DIRECTORY);
-    fs::create_dir_all(&mutation_root).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&mutation_root).map_err(|error| {
+        format!(
+            "cannot create document repository directory {}: {error}",
+            mutation_root.display()
+        )
+    })?;
     let path = mutation_root.join("repository.lock");
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .read(true)
         .write(true)
-        .open(path)
-        .map_err(|error| error.to_string())?;
-    file.lock_exclusive().map_err(|error| error.to_string())?;
+        .open(&path)
+        .map_err(|error| {
+            format!(
+                "cannot open document repository lock {}: {error}",
+                path.display()
+            )
+        })?;
+    file.lock_exclusive().map_err(|error| {
+        format!(
+            "cannot lock document repository {}: {error}",
+            path.display()
+        )
+    })?;
     Ok(RepositoryLock(file))
 }
 
@@ -2984,6 +2999,62 @@ mod tests {
         assert_eq!(result.markdown, "# Original\n");
         reader.join().unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_repository_lock_directory_failure_identifies_its_path_and_cause() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-lock-directory-error-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        let moved = root.with_extension("available");
+        fs::rename(&root, &moved).unwrap();
+        fs::write(&root, b"workspace temporarily occupied").unwrap();
+        let directory = root.join(AGENT_MUTATION_DIRECTORY);
+        let cause = fs::create_dir_all(&directory).unwrap_err().to_string();
+        let error = repository.snapshot().unwrap_err();
+        fs::remove_file(&root).unwrap();
+        fs::rename(&moved, &root).unwrap();
+        assert!(
+            repository.snapshot().is_ok(),
+            "the original workspace remains readable"
+        );
+        fs::remove_dir_all(&root).unwrap();
+        assert!(error.contains(&directory.display().to_string()), "{error}");
+        assert!(
+            error.contains(&cause),
+            "the filesystem cause is retained: {error}"
+        );
+    }
+
+    #[test]
+    fn a_repository_lock_open_failure_identifies_its_file_and_cause() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-lock-file-error-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        let lock = root.join(AGENT_MUTATION_DIRECTORY).join("repository.lock");
+        fs::remove_file(&lock).unwrap();
+        fs::create_dir(&lock).unwrap();
+        let cause = fs::write(&lock, b"cannot write to a directory")
+            .unwrap_err()
+            .to_string();
+        let error = repository.snapshot().unwrap_err();
+        fs::remove_dir(&lock).unwrap();
+        assert!(
+            repository.snapshot().is_ok(),
+            "retry recreates the lock after repair"
+        );
+        fs::remove_dir_all(&root).unwrap();
+        assert!(error.contains(&lock.display().to_string()), "{error}");
+        assert!(
+            error.contains(&cause),
+            "the filesystem cause is retained: {error}"
+        );
     }
 
     #[test]

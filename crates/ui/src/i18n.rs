@@ -41,6 +41,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "toggle_sidebar") => "折叠或展开侧边栏",
         (Locale::ZhCn, "resize_sidebar") => "调整侧边栏宽度",
         (Locale::ZhCn, "navigation") => "导航",
+        (Locale::ZhCn, "dismiss_notice") => "关闭提示",
         (Locale::ZhCn, "local_intelligence") => "本地语音资料整理",
         (Locale::ZhCn, "ask_library") => "询问你的语音库",
         (Locale::ZhCn, "ask_placeholder") => "询问你的录音……",
@@ -53,6 +54,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "project_tree_shortcuts") => "Option-↑/↓ 在同级中调整所选项目的顺序；Option-→ 把它移入上方的同级项目；Option-← 把它移到上一层的末尾。",
         (Locale::ZhCn, "import_audio") => "导入音频",
         (Locale::ZhCn, "no_projects") => "还没有项目。导入音频开始整理。",
+        (Locale::ZhCn, "documents_unavailable") => "暂时无法读取项目列表。",
+        (Locale::ZhCn, "retry_workspace_read") => "重新读取",
         (Locale::ZhCn, "open_detail") => "打开详情",
         (Locale::ZhCn, "process") => "处理项目",
         (Locale::ZhCn, "cancel") => "取消",
@@ -60,7 +63,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "original") => "原始文",
         (Locale::ZhCn, "no_summary") => "还没有总结。可以使用助手整理这个项目。",
         (Locale::ZhCn, "need_process") => "请先处理项目以生成带 speaker 的转录。",
-        (Locale::ZhCn, "empty_meetings") => "导入音频以创建项目。",
+        (Locale::ZhCn, "empty_meetings_title") => "从一段音频开始",
+        (Locale::ZhCn, "empty_meetings") => "导入录音，转录后即可阅读和整理。",
         (Locale::ZhCn, "project_detail") => "项目详情",
         (Locale::ZhCn, "close_detail") => "关闭详情",
         (Locale::ZhCn, "models_ready") => "语音识别和说话人分离模型均已就绪",
@@ -138,12 +142,20 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "ready") => "就绪",
         (Locale::ZhCn, "processing") => "处理中",
         (Locale::ZhCn, "failed") => "失败",
+        (Locale::ZhCn, "processing_transcription") => "转录",
+        (Locale::ZhCn, "processing_diarization") => "说话人分离",
+        (Locale::ZhCn, "processing_stage_waiting") => "等待中",
+        (Locale::ZhCn, "processing_stage_completed") => "已完成",
+        (Locale::ZhCn, "processing_stage_cancelled") => "已取消",
         (Locale::ZhCn, "ready_to_process") => "等待处理",
         (Locale::ZhCn, "models_active") => "下载中",
         (Locale::ZhCn, "model_status") => "模型状态",
-        (Locale::ZhCn, "ask_notice") => "助手输入已就绪；不会保存对话历史。",
         (Locale::ZhCn, "choose_audio") => "选择音频",
-        (Locale::ZhCn, "missing") => "缺失",
+        (Locale::ZhCn, "go_to_models") => "前往模型",
+        (Locale::ZhCn, "choose_model") => "选择模型",
+        (Locale::ZhCn, "models_missing_both") => "语音模型尚未就绪",
+        (Locale::ZhCn, "models_missing_asr") => "语音识别模型尚未就绪",
+        (Locale::ZhCn, "models_missing_diarization") => "说话人分离模型尚未就绪",
         (Locale::ZhCn, "interface_description") => "界面偏好与本地化选项",
         (Locale::ZhCn, "transcription_description") => "选择语音识别后端、模型和转录语言",
         (Locale::ZhCn, "speaker_description") => "选择说话人分离后端、模型和人数提示",
@@ -221,6 +233,9 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_readiness") => "连接检测",
         (Locale::ZhCn, "assistant_model_probe") => "模型能力检测",
         (Locale::ZhCn, "assistant_settings_saved") => "Assistant 设置已保存。",
+        (Locale::ZhCn, "assistant_settings_saved_draft_kept") => {
+            "已保存提交的设置，后续编辑已保留。"
+        }
         (Locale::ZhCn, "assistant_connection_required") => "请先配置 Assistant 连接。",
         (Locale::ZhCn, "assistant_scene") => "场景",
         (Locale::ZhCn, "assistant_scope") => "文档范围",
@@ -238,6 +253,13 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "assistant_current_document") => "仅当前文档",
         (Locale::ZhCn, "assistant_all_visible_documents") => "全部可见文档",
         (Locale::ZhCn, "assistant_no_document") => "未选择文档",
+        (Locale::ZhCn, "assistant_first_connection_title") => "先连接一个模型",
+        (Locale::ZhCn, "assistant_first_connection_hint") => "在助手设置中添加连接；你的问题会留在这里。",
+        (Locale::ZhCn, "assistant_first_document_title") => "先导入一段音频",
+        (Locale::ZhCn, "assistant_first_document_hint") => "把音频处理成文档后，再让助手帮你阅读和整理。",
+        (Locale::ZhCn, "assistant_imported_title") => "音频尚未转录",
+        (Locale::ZhCn, "assistant_imported_hint") => "打开当前项目，处理音频后即可根据转写内容提问。",
+        (Locale::ZhCn, "assistant_open_project") => "打开当前项目",
         (Locale::ZhCn, "assistant_no_connection") => "未配置连接",
         (Locale::ZhCn, "assistant_local_connection") => "本机连接",
         (Locale::ZhCn, "assistant_remote_connection") => "远程连接",
@@ -334,6 +356,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "document_body") => "正文（Markdown）",
         (Locale::ZhCn, "document_status") => "文档状态",
         (Locale::ZhCn, "save_document") => "保存更改",
+        (Locale::ZhCn, "retry_document_read") => "重新读取",
         (Locale::ZhCn, "document_loading") => "正在读取文档……",
         (Locale::ZhCn, "no_document_changes") => "没有需要保存的更改。",
         (Locale::ZhCn, "title_required") => "标题不能为空。",
@@ -393,6 +416,9 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::ZhCn, "workspace") => "工作区",
         (Locale::ZhCn, "documents_root") => "文档目录",
         (Locale::ZhCn, "documents_root_switching") => "正在切换文档目录……",
+        (Locale::ZhCn, "documents_root_operation_pending") => {
+            "当前操作仍在进行；结束或取消完成后再切换文档目录。"
+        }
         (Locale::ZhCn, "detail_audio_status") => "音频状态",
         (Locale::ZhCn, "audio_checking") => "正在检查……",
         (Locale::ZhCn, "audio_missing") => "音频缺失",
@@ -411,6 +437,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "toggle_sidebar") => "Toggle sidebar",
         (Locale::EnUs, "resize_sidebar") => "Resize sidebar",
         (Locale::EnUs, "navigation") => "Navigation",
+        (Locale::EnUs, "dismiss_notice") => "Dismiss",
         (Locale::EnUs, "local_intelligence") => "local voice library",
         (Locale::EnUs, "ask_library") => "Ask your voice library",
         (Locale::EnUs, "ask_placeholder") => "Ask about your recordings…",
@@ -423,6 +450,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "project_tree_shortcuts") => "Option-Up and Option-Down move the selected project among its siblings; Option-Right moves it into the project above; Option-Left moves it to the end of the level above.",
         (Locale::EnUs, "import_audio") => "Import audio",
         (Locale::EnUs, "no_projects") => "No projects yet. Import audio to begin.",
+        (Locale::EnUs, "documents_unavailable") => "The project list cannot be read right now.",
+        (Locale::EnUs, "retry_workspace_read") => "Retry",
         (Locale::EnUs, "open_detail") => "Open detail",
         (Locale::EnUs, "process") => "Process project",
         (Locale::EnUs, "cancel") => "Cancel",
@@ -434,7 +463,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "need_process") => {
             "Run processing to generate a speaker-labelled transcript."
         }
-        (Locale::EnUs, "empty_meetings") => "Import audio to create a project.",
+        (Locale::EnUs, "empty_meetings_title") => "Start with a recording",
+        (Locale::EnUs, "empty_meetings") => "Import audio to transcribe, read and organize.",
         (Locale::EnUs, "project_detail") => "PROJECT DETAIL",
         (Locale::EnUs, "close_detail") => "Close detail",
         (Locale::EnUs, "models_ready") => {
@@ -518,14 +548,20 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "ready") => "Ready",
         (Locale::EnUs, "processing") => "Processing",
         (Locale::EnUs, "failed") => "Failed",
+        (Locale::EnUs, "processing_transcription") => "Transcription",
+        (Locale::EnUs, "processing_diarization") => "Speaker identification",
+        (Locale::EnUs, "processing_stage_waiting") => "Waiting",
+        (Locale::EnUs, "processing_stage_completed") => "Completed",
+        (Locale::EnUs, "processing_stage_cancelled") => "Cancelled",
         (Locale::EnUs, "ready_to_process") => "Ready to process",
         (Locale::EnUs, "models_active") => "Downloads active",
         (Locale::EnUs, "model_status") => "Model status",
-        (Locale::EnUs, "ask_notice") => {
-            "Assistant input is ready; no conversation history is stored."
-        }
         (Locale::EnUs, "choose_audio") => "Choose audio",
-        (Locale::EnUs, "missing") => "Missing",
+        (Locale::EnUs, "go_to_models") => "Go to Models",
+        (Locale::EnUs, "choose_model") => "Choose model",
+        (Locale::EnUs, "models_missing_both") => "Models aren't ready",
+        (Locale::EnUs, "models_missing_asr") => "The transcription model isn't ready",
+        (Locale::EnUs, "models_missing_diarization") => "The speaker separation model isn't ready",
         (Locale::EnUs, "interface_description") => "Interface preferences and localization",
         (Locale::EnUs, "transcription_description") => {
             "Choose the speech recognition backend, model, and language"
@@ -615,6 +651,9 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_readiness") => "Test connection",
         (Locale::EnUs, "assistant_model_probe") => "Probe model capabilities",
         (Locale::EnUs, "assistant_settings_saved") => "Assistant settings saved.",
+        (Locale::EnUs, "assistant_settings_saved_draft_kept") => {
+            "Submitted settings saved; later edits kept."
+        }
         (Locale::EnUs, "assistant_connection_required") => "Configure an Assistant connection first.",
         (Locale::EnUs, "assistant_scene") => "Scene",
         (Locale::EnUs, "assistant_scope") => "Document scope",
@@ -632,6 +671,13 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "assistant_current_document") => "Current document only",
         (Locale::EnUs, "assistant_all_visible_documents") => "All visible documents",
         (Locale::EnUs, "assistant_no_document") => "No document selected",
+        (Locale::EnUs, "assistant_first_connection_title") => "Connect a model to begin",
+        (Locale::EnUs, "assistant_first_connection_hint") => "Add a connection in Assistant settings. Your question will stay here.",
+        (Locale::EnUs, "assistant_first_document_title") => "Start with an audio recording",
+        (Locale::EnUs, "assistant_first_document_hint") => "Process the audio into a document, then ask the Assistant to help read and organize it.",
+        (Locale::EnUs, "assistant_imported_title") => "This audio has not been transcribed yet",
+        (Locale::EnUs, "assistant_imported_hint") => "Open the current project and process its audio to ask questions about the transcript.",
+        (Locale::EnUs, "assistant_open_project") => "Open current project",
         (Locale::EnUs, "assistant_no_connection") => "No connection",
         (Locale::EnUs, "assistant_local_connection") => "Local connection",
         (Locale::EnUs, "assistant_remote_connection") => "Remote connection",
@@ -728,6 +774,7 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "document_body") => "Body (Markdown)",
         (Locale::EnUs, "document_status") => "Document status",
         (Locale::EnUs, "save_document") => "Save changes",
+        (Locale::EnUs, "retry_document_read") => "Retry reading",
         (Locale::EnUs, "document_loading") => "Reading the document…",
         (Locale::EnUs, "no_document_changes") => "Nothing to save.",
         (Locale::EnUs, "title_required") => "The title cannot be empty.",
@@ -787,6 +834,9 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "workspace") => "Workspace",
         (Locale::EnUs, "documents_root") => "Documents folder",
         (Locale::EnUs, "documents_root_switching") => "Switching the documents folder…",
+        (Locale::EnUs, "documents_root_operation_pending") => {
+            "Wait for the current operation to finish or stop before switching the documents folder."
+        }
         (Locale::EnUs, "detail_audio_status") => "Audio status",
         (Locale::EnUs, "audio_checking") => "Checking…",
         (Locale::EnUs, "audio_missing") => "Audio missing",
@@ -1078,6 +1128,8 @@ pub fn message(locale: Locale, key: &str, value: &str) -> String {
         (Locale::ZhCn, "assistant_probe_failed") => format!("检测失败：{value}"),
         (Locale::EnUs, "assistant_probe_failed") => format!("Check failed: {value}"),
         (Locale::ZhCn, "documents_load_failed") => format!("无法读取文档目录：{value}"),
+        (Locale::ZhCn, "workspace_read_failed") => format!("读取失败：{value}"),
+        (Locale::EnUs, "workspace_read_failed") => format!("Read failed: {value}"),
         (Locale::EnUs, "documents_load_failed") => {
             format!("Cannot read the documents folder: {value}")
         }

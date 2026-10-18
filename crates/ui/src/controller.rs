@@ -13,7 +13,7 @@ use crate::{
     i18n, pages,
     route::Route,
     speakers::{document_speakers, NameEntry, NameRows, SpeakerConfirmation, SpeakerProfiles},
-    state::{ContentMode, UiState},
+    state::{ContentMode, NoticeChange, NoticeTone, ProcessingStage, UiState, TOAST_LIFETIME},
     theme,
 };
 use application::{
@@ -26,7 +26,7 @@ use contracts::{
     AgentScene, AgentWriteMode, ComputeDevice, DiarizationStageKind, DocumentCommand,
     DocumentCommandEnvelope, DocumentCommandResult, DocumentRecord, ModelRef,
 };
-use domain::{DocumentState, ProjectId, ProjectStatus};
+use domain::{DocumentState, ProjectId};
 use futures::{FutureExt, StreamExt};
 use gpui::{
     prelude::*, App, Bounds, ClickEvent, Context, Entity, FocusHandle, PathPromptOptions,
@@ -57,8 +57,11 @@ enum SettingsWrite {
         change: SettingsChange,
         saved_notice: String,
     },
-    /// The Assistant form, relative to the settings it was loaded from.
-    Assistant(AssistantSettingsSave),
+    /// The explicit save and its raw form for acknowledging later edits.
+    Assistant {
+        save: AssistantSettingsSave,
+        submitted: AssistantForm,
+    },
     /// A documents-root switch and the save of `documents_root` it needs.
     DocumentsRoot { root: PathBuf },
 }
@@ -77,7 +80,7 @@ struct DocumentsRootSwitched {
     switched: bool,
 }
 
-/// Why a documents-root switch left the workspace on the root it had.
+/// Why a documents-root switch failed to save its requested setting.
 enum DocumentsRootSwitchFailure {
     /// The workspace refused the root; nothing changed.
     Refused(DocumentsRootError),
@@ -87,6 +90,7 @@ enum DocumentsRootSwitchFailure {
         failure: SettingsWriteFailure,
         switched: bool,
         restore: Option<DocumentsRootError>,
+        active_root: Option<PathBuf>,
     },
 }
 
@@ -116,7 +120,9 @@ fn switch_documents_root(
             let restore = previous
                 .filter(|_| switched)
                 .and_then(|previous| workspace.switch_documents_root(previous).err());
+            let active_root = restore.as_ref().and_then(|_| workspace.documents_root());
             Err(DocumentsRootSwitchFailure::NotSaved {
+                active_root,
                 failure,
                 switched,
                 restore,
@@ -364,6 +370,27 @@ impl AssistantInputs {
     }
 }
 
+/// The raw form at submission. Keep its text so later unfinished edits
+/// can be compared without parsing or replacing them.
+struct AssistantForm {
+    connection_id: String,
+    connection_name: String,
+    base_url: String,
+    model: String,
+    api_key: String,
+    api_key_file: String,
+    context_window_tokens: String,
+    timeout_ms: String,
+    max_output_tokens: String,
+    max_tool_rounds: String,
+    max_validation_retries: String,
+    protocol: LlmProtocol,
+    auth_mode: AssistantAuthMode,
+    enabled: bool,
+    write_mode: AgentWriteMode,
+    active_connection_id: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct DesktopServices {
     pub workspace: WorkspaceService,
@@ -493,6 +520,9 @@ pub(crate) struct RootView {
     assistant_origin: AssistantSettings,
     /// The last queued settings write; writes run one at a time.
     settings_write: Option<Task<()>>,
+    /// Keep editing available while a save awaits its acknowledgment,
+    /// but require that result before accepting another explicit save.
+    pub(crate) assistant_save_pending: bool,
     pub(crate) projects: Vec<DocumentState>,
     pub(crate) ui: UiState,
     pub(crate) assistant: AssistantController,
@@ -504,6 +534,11 @@ pub(crate) struct RootView {
     /// cancelled as soon as the start returns.
     processing_cancel_requested: bool,
     pub(crate) settings_selectors: Option<SettingsSelectors>,
+    /// A requested section is revealed after its settings viewport is laid out.
+    pending_settings_section: Option<usize>,
+    /// A later choice invalidates a model reference still resolving for that task.
+    asr_model_selection_generation: u64,
+    diarization_model_selection_generation: u64,
     /// The last failed settings write, shown on the settings page.
     pub(crate) settings_error: Option<AssistantUiError>,
     pending_expiry: Option<Task<()>>,
@@ -513,8 +548,18 @@ pub(crate) struct RootView {
     /// The latest project-list reload; an older one that finishes later is
     /// dropped.
     projects_generation: u64,
-    /// Whether the project list has loaded since the window opened.
+    /// The repository subscription lifecycle, including a rolled-back
+    /// switch; ordinary list reloads do not invalidate document reads.
+    documents_repository_generation: u64,
+    /// A different root discards drafts and their pending saves. A switch
+    /// rolled back to the same root still accepts its completed save.
+    pub(crate) documents_root_generation: u64,
+    /// Whether the initial project-list request has completed.
     pub(crate) projects_loaded: bool,
+    /// The latest list read failure; the last successful snapshot stays shown.
+    pub(crate) projects_error: Option<String>,
+    /// The locale in which the last list failure's notice was opened.
+    projects_error_locale: i18n::Locale,
     /// The open Speaker Library migration question, if any.
     pub(crate) speaker_library_prompt: Option<SpeakerLibraryPrompt>,
     pub(crate) scroll: ScrollAreas,
@@ -523,6 +568,8 @@ pub(crate) struct RootView {
     /// What held focus before the open dialog took it; closing the dialog
     /// returns focus there.
     dialog_return: Option<FocusHandle>,
+    /// The window root's, which holds focus whenever no control does.
+    pub(crate) window_focus: FocusHandle,
     /// The sidebar entries, in `pages::chrome::ENTRIES` order.
     pub(crate) nav_focus: [FocusHandle; 4],
     pub(crate) sidebar_sizing: Entity<controls::sidebar::SidebarSizing>,
@@ -553,15 +600,19 @@ pub(crate) struct RootView {
     pub(crate) speaker_profiles: SpeakerProfiles,
     /// The path `services.speaker_library` was opened on.
     speaker_library_path: String,
+    /// A newer path choice invalidates an earlier probe or migration result.
+    speaker_library_selection_generation: u64,
     /// The rename and merge controls of the speakers of the document shown
     /// in the Original view, and the revision they were read at.
     pub(crate) speaker_rows: Option<NameRows<(ProjectId, u64, i18n::Locale)>>,
+    /// A confirmed document merge returns focus to its surviving speaker.
+    speaker_removal_focus: Option<(ProjectId, SpeakerRemovalFocus)>,
     /// The rename and merge controls of the Speaker Library profiles.
     pub(crate) profile_rows: Option<NameRows<(u64, i18n::Locale)>>,
     /// Focus destination when the last profile is deleted.
     pub(crate) speaker_library_focus: FocusHandle,
-    /// A confirmed deletion returns focus after the refreshed rows exist.
-    profile_removal_focus: Option<ProfileRemovalFocus>,
+    /// A confirmed profile removal returns focus after the refreshed rows exist.
+    profile_removal_focus: Option<SpeakerRemovalFocus>,
     /// The document whose speaker correction is in flight.
     pub(crate) speaker_command: Option<ProjectId>,
     /// The speaker merge or profile change waiting for confirmation.
@@ -577,8 +628,8 @@ pub(crate) struct RootView {
 /// Why the next review awaits, which decides whether it takes the focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReviewFocus {
-    /// The user accepted or rejected the one before: the next review takes
-    /// the focus, so the queue can be worked through from the keyboard.
+    /// The user accepted or rejected the one before: continue the keyboard
+    /// queue only while focus remains in its review region.
     Decision,
     /// The one before expired: the next review takes the focus only from
     /// the review that had it, never from a field the user is typing in.
@@ -614,24 +665,36 @@ pub(crate) struct DocumentConflict {
     pub(crate) actual: u64,
 }
 
-/// The scroll positions of the lists that fade at their edges; each fade
-/// reads its list's handle at paint time.
+/// The scroll positions of independently scrollable page sections and panels.
 #[derive(Default)]
 pub(crate) struct ScrollAreas {
     pub(crate) assistant_results: ScrollHandle,
     pub(crate) project_tree: ScrollHandle,
     pub(crate) meeting_content: ScrollHandle,
+    pub(crate) meeting_context: Option<(u64, ProjectId, ContentMode)>,
     pub(crate) document_issues: ScrollHandle,
+    pub(crate) workspace_read_error: ScrollHandle,
+    pub(crate) document_conflict: ScrollHandle,
     pub(crate) detail: ScrollHandle,
     pub(crate) models: ScrollHandle,
     pub(crate) settings: ScrollHandle,
 }
 
-/// Returns focus after a profile deletion unless the user has moved it.
-struct ProfileRemovalFocus {
+/// Returns focus after a speaker row is removed unless the user has moved it.
+struct SpeakerRemovalFocus {
     removed_id: String,
-    next_id: Option<String>,
+    destination_id: Option<String>,
     previous: Option<FocusHandle>,
+}
+
+impl SpeakerRemovalFocus {
+    fn restore(self, destination: FocusHandle, window: &mut Window, cx: &mut Context<RootView>) {
+        window.defer(cx, move |window, cx| {
+            if window.focused(cx) == self.previous {
+                destination.focus(window, cx);
+            }
+        });
+    }
 }
 
 /// Asked when the Speaker Library moves to a path without a library while
@@ -668,9 +731,30 @@ impl RootView {
             window,
             |this, _, event, _, cx| match event {
                 TextFieldEvent::Submit => this.submit_assistant_prompt(cx),
+                TextFieldEvent::Change => {}
             },
         )
         .detach();
+        // Feedback belongs to the exact connection currently held by the form.
+        for field in [
+            &assistant_inputs.connection_id,
+            &assistant_inputs.connection_name,
+            &assistant_inputs.base_url,
+            &assistant_inputs.model,
+            &assistant_inputs.api_key,
+            &assistant_inputs.api_key_file,
+            &assistant_inputs.context_window_tokens,
+            &assistant_inputs.timeout_ms,
+            &assistant_inputs.max_output_tokens,
+        ] {
+            cx.subscribe(field, |this, _, event, cx| {
+                if matches!(event, TextFieldEvent::Change) {
+                    this.assistant.forget_probe();
+                    cx.notify();
+                }
+            })
+            .detach();
+        }
         let editor = DocumentEditor::new(locale, window, cx);
         cx.subscribe_in(&editor.status, window, |this, _, event, _, cx| {
             let DropdownEvent::Confirm(value) = event;
@@ -695,6 +779,7 @@ impl RootView {
             settings_base: settings_draft.clone(),
             assistant_origin: settings_draft.assistant.clone(),
             settings_write: None,
+            assistant_save_pending: false,
             settings_draft,
             projects: Vec::new(),
             ui,
@@ -711,15 +796,23 @@ impl RootView {
             cancel_contexts: None,
             processing_cancel_requested: false,
             settings_selectors: None,
+            pending_settings_section: None,
+            asr_model_selection_generation: 0,
+            diarization_model_selection_generation: 0,
             settings_error: None,
             pending_expiry: None,
             installation: InstallationState::default(),
             projects_generation: 0,
+            documents_repository_generation: 0,
+            documents_root_generation: 0,
             projects_loaded: false,
+            projects_error: None,
+            projects_error_locale: locale,
             speaker_library_prompt: None,
             scroll: ScrollAreas::default(),
             dialog_focus: cx.focus_handle(),
             dialog_return: None,
+            window_focus: cx.focus_handle(),
             nav_focus: std::array::from_fn(|_| cx.focus_handle()),
             sidebar_sizing: cx.new(|_| controls::sidebar::SidebarSizing::default()),
             tree_focus: cx.focus_handle(),
@@ -734,7 +827,9 @@ impl RootView {
             document_conflict: None,
             speaker_profiles: SpeakerProfiles::default(),
             speaker_library_path,
+            speaker_library_selection_generation: 0,
             speaker_rows: None,
+            speaker_removal_focus: None,
             profile_rows: None,
             speaker_library_focus: cx.focus_handle(),
             profile_removal_focus: None,
@@ -744,6 +839,8 @@ impl RootView {
             documents_root_switch: DocumentsRootSwitch::default(),
             model_reprobes: Default::default(),
         };
+        // Every update that sets a notice opens its toast.
+        cx.observe_self(Self::take_up_notice).detach();
         // The tree and the Speaker Library stay empty until they load on
         // workers.
         this.reload_projects(cx);
@@ -782,8 +879,13 @@ impl RootView {
                     if installation != this.installation {
                         this.installation = installation;
                         this.settle_reprobes();
-                        // Model selects show install state; rebuild them.
-                        this.settings_selectors = None;
+                        // Refresh model availability without replacing a menu
+                        // the user is currently browsing.
+                        let asr = this.settings_draft.asr_backend_id.clone();
+                        let diarization = this.settings_draft.diarization_backend_id.clone();
+                        this.refresh_model_selector("asr", asr.as_deref(), cx);
+                        this.refresh_model_selector("diarization", diarization.as_deref(), cx);
+                        this.refresh_stage_selectors(cx);
                         cx.notify();
                     }
                 });
@@ -814,12 +916,21 @@ impl RootView {
 
     /// Re-reads the project list and the scanner issues off the main thread.
     pub(crate) fn reload_projects(&mut self, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let generation = self.begin_projects_reload();
         let workspace = self.services.workspace.clone();
         cx.spawn(async move |this, cx| {
             let snapshot = runtime::spawn_blocking(move || workspace.document_snapshot()).await;
-            this.update(cx, |this, cx| this.apply_projects(generation, snapshot, cx))
-                .ok();
+            this.update(cx, |this, cx| {
+                if generation != this.projects_generation {
+                    cx.notify();
+                    return;
+                }
+                this.apply_projects(generation, snapshot, cx);
+            })
+            .ok();
         })
         .detach();
     }
@@ -830,7 +941,7 @@ impl RootView {
     }
 
     /// Shows a reloaded project list and its scanner issues unless a newer
-    /// reload has started; the first list to land also opens the tree.
+    /// reload has started; a successful list initializes an absent selection.
     fn apply_projects(
         &mut self,
         generation: u64,
@@ -840,20 +951,64 @@ impl RootView {
         if generation == self.projects_generation {
             match snapshot {
                 Ok(snapshot) => {
+                    // Metadata-only updates keep correction drafts, caret and
+                    // open menus while advancing their checked revision.
+                    if let Some(rows) = &mut self.speaker_rows {
+                        let (id, revision, locale) = rows.key().clone();
+                        let previous = self.projects.iter().find(|document| {
+                            document.id() == &id && document.revision() == revision
+                        });
+                        let current = snapshot
+                            .documents
+                            .iter()
+                            .find(|document| document.id() == &id);
+                        if let (Some(previous), Some(current)) = (previous, current) {
+                            if current.revision() != revision
+                                && previous.source == current.source
+                                && previous.results == current.results
+                                && previous.processing.latest == current.processing.latest
+                            {
+                                rows.set_key((id, current.revision(), locale));
+                            }
+                        }
+                    }
                     self.projects = snapshot.documents;
                     self.document_issues = snapshot.issues;
+                    if let Some(error) = self.projects_error.take() {
+                        let old_notice = i18n::message(
+                            self.projects_error_locale,
+                            "documents_load_failed",
+                            &error,
+                        );
+                        if self.ui.notice == old_notice {
+                            self.ui.notice.clear();
+                        }
+                        if let Some(generation) = self
+                            .ui
+                            .toast()
+                            .filter(|toast| toast.notice == old_notice)
+                            .map(|toast| toast.generation)
+                        {
+                            self.dismiss_toast(generation, cx);
+                        }
+                    }
+                    if !self.projects_loaded || self.ui.selected_project.is_none() {
+                        self.ui.open_loaded_projects(&self.projects);
+                    }
+                    self.check_selected_audio(cx);
                 }
                 Err(error) => {
-                    self.projects.clear();
-                    self.document_issues.clear();
+                    if self.projects_error.as_ref() != Some(&error) {
+                        self.scroll
+                            .workspace_read_error
+                            .set_offset(Default::default());
+                    }
+                    self.projects_error_locale = self.ui.locale;
                     self.ui.notice = i18n::message(self.ui.locale, "documents_load_failed", &error);
+                    self.projects_error = Some(error);
                 }
             }
-            if !self.projects_loaded {
-                self.ui.open_loaded_projects(&self.projects);
-                self.projects_loaded = true;
-            }
-            self.check_selected_audio(cx);
+            self.projects_loaded = true;
             cx.notify();
         }
     }
@@ -862,6 +1017,9 @@ impl RootView {
     /// the file); the tree row, the Meetings header and Detail show what it
     /// finds.
     fn check_selected_audio(&mut self, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let Some(document_id) = self
             .ui
             .selected_project
@@ -876,9 +1034,8 @@ impl RootView {
             let result =
                 runtime::spawn_blocking(move || workspace.audio_status(&document_id)).await;
             this.update(cx, |this, cx| {
-                if this.audio.apply(generation, result) {
-                    cx.notify();
-                }
+                this.audio.apply(generation, result);
+                cx.notify();
             })
             .ok();
         })
@@ -889,6 +1046,12 @@ impl RootView {
     /// never drives the Assistant page or its runs.
     pub(crate) fn saved_assistant(&self) -> &AssistantSettings {
         &self.settings_base.assistant
+    }
+
+    /// Changes only the in-memory connection projection for visual fixtures.
+    /// The Settings service and its persisted configuration stay untouched.
+    pub(crate) fn set_fixture_assistant_connection(&mut self, id: Option<String>) {
+        self.settings_base.assistant.active_connection_id = id;
     }
 
     fn installation_query(&self) -> InstallationQuery {
@@ -1145,6 +1308,34 @@ impl RootView {
         });
     }
 
+    /// When a missing processing prerequisite has a selectable installed
+    /// model, take the user to its configuration rather than its download.
+    pub(crate) fn model_setup_section(
+        &self,
+        missing: crate::state::MissingModels,
+    ) -> Option<&'static str> {
+        let (task, backend, section) = if missing.transcription {
+            (
+                "asr",
+                self.settings_draft.asr_backend_id.as_deref(),
+                "transcription",
+            )
+        } else if missing.diarization {
+            (
+                "diarization",
+                self.settings_draft.diarization_backend_id.as_deref(),
+                "speaker_separation",
+            )
+        } else {
+            return None;
+        };
+        let backend = backend?;
+        self.installation
+            .models(task, Some(backend))
+            .any(|entry| entry.install_state == ModelInstallState::Installed)
+            .then_some(section)
+    }
+
     fn model_options(&self, task: &str, backend_id: Option<&str>) -> Vec<SelectOption> {
         self.installation
             .models(task, backend_id)
@@ -1306,15 +1497,17 @@ impl RootView {
                     })
                     .ok();
                 }
-                SettingsWrite::Assistant(save) => {
+                SettingsWrite::Assistant { save, submitted } => {
                     let result = runtime::spawn_blocking(move || {
                         let result = assistant
                             .save_assistant_settings(SettingsService::revision_of(&expected), save);
                         reload_after_conflict(&settings, result)
                     })
                     .await;
-                    this.update(cx, |this, cx| this.finish_assistant_save(result, cx))
-                        .ok();
+                    this.update(cx, |this, cx| {
+                        this.finish_assistant_save(&submitted, result, cx);
+                    })
+                    .ok();
                 }
                 SettingsWrite::DocumentsRoot { root } => {
                     let result = runtime::spawn_blocking(move || {
@@ -1329,9 +1522,9 @@ impl RootView {
     }
 
     /// Shows how a documents-root switch ended. A switch saved in the
-    /// settings shows the new root's tree; a refused one changes nothing; a
-    /// switch whose save failed was switched back and adopts the settings
-    /// the conflict reloaded.
+    /// settings shows the new root's tree; a refused one changes nothing.
+    /// A failed save adopts reloaded settings, but if restoring the old root
+    /// also fails, the path and tree still follow the active workspace.
     fn finish_documents_root_switch(
         &mut self,
         result: Result<DocumentsRootSwitched, DocumentsRootSwitchFailure>,
@@ -1339,14 +1532,11 @@ impl RootView {
     ) {
         self.documents_root_switch.switching = false;
         let locale = self.ui.locale;
-        let (message, failed) = match result {
+        let (message, failed, root_changed) = match result {
             Ok(DocumentsRootSwitched { saved, switched }) => {
                 self.settings_draft.documents_root = saved.documents_root.clone();
                 self.settings_base = saved;
                 self.settings_error = None;
-                if switched {
-                    self.follow_documents_root(true, cx);
-                }
                 (
                     i18n::message(
                         locale,
@@ -1354,22 +1544,26 @@ impl RootView {
                         &self.settings_draft.documents_root,
                     ),
                     false,
+                    switched.then_some(true),
                 )
             }
             Err(DocumentsRootSwitchFailure::Refused(error)) => {
-                (i18n::documents_root_error(locale, &error), true)
+                (i18n::documents_root_error(locale, &error), true, None)
             }
             Err(DocumentsRootSwitchFailure::NotSaved {
                 failure,
                 switched,
                 restore,
+                active_root,
             }) => {
                 let reason = settings_error_text(locale, &failure.error);
                 self.settings_write_failed(failure, cx);
-                // Switching there and back ended the feeds of both roots.
-                if switched {
-                    self.follow_documents_root(restore.is_some(), cx);
+                if let Some(active_root) = active_root {
+                    // The saved setting could not be restored. Show the
+                    // directory the workspace actually reads and writes.
+                    self.settings_draft.documents_root = active_root.display().to_string();
                 }
+                let root_changed = switched.then_some(restore.is_some());
                 let message = match restore {
                     None => i18n::message(locale, "documents_root_not_saved", &reason),
                     Some(error) => i18n::message(
@@ -1378,10 +1572,22 @@ impl RootView {
                         &format!("{reason} {}", i18n::documents_root_error(locale, &error)),
                     ),
                 };
-                (message, true)
+                (message, true, root_changed)
             }
         };
-        self.ui.notice = message.clone();
+        match root_changed {
+            // Switching there and back also ended the old change feed.
+            Some(changed) => self.follow_documents_root(changed, cx),
+            // Refusal and choosing the same root still resume the reads
+            // invalidated when the switch began.
+            None => self.reload_projects(cx),
+        }
+        let tone = if failed {
+            NoticeTone::Error
+        } else {
+            NoticeTone::Success
+        };
+        self.ui.set_notice(tone, message.clone());
         self.documents_root_switch.status = Some((message, failed));
         cx.notify();
     }
@@ -1393,9 +1599,16 @@ impl RootView {
     /// audio check, document speaker controls and the Assistant's results,
     /// reviews and undo entries.
     fn follow_documents_root(&mut self, root_changed: bool, cx: &mut Context<Self>) {
+        self.documents_repository_generation += 1;
+        // A successful rollback also replaced the repository. Retain its
+        // drafts, but let reads from the restored root start again.
+        self.editor.loading.clear();
         if root_changed {
+            self.documents_root_generation += 1;
+            self.editor.saving = None;
             self.projects.clear();
             self.document_issues.clear();
+            self.projects_error = None;
             self.projects_loaded = false;
             self.ui.selected_project = None;
             self.ui.expanded_projects.clear();
@@ -1404,6 +1617,8 @@ impl RootView {
             self.document_conflict = None;
             self.audio.clear();
             self.speaker_rows = None;
+            self.speaker_removal_focus = None;
+            self.speaker_command = None;
             if matches!(
                 self.speaker_confirmation,
                 Some(SpeakerConfirmation::MergeDocumentSpeaker { .. })
@@ -1442,17 +1657,23 @@ impl RootView {
 
     fn finish_assistant_save(
         &mut self,
+        submitted: &AssistantForm,
         result: Result<AppSettings, SettingsWriteFailure>,
         cx: &mut Context<Self>,
     ) {
+        self.assistant_save_pending = false;
         match result {
             Ok(saved) => {
+                let draft_kept = self.acknowledge_assistant_form(submitted, &saved.assistant, cx);
                 self.assistant_origin = saved.assistant.clone();
-                self.settings_draft.assistant = saved.assistant.clone();
                 self.settings_base = saved;
-                self.load_assistant_form(cx);
                 self.settings_error = None;
-                self.ui.notice = i18n::text(self.ui.locale, "assistant_settings_saved").into();
+                let notice = if draft_kept {
+                    "assistant_settings_saved_draft_kept"
+                } else {
+                    "assistant_settings_saved"
+                };
+                self.ui.notice = i18n::text(self.ui.locale, notice).into();
             }
             Err(error) => self.settings_write_failed(error, cx),
         }
@@ -1461,14 +1682,19 @@ impl RootView {
 
     /// The persisted settings stay authoritative after a failed write: a
     /// conflict adopts the settings reloaded from the repository, and the
-    /// instant-save fields show them again. The unsaved Assistant form is
-    /// kept, so saving it again is the retry.
+    /// instant-save fields show them again. Keep the active documents path
+    /// until an explicit root switch, and keep the unsaved Assistant form
+    /// so saving it again is the retry.
     fn settings_write_failed(&mut self, failure: SettingsWriteFailure, cx: &mut Context<Self>) {
         let SettingsWriteFailure { error, reloaded } = failure;
         if let Some(latest) = reloaded {
             self.settings_base = latest;
         }
+        if self.settings_base.speaker_library_path != self.settings_draft.speaker_library_path {
+            self.invalidate_speaker_library_selection(cx);
+        }
         self.settings_draft = AppSettings {
+            documents_root: self.settings_draft.documents_root.clone(),
             assistant: self.settings_draft.assistant.clone(),
             ..self.settings_base.clone()
         };
@@ -1499,20 +1725,121 @@ impl RootView {
         theme::set_preference(self.settings_draft.appearance, cx);
     }
 
-    fn load_assistant_form(&mut self, cx: &mut Context<Self>) {
-        let assistant = &self.settings_draft.assistant;
-        let profile = assistant.active_connection().cloned();
-        self.assistant_protocol = profile
-            .as_ref()
-            .map_or(LlmProtocol::OpenAiChatCompletions, |profile| {
-                profile.protocol
-            });
-        self.assistant_auth_mode = profile
-            .as_ref()
-            .map_or(AssistantAuthMode::Bearer, |profile| profile.auth_mode);
-        self.assistant_inputs.load_profile(profile.as_ref(), cx);
-        let assistant = self.settings_draft.assistant.clone();
-        self.assistant_inputs.load_limits(&assistant, cx);
+    /// Adopt the saved baseline, acknowledging only values the user has
+    /// not changed since submission. Leave other text, selection and focus
+    /// with the current form, including a newly selected connection.
+    fn acknowledge_assistant_form(
+        &mut self,
+        submitted: &AssistantForm,
+        saved: &AssistantSettings,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let current_id = AssistantInputs::value(&self.assistant_inputs.connection_id, cx);
+        let same_profile = current_id == submitted.connection_id;
+        let current = &self.settings_draft.assistant;
+        let mut draft = saved.clone();
+        let mut draft_kept = false;
+        if current.enabled != submitted.enabled {
+            draft.enabled = current.enabled;
+            draft_kept |= current.enabled != saved.enabled;
+        }
+        if current.write_mode != submitted.write_mode {
+            draft.write_mode = current.write_mode;
+            draft_kept |= current.write_mode != saved.write_mode;
+        }
+        if !same_profile || current.active_connection_id != submitted.active_connection_id {
+            draft.active_connection_id = current.active_connection_id.clone();
+            draft_kept |=
+                !same_profile || current.active_connection_id != saved.active_connection_id;
+        }
+        let mut inputs = vec![
+            (
+                &self.assistant_inputs.max_tool_rounds,
+                &submitted.max_tool_rounds,
+                saved.max_tool_rounds.to_string(),
+            ),
+            (
+                &self.assistant_inputs.max_validation_retries,
+                &submitted.max_validation_retries,
+                saved.max_validation_retries.to_string(),
+            ),
+        ];
+        if same_profile {
+            let profile = saved
+                .active_connection()
+                .cloned()
+                .unwrap_or_else(empty_connection_profile);
+            if self.assistant_protocol == submitted.protocol {
+                self.assistant_protocol = profile.protocol;
+            } else {
+                draft_kept |= self.assistant_protocol != profile.protocol;
+            }
+            if self.assistant_auth_mode == submitted.auth_mode {
+                self.assistant_auth_mode = profile.auth_mode;
+            } else {
+                draft_kept |= self.assistant_auth_mode != profile.auth_mode;
+            }
+            inputs.extend([
+                (
+                    &self.assistant_inputs.connection_id,
+                    &submitted.connection_id,
+                    profile.id,
+                ),
+                (
+                    &self.assistant_inputs.connection_name,
+                    &submitted.connection_name,
+                    profile.name,
+                ),
+                (
+                    &self.assistant_inputs.base_url,
+                    &submitted.base_url,
+                    profile.base_url,
+                ),
+                (
+                    &self.assistant_inputs.model,
+                    &submitted.model,
+                    profile.model,
+                ),
+                (
+                    &self.assistant_inputs.api_key,
+                    &submitted.api_key,
+                    String::new(),
+                ),
+                (
+                    &self.assistant_inputs.api_key_file,
+                    &submitted.api_key_file,
+                    profile.api_key_file.unwrap_or_default(),
+                ),
+                (
+                    &self.assistant_inputs.context_window_tokens,
+                    &submitted.context_window_tokens,
+                    profile
+                        .context_window_tokens
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                ),
+                (
+                    &self.assistant_inputs.timeout_ms,
+                    &submitted.timeout_ms,
+                    profile.timeout_ms.to_string(),
+                ),
+                (
+                    &self.assistant_inputs.max_output_tokens,
+                    &submitted.max_output_tokens,
+                    profile.max_output_tokens.to_string(),
+                ),
+            ]);
+        }
+        for (input, submitted, saved) in inputs {
+            let value = AssistantInputs::value(input, cx);
+            if &value != submitted {
+                draft_kept |= value != saved;
+            } else if value != saved {
+                input.update(cx, |input, cx| input.set_value(saved, cx));
+            }
+        }
+        self.settings_draft.assistant = draft;
+        draft_kept
     }
 
     fn refresh_model_selector(
@@ -1657,7 +1984,8 @@ impl RootView {
     ) {
         let DropdownEvent::Confirm(value) = event;
         if let Some(backend_id) = self.settings_draft.asr_backend_id.clone() {
-            self.use_model(value.clone(), "asr".into(), backend_id, cx);
+            self.use_model(value.clone(), "asr".into(), backend_id, cx)
+                .detach();
         }
     }
 
@@ -1699,7 +2027,8 @@ impl RootView {
     ) {
         let DropdownEvent::Confirm(value) = event;
         if let Some(backend_id) = self.settings_draft.diarization_backend_id.clone() {
-            self.use_model(value.clone(), "diarization".into(), backend_id, cx);
+            self.use_model(value.clone(), "diarization".into(), backend_id, cx)
+                .detach();
             self.refresh_stage_selectors(cx);
         }
     }
@@ -1712,6 +2041,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         let DropdownEvent::Confirm(value) = event;
+        self.invalidate_diarization_model_selection(cx);
         let model = self.stage_model_ref(DiarizationStageKind::Segmentation, value);
         self.persist_field(
             move |settings| settings.diarization_stages.segmentation_model = model.clone(),
@@ -1727,6 +2057,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         let DropdownEvent::Confirm(value) = event;
+        self.invalidate_diarization_model_selection(cx);
         let model = self.stage_model_ref(DiarizationStageKind::Embedding, value);
         self.persist_field(
             move |settings| settings.diarization_stages.embedding_model = model.clone(),
@@ -1742,6 +2073,7 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         let DropdownEvent::Confirm(value) = event;
+        self.invalidate_diarization_model_selection(cx);
         let option = self
             .selected_diarization_descriptor()
             .and_then(|descriptor| {
@@ -1788,6 +2120,9 @@ impl RootView {
     }
 
     pub(crate) fn import_audio(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -1809,20 +2144,31 @@ impl RootView {
 
     /// Imports `path` and reloads the project list off the main thread.
     pub(crate) fn import_audio_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let generation = self.begin_projects_reload();
-        let workspace = self.services.workspace.clone();
+        let root_generation = self.documents_root_generation;
+        let documents = self.services.workspace.documents().frozen();
         cx.spawn(async move |this, cx| {
             let imported = runtime::spawn_blocking(move || {
-                let project = workspace.import_audio(path.display().to_string())?;
-                Ok::<_, String>((project, workspace.document_snapshot()))
+                let project = documents.import_audio(path.display().to_string())?;
+                Ok::<_, String>((project, documents.snapshot()))
             })
             .await;
             this.update(cx, |this, cx| {
+                if root_generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 match imported {
                     Ok((project, projects)) => {
-                        this.ui.selected_project = Some(project.id().clone());
+                        let refreshed = projects.is_ok();
                         this.apply_projects(generation, projects, cx);
-                        this.ui.notice = i18n::message(this.ui.locale, "imported", project.title());
+                        if refreshed {
+                            this.ui.notice =
+                                i18n::message(this.ui.locale, "imported", project.title());
+                        }
                     }
                     Err(error) => {
                         this.ui.notice = i18n::message(this.ui.locale, "import_failed", &error)
@@ -1856,7 +2202,7 @@ impl RootView {
             };
             let destination = directory.join("library.json");
             this.update(cx, move |this, cx| {
-                this.change_speaker_library_path(destination, cx);
+                this.change_speaker_library_path(destination, cx).detach();
             })
             .ok();
         })
@@ -1865,15 +2211,18 @@ impl RootView {
 
     /// Switches the Speaker Library to `destination`, offering to migrate the
     /// current library when only the current path has one. Both paths are
-    /// probed off the main thread.
+    /// probed off the main thread. The returned task completes when the
+    /// probe's UI result has been handled.
     pub(crate) fn change_speaker_library_path(
         &mut self,
         destination: std::path::PathBuf,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Task<()> {
+        self.invalidate_speaker_library_selection(cx);
+        let generation = self.speaker_library_selection_generation;
         let source = std::path::PathBuf::from(&self.settings_draft.speaker_library_path);
         if source == destination {
-            return;
+            return Task::ready(());
         }
         cx.spawn(async move |this, cx| {
             let paths = (source.clone(), destination.clone());
@@ -1882,6 +2231,9 @@ impl RootView {
             })
             .await;
             this.update_in(cx, move |this, window, cx| {
+                if generation != this.speaker_library_selection_generation {
+                    return;
+                }
                 if presence.destination_exists || !presence.source_exists {
                     this.commit_speaker_library_path(destination, cx);
                 } else {
@@ -1890,7 +2242,6 @@ impl RootView {
             })
             .ok();
         })
-        .detach();
     }
 
     fn ask_speaker_library_migration(
@@ -1917,9 +2268,19 @@ impl RootView {
         let this = cx.entity().downgrade();
         window.defer(cx, move |window, cx| {
             let previous = window.focused(cx).filter(|focused| *focused != dialog);
-            this.update(cx, |this, _| this.dialog_return = previous)
-                .ok();
-            dialog.focus(window, cx);
+            let open = this
+                .update(cx, |this, _| {
+                    if this.speaker_confirmation.is_none() && this.speaker_library_prompt.is_none()
+                    {
+                        return false;
+                    }
+                    this.dialog_return = previous;
+                    true
+                })
+                .unwrap_or(false);
+            if open {
+                dialog.focus(window, cx);
+            }
         });
     }
 
@@ -1930,22 +2291,28 @@ impl RootView {
         }
     }
 
-    /// Closes the migration question: `migrate` moves the library to the new
+    /// Closes the migration question: `migrate` copies the library to the new
     /// path, otherwise only the path changes.
-    pub(crate) fn answer_speaker_library_prompt(&mut self, migrate: bool, cx: &mut Context<Self>) {
+    pub(crate) fn answer_speaker_library_prompt(
+        &mut self,
+        migrate: bool,
+        cx: &mut Context<Self>,
+    ) -> Task<()> {
         let Some(SpeakerLibraryPrompt {
             source,
             destination,
         }) = self.speaker_library_prompt.take()
         else {
-            return;
+            return Task::ready(());
         };
-        if migrate {
-            self.migrate_speaker_library(source, destination, cx);
+        let task = if migrate {
+            self.migrate_speaker_library(source, destination, cx)
         } else {
             self.commit_speaker_library_path(destination, cx);
-        }
+            Task::ready(())
+        };
         cx.notify();
+        task
     }
 
     fn speaker_library_dialog(&self, cx: &mut Context<Self>) -> Option<ConfirmDialog> {
@@ -1967,7 +2334,7 @@ impl RootView {
             .on_confirm(i18n::text(locale, "migrate"), move |window, cx| {
                 migrate
                     .update(cx, |this, cx| {
-                        this.answer_speaker_library_prompt(true, cx);
+                        this.answer_speaker_library_prompt(true, cx).detach();
                         this.return_focus_from_dialog(window, cx);
                     })
                     .ok();
@@ -1975,7 +2342,7 @@ impl RootView {
             .on_cancel(i18n::text(locale, "use_new_path"), move |window, cx| {
                 switch
                     .update(cx, |this, cx| {
-                        this.answer_speaker_library_prompt(false, cx);
+                        this.answer_speaker_library_prompt(false, cx).detach();
                         this.return_focus_from_dialog(window, cx);
                     })
                     .ok();
@@ -1988,22 +2355,30 @@ impl RootView {
         source: std::path::PathBuf,
         destination: std::path::PathBuf,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Task<()> {
+        let generation = self.speaker_library_selection_generation;
         cx.spawn(async move |this, cx| {
             let target = destination.clone();
             let result =
                 runtime::spawn_blocking(move || application::migrate_file(&source, &target)).await;
-            this.update(cx, |this, cx| match result {
-                Ok(()) => this.commit_speaker_library_path(destination, cx),
-                Err(error) => {
-                    this.ui.notice =
-                        i18n::message(this.ui.locale, "speaker_library_migration_failed", &error);
-                    cx.notify();
+            this.update(cx, |this, cx| {
+                if generation != this.speaker_library_selection_generation {
+                    return;
+                }
+                match result {
+                    Ok(()) => this.commit_speaker_library_path(destination, cx),
+                    Err(error) => {
+                        this.ui.notice = i18n::message(
+                            this.ui.locale,
+                            "speaker_library_migration_failed",
+                            &error,
+                        );
+                        cx.notify();
+                    }
                 }
             })
             .ok();
         })
-        .detach();
     }
 
     fn commit_speaker_library_path(&mut self, path: std::path::PathBuf, cx: &mut Context<Self>) {
@@ -2032,8 +2407,57 @@ impl RootView {
         {
             self.ui.notice = i18n::message(self.ui.locale, "processing_failed", &error);
         }
-        self.speaker_profiles.status = None;
+        self.speaker_profiles.reset_for_path_change();
+        self.profile_rows = None;
+        self.profile_removal_focus = None;
+        if matches!(
+            self.speaker_confirmation,
+            Some(
+                SpeakerConfirmation::DeleteProfile { .. }
+                    | SpeakerConfirmation::MergeProfiles { .. }
+            )
+        ) {
+            self.speaker_confirmation = None;
+            self.focus_after_library_dialog_closed(cx);
+        }
         self.reload_speaker_profiles(cx);
+    }
+
+    /// Invalidate a choice on a new user selection or a reloaded path;
+    /// ordinary acknowledgements of our own settings writes are not choices.
+    fn invalidate_speaker_library_selection(&mut self, cx: &mut Context<Self>) {
+        self.speaker_library_selection_generation += 1;
+        if self.speaker_library_prompt.take().is_some() {
+            self.focus_after_library_dialog_closed(cx);
+        }
+    }
+
+    /// A discarded library question must not leave focus on a hidden dialog.
+    /// Keep any focus the user has since moved to another control.
+    fn focus_after_library_dialog_closed(&mut self, cx: &mut Context<Self>) {
+        if self.speaker_confirmation.is_some() {
+            return;
+        }
+        self.dialog_return = None;
+        cx.spawn(async move |this, cx| {
+            this.update_in(cx, |this, window, cx| {
+                if this.ui.route == Route::Settings
+                    && this.speaker_confirmation.is_none()
+                    && this.speaker_library_prompt.is_none()
+                    && (this.dialog_focus.contains_focused(window, cx)
+                        || this.window_focus.is_focused(window))
+                {
+                    this.scroll
+                        .settings
+                        .scroll_to_top_of_item(pages::settings::SPEAKER_LIBRARY_SECTION);
+                    this.speaker_library_focus.focus(window, cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
     }
 
     /// Reads the Speaker Library profiles on a worker.
@@ -2055,9 +2479,9 @@ impl RootView {
         .detach();
     }
 
-    /// Builds the rename and merge controls of the speakers of `document`
-    /// when the Original view shows it; they are rebuilt once its revision
-    /// or the locale changes.
+    /// Builds correction controls for Original. Metadata-only revisions
+    /// keep them; pending corrections retain their inputs until acknowledged.
+    /// Other audio, processing, result or locale changes rebuild them.
     fn ensure_speaker_rows(
         &mut self,
         document: Option<&DocumentState>,
@@ -2067,18 +2491,17 @@ impl RootView {
         if self.ui.route != Route::Meetings || self.ui.content_mode != ContentMode::Original {
             return;
         }
-        let Some(document) =
-            document.filter(|document| document.processing_status() == ProjectStatus::Ready)
+        let Some(document) = document.filter(|document| document.processing.latest.is_some())
         else {
             return;
         };
         let locale = self.ui.locale;
         let key = (document.id().clone(), document.revision(), locale);
-        if self
-            .speaker_rows
-            .as_ref()
-            .is_some_and(|rows| rows.is_for(&key))
-        {
+        if self.speaker_rows.as_ref().is_some_and(|rows| {
+            rows.is_for(&key)
+                || (&rows.key().0 == document.id()
+                    && self.speaker_command.as_ref() == Some(document.id()))
+        }) {
             return;
         }
         let entries = document_speakers(document)
@@ -2098,40 +2521,44 @@ impl RootView {
         ));
     }
 
-    /// Builds the rename and merge controls of the Speaker Library profiles
-    /// on the Settings route; they are rebuilt once the list or the locale
-    /// changes.
+    /// Builds the Speaker Library controls on Settings. Writes keep their
+    /// existing inputs until the saved profiles are acknowledged.
     fn ensure_profile_rows(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ui.route != Route::Settings {
             self.profile_removal_focus = None;
             return;
         }
-        let locale = self.ui.locale;
-        let key = (self.speaker_profiles.version, locale);
-        if self
-            .profile_rows
-            .as_ref()
-            .is_some_and(|rows| rows.is_for(&key))
-        {
+        if !self.speaker_profiles.loaded {
+            self.profile_rows = None;
             return;
         }
-        let entries = self
-            .speaker_profiles
-            .profiles
-            .iter()
-            .map(|profile| NameEntry::profile(profile, locale))
-            .collect::<Vec<_>>();
-        self.profile_rows = Some(NameRows::build(
-            key,
-            &entries,
-            i18n::text(locale, "merge_into_placeholder"),
-            (
-                Self::rename_speaker_profile,
-                Self::ask_merge_speaker_profiles,
-            ),
-            window,
-            cx,
-        ));
+        let locale = self.ui.locale;
+        let key = (self.speaker_profiles.version, locale);
+        let keep_rows = self.profile_rows.as_ref().is_some_and(|rows| {
+            rows.is_for(&key)
+                || (rows.key().1 == locale
+                    && self.speaker_profiles.write_path.as_deref()
+                        == Some(self.speaker_library_path.as_str()))
+        });
+        if !keep_rows {
+            let entries = self
+                .speaker_profiles
+                .profiles
+                .iter()
+                .map(|profile| NameEntry::profile(profile, locale))
+                .collect::<Vec<_>>();
+            self.profile_rows = Some(NameRows::build(
+                key,
+                &entries,
+                i18n::text(locale, "merge_into_placeholder"),
+                (
+                    Self::rename_speaker_profile,
+                    Self::ask_merge_speaker_profiles,
+                ),
+                window,
+                cx,
+            ));
+        }
         let removed = self.profile_removal_focus.as_ref().is_some_and(|request| {
             self.speaker_profiles.loaded
                 && self.speaker_profiles.read_error.is_none()
@@ -2142,7 +2569,7 @@ impl RootView {
             // A user may have moved on while the library worker ran.
             if window.focused(cx) == request.previous {
                 let destination = request
-                    .next_id
+                    .destination_id
                     .as_deref()
                     .and_then(|id| self.profile_rows.as_ref()?.row(id))
                     .map(|row| gpui::Focusable::focus_handle(row.name.read(cx), cx));
@@ -2152,12 +2579,48 @@ impl RootView {
                         .scroll_to_top_of_item(pages::settings::SPEAKER_LIBRARY_SECTION);
                     self.speaker_library_focus.clone()
                 });
-                window.defer(cx, move |window, cx| {
-                    if window.focused(cx) == request.previous {
-                        destination.focus(window, cx);
-                    }
-                });
+                request.restore(destination, window, cx);
             }
+        }
+    }
+
+    /// Follow a completed merge only in its original visible document.
+    /// Returning to another view or moving focus cancels the handoff.
+    fn restore_speaker_removal_focus(
+        &mut self,
+        document: Option<&DocumentState>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((owner, request)) = &self.speaker_removal_focus else {
+            return;
+        };
+        if self.ui.route != Route::Meetings
+            || self.ui.content_mode != ContentMode::Original
+            || !document.is_some_and(|document| document.id() == owner)
+        {
+            self.speaker_removal_focus = None;
+            return;
+        }
+        let Some(rows) = self
+            .speaker_rows
+            .as_ref()
+            .filter(|rows| &rows.key().0 == owner)
+        else {
+            return;
+        };
+        if self.speaker_command.is_some() || rows.row(&request.removed_id).is_some() {
+            return;
+        }
+        let destination = request
+            .destination_id
+            .as_deref()
+            .and_then(|id| rows.row(id))
+            .map(|row| gpui::Focusable::focus_handle(row.name.read(cx), cx))
+            .unwrap_or_else(|| self.window_focus.clone());
+        let (_, request) = self.speaker_removal_focus.take().unwrap();
+        if window.focused(cx) == request.previous {
+            request.restore(destination, window, cx);
         }
     }
 
@@ -2165,6 +2628,9 @@ impl RootView {
     /// field is blank: one `SetSpeakerLabel` against the revision the list
     /// was read at.
     pub(crate) fn rename_document_speaker(&mut self, speaker_id: String, cx: &mut Context<Self>) {
+        if self.speaker_command.is_some() || self.documents_root_switch.switching {
+            return;
+        }
         let Some(rows) = &self.speaker_rows else {
             return;
         };
@@ -2201,6 +2667,12 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.speaker_command.is_some() || self.documents_root_switch.switching {
+            if let Some(rows) = &self.speaker_rows {
+                rows.clear_merge_choice(&from, cx);
+            }
+            return;
+        }
         let Some(rows) = &self.speaker_rows else {
             return;
         };
@@ -2231,9 +2703,9 @@ impl RootView {
         cx.notify();
     }
 
-    /// Runs a speaker correction on a worker and reloads the tree, whose
-    /// new revision rebuilds the speaker rows. A conflict opens the
-    /// conflict notice; nothing was written then.
+    /// Runs a speaker correction on a worker, accepts its saved revision
+    /// without replacing later input, and reloads the tree. A conflict opens
+    /// the conflict notice; nothing was written then.
     fn run_speaker_command(
         &mut self,
         command: DocumentCommand,
@@ -2241,6 +2713,9 @@ impl RootView {
         done: String,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let (DocumentCommand::SetSpeakerLabel { document_id, .. }
         | DocumentCommand::MergeSpeaker { document_id, .. }) = &command
         else {
@@ -2249,6 +2724,14 @@ impl RootView {
         if self.speaker_command.is_some() {
             return;
         }
+        let submitted_field = match &command {
+            DocumentCommand::SetSpeakerLabel { speaker_id, .. } => self
+                .speaker_rows
+                .as_ref()
+                .and_then(|rows| rows.row(speaker_id))
+                .map(|row| row.name.entity_id()),
+            _ => None,
+        };
         let envelope = DocumentCommandEnvelope::new(
             format!("ui-speaker-{document_id}-{revision}"),
             command.clone(),
@@ -2256,16 +2739,30 @@ impl RootView {
         self.speaker_command = Some(document_id.clone());
         cx.notify();
         let commands = self.services.workspace.document_commands();
+        let root_generation = self.documents_root_generation;
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || commands.execute(envelope)).await;
             this.update(cx, |this, cx| {
+                if root_generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 this.speaker_command = None;
                 match result {
-                    Ok(_) => {
+                    Ok(DocumentCommandResult::Updated(record)) => {
+                        this.acknowledge_speaker_write(&record, revision, submitted_field, cx);
                         this.ui.notice = done;
                         this.reload_projects(cx);
                     }
-                    Err(error) => this.document_write_failed(error, "speaker_edit_failed", cx),
+                    Ok(_) => {
+                        this.speaker_removal_focus = None;
+                        this.ui.notice = done;
+                        this.reload_projects(cx);
+                    }
+                    Err(error) => {
+                        this.speaker_removal_focus = None;
+                        this.document_write_failed(error, "speaker_edit_failed", cx);
+                    }
                 }
                 cx.notify();
             })
@@ -2274,8 +2771,58 @@ impl RootView {
         .detach();
     }
 
+    /// Rebase only the controls of this write's original document and
+    /// revision. A newer unrelated snapshot can supply the checked revision.
+    fn acknowledge_speaker_write(
+        &mut self,
+        record: &DocumentRecord,
+        base_revision: u64,
+        submitted_field: Option<gpui::EntityId>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(document) = self
+            .projects
+            .iter_mut()
+            .find(|document| document.id() == record.state.id())
+        {
+            if document.revision() <= record.state.revision() {
+                *document = record.state.clone();
+            }
+        }
+        let current_revision = self
+            .projects
+            .iter()
+            .find(|document| {
+                document.id() == record.state.id()
+                    && document.source == record.state.source
+                    && document.results == record.state.results
+                    && document.processing.latest == record.state.processing.latest
+            })
+            .map_or(record.state.revision(), DocumentState::revision);
+        if let Some(rows) = &mut self.speaker_rows {
+            if &rows.key().0 == record.state.id() && rows.key().1 == base_revision {
+                let entries = document_speakers(&record.state)
+                    .iter()
+                    .map(|speaker| NameEntry::speaker(speaker, self.ui.locale))
+                    .collect::<Vec<_>>();
+                if !rows.saved(
+                    (record.state.id().clone(), current_revision, self.ui.locale),
+                    &entries,
+                    submitted_field,
+                    i18n::text(self.ui.locale, "merge_into_placeholder"),
+                    cx,
+                ) {
+                    self.speaker_rows = None;
+                }
+            }
+        }
+    }
+
     /// Renames profile `profile_id` to the typed name.
     pub(crate) fn rename_speaker_profile(&mut self, profile_id: String, cx: &mut Context<Self>) {
+        if self.speaker_profiles.write_path.is_some() {
+            return;
+        }
         let Some((name, changed)) = self
             .profile_rows
             .as_ref()
@@ -2289,9 +2836,15 @@ impl RootView {
             cx.notify();
             return;
         }
+        let submitted_field = self
+            .profile_rows
+            .as_ref()
+            .and_then(|rows| rows.row(&profile_id))
+            .map(|row| row.name.entity_id());
         let done = i18n::message(self.ui.locale, "speaker_profile_renamed", &name);
         self.run_speaker_library_call(
             move |library| library.rename(&profile_id, name).map(drop),
+            submitted_field,
             done,
             cx,
         );
@@ -2304,6 +2857,9 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.speaker_profiles.write_path.is_some() {
+            return;
+        }
         let Some(profile) = self.speaker_profiles.find(&profile_id) else {
             return;
         };
@@ -2323,6 +2879,12 @@ impl RootView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.speaker_profiles.write_path.is_some() {
+            if let Some(rows) = &self.profile_rows {
+                rows.clear_merge_choice(&source_id, cx);
+            }
+            return;
+        }
         let name = |id: &str| {
             self.speaker_profiles
                 .find(id)
@@ -2360,6 +2922,14 @@ impl RootView {
                     rows.clear_merge_choice(&from, cx);
                 }
                 if confirmed {
+                    self.speaker_removal_focus = Some((
+                        document_id.clone(),
+                        SpeakerRemovalFocus {
+                            removed_id: from.clone(),
+                            destination_id: Some(into.clone()),
+                            previous: self.dialog_return.clone(),
+                        },
+                    ));
                     let done =
                         i18n::message_pair(locale, "speakers_merged", &from_name, &into_name);
                     self.run_speaker_command(
@@ -2384,9 +2954,9 @@ impl RootView {
                         .position(|profile| profile.id == profile_id)
                         .and_then(|index| self.speaker_profiles.profiles.get(index + 1))
                         .map(|profile| profile.id.clone());
-                    self.profile_removal_focus = Some(ProfileRemovalFocus {
+                    self.profile_removal_focus = Some(SpeakerRemovalFocus {
                         removed_id: profile_id.clone(),
-                        next_id,
+                        destination_id: next_id,
                         previous: self.dialog_return.clone(),
                     });
                     let done = i18n::message(locale, "speaker_profile_deleted", &name);
@@ -2395,6 +2965,7 @@ impl RootView {
                             true => Ok(()),
                             false => Err(SpeakerLibraryError::ProfileNotFound(profile_id)),
                         },
+                        None,
                         done,
                         cx,
                     );
@@ -2410,6 +2981,11 @@ impl RootView {
                     rows.clear_merge_choice(&source_id, cx);
                 }
                 if confirmed {
+                    self.profile_removal_focus = Some(SpeakerRemovalFocus {
+                        removed_id: source_id.clone(),
+                        destination_id: Some(target_id.clone()),
+                        previous: self.dialog_return.clone(),
+                    });
                     let done = i18n::message_pair(
                         locale,
                         "speaker_profiles_merged",
@@ -2418,6 +2994,7 @@ impl RootView {
                     );
                     self.run_speaker_library_call(
                         move |library| library.merge_profiles(&target_id, &source_id).map(drop),
+                        None,
                         done,
                         cx,
                     );
@@ -2454,26 +3031,38 @@ impl RootView {
         )
     }
 
-    /// Runs one Speaker Library call on a worker, shows its outcome and
-    /// reads the profiles again; calls run one at a time.
+    /// Runs one Speaker Library change and reads its saved profiles on a
+    /// worker. The acknowledgement keeps later input in this library only;
+    /// calls run one at a time.
     fn run_speaker_library_call(
         &mut self,
         call: impl FnOnce(&SpeakerLibraryService) -> Result<(), SpeakerLibraryError> + Send + 'static,
+        submitted_field: Option<gpui::EntityId>,
         done: String,
         cx: &mut Context<Self>,
     ) {
-        if self.speaker_profiles.busy {
+        if self.speaker_profiles.write_path.is_some() {
             return;
         }
-        self.speaker_profiles.busy = true;
+        let path = self.speaker_library_path.clone();
+        self.speaker_profiles.write_path = Some(path.clone());
         cx.notify();
         let library = self.services.speaker_library.clone();
         cx.spawn(async move |this, cx| {
-            let result =
-                runtime::spawn_blocking(move || call(&library).map_err(|error| error.to_string()))
-                    .await;
+            let (result, profiles) = runtime::spawn_blocking(move || {
+                let result = call(&library).map_err(|error| error.to_string());
+                let profiles = library.profiles().map_err(|error| error.to_string());
+                (result, profiles)
+            })
+            .await;
             this.update(cx, |this, cx| {
-                this.speaker_profiles.busy = false;
+                this.speaker_profiles.write_path = None;
+                if path != this.speaker_library_path {
+                    this.profile_removal_focus = None;
+                    this.reload_speaker_profiles(cx);
+                    cx.notify();
+                    return;
+                }
                 if result.is_err() {
                     this.profile_removal_focus = None;
                 }
@@ -2484,7 +3073,30 @@ impl RootView {
                         true,
                     ),
                 });
-                this.reload_speaker_profiles(cx);
+                // Supersede reads started before this completed write.
+                let generation = this.speaker_profiles.begin_read();
+                let locale = this.ui.locale;
+                this.speaker_profiles
+                    .apply_read(generation, profiles, locale);
+                if let Some(rows) = &mut this.profile_rows {
+                    if rows.key().1 == locale {
+                        let entries = this
+                            .speaker_profiles
+                            .profiles
+                            .iter()
+                            .map(|profile| NameEntry::profile(profile, locale))
+                            .collect::<Vec<_>>();
+                        if !rows.saved(
+                            (this.speaker_profiles.version, locale),
+                            &entries,
+                            submitted_field,
+                            i18n::text(locale, "merge_into_placeholder"),
+                            cx,
+                        ) {
+                            this.profile_rows = None;
+                        }
+                    }
+                }
                 cx.notify();
             })
             .ok();
@@ -2525,6 +3137,52 @@ impl RootView {
         }
     }
 
+    /// Folds the Meetings or Settings sidebar closed or open; the other
+    /// routes have none. Focus in the folding project tree moves to the
+    /// Meetings entry.
+    pub(crate) fn toggle_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.ui.route, Route::Meetings | Route::Settings) {
+            return;
+        }
+        if self.ui.sidebar_open && self.tree_focus.contains_focused(window, cx) {
+            self.nav_focus[1].focus(window, cx);
+        }
+        self.ui.sidebar_open = !self.ui.sidebar_open;
+        let (open, duration) = (self.ui.sidebar_open, theme::tokens(cx).motion.layout);
+        let now = cx.background_executor().now();
+        self.sidebar_sizing
+            .update(cx, |state, _| state.set_open(open, duration, now));
+        cx.notify();
+    }
+
+    /// Runs a window shortcut as its control in the shell would.
+    fn run_shortcut(
+        &mut self,
+        shortcut: &controls::window::Shortcut,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use controls::window::Shortcut;
+        match *shortcut {
+            Shortcut::Entry(index) => self.navigate(pages::chrome::ENTRIES[index].0, cx),
+            Shortcut::Settings => self.navigate(Route::Settings, cx),
+            Shortcut::Back => self.travel(false, cx),
+            Shortcut::Forward => self.travel(true, cx),
+            Shortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
+            Shortcut::ImportAudio => self.import_audio(&ClickEvent::default(), window, cx),
+            Shortcut::SaveDocument => {
+                if self.ui.route == Route::Meetings
+                    && self.ui.content_mode == ContentMode::Edit
+                    && self.ui.selected_project.as_ref().is_some_and(|id| {
+                        self.editor.shown() == Some(id) && !self.editor.read_errors.contains_key(id)
+                    })
+                {
+                    self.save_document_draft(&ClickEvent::default(), window, cx);
+                }
+            }
+        }
+    }
+
     pub(crate) fn set_locale(&mut self, locale: i18n::Locale, cx: &mut Context<Self>) {
         self.persist_field_with_notice(
             move |settings| settings.ui_locale = locale.code().into(),
@@ -2534,8 +3192,15 @@ impl RootView {
         self.sync_locale(cx);
     }
 
-    pub(crate) fn open_detail(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if self.ui.selected_project.is_some() {
+    pub(crate) fn toggle_detail(
+        &mut self,
+        event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ui.detail_open {
+            self.close_detail(event, window, cx);
+        } else if self.ui.selected_project.is_some() {
             self.ui.detail_open = true;
             cx.notify();
         }
@@ -2572,6 +3237,7 @@ impl RootView {
             return;
         };
         if self.editor.loading.contains(&document_id)
+            || self.editor.read_errors.contains_key(&document_id)
             || self
                 .editor
                 .show(&document_id, &self.projects, self.ui.locale, cx)
@@ -2584,6 +3250,11 @@ impl RootView {
     /// Reads `document_id` (state and Markdown body) on a worker and makes it
     /// the document's draft, replacing any edits.
     fn load_document_draft(&mut self, document_id: ProjectId, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
+        let previous_error = self.editor.read_errors.remove(&document_id);
+        let generation = self.documents_repository_generation;
         self.editor.loading.insert(document_id.clone());
         let commands = self.services.workspace.document_commands();
         let read_id = document_id.clone();
@@ -2598,18 +3269,43 @@ impl RootView {
             })
             .await;
             this.update(cx, |this, cx| {
+                if generation != this.documents_repository_generation {
+                    cx.notify();
+                    return;
+                }
                 this.editor.loading.remove(&document_id);
                 match result {
                     Ok(DocumentCommandResult::Document(Some(record))) => {
+                        if previous_error.as_ref() == Some(&this.ui.notice) {
+                            this.ui.notice.clear();
+                        }
+                        if let Some(generation) = this
+                            .ui
+                            .toast()
+                            .filter(|toast| previous_error.as_ref() == Some(&toast.notice))
+                            .map(|toast| toast.generation)
+                        {
+                            this.dismiss_toast(generation, cx);
+                        }
                         this.show_loaded_draft(&record, cx)
                     }
-                    Ok(_) => this.ui.notice = i18n::text(this.ui.locale, "project_missing").into(),
+                    Ok(_) => {
+                        let message = i18n::text(this.ui.locale, "project_missing").to_string();
+                        this.editor
+                            .read_errors
+                            .insert(document_id.clone(), message.clone());
+                        this.ui.notice = message;
+                    }
                     Err(error) => {
-                        this.ui.notice = i18n::message(
+                        let message = i18n::message(
                             this.ui.locale,
                             "document_read_failed",
                             &error.to_string(),
-                        )
+                        );
+                        this.editor
+                            .read_errors
+                            .insert(document_id.clone(), message.clone());
+                        this.ui.notice = message;
                     }
                 }
                 cx.notify();
@@ -2617,6 +3313,21 @@ impl RootView {
             .ok();
         })
         .detach();
+    }
+
+    /// Retries the selected document's failed read, leaving other drafts intact.
+    pub(crate) fn retry_document_read(
+        &mut self,
+        _: &ClickEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(id) = self.ui.selected_project.clone() {
+            if self.editor.read_errors.contains_key(&id) {
+                self.load_document_draft(id, cx);
+                cx.notify();
+            }
+        }
     }
 
     /// Makes `record` its document's draft, shown when it is selected.
@@ -2634,6 +3345,9 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         if self.editor.saving.is_some() {
             return;
         }
@@ -2653,6 +3367,7 @@ impl RootView {
                 return;
             }
         };
+        let generation = self.documents_root_generation;
         let document_id = draft.document_id;
         self.editor.saving = Some(document_id.clone());
         cx.notify();
@@ -2668,6 +3383,10 @@ impl RootView {
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || commands.execute(envelope)).await;
             this.update(cx, |this, cx| {
+                if generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 this.editor.saving = None;
                 match result {
                     Ok(DocumentCommandResult::Updated(record)) => {
@@ -2707,7 +3426,7 @@ impl RootView {
                     .find(|project| project.id() == &document_id)
                     .map_or_else(|| document_id.to_string(), |project| project.title().into());
                 self.ui.notice = i18n::message(self.ui.locale, "document_conflict", &title);
-                self.document_conflict = Some(DocumentConflict {
+                self.show_document_conflict(DocumentConflict {
                     document_id,
                     title,
                     expected,
@@ -2721,6 +3440,15 @@ impl RootView {
         }
     }
 
+    /// Start a new conflict at its first line, retaining a repeated conflict's
+    /// reading position.
+    fn show_document_conflict(&mut self, conflict: DocumentConflict) {
+        if self.document_conflict.as_ref() != Some(&conflict) {
+            self.scroll.document_conflict.set_offset(Default::default());
+        }
+        self.document_conflict = Some(conflict);
+    }
+
     /// The conflict notice's reload: reads the tree and the conflicting
     /// document again, discarding that document's draft, and closes the
     /// notice.
@@ -2730,9 +3458,19 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let Some(conflict) = self.document_conflict.take() else {
             return;
         };
+        if self
+            .speaker_rows
+            .as_ref()
+            .is_some_and(|rows| rows.key().0 == conflict.document_id)
+        {
+            self.speaker_rows = None;
+        }
         let had_draft = self.editor.has_draft(&conflict.document_id);
         self.editor.discard(&conflict.document_id);
         if had_draft {
@@ -2752,6 +3490,10 @@ impl RootView {
         new_parent_id: ProjectId,
         cx: &mut Context<Self>,
     ) {
+        if drag.root_generation != self.documents_root_generation {
+            cx.notify();
+            return;
+        }
         self.run_tree_command(
             self.reparent_command(drag, Some(new_parent_id)),
             "hierarchy_updated",
@@ -2792,6 +3534,10 @@ impl RootView {
         before: bool,
         cx: &mut Context<Self>,
     ) {
+        if drag.root_generation != self.documents_root_generation {
+            cx.notify();
+            return;
+        }
         self.run_tree_command(
             Self::reorder_command(drag, target_id, before),
             "order_updated",
@@ -2826,6 +3572,7 @@ impl RootView {
         let drag = ProjectDrag {
             project_id: document.id().clone(),
             revision: document.revision(),
+            root_generation: self.documents_root_generation,
         };
         match crate::components::tree_shift(&self.projects, &drag.project_id, shift) {
             Some(TreeShiftMove::Reorder { target, before }) => self.run_tree_command(
@@ -2856,12 +3603,20 @@ impl RootView {
         focus: TreeMoveFocus,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
+        let root_generation = self.documents_root_generation;
         let generation = self.begin_projects_reload();
         let commands = self.services.workspace.document_commands();
         let envelope = DocumentCommandEnvelope::new("ui-tree-move", command);
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || commands.execute(envelope)).await;
             this.update(cx, |this, cx| {
+                if root_generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 match result {
                     Ok(DocumentCommandResult::Snapshot { documents, issues }) => {
                         // The listing's issues carry no kind; each keeps
@@ -2915,6 +3670,7 @@ impl RootView {
         else {
             return;
         };
+        self.assistant.forget_probe();
         self.settings_draft.assistant.active_connection_id = Some(profile.id.clone());
         self.assistant_protocol = profile.protocol;
         self.assistant_auth_mode = profile.auth_mode;
@@ -2961,6 +3717,7 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.assistant.forget_probe();
         self.assistant_protocol = LlmProtocol::OpenAiChatCompletions;
         self.assistant_auth_mode = AssistantAuthMode::Bearer;
         self.assistant_inputs.load_profile(None, cx);
@@ -2983,7 +3740,10 @@ impl RootView {
     }
 
     pub(crate) fn set_assistant_protocol(&mut self, protocol: LlmProtocol, cx: &mut Context<Self>) {
-        self.assistant_protocol = protocol;
+        if self.assistant_protocol != protocol {
+            self.assistant.forget_probe();
+            self.assistant_protocol = protocol;
+        }
         cx.notify();
     }
 
@@ -2992,7 +3752,10 @@ impl RootView {
         auth_mode: AssistantAuthMode,
         cx: &mut Context<Self>,
     ) {
-        self.assistant_auth_mode = auth_mode;
+        if self.assistant_auth_mode != auth_mode {
+            self.assistant.forget_probe();
+            self.assistant_auth_mode = auth_mode;
+        }
         cx.notify();
     }
 
@@ -3109,14 +3872,49 @@ impl RootView {
         Ok(save)
     }
 
+    fn assistant_form(&self, cx: &App) -> AssistantForm {
+        AssistantForm {
+            connection_id: AssistantInputs::value(&self.assistant_inputs.connection_id, cx),
+            connection_name: AssistantInputs::value(&self.assistant_inputs.connection_name, cx),
+            base_url: AssistantInputs::value(&self.assistant_inputs.base_url, cx),
+            model: AssistantInputs::value(&self.assistant_inputs.model, cx),
+            api_key: AssistantInputs::value(&self.assistant_inputs.api_key, cx),
+            api_key_file: AssistantInputs::value(&self.assistant_inputs.api_key_file, cx),
+            context_window_tokens: AssistantInputs::value(
+                &self.assistant_inputs.context_window_tokens,
+                cx,
+            ),
+            timeout_ms: AssistantInputs::value(&self.assistant_inputs.timeout_ms, cx),
+            max_output_tokens: AssistantInputs::value(&self.assistant_inputs.max_output_tokens, cx),
+            max_tool_rounds: AssistantInputs::value(&self.assistant_inputs.max_tool_rounds, cx),
+            max_validation_retries: AssistantInputs::value(
+                &self.assistant_inputs.max_validation_retries,
+                cx,
+            ),
+            protocol: self.assistant_protocol,
+            auth_mode: self.assistant_auth_mode,
+            enabled: self.settings_draft.assistant.enabled,
+            write_mode: self.settings_draft.assistant.write_mode,
+            active_connection_id: self.settings_draft.assistant.active_connection_id.clone(),
+        }
+    }
+
     pub(crate) fn save_assistant_settings(
         &mut self,
         _: &ClickEvent,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.assistant_save_pending {
+            return;
+        }
         match self.assistant_save_from_inputs(cx) {
-            Ok(save) => self.queue_settings_write(SettingsWrite::Assistant(save), cx),
+            Ok(save) => {
+                let submitted = self.assistant_form(cx);
+                self.assistant_save_pending = true;
+                self.queue_settings_write(SettingsWrite::Assistant { save, submitted }, cx);
+                cx.notify();
+            }
             Err(error) => {
                 self.ui.notice = error.to_string();
                 cx.notify();
@@ -3126,7 +3924,26 @@ impl RootView {
 
     fn probe_assistant_connection(&mut self, kind: ConnectionProbeKind, cx: &mut Context<Self>) {
         let profile = match self.assistant_profile_from_inputs(cx) {
-            Ok(Some((profile, _))) => profile,
+            Ok(Some((profile, credential))) => {
+                let validation = self
+                    .assistant_origin
+                    .connections
+                    .iter()
+                    .find(|stored| stored.id == profile.id)
+                    .map_or(Ok(()), |stored| {
+                        connection_patch(stored, &profile, credential)
+                            .validate_credential_target(stored)
+                    });
+                if let Err(error) = validation {
+                    let error = AssistantUiError::from_settings(&error);
+                    self.ui.notice = settings_error_text(self.ui.locale, &error);
+                    self.settings_error = Some(error);
+                    cx.notify();
+                    return;
+                }
+                self.forget_credential_target_conflict();
+                profile
+            }
             Ok(None) => {
                 self.ui.notice = i18n::text(self.ui.locale, "assistant_connection_required").into();
                 cx.notify();
@@ -3240,7 +4057,7 @@ impl RootView {
     }
 
     fn start_assistant_run(&mut self, query: String, cx: &mut Context<Self>) {
-        if self.assistant_busy() {
+        if self.documents_root_switch.switching || self.assistant_busy() {
             return;
         }
         match self.assistant.scope_mode {
@@ -3341,13 +4158,18 @@ impl RootView {
     /// Opens Settings at its Assistant section, where a connection, key or
     /// limit an Assistant error names is fixed.
     pub(crate) fn open_assistant_settings(&mut self, cx: &mut Context<Self>) {
+        self.open_settings_section("assistant_settings", cx);
+    }
+
+    /// Reveal a configuration section after its viewport has been laid out.
+    pub(crate) fn open_settings_section(&mut self, key: &str, cx: &mut Context<Self>) {
         self.navigate(Route::Settings, cx);
         if let Some(section) = pages::settings::SECTIONS
             .iter()
-            .position(|key| *key == "assistant_settings")
+            .position(|candidate| *candidate == key)
         {
             self.ui.settings_section = section;
-            self.scroll.settings.scroll_to_top_of_item(section);
+            self.pending_settings_section = Some(section);
         }
         cx.notify();
     }
@@ -3382,9 +4204,12 @@ impl RootView {
     pub(crate) fn accept_assistant_pending(
         &mut self,
         _: &ClickEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let (Some(run), Some(pending)) = (
             self.assistant.result_run(),
             self.assistant.pending_for_accept(now_ms()),
@@ -3392,6 +4217,11 @@ impl RootView {
             cx.notify();
             return;
         };
+        // The decision buttons become disabled; keep keyboard focus in
+        // their stable region until the user chooses somewhere else.
+        if self.review_focus.contains_focused(window, cx) {
+            self.review_focus.focus(window, cx);
+        }
         let authorized_document_ids = self.assistant.result_authorized_document_ids();
         let service = self.services.assistant.clone();
         cx.notify();
@@ -3417,7 +4247,7 @@ impl RootView {
     pub(crate) fn reject_assistant_pending(
         &mut self,
         _: &ClickEvent,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let (Some(run), Some(pending)) = (
@@ -3427,6 +4257,9 @@ impl RootView {
             cx.notify();
             return;
         };
+        if self.review_focus.contains_focused(window, cx) {
+            self.review_focus.focus(window, cx);
+        }
         let authorized_document_ids = self.assistant.result_authorized_document_ids();
         let service = self.services.assistant.clone();
         cx.notify();
@@ -3482,6 +4315,9 @@ impl RootView {
         mutation_id: String,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let Some(run) = self.assistant.result_run() else {
             return;
         };
@@ -3511,6 +4347,12 @@ impl RootView {
         .detach();
     }
 
+    /// An accepted action owns the current workspace before its worker
+    /// registers a shared job, and until its result has reached the UI.
+    pub(crate) fn documents_root_busy(&self) -> bool {
+        self.ui.processing || self.assistant_busy()
+    }
+
     /// The Workspace section's button: asks for a folder and switches the
     /// documents root to it.
     pub(crate) fn choose_documents_root_directory(
@@ -3519,6 +4361,14 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
+        if self.documents_root_busy() {
+            self.ui.notice = i18n::text(self.ui.locale, "documents_root_operation_pending").into();
+            cx.notify();
+            return;
+        }
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -3546,7 +4396,19 @@ impl RootView {
         if self.documents_root_switch.switching {
             return;
         }
+        if self.documents_root_busy() {
+            self.ui.notice = i18n::text(self.ui.locale, "documents_root_operation_pending").into();
+            cx.notify();
+            return;
+        }
         self.documents_root_switch.switching = true;
+        // The repository changes before the settings worker returns.
+        // Keep the current projection until the switch settles, and let
+        // the selected document start its read again afterwards.
+        self.documents_repository_generation += 1;
+        self.editor.loading.clear();
+        self.begin_projects_reload();
+        self.audio.invalidate_pending();
         self.documents_root_switch.status = None;
         self.ui.notice = i18n::text(self.ui.locale, "documents_root_switching").into();
         self.queue_settings_write(SettingsWrite::DocumentsRoot { root }, cx);
@@ -3556,6 +4418,9 @@ impl RootView {
     /// The Meetings header's relink button: asks for the selected
     /// document's audio file and relinks it.
     pub(crate) fn relink_audio(&mut self, _: &ClickEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -3581,6 +4446,9 @@ impl RootView {
     /// refused relink writes nothing; a revision conflict opens the
     /// conflict notice.
     pub(crate) fn relink_audio_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         if self.audio.relinking.is_some() {
             return;
         }
@@ -3599,14 +4467,19 @@ impl RootView {
         self.audio.relinking = Some(document_id.clone());
         self.ui.notice = i18n::text(self.ui.locale, "relinking_audio").into();
         cx.notify();
-        let workspace = self.services.workspace.clone();
+        let root_generation = self.documents_root_generation;
+        let documents = self.services.workspace.documents().frozen();
         let path = path.display().to_string();
         cx.spawn(async move |this, cx| {
             let result = runtime::spawn_blocking(move || {
-                workspace.relink_audio(&document_id, revision, path)
+                documents.relink_audio(&document_id, revision, path)
             })
             .await;
             this.update(cx, |this, cx| {
+                if root_generation != this.documents_root_generation {
+                    cx.notify();
+                    return;
+                }
                 this.audio.relinking = None;
                 let locale = this.ui.locale;
                 match result {
@@ -3615,7 +4488,10 @@ impl RootView {
                         this.reload_projects(cx);
                     }
                     Err(error) => {
-                        this.ui.notice = i18n::audio_source_error(locale, &error);
+                        this.ui.set_notice(
+                            NoticeTone::Error,
+                            i18n::audio_source_error(locale, &error),
+                        );
                         if let AudioSourceError::RevisionConflict {
                             document_id,
                             expected,
@@ -3630,7 +4506,7 @@ impl RootView {
                                     || document_id.to_string(),
                                     |project| project.title().into(),
                                 );
-                            this.document_conflict = Some(DocumentConflict {
+                            this.show_document_conflict(DocumentConflict {
                                 document_id,
                                 title,
                                 expected,
@@ -3693,6 +4569,7 @@ impl RootView {
     }
 
     pub(crate) fn select_asr_backend(&mut self, backend_id: String, cx: &mut Context<Self>) {
+        self.asr_model_selection_generation += 1;
         self.ui.notice = i18n::message(
             self.ui.locale,
             "backend_selected",
@@ -3718,6 +4595,7 @@ impl RootView {
         backend_id: String,
         cx: &mut Context<Self>,
     ) {
+        self.diarization_model_selection_generation += 1;
         self.ui.notice = i18n::message(
             self.ui.locale,
             "backend_selected",
@@ -3739,13 +4617,44 @@ impl RootView {
         );
     }
 
+    /// A manual stage choice supersedes a pending bundle selection, which
+    /// would otherwise reset the stages. Show the model still configured.
+    fn invalidate_diarization_model_selection(&mut self, cx: &mut Context<Self>) {
+        self.diarization_model_selection_generation += 1;
+        let backend = self.settings_draft.diarization_backend_id.clone();
+        self.refresh_model_selector("diarization", backend.as_deref(), cx);
+    }
+
+    /// Resolve the model off-thread; accept only the current task's choice.
+    /// The returned task completes once its UI result has been handled.
     pub(crate) fn use_model(
         &mut self,
         model_id: String,
         task: String,
         backend_id: String,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Task<()> {
+        let asr = task == "asr";
+        let task = if asr { "asr" } else { "diarization" };
+        let generation = if asr {
+            self.asr_model_selection_generation += 1;
+            self.asr_model_selection_generation
+        } else {
+            self.diarization_model_selection_generation += 1;
+            self.diarization_model_selection_generation
+        };
+        let base = if asr {
+            (
+                self.settings_draft.asr_backend_id.clone(),
+                self.settings_draft.asr_model.clone(),
+            )
+        } else {
+            (
+                self.settings_draft.diarization_backend_id.clone(),
+                self.settings_draft.diarization_model.clone(),
+            )
+        };
+        let stages = self.settings_draft.diarization_stages.clone();
         let models = self.services.model_manager.clone();
         cx.spawn(async move |this, cx| {
             let (model_id_for_ref, backend_id_for_ref) = (model_id.clone(), backend_id.clone());
@@ -3754,9 +4663,34 @@ impl RootView {
             })
             .await;
             this.update(cx, |this, cx| {
+                let current_generation = if asr {
+                    this.asr_model_selection_generation
+                } else {
+                    this.diarization_model_selection_generation
+                };
+                if generation != current_generation {
+                    return;
+                }
+                let current = if asr {
+                    (
+                        this.settings_draft.asr_backend_id.clone(),
+                        this.settings_draft.asr_model.clone(),
+                    )
+                } else {
+                    (
+                        this.settings_draft.diarization_backend_id.clone(),
+                        this.settings_draft.diarization_model.clone(),
+                    )
+                };
+                if current != base || (!asr && this.settings_draft.diarization_stages != stages) {
+                    this.refresh_model_selector(task, current.0.as_deref(), cx);
+                    cx.notify();
+                    return;
+                }
                 match model {
                     Ok(model) => {
                         this.ui.notice = i18n::message(this.ui.locale, "model_selected", &model_id);
+                        let backend_for_selector = backend_id.clone();
                         this.persist_field(
                             move |settings| {
                                 if task == "asr" {
@@ -3770,8 +4704,13 @@ impl RootView {
                             },
                             cx,
                         );
+                        this.refresh_model_selector(task, Some(&backend_for_selector), cx);
+                        if !asr {
+                            this.refresh_stage_selectors(cx);
+                        }
                     }
                     Err(error) => {
+                        this.refresh_model_selector(task, current.0.as_deref(), cx);
                         this.ui.notice =
                             i18n::message(this.ui.locale, "model_not_ready", &error.to_string())
                     }
@@ -3780,7 +4719,6 @@ impl RootView {
             })
             .ok();
         })
-        .detach();
     }
 
     /// Starts the download off the main thread and follows its progress.
@@ -3944,7 +4882,14 @@ impl RootView {
         cx: &mut Context<Self>,
     ) {
         if self.ui.processing {
-            self.cancel_processing(event, window, cx);
+            if self
+                .ui
+                .selected_project
+                .as_ref()
+                .is_some_and(|id| self.ui.is_processing_document(id))
+            {
+                self.cancel_processing(event, window, cx);
+            }
         } else {
             self.process_selected(event, window, cx);
         }
@@ -3975,6 +4920,9 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.documents_root_switch.switching {
+            return;
+        }
         let Some(project_id) = self.ui.selected_project.clone() else {
             self.ui.notice = i18n::text(self.ui.locale, "select_project_first").into();
             cx.notify();
@@ -3998,7 +4946,16 @@ impl RootView {
             cx.notify();
             return;
         };
-        self.ui.processing = true;
+        if crate::state::missing_models(
+            &self.installation,
+            &self.settings_draft,
+            (&self.services.asr_model, &self.services.diarization_model),
+        )
+        .any()
+        {
+            return;
+        }
+        self.ui.begin_processing(project_id.clone());
         self.processing_cancel_requested = false;
         self.ui.notice = i18n::message(self.ui.locale, "processing", project.title());
         let workspace = self.services.workspace.clone();
@@ -4008,7 +4965,7 @@ impl RootView {
             (Some(_), Some(model)) => model,
             (Some(backend_id), None) => {
                 self.ui.notice = i18n::message(self.ui.locale, "asr_model_required", &backend_id);
-                self.ui.processing = false;
+                self.ui.finish_processing();
                 cx.notify();
                 return;
             }
@@ -4021,7 +4978,7 @@ impl RootView {
             (Some(backend_id), None) => {
                 self.ui.notice =
                     i18n::message(self.ui.locale, "diarization_model_required", &backend_id);
-                self.ui.processing = false;
+                self.ui.finish_processing();
                 cx.notify();
                 return;
             }
@@ -4049,7 +5006,7 @@ impl RootView {
                 Ok(job) => job,
                 Err(error) => {
                     this.update(cx, |this, cx| {
-                        this.ui.processing = false;
+                        this.ui.finish_processing();
                         this.processing_cancel_requested = false;
                         this.ui.notice = i18n::message(this.ui.locale, "processing_failed", &error);
                         cx.notify();
@@ -4062,7 +5019,7 @@ impl RootView {
             let follow = this.update(cx, |this, cx| {
                 cx.notify();
                 if std::mem::take(&mut this.processing_cancel_requested) {
-                    this.ui.processing = false;
+                    this.ui.finish_processing();
                     this.ui.notice = i18n::message(this.ui.locale, "cancelled", &title);
                     return false;
                 }
@@ -4083,7 +5040,7 @@ impl RootView {
 
     /// Shows a started job's events until it finishes, then reloads the
     /// project list.
-    async fn follow_processing(
+    pub(crate) async fn follow_processing(
         this: gpui::WeakEntity<Self>,
         job: application::ProjectProcessingJob,
         cx: &mut gpui::AsyncApp,
@@ -4097,23 +5054,29 @@ impl RootView {
             futures::select! {
                 event = asr_next => {
                     if let Some(event) = event {
-                        this.update(cx, |this, cx| this.apply_job_event("ASR", event, cx)).ok();
+                        this.update(cx, |this, cx| this.apply_job_event(ProcessingStage::Transcription, event, cx)).ok();
                     }
                 }
                 event = diarization_next => {
                     if let Some(event) = event {
-                        this.update(cx, |this, cx| this.apply_job_event("DIA", event, cx)).ok();
+                        this.update(cx, |this, cx| this.apply_job_event(ProcessingStage::Diarization, event, cx)).ok();
                     }
                 }
                 result = processing_future => {
                     this.update(cx, |this, cx| {
-                        this.ui.processing = false;
+                        let title = this.ui.processing_project.as_ref().map(|id| {
+                            this.projects.iter().find(|project| project.id() == id)
+                                .map(|project| project.title()).unwrap_or(id.as_str())
+                        }).unwrap_or_default().to_string();
+                        this.ui.finish_processing();
                         this.cancel_contexts = None;
                         this.reload_projects(cx);
                         match result {
                             Ok(project) => {
-                                this.ui.selected_project = Some(project.id().clone());
                                 this.ui.notice = i18n::message(this.ui.locale, "finished", project.title());
+                            }
+                            Err(error) if error.code == contracts::BackendErrorCode::Cancelled => {
+                                this.ui.set_notice(NoticeTone::Info, i18n::message(this.ui.locale, "cancelled", &title));
                             }
                             Err(error) => {
                                 this.ui.notice = i18n::message(this.ui.locale, "processing_failed", &error.message)
@@ -4156,28 +5119,11 @@ impl RootView {
         .detach();
     }
 
-    fn apply_job_event(&mut self, source: &str, event: JobEvent, cx: &mut Context<Self>) {
-        self.ui.notice = match event {
-            JobEvent::Started { .. } => i18n::message(self.ui.locale, "job_started", source),
-            JobEvent::Progress { progress, .. } => match progress.total {
-                Some(total) => i18n::message(
-                    self.ui.locale,
-                    "job_progress_total",
-                    &format!("{source}|{}|{total}", progress.completed),
-                ),
-                None => i18n::message(
-                    self.ui.locale,
-                    "job_progress",
-                    &format!("{source}|{}", progress.completed),
-                ),
-            },
-            JobEvent::Completed { .. } => i18n::message(self.ui.locale, "job_completed", source),
-            JobEvent::Failed { message, .. } => {
-                i18n::message(self.ui.locale, "job_failed", &format!("{source}|{message}"))
-            }
-            JobEvent::Cancelled { .. } => i18n::message(self.ui.locale, "job_cancelled", source),
-        };
-        cx.notify();
+    fn apply_job_event(&mut self, stage: ProcessingStage, event: JobEvent, cx: &mut Context<Self>) {
+        if self.ui.processing {
+            self.ui.processing_feedback.apply(stage, event);
+            cx.notify();
+        }
     }
 }
 
@@ -4383,8 +5329,65 @@ fn stage_selection<'a>(options: &'a [SelectOption], saved: Option<&'a str>) -> O
         .or_else(|| options.first().map(SelectOption::value))
 }
 
+/// The toast of the latest notice. Its timers end only the toast they
+/// were started for, so a newer notice needs none of them cancelled.
+impl RootView {
+    /// Takes up a notice set since the last update: a toast that opens
+    /// fades after `TOAST_LIFETIME` unless its tone keeps it, and a cleared
+    /// notice closes its toast.
+    fn take_up_notice(&mut self, cx: &mut Context<Self>) {
+        match self.ui.take_up_notice() {
+            Some(NoticeChange::Opened { generation, tone }) if tone.fades() => {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(TOAST_LIFETIME).await;
+                    this.update(cx, |this, cx| this.dismiss_toast(generation, cx))
+                        .ok();
+                })
+                .detach();
+            }
+            Some(NoticeChange::Cleared(generation)) => self.dismiss_toast(generation, cx),
+            _ => {}
+        }
+    }
+
+    /// Fades out the toast of `generation`, then removes it and clears its
+    /// notice.
+    pub(crate) fn dismiss_toast(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if !self.ui.toast_leave(generation) {
+            return;
+        }
+        let fade = theme::tokens(cx).motion.menu;
+        if fade.is_zero() {
+            self.ui.toast_remove(generation);
+        } else {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(fade).await;
+                this.update(cx, |this, cx| {
+                    this.ui.toast_remove(generation);
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+}
+
 impl Render for RootView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(section) = self.pending_settings_section.take() {
+            if self.ui.route == Route::Settings && self.ui.settings_section == section {
+                // Defer from render so this Settings layout publishes its
+                // viewport before the section scroll is requested.
+                cx.defer_in(window, move |this, _, cx| {
+                    if this.ui.route == Route::Settings && this.ui.settings_section == section {
+                        this.scroll.settings.scroll_to_top_of_item(section);
+                        cx.notify();
+                    }
+                });
+            }
+        }
         self.focus_awaiting_review(window, cx);
         self.ensure_settings_selectors(window, cx);
         self.ensure_document_editor(cx);
@@ -4394,12 +5397,32 @@ impl Render for RootView {
             .as_ref()
             .and_then(|id| self.projects.iter().find(|project| project.id() == id))
             .cloned();
+        if self.ui.route == Route::Meetings
+            && self.ui.content_mode == ContentMode::Original
+            && selected
+                .as_ref()
+                .is_some_and(|document| document.processing.latest.is_none())
+        {
+            self.ui.content_mode = ContentMode::Summary;
+        }
         self.ensure_speaker_rows(selected.as_ref(), window, cx);
         self.ensure_profile_rows(window, cx);
+        self.restore_speaker_removal_focus(selected.as_ref(), window, cx);
+        if let Some(rows) = &self.speaker_rows {
+            rows.set_merge_disabled(
+                self.speaker_command.is_some() || self.documents_root_switch.switching,
+                window,
+                cx,
+            );
+        }
+        if let Some(rows) = &self.profile_rows {
+            rows.set_merge_disabled(self.speaker_profiles.write_path.is_some(), window, cx);
+        }
         let body = match self.ui.route {
             Route::Assistant => pages::assistant::render(self, cx).into_any_element(),
             Route::Meetings => {
-                pages::meetings::render(self, selected.as_ref(), cx).into_any_element()
+                pages::meetings::render(self, selected.as_ref(), window.viewport_size().height, cx)
+                    .into_any_element()
             }
             Route::Models => pages::models::render(self, cx).into_any_element(),
             Route::Settings => pages::settings::render(self, cx).into_any_element(),
@@ -4421,7 +5444,8 @@ impl Render for RootView {
         let shell = pages::chrome::shell(self, body, detail, window, cx)
             .children(self.speaker_library_dialog(cx))
             .children(self.speaker_confirmation_dialog(cx));
-        controls::window::root(shell, cx)
+        let focus = self.window_focus.clone();
+        controls::window::root(shell, &focus, cx.listener(Self::run_shortcut), window, cx)
     }
 }
 
@@ -4440,14 +5464,21 @@ impl RootView {
             return;
         }
         let take = match request {
-            ReviewFocus::Decision => true,
+            ReviewFocus::Decision => self.review_focus.contains_focused(window, cx),
             ReviewFocus::Expiry => {
-                window.focused(cx).is_none() || self.review_focus.contains_focused(window, cx)
+                self.window_focus.is_focused(window)
+                    || window.focused(cx).is_none()
+                    || self.review_focus.contains_focused(window, cx)
             }
         };
         if take {
             let focus = self.review_focus.clone();
-            window.defer(cx, move |window, cx| focus.focus(window, cx));
+            let previous = window.focused(cx);
+            window.defer(cx, move |window, cx| {
+                if window.focused(cx) == previous {
+                    focus.focus(window, cx);
+                }
+            });
         }
     }
 }

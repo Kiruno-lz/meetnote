@@ -125,7 +125,9 @@ pub(crate) struct Dropdown {
     placeholder: SharedString,
     options: Vec<SelectOption>,
     selected: Option<usize>,
+    disabled: bool,
     open: bool,
+    reveal_on_open: bool,
     highlighted: Option<usize>,
     trigger_focus: FocusHandle,
     menu_focus: FocusHandle,
@@ -158,13 +160,36 @@ impl Dropdown {
             placeholder: placeholder.into(),
             selected: SelectOption::position(&options, selected),
             options,
+            disabled: false,
             open: false,
+            reveal_on_open: false,
             highlighted: None,
             trigger_focus: cx.focus_handle(),
             menu_focus: cx.focus_handle(),
             menu_scroll: ScrollHandle::new(),
             trigger_bounds: Rc::default(),
         }
+    }
+
+    /// Disables pointer and keyboard activation without discarding the
+    /// selection. Close a menu that was already open and return its focus.
+    pub(crate) fn set_disabled(
+        &mut self,
+        disabled: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.disabled == disabled {
+            return;
+        }
+        self.disabled = disabled;
+        if disabled {
+            if self.open && self.menu_focus.is_focused(window) {
+                self.trigger_focus.focus(window, cx);
+            }
+            self.close_menu(cx);
+        }
+        cx.notify();
     }
 
     /// Renames the select and its placeholder, e.g. after the locale
@@ -210,10 +235,26 @@ impl Dropdown {
         selected: Option<&str>,
         cx: &mut Context<Self>,
     ) {
-        self.selected = SelectOption::position(&options, selected);
+        let selected = SelectOption::position(&options, selected);
+        if self.options == options && self.selected == selected {
+            return;
+        }
+        let highlighted = self
+            .highlighted
+            .and_then(|index| self.options.get(index))
+            .and_then(|previous| SelectOption::position(&options, Some(&previous.value)))
+            .filter(|index| !options[*index].disabled);
+        self.selected = selected;
         self.options = options;
         if self.open {
-            self.highlighted = opening_highlight(&self.options, self.selected);
+            let highlighted =
+                highlighted.or_else(|| opening_highlight(&self.options, self.selected));
+            if highlighted != self.highlighted {
+                if let Some(index) = highlighted {
+                    self.menu_scroll.scroll_to_item(index);
+                }
+            }
+            self.highlighted = highlighted;
         }
         cx.notify();
     }
@@ -221,14 +262,12 @@ impl Dropdown {
     /// Opens the menu with the selection highlighted. A select without
     /// options stays closed.
     pub(crate) fn open_menu(&mut self, cx: &mut Context<Self>) {
-        if self.open || self.options.is_empty() {
+        if self.disabled || self.open || self.options.is_empty() {
             return;
         }
         self.open = true;
+        self.reveal_on_open = true;
         self.highlighted = opening_highlight(&self.options, self.selected);
-        if let Some(index) = self.highlighted {
-            self.menu_scroll.scroll_to_item(index);
-        }
         cx.notify();
     }
 
@@ -260,6 +299,9 @@ impl Dropdown {
 
     /// Chooses the option at `index` when it is enabled and closes the menu.
     fn choose(&mut self, index: usize, cx: &mut Context<Self>) {
+        if self.disabled {
+            return;
+        }
         let Some(option) = self.options.get(index).filter(|option| !option.disabled) else {
             return;
         };
@@ -281,6 +323,7 @@ impl Dropdown {
 
     fn render_trigger(&self, tokens: &Tokens, cx: &mut Context<Self>) -> impl IntoElement {
         let open = self.open;
+        let disabled = self.disabled;
         let entity = cx.entity();
         let menu_focus = self.menu_focus.clone();
         let bounds = self.trigger_bounds.clone();
@@ -295,13 +338,19 @@ impl Dropdown {
             .flex()
             .items_center()
             .gap(tokens.spacing.sm)
-            .cursor_pointer()
+            // Keep an already focused trigger in the window's focus path
+            // while disabled, without offering it as a Tab destination.
+            .when(disabled, |trigger| {
+                trigger.track_focus(&self.trigger_focus.clone().tab_stop(false))
+            })
+            .when(!disabled, |trigger| trigger.cursor_pointer())
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 // The root's own focus transfer would take focus back from
                 // the menu.
                 window.prevent_default();
-                if open {
-                    // The press outside the menu has already closed it.
+                if disabled || open {
+                    // A disabled trigger stays inert. An open menu has
+                    // already closed on the outside press.
                     return;
                 }
                 entity.update(cx, |this, cx| this.open_menu(cx));
@@ -311,7 +360,11 @@ impl Dropdown {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .text_color(color)
+                    .text_color(if disabled {
+                        tokens.button.disabled_text
+                    } else {
+                        color
+                    })
                     .child(theme::tail_faded_label(
                         "select-value",
                         text,
@@ -322,7 +375,13 @@ impl Dropdown {
                 div()
                     .flex_none()
                     .text_xs()
-                    .text_color(if open { tokens.text } else { tokens.text_muted })
+                    .text_color(if disabled {
+                        tokens.button.disabled_text
+                    } else if open {
+                        tokens.text
+                    } else {
+                        tokens.text_muted
+                    })
                     .child(if open { "▴" } else { "▾" }),
             )
             // The trigger row fills the root inside its 1px border; the menu
@@ -463,14 +522,35 @@ impl Dropdown {
 
 impl Render for Dropdown {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if std::mem::take(&mut self.reveal_on_open) {
+            // Reveal once after the menu publishes its viewport; reopening
+            // leaves an already visible choice at its familiar position.
+            cx.defer_in(window, |this, _, cx| {
+                if this.open {
+                    if let Some(index) = this.highlighted {
+                        let viewport = this.menu_scroll.bounds();
+                        let offset = this.menu_scroll.offset().y;
+                        if this.menu_scroll.bounds_for_item(index).is_some_and(|item| {
+                            item.top() + offset >= viewport.top()
+                                && item.bottom() + offset <= viewport.bottom()
+                        }) {
+                            return;
+                        }
+                        this.menu_scroll.scroll_to_top_of_item(index);
+                        cx.notify();
+                    }
+                }
+            });
+        }
         let tokens = *theme::tokens(cx);
         let entity = cx.entity();
         let trigger_focus = self.trigger_focus.clone();
-        let focused = self.trigger_focus.is_focused(window);
-        let ring = keyboard_focused(&self.trigger_focus, window);
+        let focused = !self.disabled && self.trigger_focus.is_focused(window);
+        let ring = !self.disabled && keyboard_focused(&self.trigger_focus, window);
         let trigger = self.render_trigger(&tokens, cx);
         let menu = self.open.then(|| self.render_menu(&tokens, cx));
         let select = gpui_base::Select::new("select")
+            .disabled(self.disabled)
             .open(self.open)
             .focus_handle(&self.trigger_focus)
             .content_focus_handle(&self.menu_focus)
@@ -558,6 +638,114 @@ mod tests {
         );
         assert_eq!(opening_highlight(&options, None), Some(1));
         assert_eq!(opening_highlight(&options, Some(9)), Some(1));
+    }
+
+    #[gpui::test]
+    fn refreshed_options_keep_the_keyboard_choice_and_update_install_details(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let menu = cx.new(|cx| {
+                Dropdown::new(
+                    "Model",
+                    "Choose",
+                    options(&[false, false, true]),
+                    Some("0"),
+                    cx,
+                )
+            });
+            menu.update(cx, |menu, cx| {
+                menu.open_menu(cx);
+                menu.move_highlight(1, cx);
+                assert_eq!(menu.highlighted_value(), Some("1"));
+                let mut updated = options(&[false, false, false]);
+                updated[2] = updated[2].clone().detail("Downloaded");
+                updated.rotate_right(1);
+                menu.set_options(updated.clone(), Some("0"), cx);
+                assert!(menu.is_open());
+                assert_eq!(menu.options[0].detail.as_deref(), Some("Downloaded"));
+                assert_eq!(menu.selected_value(), Some("0"));
+                assert_eq!(
+                    menu.highlighted_value(),
+                    Some("1"),
+                    "keep the choice by value"
+                );
+                menu.set_options(updated, Some("0"), cx);
+                assert_eq!(
+                    menu.highlighted_value(),
+                    Some("1"),
+                    "an unchanged refresh is inert"
+                );
+                menu.set_options(options(&[false, true, false]), Some("0"), cx);
+                assert_eq!(
+                    menu.highlighted_value(),
+                    Some("0"),
+                    "skip a newly disabled choice"
+                );
+                menu.set_options(Vec::new(), None, cx);
+                assert_eq!(menu.highlighted_value(), None);
+                menu.confirm_highlighted(cx);
+                assert!(!menu.is_open());
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn disabling_an_open_select_keeps_its_choice_and_resumes_keyboard_use(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| crate::controller::init_app(crate::theme::Accessibility::default(), cx));
+        let (select, cx) = cx.add_window_view(|_, cx| {
+            Dropdown::new(
+                "Speaker",
+                "Merge into",
+                options(&[false, false]),
+                Some("0"),
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let focus = select.read(cx).trigger_focus.clone();
+            focus.focus(window, cx);
+        });
+        cx.simulate_keystrokes("down");
+        assert!(select.read_with(cx, |select, _| select.is_open()));
+        assert!(cx.update(|window, cx| select.read(cx).menu_focus.is_focused(window)));
+        select.update_in(cx, |select, window, cx| {
+            select.set_disabled(true, window, cx)
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("select-menu").is_none());
+        assert!(cx.update(|window, cx| select.read(cx).trigger_focus.is_focused(window)));
+        for key in ["enter", "space", "down", "up"] {
+            cx.simulate_keystrokes(key);
+            assert!(
+                !select.read_with(cx, |select, _| select.is_open()),
+                "{key} must not open a disabled select"
+            );
+        }
+        let bounds = select.read_with(cx, |select, _| select.trigger_bounds.get());
+        cx.simulate_click(bounds.center(), gpui::Modifiers::none());
+        assert!(!select.read_with(cx, |select, _| select.is_open()));
+        assert_eq!(
+            select.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+            Some("0".into())
+        );
+        select.update_in(cx, |select, window, cx| {
+            select.set_disabled(false, window, cx)
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let focus = select.read(cx).trigger_focus.clone();
+            focus.focus(window, cx);
+        });
+        cx.simulate_keystrokes("down down enter");
+        assert!(!select.read_with(cx, |select, _| select.is_open()));
+        assert_eq!(
+            select.read_with(cx, |select, _| select.selected_value().map(str::to_owned)),
+            Some("1".into())
+        );
     }
 
     #[test]

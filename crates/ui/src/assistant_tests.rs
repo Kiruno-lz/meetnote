@@ -19,8 +19,8 @@ use crate::document_tests::{leak, rendered, within, View};
 use crate::route::Route;
 use crate::tests::{
     click_selector, empty_result, field_value, focus_field, hold_a_worker_alone, open_desktop_with,
-    pending_review, start_run, stored_key_settings, wait_for, FakeAssistantUiService, Field, Gate,
-    STORED_KEY,
+    pending_review, start_run, stored_key_settings, test_settings, wait_for,
+    FakeAssistantUiService, Field, Gate, STORED_KEY,
 };
 use gpui::{TestAppContext, VisualTestContext};
 use runtime::{JobEvent, JobId, Progress};
@@ -203,6 +203,359 @@ fn open_assistant(
     (view, cx, assistant)
 }
 
+/// The actual default empty workspace, with an optional saved connection.
+fn first_use_assistant(
+    cx: &mut TestAppContext,
+    connected: bool,
+) -> (View, &mut VisualTestContext, Arc<FakeAssistantUiService>) {
+    let assistant = Arc::new(FakeAssistantUiService::default());
+    let settings = if connected {
+        stored_key_settings()
+    } else {
+        test_settings()
+    };
+    let (view, cx) = open_desktop_with(cx, assistant.clone(), settings);
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |root, _| root.projects.is_empty()));
+    (view, cx, assistant)
+}
+
+fn tab_to_first_use_action(cx: &mut VisualTestContext, selector: &'static str) {
+    for _ in 0..40 {
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        if cx
+            .debug_bounds("focus-ring")
+            .is_some_and(|ring| within(ring, rendered(cx, selector)))
+        {
+            return;
+        }
+    }
+    panic!("Tab never reached {selector}");
+}
+
+fn press_enter(cx: &mut VisualTestContext) {
+    let keystroke = gpui::Keystroke::parse("enter").unwrap();
+    cx.simulate_event(gpui::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui::KeyUpEvent { keystroke });
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn first_use_offers_connection_settings_without_losing_a_rejected_question(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, assistant) = first_use_assistant(cx, false);
+    let action = rendered(cx, "assistant-first-settings");
+    assert!(within(action, rendered(cx, "assistant-results")));
+    assert!(
+        !shown(cx, "assistant-first-import".into()),
+        "connection comes before import"
+    );
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep this question");
+    assert!(
+        cx.update(
+            |window, cx| gpui::Focusable::focus_handle(prompt.read(cx), cx)
+                .contains_focused(window, cx)
+        ),
+        "drawing guidance does not move focus"
+    );
+    click_selector(cx, "assistant-submit");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.assistant.task, AssistantTaskState::Idle);
+        assert!(root.ui.notice.contains("CONNECTION_NOT_CONFIGURED"));
+    });
+    rendered(cx, "assistant-first-settings");
+    assert!(assistant.run_request_ids.lock().unwrap().is_empty());
+    click_selector(cx, "assistant-first-settings");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Settings);
+        assert_eq!(
+            root.ui.settings_section,
+            crate::pages::settings::ASSISTANT_SECTION
+        );
+    });
+    assert_eq!(field_value(cx, &prompt), "keep this question");
+}
+
+#[gpui::test]
+fn first_use_connection_settings_is_keyboard_reachable_at_minimum_size(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    assert!(within(
+        rendered(cx, "assistant-first-settings"),
+        rendered(cx, "assistant-results")
+    ));
+    tab_to_first_use_action(cx, "assistant-first-settings");
+    press_enter(cx);
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Settings);
+        assert_eq!(
+            root.ui.settings_section,
+            crate::pages::settings::ASSISTANT_SECTION
+        );
+    });
+}
+
+fn first_settings_jump_reveals_the_assistant_form(
+    cx: &mut TestAppContext,
+    locale: crate::i18n::Locale,
+    keyboard: bool,
+) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    view.update(cx, |root, cx| root.set_locale(locale, cx));
+    wait_for(cx, &view, |root| {
+        root.ui.notice == crate::i18n::text(locale, "language_changed")
+    });
+    if keyboard {
+        tab_to_first_use_action(cx, "assistant-first-settings");
+        press_enter(cx);
+    } else {
+        click_selector(cx, "assistant-first-settings");
+    }
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Settings);
+    assert_assistant_form_visible(cx, locale);
+}
+
+fn assert_assistant_form_visible(cx: &mut VisualTestContext, locale: crate::i18n::Locale) {
+    let viewport = rendered(cx, "settings-scroll");
+    for key in [
+        "assistant_enabled",
+        "assistant_profiles",
+        "assistant_connection_id",
+    ] {
+        let selector = leak(format!("setting-label-{}", crate::i18n::text(locale, key)));
+        let label = rendered(cx, selector);
+        assert!(
+            within(label, viewport),
+            "{key} must be visible after the first settings jump: {label:?} in {viewport:?}"
+        );
+    }
+}
+
+#[gpui::test]
+fn the_first_chinese_settings_button_reveals_the_assistant_form(cx: &mut TestAppContext) {
+    first_settings_jump_reveals_the_assistant_form(cx, crate::i18n::Locale::ZhCn, false);
+}
+
+#[gpui::test]
+fn the_first_english_settings_button_reveals_the_assistant_form(cx: &mut TestAppContext) {
+    first_settings_jump_reveals_the_assistant_form(cx, crate::i18n::Locale::EnUs, false);
+}
+
+#[gpui::test]
+fn the_first_settings_keyboard_action_reveals_the_assistant_form(cx: &mut TestAppContext) {
+    first_settings_jump_reveals_the_assistant_form(cx, crate::i18n::Locale::EnUs, true);
+}
+
+#[gpui::test]
+fn returning_to_assistant_settings_keeps_the_question_and_reveals_the_form(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep my question while I connect");
+    click_selector(cx, "assistant-first-settings");
+    assert_assistant_form_visible(cx, crate::i18n::Locale::ZhCn);
+    click_selector(cx, "settings-section-0");
+    click_selector(cx, "nav-Assistant");
+    assert_eq!(field_value(cx, &prompt), "keep my question while I connect");
+    click_selector(cx, "assistant-first-settings");
+    assert_assistant_form_visible(cx, crate::i18n::Locale::ZhCn);
+    click_selector(cx, "nav-Assistant");
+    assert_eq!(field_value(cx, &prompt), "keep my question while I connect");
+}
+
+#[gpui::test]
+fn leaving_settings_before_layout_discards_the_assistant_jump(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    view.update(cx, |root, cx| {
+        root.open_assistant_settings(cx);
+        root.navigate(Route::Assistant, cx);
+    });
+    cx.run_until_parked();
+    click_selector(cx, "nav-Settings");
+    let scroll = view.read_with(cx, |root, _| root.scroll.settings.clone());
+    assert_eq!(scroll.offset().y, gpui::px(0.));
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Settings);
+}
+
+#[gpui::test]
+fn first_use_with_a_connection_offers_the_existing_audio_picker(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = first_use_assistant(cx, true);
+    let action = rendered(cx, "assistant-first-import");
+    assert!(within(action, rendered(cx, "assistant-results")));
+    assert!(action.bottom() <= rendered(cx, "assistant-input-bar").top());
+    assert!(!shown(cx, "assistant-first-settings".into()));
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep this question too");
+    click_selector(cx, "assistant-submit");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.assistant.task, AssistantTaskState::Idle);
+        assert!(root.ui.notice.contains("DOCUMENT_ACCESS_DENIED"));
+    });
+    assert!(!cx.cx.did_prompt_for_paths());
+    click_selector(cx, "assistant-first-import");
+    assert!(cx.cx.did_prompt_for_paths());
+    assert_eq!(field_value(cx, &prompt), "keep this question too");
+    assert!(assistant.run_request_ids.lock().unwrap().is_empty());
+}
+
+#[gpui::test]
+fn first_use_audio_import_is_keyboard_reachable_at_minimum_size(cx: &mut TestAppContext) {
+    let (_view, cx, _) = first_use_assistant(cx, true);
+    assert!(within(
+        rendered(cx, "assistant-first-import"),
+        rendered(cx, "assistant-results")
+    ));
+    tab_to_first_use_action(cx, "assistant-first-import");
+    press_enter(cx);
+    assert!(cx.cx.did_prompt_for_paths());
+}
+
+#[gpui::test]
+fn first_use_guidance_never_replaces_an_existing_result_or_review(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, false);
+    // A result already received remains readable if the connection is later removed.
+    view.update(cx, |root, cx| {
+        let document =
+            domain::DocumentState::new(domain::ProjectId::new("first"), "First", "first.wav");
+        root.assistant.authorize_document(Some(&document));
+        let settings = settings::AssistantSettings {
+            active_connection_id: Some("previous-connection".into()),
+            ..Default::default()
+        };
+        let (request, _) = root
+            .assistant
+            .begin("previous request".into(), &settings)
+            .unwrap();
+        root.assistant.complete(
+            &request.request_id,
+            AssistantRunResult {
+                answer: Some("existing answer".into()),
+                pending_reviews: vec![pending_review("existing-review", u64::MAX)],
+                ..empty_result()
+            },
+        );
+        cx.notify();
+    });
+    cx.run_until_parked();
+    rendered(cx, "assistant-result");
+    rendered(cx, "assistant-pending-existing-review");
+    assert!(!shown(cx, "assistant-first-settings".into()));
+    assert!(!shown(cx, "assistant-first-import".into()));
+}
+
+/// Runs the real import use case and its asynchronous controller completion.
+/// The in-memory repository avoids user files; no audio processing is run.
+fn complete_first_audio_import(view: &View, cx: &mut VisualTestContext) {
+    view.read_with(cx, |root, _| {
+        assert!(root.projects.is_empty());
+        assert!(root.ui.selected_project.is_none());
+    });
+    view.update(cx, |root, cx| {
+        root.import_audio_path("first-recording.wav".into(), cx)
+    });
+    wait_for(cx, view, |root| {
+        root.projects.len() == 1 && !root.audio.pending()
+    });
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.selected_project.as_ref(),
+            Some(root.projects[0].id())
+        );
+        assert_eq!(
+            root.projects[0].processing_status(),
+            domain::ProjectStatus::Imported
+        );
+        assert!(!root.ui.processing);
+    });
+}
+
+#[gpui::test]
+fn imported_audio_offers_its_project_without_interrupting_the_question(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = first_use_assistant(cx, true);
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep the question while importing");
+    complete_first_audio_import(&view, cx);
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.route),
+        Route::Assistant
+    );
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(prompt.read(cx), cx)
+            .contains_focused(window, cx)
+    ));
+    let action = rendered(cx, "assistant-first-project");
+    assert!(within(action, rendered(cx, "assistant-results")));
+    assert!(action.bottom() <= rendered(cx, "assistant-input-bar").top());
+    assert!(!shown(cx, "assistant-first-import".into()));
+    let selected = view.read_with(cx, |root, _| root.ui.selected_project.clone());
+    click_selector(cx, "assistant-first-project");
+    view.read_with(cx, |root, _| {
+        assert_eq!(root.ui.route, Route::Meetings);
+        assert_eq!(root.ui.selected_project, selected);
+        assert!(!root.ui.processing);
+    });
+    rendered(cx, "process-project");
+    assert_eq!(
+        field_value(cx, &prompt),
+        "keep the question while importing"
+    );
+    assert!(assistant.run_request_ids.lock().unwrap().is_empty());
+}
+
+#[gpui::test]
+fn imported_audio_project_is_keyboard_reachable_at_minimum_size(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, true);
+    complete_first_audio_import(&view, cx);
+    tab_to_first_use_action(cx, "assistant-first-project");
+    press_enter(cx);
+    assert_eq!(view.read_with(cx, |root, _| root.ui.route), Route::Meetings);
+    rendered(cx, "process-project");
+}
+
+#[gpui::test]
+fn imported_audio_guidance_yields_to_processing_and_existing_results(cx: &mut TestAppContext) {
+    let (view, cx, _) = first_use_assistant(cx, true);
+    complete_first_audio_import(&view, cx);
+    rendered(cx, "assistant-first-project");
+    view.update(cx, |root, cx| {
+        root.ui
+            .begin_processing(root.ui.selected_project.clone().unwrap());
+        cx.notify();
+    });
+    assert!(!shown(cx, "assistant-first-project".into()));
+    view.update(cx, |root, cx| {
+        root.ui.finish_processing();
+        let document = root.projects[0].clone();
+        root.assistant.authorize_document(Some(&document));
+        let settings = root.saved_assistant().clone();
+        let (request, _) = root
+            .assistant
+            .begin("previous question".into(), &settings)
+            .unwrap();
+        root.assistant.complete(
+            &request.request_id,
+            AssistantRunResult {
+                answer: Some("existing answer".into()),
+                pending_reviews: vec![pending_review("existing-review", u64::MAX)],
+                ..empty_result()
+            },
+        );
+        cx.notify();
+    });
+    cx.run_until_parked();
+    rendered(cx, "assistant-result");
+    rendered(cx, "assistant-pending-existing-review");
+    assert!(!shown(cx, "assistant-first-project".into()));
+}
+
 #[gpui::test]
 fn a_run_that_fails_after_two_writes_keeps_every_receipt_warning_and_undo(cx: &mut TestAppContext) {
     let _alone = hold_a_worker_alone();
@@ -342,6 +695,8 @@ fn a_rejected_api_key_explains_itself_and_opens_assistant_settings(cx: &mut Test
     assert!(!shown(cx, "assistant-retry".into()));
 
     click_selector(cx, "assistant-open-settings");
+    let locale = view.read_with(cx, |root, _| root.ui.locale);
+    assert_assistant_form_visible(cx, locale);
     let assistant_section = crate::pages::settings::SECTIONS
         .iter()
         .position(|key| *key == "assistant_settings");
@@ -371,6 +726,99 @@ fn review_focused(cx: &mut VisualTestContext, view: &View) -> bool {
     cx.run_until_parked();
     let focus = view.read_with(cx, |root, _| root.review_focus.clone());
     cx.update(|window, _| focus.is_focused(window))
+}
+
+fn decision_keeps_the_question_focus(
+    cx: &mut TestAppContext,
+    accept: bool,
+    move_during_decision: bool,
+) {
+    let _alone = hold_a_worker_alone();
+    let gate = Gate::default();
+    let (view, cx, assistant) = open_assistant(
+        cx,
+        FakeAssistantUiService {
+            decision_gate: Some(gate.clone()),
+            ..Default::default()
+        },
+    );
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        pending_reviews: vec![
+            pending_review("review-1", u64::MAX),
+            pending_review("review-2", u64::MAX),
+        ],
+        ..empty_result()
+    });
+    *assistant.confirm_result.lock().unwrap() = Some(confirmed("accepted-1"));
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    let prompt = view.read_with(cx, |root, _| root.assistant_inputs.prompt.clone());
+    retype(cx, &prompt, "keep this next question");
+    if move_during_decision {
+        let focus = view.read_with(cx, |root, _| root.review_focus.clone());
+        cx.update(|window, cx| focus.focus(window, cx));
+    }
+    // The short viewport can put the decisions below the initial view.
+    let action = if accept {
+        "assistant-confirm"
+    } else {
+        "assistant-reject"
+    };
+    let scroll = view.read_with(cx, |root, _| root.scroll.assistant_results.clone());
+    let delta = scroll.bounds().bottom() - rendered(cx, action).bottom() - gpui::px(8.);
+    if delta < gpui::px(0.) {
+        scroll.set_offset(gpui::point(scroll.offset().x, scroll.offset().y + delta));
+        cx.update(|window, cx| window.draw(cx).clear());
+    }
+    assert!(within(rendered(cx, action), scroll.bounds()));
+    gate.arm();
+    click_selector(cx, action);
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    if move_during_decision {
+        retype(cx, &prompt, "keep this next question");
+    }
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(prompt.read(cx), cx)
+            .contains_focused(window, cx)
+    ));
+    gate.release();
+    wait_for(cx, &view, |root| {
+        matches!(
+            &root.assistant.pending,
+            Some(PendingReviewState::Awaiting(review)) if review.confirmation_id == "review-2"
+        )
+    });
+    assert!(
+        cx.update(
+            |window, cx| gpui::Focusable::focus_handle(prompt.read(cx), cx)
+                .contains_focused(window, cx)
+        ),
+        "the decision must not move focus from the question"
+    );
+    assert_eq!(field_value(cx, &prompt), "keep this next question");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.route),
+        Route::Assistant
+    );
+    rendered(cx, "assistant-pending-review-2");
+}
+
+#[gpui::test]
+fn accepting_a_review_keeps_the_question_focus_after_the_user_moves_on(cx: &mut TestAppContext) {
+    decision_keeps_the_question_focus(cx, true, true);
+}
+
+#[gpui::test]
+fn rejecting_a_review_keeps_the_question_focus_after_the_user_moves_on(cx: &mut TestAppContext) {
+    decision_keeps_the_question_focus(cx, false, true);
+}
+
+#[gpui::test]
+fn a_pointer_review_decision_keeps_the_question_focus_without_further_input(
+    cx: &mut TestAppContext,
+) {
+    decision_keeps_the_question_focus(cx, true, false);
 }
 
 #[gpui::test]
@@ -421,9 +869,22 @@ fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut Te
     );
 
     // Accepting: both decisions and a new run wait until it is written.
+    // Continue from the review with the keyboard; pointer presses retain
+    // whichever field was already focused instead.
+    let focus = view.read_with(cx, |root, _| root.review_focus.clone());
+    cx.update(|window, cx| focus.focus(window, cx));
+    cx.simulate_keystrokes("tab tab");
+    assert!(within(
+        rendered(cx, "focus-ring"),
+        rendered(cx, "assistant-confirm")
+    ));
     gate.arm();
-    click_selector(cx, "assistant-confirm");
+    press_enter(cx);
     wait_for(cx, &view, |_| gate.counts().0 == 1);
+    assert!(
+        cx.update(|window, cx| focus.contains_focused(window, cx)),
+        "the in-flight keyboard decision stays in the review region"
+    );
     assert!(shown(cx, "assistant-review-accepting".into()));
     let task = view.read_with(cx, |root, _| root.assistant.task.clone());
     click_selector(cx, "assistant-confirm");
@@ -432,6 +893,10 @@ fn the_review_queue_advances_past_expiry_and_focuses_the_next_review(cx: &mut Te
     assert_no_new_run(cx, &view, &assistant, 1, &task);
     assert_eq!(assistant.grants_for("confirm").len(), 1);
     assert!(assistant.grants_for("reject").is_empty());
+    assert!(
+        cx.update(|window, cx| focus.contains_focused(window, cx)),
+        "disabled presses leave the review focus unchanged"
+    );
     gate.release();
     wait_for(cx, &view, |root| {
         matches!(
@@ -528,6 +993,139 @@ fn a_review_shows_its_diff_and_lines_its_decisions_up_at_the_end(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn long_review_text_can_be_read_in_full_before_a_write(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    let mut review = pending_review("full-diff-review", u64::MAX);
+    review.field_diffs = vec![crate::assistant_ui::AssistantFieldDiff {
+        document_id: "first".into(),
+        field: "markdown".into(),
+        before: Some(
+            "The original meeting notes describe the decision and its owner in detail. "
+                .repeat(120),
+        ),
+        after: Some(
+            "The replacement meeting notes describe the revised decision and a new owner. "
+                .repeat(144),
+        ),
+    }];
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        pending_reviews: vec![review],
+        ..empty_result()
+    });
+    *assistant.confirm_result.lock().unwrap() = Some(confirmed("full-diff-write"));
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    for size in [
+        gpui::size(gpui::px(1180.), gpui::px(760.)),
+        crate::pages::chrome::MIN_WINDOW_SIZE,
+    ] {
+        cx.simulate_resize(size);
+        let scroll = view.read_with(cx, |root, _| root.scroll.assistant_results.clone());
+        scroll.set_offset(gpui::Point::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+        let before = rendered(cx, "assistant-diff-0-before");
+        let after = rendered(cx, "assistant-diff-0-after");
+        assert!(
+            before.size.height >= gpui::px(20.) * 20. && after.size.height >= gpui::px(20.) * 24.,
+            "the complete old and new prose can be read before approving: {before:?}, {after:?}"
+        );
+        assert!(
+            before.bottom() <= after.top(),
+            "old and new values read in order"
+        );
+        let results = rendered(cx, "assistant-results");
+        for value in [before, after] {
+            assert!(
+                value.left() >= results.left() && value.right() <= results.right(),
+                "the full text wraps inside the results viewport: {value:?} in {results:?}"
+            );
+        }
+        assert!(
+            rendered(cx, "assistant-confirm").top() > results.bottom(),
+            "approval follows the complete diff beyond the initial viewport"
+        );
+        scroll_results_to_end(cx, &view);
+        let confirm = rendered(cx, "assistant-confirm");
+        assert!(within(confirm, rendered(cx, "assistant-results")));
+        assert!(
+            confirm.bottom() <= rendered(cx, "assistant-input-bar").top(),
+            "scrolling through the full review reveals the decision above the prompt"
+        );
+        assert!(within(
+            rendered(cx, "assistant-input-bar"),
+            rendered(cx, "assistant-page")
+        ));
+        assert!(
+            assistant.grants_for("confirm").is_empty(),
+            "reading never approves a write"
+        );
+    }
+    click_selector(cx, "assistant-confirm");
+    wait_for(cx, &view, |root| {
+        root.assistant.task == AssistantTaskState::Completed
+    });
+    assert_eq!(assistant.grants_for("confirm").len(), 1);
+    assert!(shown(cx, "assistant-receipt-full-diff-write".into()));
+}
+
+#[gpui::test]
+fn tab_reveals_review_controls_after_long_results_above_the_prompt(cx: &mut TestAppContext) {
+    let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
+    let mut review = pending_review("keyboard-review", u64::MAX);
+    review.field_diffs = vec![crate::assistant_ui::AssistantFieldDiff {
+        document_id: "first".into(),
+        field: "summary".into(),
+        before: Some("The previous summary.".into()),
+        after: Some("The revised summary names the decision and its owner.".into()),
+    }];
+    *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
+        answer: Some(
+            "The meeting notes describe the decision and its owner in detail. ".repeat(144),
+        ),
+        pending_reviews: vec![review],
+        ..empty_result()
+    });
+    start_run(cx, &view);
+    wait_for(cx, &view, |root| root.assistant.pending.is_some());
+    for size in [
+        gpui::size(gpui::px(1920.), gpui::px(1080.)),
+        gpui::size(gpui::px(1180.), gpui::px(760.)),
+        crate::pages::chrome::MIN_WINDOW_SIZE,
+    ] {
+        cx.simulate_resize(size);
+        let scroll = view.read_with(cx, |root, _| root.scroll.assistant_results.clone());
+        scroll.set_offset(gpui::Point::default());
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+        assert!(
+            rendered(cx, "assistant-confirm").top() > rendered(cx, "assistant-results").bottom(),
+            "the long review puts its decisions below the initial viewport: {:?} in {:?}",
+            rendered(cx, "assistant-confirm"),
+            rendered(cx, "assistant-results")
+        );
+        let focus = view.read_with(cx, |root, _| root.review_focus.clone());
+        cx.update(|window, cx| focus.focus(window, cx));
+        cx.simulate_keystrokes("tab tab");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear());
+        cx.run_until_parked();
+        let confirm = rendered(cx, "assistant-confirm");
+        let ring = rendered(cx, "focus-ring");
+        assert!(
+            within(ring, confirm),
+            "Tab reaches the confirmation button: {ring:?} in {confirm:?}"
+        );
+        let bar = rendered(cx, "assistant-input-bar");
+        assert!(
+            confirm.bottom() <= bar.top(),
+            "keyboard reveal leaves the decision clear of the floating prompt: {confirm:?} above {bar:?}"
+        );
+        assert!(within(confirm, rendered(cx, "assistant-results")));
+    }
+}
+
+#[gpui::test]
 fn reviews_over_the_queue_limit_are_noticed_on_the_page(cx: &mut TestAppContext) {
     let (view, cx, assistant) = open_assistant(cx, FakeAssistantUiService::default());
     *assistant.run_result.lock().unwrap() = Some(AssistantRunResult {
@@ -588,8 +1186,8 @@ fn the_last_card_scrolls_clear_of_the_input_bar_and_nothing_shows_below_it(
         "the last card ends above the bar: {last:?} and {bar:?}"
     );
     assert!(
-        results.top() < bar.top() && results.bottom() <= bar.bottom(),
-        "the results run under the bar but end with it: {results:?} and {bar:?}"
+        results.top() < bar.top() && results.bottom() <= bar.top(),
+        "the results viewport ends above the bar: {results:?} and {bar:?}"
     );
 }
 
@@ -793,6 +1391,419 @@ fn click_assistant_setting(cx: &mut VisualTestContext, view: &View, selector: &'
     click_selector(cx, selector);
 }
 
+/// Real settings files whose successful CAS can wait before its result
+/// reaches the form. Readers use another service, so the saving service's
+/// held write lock never blocks an assertion on the UI thread.
+struct AssistantSaveFiles {
+    path: std::path::PathBuf,
+    settings: settings::SettingsService,
+    gate: Gate,
+    writes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+struct HeldAssistantSave {
+    inner: settings::JsonSettingsRepository,
+    gate: Gate,
+    writes: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl settings::SettingsRepository for HeldAssistantSave {
+    fn load(&self) -> Result<settings::AppSettings, settings::SettingsError> {
+        settings::SettingsRepository::load(&self.inner)
+    }
+
+    fn save(&self, value: &settings::AppSettings) -> Result<(), settings::SettingsError> {
+        settings::SettingsRepository::save(&self.inner, value)
+    }
+
+    fn save_if_equal(
+        &self,
+        expected: &settings::AppSettings,
+        value: &settings::AppSettings,
+    ) -> Result<(), settings::SettingsError> {
+        let result = settings::SettingsRepository::save_if_equal(&self.inner, expected, value);
+        if result.is_ok() {
+            self.writes
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.gate.pass();
+        }
+        result
+    }
+}
+
+impl AssistantSaveFiles {
+    fn new() -> Self {
+        let path = crate::tests::temp_directory().join("settings.json");
+        let inner = settings::JsonSettingsRepository::open(&path);
+        let mut saved = stored_key_settings().snapshot().unwrap();
+        let mut second = saved.assistant.connections[0].clone();
+        second.id = "second".into();
+        second.name = "Second".into();
+        second.api_key = Some("second-stored-key".into());
+        saved.assistant.connections.push(second);
+        settings::SettingsRepository::save(&inner, &saved).unwrap();
+        let gate = Gate::default();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let settings = settings::SettingsService::open(Arc::new(HeldAssistantSave {
+            inner,
+            gate: gate.clone(),
+            writes: writes.clone(),
+        }))
+        .unwrap();
+        Self {
+            path,
+            settings,
+            gate,
+            writes,
+        }
+    }
+
+    fn read(&self) -> settings::AssistantSettings {
+        settings::SettingsService::open(Arc::new(settings::JsonSettingsRepository::open(
+            &self.path,
+        )))
+        .unwrap()
+        .snapshot()
+        .unwrap()
+        .assistant
+    }
+
+    fn write_count(&self) -> usize {
+        self.writes.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl Drop for AssistantSaveFiles {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(self.path.parent().unwrap()).ok();
+    }
+}
+
+fn open_saving_form<'a>(
+    cx: &'a mut TestAppContext,
+    files: &AssistantSaveFiles,
+) -> (View, &'a mut VisualTestContext) {
+    let assistant = Arc::new(FakeAssistantUiService {
+        settings: Some(files.settings.clone()),
+        ..Default::default()
+    });
+    let (view, cx) = open_desktop_with(cx, assistant, files.settings.clone());
+    open_assistant_settings(cx, &view);
+    (view, cx)
+}
+
+#[gpui::test]
+fn a_saved_assistant_form_keeps_new_typing_and_credentials(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let (view, cx) = open_saving_form(cx, &files);
+    let (name, key, rounds) = view.read_with(cx, |root, _| {
+        (
+            root.assistant_inputs.connection_name.clone(),
+            root.assistant_inputs.api_key.clone(),
+            root.assistant_inputs.max_tool_rounds.clone(),
+        )
+    });
+    retype(cx, &name, "Saved name");
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    assert_eq!(files.read().connections[0].name, "Saved name");
+    click_assistant_setting(cx, &view, "settings-write-mode-confirm-each");
+    retype(cx, &key, "later-key-draft");
+    retype(cx, &rounds, "1e"); // A partial numeric edit is a draft too.
+    retype(cx, &name, "Keep this draft");
+    cx.simulate_keystrokes("left");
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Saved name"
+    });
+    assert_eq!(
+        field_value(cx, &name),
+        "Keep this draft",
+        "a save result must not replace later typing"
+    );
+    assert!(
+        field_value(cx, &key) == "later-key-draft",
+        "a save result must keep a newly typed key"
+    );
+    assert_eq!(field_value(cx, &rounds), "1e");
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings_draft.assistant.write_mode,
+            contracts::AgentWriteMode::ConfirmEach
+        );
+        assert_eq!(
+            root.saved_write_mode(),
+            contracts::AgentWriteMode::Automatic
+        );
+        assert_eq!(
+            root.ui.notice,
+            crate::i18n::text(root.ui.locale, "assistant_settings_saved_draft_kept")
+        );
+    });
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(name.read(cx), cx).contains_focused(window, cx)
+    ));
+    cx.simulate_input("!");
+    assert_eq!(field_value(cx, &name), "Keep this draf!t");
+    assert!(files.read().connections[0].api_key.as_deref() == Some(STORED_KEY));
+    retype(cx, &rounds, "12");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Keep this draf!t"
+    });
+    let saved = files.read();
+    assert_eq!(saved.connections[0].name, "Keep this draf!t");
+    assert_eq!(saved.max_tool_rounds, 12);
+    assert_eq!(saved.write_mode, contracts::AgentWriteMode::ConfirmEach);
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.ui.notice,
+            crate::i18n::text(root.ui.locale, "assistant_settings_saved")
+        )
+    });
+    assert!(saved.connections[0].api_key.as_deref() == Some("later-key-draft"));
+    assert!(
+        field_value(cx, &key).is_empty(),
+        "only the explicitly saved key is cleared"
+    );
+}
+
+#[gpui::test]
+fn a_saved_assistant_form_keeps_the_newly_selected_connection(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let (view, cx) = open_saving_form(cx, &files);
+    let (id, name, key) = view.read_with(cx, |root, _| {
+        (
+            root.assistant_inputs.connection_id.clone(),
+            root.assistant_inputs.connection_name.clone(),
+            root.assistant_inputs.api_key.clone(),
+        )
+    });
+    retype(cx, &name, "Saved first connection");
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    click_assistant_setting(cx, &view, "assistant-profile-second");
+    retype(cx, &name, "Second draft");
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Saved first connection"
+    });
+    assert_eq!(
+        field_value(cx, &id),
+        "second",
+        "an earlier save must not switch the form back"
+    );
+    assert_eq!(field_value(cx, &name), "Second draft");
+    assert!(field_value(cx, &key).is_empty());
+    view.read_with(cx, |root, cx| {
+        assert_eq!(
+            root.settings_draft
+                .assistant
+                .active_connection_id
+                .as_deref(),
+            Some("second")
+        );
+        assert!(root.form_keeps_stored_credential(cx));
+        assert_eq!(
+            root.ui.notice,
+            crate::i18n::text(root.ui.locale, "assistant_settings_saved_draft_kept")
+        );
+    });
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(name.read(cx), cx).contains_focused(window, cx)
+    ));
+    let saved_first = files.read();
+    assert_eq!(saved_first.active_connection_id.as_deref(), Some("local"));
+    assert_eq!(saved_first.connections[1].name, "Second");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().active_connection_id.as_deref() == Some("second")
+    });
+    let saved_second = files.read();
+    assert_eq!(saved_second.connections[0].name, "Saved first connection");
+    assert_eq!(saved_second.connections[1].name, "Second draft");
+    assert!(saved_second.connections[1].api_key.as_deref() == Some("second-stored-key"));
+}
+
+#[gpui::test]
+fn a_pending_assistant_save_requires_a_later_explicit_save(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let (view, cx) = open_saving_form(cx, &files);
+    let name = view.read_with(cx, |root, _| root.assistant_inputs.connection_name.clone());
+    retype(cx, &name, "First saved edit");
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    assert_eq!(files.read().connections[0].name, "First saved edit");
+    retype(cx, &name, "Local");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    view.update_in(cx, |root, window, cx| {
+        root.save_assistant_settings(&gpui::ClickEvent::default(), window, cx);
+        // An ordinary settings write provides an actual queue barrier after
+        // both the button and a stale callback tried to save again.
+        root.set_locale(crate::i18n::Locale::EnUs, cx);
+    });
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.ui.notice == crate::i18n::text(crate::i18n::Locale::EnUs, "language_changed")
+    });
+    assert_eq!(
+        files.write_count(),
+        2,
+        "only A and the locale write may commit"
+    );
+    assert_eq!(files.read().connections[0].name, "First saved edit");
+    assert_eq!(field_value(cx, &name), "Local");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Local"
+    });
+    assert_eq!(files.write_count(), 3);
+    assert_eq!(files.read().connections[0].name, "Local");
+}
+
+#[gpui::test]
+fn a_later_assistant_save_preserves_unedited_external_settings(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let (view, cx) = open_saving_form(cx, &files);
+    let external = settings::SettingsService::open(Arc::new(
+        settings::JsonSettingsRepository::open(&files.path),
+    ))
+    .unwrap();
+    external
+        .patch_if_equal(
+            &external.revision().unwrap(),
+            settings::SettingsPatch {
+                write_mode: Some(contracts::AgentWriteMode::ConfirmEach),
+                connection: Some(settings::AssistantConnectionPatch {
+                    id: "local".into(),
+                    max_output_tokens: Some(3072),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            settings::SettingsGrant::full(),
+        )
+        .unwrap();
+    let name = view.read_with(cx, |root, _| root.assistant_inputs.connection_name.clone());
+    retype(cx, &name, "First retry");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| root.settings_error.is_some());
+    assert_eq!(files.write_count(), 0);
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    assert_eq!(
+        files.read().write_mode,
+        contracts::AgentWriteMode::ConfirmEach
+    );
+    assert_eq!(files.read().connections[0].max_output_tokens, 3072);
+    retype(cx, &name, "Second explicit edit");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "First retry"
+    });
+    assert_eq!(field_value(cx, &name), "Second explicit edit");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Second explicit edit"
+    });
+    assert_eq!(files.write_count(), 2);
+    let saved = files.read();
+    assert_eq!(
+        saved.write_mode,
+        contracts::AgentWriteMode::ConfirmEach,
+        "a later name edit must not restore the old external write mode"
+    );
+    assert_eq!(saved.connections[0].max_output_tokens, 3072);
+    assert_eq!(saved.connections[0].name, "Second explicit edit");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Second explicit edit"
+    });
+}
+
+#[gpui::test]
+fn a_later_assistant_save_keeps_the_acknowledged_credential(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let files = AssistantSaveFiles::new();
+    let key_file = files.path.parent().unwrap().join("credentials/key.txt");
+    std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
+    std::fs::write(&key_file, "fixture-file-key").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    files
+        .settings
+        .patch_if_equal(
+            &files.settings.revision().unwrap(),
+            settings::SettingsPatch {
+                connection: Some(settings::AssistantConnectionPatch {
+                    id: "local".into(),
+                    credential: Some(settings::CredentialUpdate::File(
+                        "credentials/key.txt".into(),
+                    )),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            settings::SettingsGrant::full(),
+        )
+        .unwrap();
+    let before = files.write_count();
+    let (view, cx) = open_saving_form(cx, &files);
+    let (name, key, file) = view.read_with(cx, |root, _| {
+        (
+            root.assistant_inputs.connection_name.clone(),
+            root.assistant_inputs.api_key.clone(),
+            root.assistant_inputs.api_key_file.clone(),
+        )
+    });
+    retype(cx, &key, "first-rotated-key");
+    retype(cx, &name, "First key save");
+    files.gate.arm();
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |_| files.gate.counts().1 == 1);
+    assert!(files.read().connections[0].api_key_file.is_none());
+    focus_field(cx, &key);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_keystrokes("backspace");
+    assert!(field_value(cx, &key).is_empty());
+    retype(cx, &name, "Keep the saved credential");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    files.gate.release();
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "First key save"
+    });
+    assert!(field_value(cx, &key).is_empty());
+    assert!(field_value(cx, &file).is_empty());
+    assert_eq!(field_value(cx, &name), "Keep the saved credential");
+    click_assistant_setting(cx, &view, "assistant-save-settings");
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Keep the saved credential"
+    });
+    assert_eq!(files.write_count(), before + 2);
+    let saved = files.read();
+    assert!(
+        saved.connections[0].api_key.as_deref() == Some("first-rotated-key"),
+        "an untouched old file field must not replace the just-saved key"
+    );
+    assert!(saved.connections[0].api_key_file.is_none());
+    wait_for(cx, &view, |root| {
+        root.saved_assistant().connections[0].name == "Keep the saved credential"
+    });
+    assert!(field_value(cx, &key).is_empty());
+    assert!(field_value(cx, &file).is_empty());
+}
+
 #[gpui::test]
 fn turning_automatic_write_back_off_explains_confirm_each(cx: &mut TestAppContext) {
     let settings = stored_key_settings();
@@ -841,6 +1852,99 @@ fn diagnostic(kind: ConnectionProbeKind) -> ConnectionDiagnostic {
 
 fn probing(view: &View, cx: &mut VisualTestContext) -> Option<ConnectionProbeKind> {
     view.read_with(cx, |root, _| root.assistant.probe_running)
+}
+
+#[gpui::test]
+fn editing_a_connection_clears_its_old_probe_without_losing_the_draft(cx: &mut TestAppContext) {
+    let (view, cx, _) = open_assistant(cx, FakeAssistantUiService::default());
+    open_assistant_settings(cx, &view);
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    let model = view.read_with(cx, |root, _| root.assistant_inputs.model.clone());
+    retype(cx, &model, "changed-model");
+    assert!(
+        !shown(cx, "assistant-probe-result".into()),
+        "the old model result no longer describes this draft"
+    );
+    assert_eq!(field_value(cx, &model), "changed-model");
+    assert!(cx.update(
+        |window, cx| gpui::Focusable::focus_handle(model.read(cx), cx).contains_focused(window, cx)
+    ));
+    assert_eq!(
+        view.read_with(cx, |root, _| root
+            .saved_assistant()
+            .active_connection()
+            .unwrap()
+            .model
+            .clone()),
+        "assistant-default"
+    );
+}
+
+#[gpui::test]
+fn switching_profiles_clears_probe_errors_and_cancels_the_previous_probe(cx: &mut TestAppContext) {
+    let _alone = hold_a_worker_alone();
+    let settings = stored_key_settings();
+    let mut value = settings.snapshot().unwrap();
+    let mut second = value.assistant.connections[0].clone();
+    second.id = "second".into();
+    second.name = "Second".into();
+    second.model = "second-model".into();
+    value.assistant.connections.push(second);
+    settings.update(value).unwrap();
+    let gate = Gate::default();
+    let assistant = Arc::new(FakeAssistantUiService {
+        settings: Some(settings.clone()),
+        probe_gate: Some(gate.clone()),
+        ..Default::default()
+    });
+    assistant
+        .probe_results
+        .lock()
+        .unwrap()
+        .push_back(Err(warning("PROVIDER_TIMEOUT", true)));
+    let (view, cx) = open_desktop_with(cx, assistant.clone(), settings);
+    open_assistant_settings(cx, &view);
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    assert!(shown(cx, "assistant-probe-retry".into()));
+    click_assistant_setting(cx, &view, "assistant-profile-second");
+    assert!(
+        !shown(cx, "assistant-probe-error".into()),
+        "the second profile does not inherit the first error"
+    );
+    assert!(!shown(cx, "assistant-probe-retry".into()));
+    gate.arm();
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    click_assistant_setting(cx, &view, "assistant-profile-local");
+    let cancellation = assistant.probe_cancellations.lock().unwrap()[1].clone();
+    let cancelled = cancellation.is_cancelled();
+    gate.release();
+    assert!(
+        cancelled,
+        "switching cancels the old profile's actual service token"
+    );
+    assert_eq!(probing(&view, cx), None);
+    assert!(!shown(cx, "assistant-probe-running".into()));
+    assert!(
+        !shown(cx, "assistant-probe-cancelled".into()),
+        "a profile change is not a user cancellation outcome"
+    );
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.assistant
+                .diagnostic
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .requested_model,
+            "assistant-default"
+        )
+    });
 }
 
 #[gpui::test]
@@ -928,6 +2032,79 @@ fn retype(cx: &mut VisualTestContext, field: &Field, text: &str) {
     cx.simulate_keystrokes("cmd-a");
     cx.simulate_input(text);
     assert_eq!(field_value(cx, field), text);
+}
+
+#[gpui::test]
+fn probing_an_edited_target_requires_the_same_explicit_key_as_saving(cx: &mut TestAppContext) {
+    let settings = stored_key_settings();
+    let before = settings.snapshot().unwrap();
+    let assistant = Arc::new(FakeAssistantUiService {
+        settings: Some(settings.clone()),
+        ..Default::default()
+    });
+    let (view, cx) = open_desktop_with(cx, assistant.clone(), settings.clone());
+    open_assistant_settings(cx, &view);
+    let (base_url, key) = view.read_with(cx, |root, _| {
+        (
+            root.assistant_inputs.base_url.clone(),
+            root.assistant_inputs.api_key.clone(),
+        )
+    });
+    retype(cx, &base_url, "http://127.0.0.1:4011");
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| {
+        root.assistant.diagnostic.is_some() || root.settings_error.is_some()
+    });
+    assert!(
+        assistant.probe_calls.lock().unwrap().is_empty(),
+        "a draft target cannot receive a stored key before it is explicitly entered"
+    );
+    view.read_with(cx, |root, _| {
+        assert_eq!(
+            root.settings_error.as_ref().unwrap().code,
+            SETTINGS_CREDENTIAL_TARGET_CONFLICT
+        )
+    });
+    assert!(shown(cx, "assistant-credential-target-conflict".into()));
+    assert_eq!(
+        settings.snapshot().unwrap(),
+        before,
+        "a refused probe never saves the form"
+    );
+
+    // Entering the same key again is an explicit decision, just as it is for Save.
+    retype(cx, &key, STORED_KEY);
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    assert!(!shown(cx, "assistant-credential-target-conflict".into()));
+    let profiles = assistant.probe_profiles.lock().unwrap();
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0].base_url, "http://127.0.0.1:4011");
+    assert_eq!(profiles[0].api_key.as_deref(), Some(STORED_KEY));
+    assert_eq!(
+        settings.snapshot().unwrap(),
+        before,
+        "testing the explicitly entered draft still does not save it"
+    );
+}
+
+#[gpui::test]
+fn probing_a_budget_edit_keeps_the_existing_credential(cx: &mut TestAppContext) {
+    let settings = stored_key_settings();
+    let assistant = Arc::new(FakeAssistantUiService {
+        settings: Some(settings.clone()),
+        ..Default::default()
+    });
+    let (view, cx) = open_desktop_with(cx, assistant.clone(), settings);
+    open_assistant_settings(cx, &view);
+    let timeout = view.read_with(cx, |root, _| root.assistant_inputs.timeout_ms.clone());
+    retype(cx, &timeout, "60000");
+    click_assistant_setting(cx, &view, "assistant-model-probe");
+    wait_for(cx, &view, |root| root.assistant.diagnostic.is_some());
+    let profiles = assistant.probe_profiles.lock().unwrap();
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0].timeout_ms, 60000);
+    assert_eq!(profiles[0].api_key.as_deref(), Some(STORED_KEY));
 }
 
 #[gpui::test]

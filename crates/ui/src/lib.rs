@@ -14,6 +14,10 @@ mod model_tests;
 mod pages;
 mod route;
 #[cfg(test)]
+mod scrollbar_tests;
+#[cfg(test)]
+mod shell_tests;
+#[cfg(test)]
 mod source_files;
 #[cfg(test)]
 mod speaker_tests;
@@ -72,6 +76,8 @@ mod tests {
             Arc<Mutex<std::collections::VecDeque<Result<ConnectionDiagnostic, AssistantUiError>>>>,
         /// The kind of every probe.
         pub(crate) probe_calls: Arc<Mutex<Vec<ConnectionProbeKind>>>,
+        pub(crate) probe_profiles: Arc<Mutex<Vec<settings::AssistantConnectionProfile>>>,
+        pub(crate) probe_cancellations: Arc<Mutex<Vec<AssistantCancellation>>>,
         /// Holds each probe until released, when set.
         pub(crate) probe_gate: Option<Gate>,
         /// Subscribers of `job_events`; tests publish through `publish_job`.
@@ -131,8 +137,10 @@ mod tests {
             &self,
             profile: settings::AssistantConnectionProfile,
             kind: ConnectionProbeKind,
-            _: AssistantCancellation,
+            cancellation: AssistantCancellation,
         ) -> Result<ConnectionDiagnostic, AssistantUiError> {
+            self.probe_profiles.lock().unwrap().push(profile.clone());
+            self.probe_cancellations.lock().unwrap().push(cancellation);
             self.probe_calls.lock().unwrap().push(kind);
             if let Some(gate) = &self.probe_gate {
                 gate.pass();
@@ -983,14 +991,14 @@ mod tests {
     fn starting_processing_leaves_the_ui_thread_free(cx: &mut TestAppContext) {
         let _alone = hold_a_worker_alone();
         let gate = Gate::default();
-        // Selected models that are not installed.
+        // Custom references are checked by backend preflight on the worker.
         let settings = test_settings();
         let mut value = settings.snapshot().unwrap();
         let missing = |backend_id: &str| ModelRef {
             backend_id: backend_id.into(),
             model_id: "fixture".into(),
             revision: None,
-            artifact_path: "missing-model".into(),
+            artifact_path: format!("unlisted-selected-{backend_id}"),
             artifacts: Vec::new(),
         };
         value.asr_model = Some(missing("whisper-rs"));
@@ -1025,6 +1033,7 @@ mod tests {
         assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-start");
         // The fixture has no model, so the job fails and processing ends.
         wait_for(cx, &view, |root| !root.ui.processing);
+        assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_none()));
         std::fs::remove_dir_all(directory).ok();
     }
 
@@ -1201,6 +1210,7 @@ mod tests {
         );
         view.read_with(cx, |root, _| {
             assert!(root.cancel_contexts.is_none());
+            assert!(root.ui.processing_project.is_none());
             assert_eq!(
                 root.ui.notice,
                 i18n::message(i18n::Locale::ZhCn, "cancelled", "First")
@@ -1227,6 +1237,7 @@ mod tests {
         gate.arm();
         view.update(cx, |root, cx| {
             root.use_model("gated-model".into(), "asr".into(), "gated-asr".into(), cx)
+                .detach()
         });
         assert_ui_responsive_while_held(cx, &view, &gate, &settings, "dia-during-model-ref");
         wait_for(cx, &view, |_| {
@@ -1269,6 +1280,7 @@ mod tests {
 
         view.update(cx, |root, cx| {
             root.change_speaker_library_path(destination.clone(), cx)
+                .detach()
         });
         wait_for(cx, &view, |root| root.speaker_library_prompt.is_some());
         cx.run_until_parked();
@@ -1277,6 +1289,272 @@ mod tests {
             "the migration dialog is shown"
         );
         (view, cx, services, [directory, source, destination])
+    }
+
+    /// Wait for the actual path operation's UI callback, not only its worker.
+    fn finish_library_path_task(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<controller::RootView>,
+        task: gpui::Task<()>,
+    ) {
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = finished.clone();
+        cx.spawn(move |_| async move {
+            task.await;
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .detach();
+        wait_for(cx, view, |_| {
+            finished.load(std::sync::atomic::Ordering::SeqCst)
+        });
+    }
+
+    #[gpui::test]
+    fn library_path_selection_closes_a_migration_question_for_the_previous_library(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx, services, [directory, source, unused]) = open_speaker_library_prompt(cx);
+        let chosen = directory.join("chosen/library.json");
+        std::fs::create_dir_all(chosen.parent().unwrap()).unwrap();
+        std::fs::write(&chosen, "{}\n").unwrap();
+        let task = view.update(cx, |root, cx| {
+            root.navigate(route::Route::Settings, cx);
+            root.change_speaker_library_path(chosen.clone(), cx)
+        });
+        finish_library_path_task(cx, &view, task);
+        wait_for(cx, &view, |_| {
+            services.settings.snapshot().unwrap().speaker_library_path
+                == chosen.display().to_string()
+        });
+        assert!(
+            view.read_with(cx, |root, _| root.speaker_library_prompt.is_none()),
+            "a question for the previous library cannot remain active"
+        );
+        assert!(cx.debug_bounds("confirm-dialog").is_none());
+        assert!(cx.update(|window, cx| !view.read(cx).dialog_focus.contains_focused(window, cx)));
+        let stale = view.update(cx, |root, cx| root.answer_speaker_library_prompt(true, cx));
+        finish_library_path_task(cx, &view, stale);
+        assert_eq!(
+            services.settings.snapshot().unwrap().speaker_library_path,
+            chosen.display().to_string()
+        );
+        assert!(
+            !unused.exists(),
+            "the obsolete question must not copy a library"
+        );
+        assert_eq!(std::fs::read_to_string(source).unwrap(), "{}");
+        assert_eq!(std::fs::read_to_string(chosen).unwrap(), "{}\n");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[gpui::test]
+    fn library_path_selection_discards_a_probe_after_keeping_the_current_path(
+        cx: &mut TestAppContext,
+    ) {
+        library_path_selection_keeps_current_path(cx, false);
+    }
+
+    #[gpui::test]
+    fn library_path_selection_discards_an_old_migration_question_after_keeping_the_current_path(
+        cx: &mut TestAppContext,
+    ) {
+        library_path_selection_keeps_current_path(cx, true);
+    }
+
+    fn library_path_selection_keeps_current_path(cx: &mut TestAppContext, missing: bool) {
+        let (view, cx, services, [directory, source, _]) = open_speaker_library_prompt(cx);
+        let old_path = directory.join("older/library.json");
+        if !missing {
+            std::fs::create_dir_all(old_path.parent().unwrap()).unwrap();
+            std::fs::write(&old_path, "{}\n").unwrap();
+        }
+        let (old, latest) = view.update(cx, |root, cx| {
+            let old = root.change_speaker_library_path(old_path.clone(), cx);
+            let latest = root.change_speaker_library_path(source.clone(), cx);
+            (old, latest)
+        });
+        finish_library_path_task(cx, &view, latest);
+        finish_library_path_task(cx, &view, old);
+        wait_for(cx, &view, |root| {
+            services.settings.snapshot().unwrap().speaker_library_path
+                == root.settings_draft.speaker_library_path
+        });
+        assert_eq!(
+            services.settings.snapshot().unwrap().speaker_library_path,
+            source.display().to_string(),
+            "keeping the current path supersedes an earlier pending choice"
+        );
+        assert!(
+            view.read_with(cx, |root, _| root.speaker_library_prompt.is_none()),
+            "the cancelled choice cannot open a migration question"
+        );
+        assert_eq!(std::fs::read_to_string(source).unwrap(), "{}");
+        assert_eq!(old_path.exists(), !missing);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[gpui::test]
+    fn library_path_selection_keeps_the_current_path_after_an_old_migration_finishes(
+        cx: &mut TestAppContext,
+    ) {
+        library_path_selection_supersedes_a_migration(cx, false);
+    }
+
+    #[gpui::test]
+    fn library_path_selection_keeps_the_current_notice_after_an_old_migration_fails(
+        cx: &mut TestAppContext,
+    ) {
+        library_path_selection_supersedes_a_migration(cx, true);
+    }
+
+    fn library_path_selection_supersedes_a_migration(cx: &mut TestAppContext, fail: bool) {
+        let (view, cx, services, [directory, source, destination]) =
+            open_speaker_library_prompt(cx);
+        if fail {
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            std::fs::write(&destination, "keep this existing file").unwrap();
+        }
+        let before = view.read_with(cx, |root, _| root.ui.notice.clone());
+        let (old, latest) = view.update(cx, |root, cx| {
+            let old = root.answer_speaker_library_prompt(true, cx);
+            let latest = root.change_speaker_library_path(source.clone(), cx);
+            (old, latest)
+        });
+        finish_library_path_task(cx, &view, latest);
+        finish_library_path_task(cx, &view, old);
+        wait_for(cx, &view, |root| {
+            services.settings.snapshot().unwrap().speaker_library_path
+                == root.settings_draft.speaker_library_path
+        });
+        assert_eq!(
+            services.settings.snapshot().unwrap().speaker_library_path,
+            source.display().to_string(),
+            "an acknowledged copy does not supersede a later path choice"
+        );
+        assert_eq!(
+            view.read_with(cx, |root, _| root.ui.notice.clone()),
+            before,
+            "a superseded migration cannot report a stale outcome"
+        );
+        assert_eq!(std::fs::read_to_string(source).unwrap(), "{}");
+        assert_eq!(
+            std::fs::read_to_string(destination).unwrap(),
+            if fail {
+                "keep this existing file"
+            } else {
+                "{}"
+            }
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[gpui::test]
+    fn library_path_selection_discards_a_question_after_external_settings_are_reloaded(
+        cx: &mut TestAppContext,
+    ) {
+        let (view, cx, services, [directory, source, unused]) = open_speaker_library_prompt(cx);
+        let chosen = directory.join("external/library.json");
+        std::fs::create_dir_all(chosen.parent().unwrap()).unwrap();
+        std::fs::write(&chosen, "{}\n").unwrap();
+        let mut external = services.settings.snapshot().unwrap();
+        external.speaker_library_path = chosen.display().to_string();
+        services.settings.update(external).unwrap();
+        // The UI's next revision-checked write reloads the externally changed
+        // settings after refusing the stale revision.
+        view.update(cx, |root, cx| {
+            root.navigate(route::Route::Settings, cx);
+            root.set_locale(i18n::Locale::EnUs, cx);
+        });
+        wait_for(cx, &view, |root| {
+            root.settings_error.is_some()
+                && root.settings_draft.speaker_library_path == chosen.display().to_string()
+        });
+        assert!(
+            view.read_with(cx, |root, _| root.speaker_library_prompt.is_none()),
+            "external settings end the old library's question"
+        );
+        assert!(cx.debug_bounds("confirm-dialog").is_none());
+        assert!(cx.update(|window, cx| !view.read(cx).dialog_focus.contains_focused(window, cx)));
+        let stale = view.update(cx, |root, cx| root.answer_speaker_library_prompt(true, cx));
+        finish_library_path_task(cx, &view, stale);
+        assert_eq!(
+            services.settings.snapshot().unwrap().speaker_library_path,
+            chosen.display().to_string()
+        );
+        assert!(!unused.exists());
+        assert_eq!(std::fs::read_to_string(source).unwrap(), "{}");
+        assert_eq!(std::fs::read_to_string(chosen).unwrap(), "{}\n");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[gpui::test]
+    fn library_path_selection_keeps_a_new_question_across_earlier_settings_acknowledgements(
+        cx: &mut TestAppContext,
+    ) {
+        let _alone = hold_a_worker_alone();
+        let (view, cx, services, [directory, source, _]) = open_speaker_library_prompt(cx);
+        let first = directory.join("first/library.json");
+        let second = directory.join("second/library.json");
+        let latest = directory.join("latest/library.json");
+        for path in [&first, &second] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "{}\n").unwrap();
+        }
+        let repository = JsonSettingsRepository::open(directory.join("held-settings.json"));
+        settings::SettingsRepository::save(&repository, &services.settings.snapshot().unwrap())
+            .unwrap();
+        let gate = Gate::default();
+        let settings = SettingsService::open(Arc::new(crate::workspace_tests::HeldSettingsSave {
+            inner: repository,
+            gate: gate.clone(),
+        }))
+        .unwrap();
+        view.update(cx, |root, _| root.services.settings = settings.clone());
+        gate.arm();
+        let task = view.update(cx, |root, cx| {
+            root.change_speaker_library_path(first.clone(), cx)
+        });
+        finish_library_path_task(cx, &view, task);
+        wait_for(cx, &view, |_| gate.counts() == (1, 1));
+        let task = view.update(cx, |root, cx| {
+            root.change_speaker_library_path(second.clone(), cx)
+        });
+        finish_library_path_task(cx, &view, task);
+        let task = view.update(cx, |root, cx| {
+            root.change_speaker_library_path(latest.clone(), cx)
+        });
+        finish_library_path_task(cx, &view, task);
+        let question_before_ack = view.read_with(cx, |root, _| {
+            root.speaker_library_prompt
+                .as_ref()
+                .map(|question| (question.source.clone(), question.destination.clone()))
+        });
+        gate.release();
+        wait_for(cx, &view, |root| {
+            root.settings_draft.speaker_library_path == second.display().to_string()
+                && settings.snapshot().unwrap().speaker_library_path == second.display().to_string()
+        });
+        assert_eq!(question_before_ack, Some((second.clone(), latest.clone())));
+        assert_eq!(
+            view.read_with(cx, |root, _| root.speaker_library_prompt.as_ref().map(
+                |question| (question.source.clone(), question.destination.clone())
+            )),
+            question_before_ack,
+            "earlier write acknowledgements cannot dismiss the latest path question"
+        );
+        click_selector(cx, "dialog-cancel");
+        wait_for(cx, &view, |_| {
+            settings.snapshot().unwrap().speaker_library_path == latest.display().to_string()
+        });
+        assert!(
+            !latest.exists(),
+            "using the new path does not migrate a file"
+        );
+        assert_eq!(std::fs::read_to_string(source).unwrap(), "{}");
+        for path in [first, second] {
+            assert_eq!(std::fs::read_to_string(path).unwrap(), "{}\n");
+        }
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[track_caller]
@@ -1295,6 +1573,9 @@ mod tests {
         let route = view.read_with(cx, |root, _| root.ui.route);
         assert_ne!(route, route::Route::Models);
         click_selector(cx, "nav-Models");
+        assert_eq!(view.read_with(cx, |root, _| root.ui.route), route);
+        // Nor do the window's shortcuts reach past it.
+        cx.simulate_keystrokes("cmd-3");
         assert_eq!(view.read_with(cx, |root, _| root.ui.route), route);
         assert!(cx.debug_bounds("confirm-dialog").is_some());
 
@@ -1451,8 +1732,8 @@ mod tests {
         assert!(inside(panel), "Detail is inside the content plane");
 
         let close = cx
-            .debug_bounds("close-detail")
-            .expect("Detail can be closed");
+            .debug_bounds("open-project-detail")
+            .expect("the document's detail trigger can close its panel");
         cx.simulate_click(close.center(), Modifiers::none());
         cx.run_until_parked();
         assert!(cx.debug_bounds("detail-panel").is_none(), "Detail closed");
