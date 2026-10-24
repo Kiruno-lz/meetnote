@@ -805,6 +805,8 @@ fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
     let (_window, cx, _) = open_route(cx, Route::Meetings);
     let mut expected = SIDEBAR_STOPS.to_vec();
     expected.extend([
+        "workspace-search-input",
+        "workspace-search-submit",
         // The tree is one stop, on its selected row.
         leak(format!("project-row-{}", DOCUMENT_IDS[0])),
         // Processing waits for models; the next steps remain reachable.

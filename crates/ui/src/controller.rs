@@ -524,6 +524,7 @@ pub(crate) struct RootView {
     /// but require that result before accepting another explicit save.
     pub(crate) assistant_save_pending: bool,
     pub(crate) projects: Vec<DocumentState>,
+    pub(crate) search: crate::search::WorkspaceSearch,
     pub(crate) ui: UiState,
     pub(crate) assistant: AssistantController,
     pub(crate) assistant_inputs: AssistantInputs,
@@ -758,6 +759,7 @@ impl RootView {
             .detach();
         }
         let editor = DocumentEditor::new(locale, window, cx);
+        let search = crate::search::WorkspaceSearch::new(locale, window, cx);
         cx.subscribe_in(&editor.status, window, |this, _, event, _, cx| {
             let DropdownEvent::Confirm(value) = event;
             this.editor.set_status(value.clone());
@@ -784,6 +786,7 @@ impl RootView {
             assistant_save_pending: false,
             settings_draft,
             projects: Vec::new(),
+            search,
             ui,
             assistant: AssistantController::default(),
             assistant_inputs,
@@ -939,6 +942,7 @@ impl RootView {
     }
 
     fn begin_projects_reload(&mut self) -> u64 {
+        self.search.invalidate();
         self.projects_generation += 1;
         self.projects_generation
     }
@@ -977,6 +981,7 @@ impl RootView {
                     }
                     self.projects = snapshot.documents;
                     self.document_issues = snapshot.issues;
+                    self.refresh_workspace_search(cx);
                     if let Some(error) = self.projects_error.take() {
                         let old_notice = i18n::message(
                             self.projects_error_locale,
@@ -1720,6 +1725,7 @@ impl RootView {
         self.ui.locale = locale;
         self.settings_selectors = None;
         self.assistant_inputs.follow_locale(locale, cx);
+        self.search.follow_locale(locale, cx);
         self.editor.follow_locale(locale, &self.projects, cx);
     }
 
@@ -3186,6 +3192,7 @@ impl RootView {
             Shortcut::Forward => self.travel(true, cx),
             Shortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
             Shortcut::ImportAudio => self.import_audio(&ClickEvent::default(), window, cx),
+            Shortcut::Search => self.focus_workspace_search(window, cx),
             Shortcut::SaveDocument => {
                 if self.ui.route == Route::Meetings
                     && self.ui.content_mode == ContentMode::Edit
@@ -4437,6 +4444,7 @@ impl RootView {
             return;
         }
         self.documents_root_switch.switching = true;
+        self.clear_workspace_search(cx);
         // The repository changes before the settings worker returns.
         // Keep the current projection until the switch settles, and let
         // the selected document start its read again afterwards.

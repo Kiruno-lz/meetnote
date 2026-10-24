@@ -286,6 +286,79 @@ fn switch_status(cx: &mut VisualTestContext, view: &View) -> Option<(String, boo
     view.read_with(cx, |root, _| root.documents_root_switch.status.clone())
 }
 
+#[gpui::test]
+fn workspace_search_discards_a_late_result_after_switching_roots(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_read_gate(Some(&gate));
+    fixture.old.put(
+        DocumentState::new(ProjectId::new("old"), "Old meeting", "old.wav"),
+        "预算",
+    );
+    fixture.new.put(
+        DocumentState::new(ProjectId::new("new"), "New meeting", "new.wav"),
+        "预算",
+    );
+    let (view, cx) = open_workspace(cx, &fixture);
+    cx.simulate_keystrokes("cmd-shift-f");
+    let input = view.read_with(cx, |root, _| root.search.input.clone());
+    focus_field(cx, &input);
+    gate.arm();
+    cx.simulate_input("预算");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    // The held repository read must leave UI interaction and switching usable.
+    choose(cx, &view, fixture.new.path());
+    assert_eq!(fixture.root(), fixture.new.path());
+    assert!(crate::tests::field_value(cx, &input).is_empty());
+    gate.release();
+    crate::document_tests::search(cx, &view, "预算");
+    let found = view.read_with(cx, |root, _| {
+        root.search
+            .result
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .hits
+            .clone()
+    });
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].document_id.as_str(), "new");
+    assert!(cx.debug_bounds("search-open-old").is_none());
+}
+
+#[gpui::test]
+fn workspace_search_clearing_or_editing_invalidates_a_held_query(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_read_gate(Some(&gate));
+    fixture.old.put(
+        DocumentState::new(ProjectId::new("old"), "Review", "old.wav"),
+        "预算",
+    );
+    let (view, cx) = open_workspace(cx, &fixture);
+    cx.simulate_keystrokes("cmd-shift-f");
+    let input = view.read_with(cx, |root, _| root.search.input.clone());
+    focus_field(cx, &input);
+    gate.arm();
+    cx.simulate_input("预算");
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    // Clearing while a real worker is held does not block the desktop.
+    click_selector(cx, "workspace-search-clear");
+    assert!(!view.read_with(cx, |root, _| root.search.pending));
+    assert!(cx.debug_bounds("project-tree").is_some());
+    gate.release();
+    crate::document_tests::search(cx, &view, "不存在");
+    assert!(cx.debug_bounds("workspace-search-empty").is_some());
+    // A new draft immediately hides the previous results, until Enter.
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input("预算");
+    assert!(view.read_with(cx, |root, _| root.search.result.is_none()));
+    assert!(!view.read_with(cx, |root, _| root.search.pending));
+}
+
 /// Same IDs and revisions in both roots, with b sharing a's recording.
 fn drag_documents(root: &DocumentsRoot, prefix: &str) {
     put(root, "a", &format!("{prefix} a"));

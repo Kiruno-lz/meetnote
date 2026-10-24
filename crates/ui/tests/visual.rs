@@ -7,6 +7,9 @@
 //! MEETNOTE_VISUAL=1 cargo test -p ui --test visual
 //! ```
 //!
+//! `MEETNOTE_VISUAL_FILTER=meetings-search` captures or compares only scene
+//! names containing that text. A filtered run does not validate the full matrix.
+//!
 //! Rewrite the baselines after an intended change, then review every PNG
 //! against the visual checklist in `docs/plan/ui-plan.md`:
 //!
@@ -141,7 +144,8 @@ mod screenshots {
         (Route::Settings, "settings"),
     ];
     /// Overlays captured over a route, with their baseline file name prefix.
-    const OVERLAYS: [(Route, Overlay, &str); 20] = [
+    const OVERLAYS: [(Route, Overlay, &str); 21] = [
+        (Route::Meetings, Overlay::WorkspaceSearch, "meetings-search"),
         (Route::Meetings, Overlay::EmptyWorkspace, "meetings-empty"),
         (
             Route::Meetings,
@@ -265,14 +269,28 @@ mod screenshots {
             std::env::temp_dir().join(format!("meetnote-visual-{}", std::process::id()));
         let mut scale_factor = None;
         let mut failures = 0;
-        let screenshots = APPEARANCES.iter().flat_map(|appearance| {
-            ROUTES
-                .iter()
-                .map(move |(route, route_name)| (*appearance, *route, None, *route_name))
-                .chain(OVERLAYS.iter().map(move |(route, overlay, name)| {
-                    (*appearance, *route, Some(*overlay), *name)
-                }))
-        });
+        let filter = std::env::var("MEETNOTE_VISUAL_FILTER").ok();
+        let screenshots = APPEARANCES
+            .iter()
+            .flat_map(|appearance| {
+                ROUTES
+                    .iter()
+                    .map(move |(route, route_name)| (*appearance, *route, None, *route_name))
+                    .chain(OVERLAYS.iter().map(move |(route, overlay, name)| {
+                        (*appearance, *route, Some(*overlay), *name)
+                    }))
+            })
+            .filter(|((appearance, ..), _, _, route)| {
+                filter
+                    .as_ref()
+                    .is_none_or(|filter| format!("{route}-{appearance}").contains(filter))
+            })
+            .collect::<Vec<_>>();
+        let total = screenshots.len();
+        if total == 0 {
+            println!("visual: no scenes match MEETNOTE_VISUAL_FILTER");
+            return ExitCode::FAILURE;
+        }
         for ((appearance_name, theme, material), route, overlay, route_name) in screenshots {
             let name = format!("{route_name}-{appearance_name}");
             let appearance = AppearanceSettings { theme, material };
@@ -392,9 +410,9 @@ mod screenshots {
                 "visual: wrote {} at scale factor {scale_factor}; review every PNG",
                 path.display()
             );
+            println!("visual: generated {total} screenshots; filter={filter:?}; review the captured scenes");
             return ExitCode::SUCCESS;
         }
-        let total = APPEARANCES.len() * (ROUTES.len() + OVERLAYS.len());
         if failures > 0 {
             println!(
                 "visual: {failures} of {total} screenshots changed by more than {}‰ of their pixels",
