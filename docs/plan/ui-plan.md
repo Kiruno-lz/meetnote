@@ -135,7 +135,7 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 |---|---|---|
 | Application shell | 窗口标题 MeetNote、透明标题栏、交通灯与拖拽条，最小 900×600；玻璃侧栏含四个入口（高亮当前 route）、导入音频与 Meetings 下的项目树；不透明内容平面；`crates/ui/src/theme/` 的深/浅 × 玻璃/不透明 token，跟随系统外观与 reduce transparency/motion；窗口第一层为 MeetNote 窗口根；frosted 浮层与 edge fade 原语；全部控件为带 label 的 gpui-base 包装；每个可聚焦控件只在键盘聚焦时显示焦点环；Tab 顺序为侧栏四个入口、导入音频、页面，Tab 到达滚动区内的控件时自动滚入视野；侧栏是带 label 的 tab list，上下键切换；项目树是一个 Tab 停靠点，方向键选择、展开与进入父子，Option-↑/↓ 调整同级顺序、Option-→ 移入上一兄弟、Option-← 移到上一层末尾，经同一带 revision 的 `Reparent`/`Reorder` 写回；对话框关闭后焦点回到打开者，关闭 Detail 回到"打开详情"，切换 route 后停在对应侧栏入口；选择型按钮为 radio 角色，由带 label 的 `RadioGroup` 包裹 | Accessibility Inspector 手工检查 |
 | Assistant | 内容平面底部的 frosted 输入条（Enter 发送）、场景/scope、连接、结果、warning/多 mutation、确认/undo 与进度渲染；任务状态由共享 JobRuntime 的 `JobEvent` 按请求投影；pending 过期后队列推进到下一项 | — |
-| Workspace search | 项目侧栏按 Enter 搜索已保存的标题、标签、摘要、转写与 Markdown；`⌘⇧F` 聚焦；显示命中片段、来源与转写时间，最多 50 个匹配文档；原文命中打开 Original，Markdown 命中打开编辑器；保留搜索结果，清除后展开所选文档祖先；外部变更重新查询，编辑查询或切换工作区拒绝迟到结果；读取失败显示原因 | 命中段落自动定位、日期/标签筛选与大规模索引，见[产品优先级](product-opportunities.md) |
+| Workspace search | 项目侧栏按 Enter 搜索已保存的标题、标签、摘要、转写与 Markdown；`⌘⇧F` 展开侧栏并聚焦；显示命中片段、来源与转写时间，最多 50 个匹配文档；原文命中打开 Original，无处理记录或部分对齐时仍保留原始转写；Markdown 命中打开独立的最新保存笔记，未保存草稿保留，显式切回编辑时刷新干净草稿；保留搜索结果，清除后展开所选文档祖先；外部变更重新查询和读取笔记，编辑查询或切换工作区拒绝迟到结果；读取失败显示原因，笔记可重试 | 命中段落自动定位、日期/标签筛选与大规模索引，见[产品优先级](product-opportunities.md) |
 | Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original/编辑、处理与取消；内容平面顶部列出 scanner issue（路径与原因）；标题、标签、状态、摘要与正文按文档保存草稿，经一次带 revision 的 `Update` 提交；树移动经 `Reparent`/`Reorder` 命令；revision 冲突显示通知并保留草稿，用户重新加载后才丢弃；Original 视图的 speaker 列表支持改名与确认后合并；scanner issue 按 `DocumentIssueKind` 本地化；选中文档的音频在后台检查，缺失或 checksum 不符时在树、标题栏与 Detail 标记并禁止处理，经文件选择按 revision 重新关联；列表读取与处理启动在后台执行，启动完成前的取消在启动返回后生效 | — |
 | Detail | 内容平面内右侧不透明面板：identity、audio source、层级、document status、revision、processing provenance、最近错误、结果统计与缺失的 provenance 项、transcript | 单文档的 Agent 变更来源（mutation journal 尚无按文档查询） |
 | Models | catalog 分组、下载、暂停、继续、取消和进度，安装状态来自 `InstallationService`；卡片显示 license、来源与短 checksum，展开后显示完整 checksum、逐 backend 与逐文件 probe 结果；probe 结果、类型与 UTC 时间；本地化的失败原因与不可读记录；`ready` 且缺失/部分安装的模型可下载或重试，已安装模型可重新 probe | — |
@@ -171,7 +171,7 @@ root document
 - 编辑标题、标签、总结、正文或状态时携带当前 revision；冲突不得覆盖磁盘内容。
 - processing/results 只读，语义字段可编辑。
 
-Detail 作为右侧不透明面板，以 hairline 与内容区分隔；展示 identity、audio source、hierarchy、document status、revision、processing provenance 与结果统计；Markdown 正文在内容平面的 Summary/Original/编辑模式中阅读与修改，Detail 不重复显示。关闭面板不得取消处理或下载任务。
+Detail 作为右侧不透明面板，以 hairline 与内容区分隔；展示 identity、audio source、hierarchy、document status、revision、processing provenance 与结果统计；内容平面提供 Summary/Original/笔记/编辑模式，Markdown 在笔记中读取已保存正文、在编辑中维护草稿，Detail 不重复显示。关闭面板不得取消处理或下载任务。
 
 ## Assistant
 
