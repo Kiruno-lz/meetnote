@@ -153,6 +153,10 @@ impl RootView {
     pub(crate) fn focus_workspace_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.navigate(Route::Meetings, cx);
         self.ui.sidebar_open = true;
+        let now = cx.background_executor().now();
+        self.sidebar_sizing.update(cx, |sizing, _| {
+            sizing.set_open(true, std::time::Duration::ZERO, now);
+        });
         self.search
             .input
             .read(cx)

@@ -57,6 +57,35 @@ pub(crate) fn search(cx: &mut VisualTestContext, view: &View, query: &str) {
 }
 
 #[gpui::test]
+fn workspace_search_shortcut_reopens_closed_and_folding_sidebars(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "Notes");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    let width = rendered(cx, "project-sidebar").size.width;
+    for elapsed in [
+        std::time::Duration::from_secs(1),
+        std::time::Duration::from_millis(40),
+    ] {
+        cx.simulate_keystrokes("ctrl-cmd-s");
+        cx.executor().advance_clock(elapsed);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-shift-f");
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            rendered(cx, "project-sidebar").size.width,
+            width,
+            "the shortcut must reopen the real sidebar layout"
+        );
+        let input = view.read_with(cx, |root, _| root.search.input.clone());
+        assert!(cx.update(
+            |window, cx| gpui::Focusable::focus_handle(input.read(cx), cx).is_focused(window)
+        ));
+    }
+}
+
+#[gpui::test]
 fn workspace_search_reveals_keyboard_results_in_a_minimum_window(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
     for index in 0..40 {
