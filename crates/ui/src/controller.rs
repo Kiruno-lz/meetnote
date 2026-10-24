@@ -525,6 +525,8 @@ pub(crate) struct RootView {
     pub(crate) assistant_save_pending: bool,
     pub(crate) projects: Vec<DocumentState>,
     pub(crate) search: crate::search::WorkspaceSearch,
+    pub(crate) saved_document: Option<crate::editor::SavedDocument>,
+    saved_document_generation: u64,
     pub(crate) ui: UiState,
     pub(crate) assistant: AssistantController,
     pub(crate) assistant_inputs: AssistantInputs,
@@ -787,6 +789,8 @@ impl RootView {
             settings_draft,
             projects: Vec::new(),
             search,
+            saved_document: None,
+            saved_document_generation: 0,
             ui,
             assistant: AssistantController::default(),
             assistant_inputs,
@@ -943,6 +947,8 @@ impl RootView {
 
     fn begin_projects_reload(&mut self) -> u64 {
         self.search.invalidate();
+        self.saved_document_generation += 1;
+        self.saved_document = None;
         self.projects_generation += 1;
         self.projects_generation
     }
@@ -3265,7 +3271,74 @@ impl RootView {
                 .set_offset(gpui::Point::default());
         }
         self.ui.content_mode = mode;
+        if mode == ContentMode::Edit {
+            if let Some(Ok(record)) = self
+                .saved_document
+                .as_ref()
+                .filter(|saved| self.ui.selected_project.as_ref() == Some(&saved.document_id))
+                .and_then(|saved| saved.outcome.as_ref())
+            {
+                self.editor
+                    .follow_saved_if_clean(record, &self.projects, self.ui.locale, cx);
+            }
+        }
+        if mode == ContentMode::Markdown {
+            if let Some(id) = self.ui.selected_project.clone() {
+                self.load_saved_document(id, cx);
+            }
+        }
         cx.notify();
+    }
+
+    pub(crate) fn load_saved_document(&mut self, document_id: ProjectId, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
+        self.saved_document_generation += 1;
+        let generation = self.saved_document_generation;
+        self.saved_document = Some(crate::editor::SavedDocument {
+            document_id: document_id.clone(),
+            outcome: None,
+        });
+        let documents = self.services.workspace.documents().frozen();
+        cx.spawn(async move |this, cx| {
+            let outcome = runtime::spawn_blocking(move || documents.read(&document_id)).await;
+            this.update(cx, |this, cx| {
+                if generation != this.saved_document_generation {
+                    return;
+                }
+                let outcome = match outcome {
+                    Ok(Some(record)) => Ok(record),
+                    Ok(None) => Err(i18n::text(this.ui.locale, "project_missing").into()),
+                    Err(error) => Err(i18n::message(
+                        this.ui.locale,
+                        "document_read_failed",
+                        &error,
+                    )),
+                };
+                if let Some(saved) = &mut this.saved_document {
+                    saved.outcome = Some(outcome);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn ensure_saved_document(&mut self, cx: &mut Context<Self>) {
+        if self.ui.route == Route::Meetings && self.ui.content_mode == ContentMode::Markdown {
+            if let Some(id) = self.ui.selected_project.clone() {
+                if self
+                    .saved_document
+                    .as_ref()
+                    .is_none_or(|saved| saved.document_id != id)
+                {
+                    self.load_saved_document(id, cx);
+                }
+            }
+        }
     }
 
     /// Shows the selected document's draft in the editor, first reading it
@@ -5439,6 +5512,7 @@ impl Render for RootView {
         self.focus_awaiting_review(window, cx);
         self.ensure_settings_selectors(window, cx);
         self.ensure_document_editor(cx);
+        self.ensure_saved_document(cx);
         let selected = self
             .ui
             .selected_project

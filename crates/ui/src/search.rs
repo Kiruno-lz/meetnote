@@ -140,13 +140,14 @@ impl RootView {
         }
         self.ui.content_mode = match hit.source {
             SearchSource::Transcript => ContentMode::Original,
-            // Markdown is edited in the document editor; Summary only shows
-            // the semantic summary and would hide a Markdown-only match.
-            SearchSource::Markdown => ContentMode::Edit,
+            SearchSource::Markdown => ContentMode::Markdown,
             _ => ContentMode::Summary,
         };
         self.navigate(Route::Meetings, cx);
         self.select_project(hit.document_id.clone(), cx);
+        if hit.source == SearchSource::Markdown {
+            self.load_saved_document(hit.document_id.clone(), cx);
+        }
         self.reveal_tree_selection = true;
     }
 

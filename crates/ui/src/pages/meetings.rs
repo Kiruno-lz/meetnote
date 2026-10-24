@@ -393,7 +393,7 @@ fn main_panel(
         let mode = root.ui.content_mode;
         let scroll = root.scroll.meeting_content.clone();
         let empty = (match mode {
-            ContentMode::Edit => false,
+            ContentMode::Edit | ContentMode::Markdown => false,
             ContentMode::Original => !original_available,
             ContentMode::Summary => !ready,
         })
@@ -413,6 +413,7 @@ fn main_panel(
             .bg(tokens.surface);
         content = match mode {
             ContentMode::Edit => content.child(editor_form(root, project, &tokens, cx)),
+            ContentMode::Markdown => content.child(saved_markdown(root, project, &tokens, cx)),
             ContentMode::Summary if ready => content.child(match &project.content.summary {
                 Some(summary) => {
                     reading(summary.clone()).debug_selector(|| "document-summary".into())
@@ -448,6 +449,10 @@ fn main_panel(
                 crate::components::mode_button(tr(locale, "original"), ContentMode::Original, cx),
             );
         }
+        controls = controls.option(
+            mode == ContentMode::Markdown,
+            crate::components::mode_button(tr(locale, "saved_markdown"), ContentMode::Markdown, cx),
+        );
         controls = controls.option(
             mode == ContentMode::Edit,
             crate::components::mode_button(tr(locale, "edit"), ContentMode::Edit, cx),
@@ -792,6 +797,59 @@ fn reading(text: impl IntoElement) -> gpui::Div {
         .text_sm()
         .line_height(relative(READING_LINE_HEIGHT))
         .child(text)
+}
+
+fn saved_markdown(
+    root: &RootView,
+    project: &DocumentState,
+    tokens: &Tokens,
+    cx: &mut Context<RootView>,
+) -> AnyElement {
+    let locale = root.ui.locale;
+    let saved = root
+        .saved_document
+        .as_ref()
+        .filter(|saved| &saved.document_id == project.id());
+    match saved.and_then(|saved| saved.outcome.as_ref()) {
+        Some(Ok(record)) => div()
+            .flex()
+            .flex_col()
+            .gap(tokens.spacing.md)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(tokens.text_muted)
+                    .child(tr(locale, "saved_markdown_hint")),
+            )
+            .child(
+                reading(record.markdown.clone()).debug_selector(|| "saved-markdown-content".into()),
+            )
+            .into_any_element(),
+        Some(Err(error)) => div()
+            .flex()
+            .flex_col()
+            .gap(tokens.spacing.md)
+            .child(
+                div()
+                    .debug_selector(|| "saved-markdown-error".into())
+                    .child(error.clone()),
+            )
+            .child(
+                Button::new("retry-saved-markdown", tr(locale, "retry_document_read"))
+                    .debug_selector(|| "retry-saved-markdown".into())
+                    .disabled(root.documents_root_switch.switching)
+                    .on_click(cx.listener(|root, _, _, cx| {
+                        if let Some(id) = root.ui.selected_project.clone() {
+                            root.load_saved_document(id, cx);
+                        }
+                    })),
+            )
+            .into_any_element(),
+        None => div()
+            .debug_selector(|| "saved-markdown-loading".into())
+            .child(tr(locale, "document_loading"))
+            .into_any_element(),
+    }
 }
 
 /// The speaker-labelled transcript as turns: each speaker's name in its

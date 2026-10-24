@@ -86,6 +86,122 @@ fn workspace_search_shortcut_reopens_closed_and_folding_sidebars(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn workspace_search_shows_saved_markdown_without_replacing_a_dirty_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "原笔记");
+    let (view, cx, changes) = open_on(cx, &documents);
+    open_editor(cx, &view, "meeting");
+    let body = view.read_with(cx, |root, _| root.editor.body.clone());
+    retype_area(cx, &body, "未保存草稿");
+    std::fs::write(documents.path().join("meeting/document.md"), "新的决定").unwrap();
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    search(cx, &view, "新的决定");
+    click_selector(cx, "search-open-meeting");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|saved| saved.outcome.is_some())
+    });
+    assert!(
+        cx.debug_bounds("saved-markdown-content").is_some(),
+        "a saved-content match must have a separate reader instead of showing the dirty draft"
+    );
+    assert_eq!(
+        view.read_with(cx, |root, _| root
+            .saved_document
+            .as_ref()
+            .unwrap()
+            .outcome
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .markdown
+            .clone()),
+        "新的决定"
+    );
+    click_selector(cx, "content-mode-edit");
+    assert_eq!(area_value(cx, &body), "未保存草稿");
+    assert_eq!(documents.read("meeting").markdown, "新的决定");
+}
+
+#[gpui::test]
+fn saved_markdown_refreshes_a_clean_editor_when_edit_is_chosen(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "原笔记");
+    let (view, cx, changes) = open_on(cx, &documents);
+    open_editor(cx, &view, "meeting");
+    let body = view.read_with(cx, |root, _| root.editor.body.clone());
+    std::fs::write(documents.path().join("meeting/document.md"), "新的决定").unwrap();
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    search(cx, &view, "新的决定");
+    click_selector(cx, "search-open-meeting");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|saved| saved.outcome.is_some())
+    });
+    click_selector(cx, "content-mode-edit");
+    assert_eq!(
+        area_value(cx, &body),
+        "新的决定",
+        "a clean editor should follow the saved document when explicitly opened"
+    );
+}
+
+#[gpui::test]
+fn saved_markdown_refreshes_external_changes_and_retries_failed_reads(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "First notes");
+    let (view, cx, changes) = open_on(cx, &documents);
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|saved| saved.outcome.is_some())
+    });
+    std::fs::write(documents.path().join("meeting/document.md"), "New notes").unwrap();
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .and_then(|saved| saved.outcome.as_ref())
+            .is_some_and(|outcome| {
+                outcome
+                    .as_ref()
+                    .is_ok_and(|record| record.markdown == "New notes")
+            })
+    });
+    std::fs::remove_file(documents.path().join("meeting/document.md")).unwrap();
+    // Reopening explicitly re-reads disk, even without a watcher event.
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .and_then(|saved| saved.outcome.as_ref())
+            .is_some_and(Result::is_err)
+    });
+    rendered(cx, "saved-markdown-error");
+    std::fs::write(
+        documents.path().join("meeting/document.md"),
+        "Restored notes",
+    )
+    .unwrap();
+    click_selector(cx, "retry-saved-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .and_then(|saved| saved.outcome.as_ref())
+            .is_some_and(|outcome| {
+                outcome
+                    .as_ref()
+                    .is_ok_and(|record| record.markdown == "Restored notes")
+            })
+    });
+    rendered(cx, "saved-markdown-content");
+}
+
+#[gpui::test]
 fn workspace_search_opens_raw_transcripts_without_processing_metadata(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
     let mut document = DocumentState::new(ProjectId::new("meeting"), "Review", "audio.wav");
@@ -198,11 +314,13 @@ fn workspace_search_refreshes_external_markdown_and_handles_empty_results(cx: &m
     search(cx, &view, "项目预算");
     click_selector(cx, "search-open-meeting");
     wait_for(cx, &view, |root| {
-        root.editor.shown() == Some(&ProjectId::new("meeting"))
+        root.saved_document
+            .as_ref()
+            .is_some_and(|saved| saved.outcome.is_some())
     });
     assert_eq!(
         view.read_with(cx, |root, _| root.ui.content_mode),
-        crate::state::ContentMode::Edit
+        crate::state::ContentMode::Markdown
     );
     std::fs::write(documents.path().join("meeting/document.md"), "新的决定").unwrap();
     changes.unbounded_send(DocumentChange::Changed).unwrap();

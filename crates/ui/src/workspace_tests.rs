@@ -359,6 +359,59 @@ fn workspace_search_clearing_or_editing_invalidates_a_held_query(cx: &mut TestAp
     assert!(!view.read_with(cx, |root, _| root.search.pending));
 }
 
+#[gpui::test]
+fn saved_markdown_discards_an_old_workspace_read_with_the_same_document_id(
+    cx: &mut TestAppContext,
+) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let gate = crate::tests::Gate::default();
+    let fixture = Workspace::with_read_gate(Some(&gate));
+    fixture.old.put(
+        DocumentState::new(ProjectId::new("same"), "Old", "old.wav"),
+        "Old workspace notes",
+    );
+    fixture.new.put(
+        DocumentState::new(ProjectId::new("same"), "New", "new.wav"),
+        "New workspace notes",
+    );
+    let (view, cx) = open_workspace(cx, &fixture);
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    gate.arm();
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |_| gate.counts().0 == 1);
+    choose(cx, &view, fixture.new.path());
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    cx.run_until_parked();
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .and_then(|saved| saved.outcome.as_ref())
+            .is_some_and(|outcome| {
+                outcome
+                    .as_ref()
+                    .is_ok_and(|record| record.markdown == "New workspace notes")
+            })
+    });
+    gate.release();
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |root, _| root
+            .saved_document
+            .as_ref()
+            .unwrap()
+            .outcome
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .markdown
+            .clone()),
+        "New workspace notes"
+    );
+}
+
 /// Same IDs and revisions in both roots, with b sharing a's recording.
 fn drag_documents(root: &DocumentsRoot, prefix: &str) {
     put(root, "a", &format!("{prefix} a"));

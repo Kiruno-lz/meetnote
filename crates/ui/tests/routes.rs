@@ -315,6 +315,7 @@ fn the_content_views_form_one_segmented_control(cx: &mut TestAppContext) {
     let segments = [
         "content-mode-summary",
         "content-mode-original",
+        "content-mode-markdown",
         "content-mode-edit",
     ]
     .map(|selector| visible(cx, selector));
@@ -814,6 +815,7 @@ fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
         "go-to-models",
         "content-mode-summary",
         "content-mode-original",
+        "content-mode-markdown",
         "content-mode-edit",
     ]);
     assert_tab_order(cx, &expected);

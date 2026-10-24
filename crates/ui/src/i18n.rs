@@ -32,6 +32,10 @@ impl Locale {
 
 pub fn text(locale: Locale, key: &str) -> &'static str {
     match (locale, key) {
+        (Locale::ZhCn, "saved_markdown") => "笔记",
+        (Locale::EnUs, "saved_markdown") => "Notes",
+        (Locale::ZhCn, "saved_markdown_hint") => "已保存的 Markdown；未保存的修改保留在编辑器中。",
+        (Locale::EnUs, "saved_markdown_hint") => "Saved Markdown. Unsaved changes remain in the editor.",
         (Locale::ZhCn, "unattributed_speech") => "未标注说话人",
         (Locale::EnUs, "unattributed_speech") => "Unattributed speech",
         (Locale::ZhCn, "workspace_search") => "搜索工作区",
