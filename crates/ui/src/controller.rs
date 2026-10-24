@@ -5450,6 +5450,10 @@ impl Render for RootView {
             && selected
                 .as_ref()
                 .is_some_and(|document| document.processing.latest.is_none())
+            && selected.as_ref().is_some_and(|document| {
+                document.results.transcript.is_empty()
+                    && document.results.speaker_segments.is_empty()
+            })
         {
             self.ui.content_mode = ContentMode::Summary;
         }

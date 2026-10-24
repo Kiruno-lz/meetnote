@@ -387,10 +387,17 @@ fn main_panel(
         .children(issues_panel(root, &tokens, cx));
     if let Some(project) = project {
         let ready = project.processing.latest.is_some();
+        let original_available = ready
+            || !project.results.transcript.is_empty()
+            || !project.results.speaker_segments.is_empty();
         let mode = root.ui.content_mode;
         let scroll = root.scroll.meeting_content.clone();
-        let empty = (mode != ContentMode::Edit && !ready)
-            .then(|| unprocessed_state(root, project, &tokens, cx));
+        let empty = (match mode {
+            ContentMode::Edit => false,
+            ContentMode::Original => !original_available,
+            ContentMode::Summary => !ready,
+        })
+        .then(|| unprocessed_state(root, project, &tokens, cx));
         let mut content = div()
             .id("meeting-content")
             .debug_selector(|| "meeting-content".into())
@@ -412,7 +419,7 @@ fn main_panel(
                 }
                 None => reading(tr(locale, "no_summary")).text_color(tokens.text_muted),
             }),
-            ContentMode::Original if ready => content
+            ContentMode::Original if original_available => content
                 .child(speakers_panel(root, project, &tokens, cx))
                 .child(transcript(project, locale, &tokens)),
             _ => content,
@@ -435,7 +442,7 @@ fn main_panel(
                 mode == ContentMode::Summary,
                 crate::components::mode_button(tr(locale, "summary"), ContentMode::Summary, cx),
             );
-        if ready {
+        if original_available {
             controls = controls.option(
                 mode == ContentMode::Original,
                 crate::components::mode_button(tr(locale, "original"), ContentMode::Original, cx),

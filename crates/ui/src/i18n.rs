@@ -32,6 +32,8 @@ impl Locale {
 
 pub fn text(locale: Locale, key: &str) -> &'static str {
     match (locale, key) {
+        (Locale::ZhCn, "unattributed_speech") => "未标注说话人",
+        (Locale::EnUs, "unattributed_speech") => "Unattributed speech",
         (Locale::ZhCn, "workspace_search") => "搜索工作区",
         (Locale::ZhCn, "search_placeholder") => "搜索原文、笔记、标题…",
         (Locale::ZhCn, "search_submit") => "搜索",

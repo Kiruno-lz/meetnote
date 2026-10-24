@@ -20,6 +20,7 @@ use crate::{
 use contracts::SpeakerProfile;
 use domain::{DocumentState, ProjectId};
 use gpui::{prelude::*, App, Context, Entity, Subscription, Window};
+use std::collections::BTreeSet;
 
 /// One speaker of a document's results.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,26 +59,60 @@ pub(crate) struct TranscriptTurn {
 /// of one speaker under one name.
 pub(crate) fn transcript_turns(state: &DocumentState, locale: Locale) -> Vec<TranscriptTurn> {
     let speakers = document_speakers(state);
-    let mut turns: Vec<(&str, TranscriptTurn)> = Vec::new();
-    for segment in &state.results.speaker_segments {
+    let mut segments: Vec<_> = state
+        .results
+        .speaker_segments
+        .iter()
+        .map(|segment| {
+            (
+                Some(segment.speaker_id.as_str()),
+                segment.start_ms,
+                segment.end_ms,
+                segment.text.as_str(),
+            )
+        })
+        .collect();
+    // External documents may contain raw ASR without aligned speaker rows,
+    // or only a partial alignment. Keep every searchable text visible without
+    // inventing a speaker attribution or duplicating identical aligned text.
+    let aligned: BTreeSet<_> = state
+        .results
+        .speaker_segments
+        .iter()
+        .map(|segment| {
+            (
+                segment.transcript_segment_id.as_str(),
+                segment.text.as_str(),
+                segment.start_ms,
+                segment.end_ms,
+            )
+        })
+        .collect();
+    for raw in &state.results.transcript {
+        if !aligned.contains(&(raw.id.as_str(), raw.text.as_str(), raw.start_ms, raw.end_ms)) {
+            segments.push((None, raw.start_ms, raw.end_ms, raw.text.as_str()));
+        }
+    }
+    segments.sort_by_key(|(_, start, end, _)| (*start, *end));
+    let mut turns: Vec<(Option<&str>, TranscriptTurn)> = Vec::new();
+    for (speaker_id, start_ms, _, text) in segments {
         match turns.last_mut() {
-            Some((speaker, turn)) if *speaker == segment.speaker_id => {
-                turn.paragraphs.push(segment.text.clone());
+            Some((speaker, turn)) if *speaker == speaker_id => {
+                turn.paragraphs.push(text.to_string());
             }
             _ => {
-                let speaker = speakers
-                    .iter()
-                    .find(|speaker| speaker.id == segment.speaker_id);
+                let speaker =
+                    speaker_id.and_then(|id| speakers.iter().find(|speaker| speaker.id == id));
                 turns.push((
-                    &segment.speaker_id,
+                    speaker_id,
                     TranscriptTurn {
-                        order: speaker.map_or(0, |speaker| speaker.order),
+                        order: speaker.map_or(speakers.len(), |speaker| speaker.order),
                         name: speaker.map_or_else(
-                            || segment.speaker_id.clone(),
+                            || i18n::text(locale, "unattributed_speech").to_string(),
                             |speaker| speaker.name(locale),
                         ),
-                        start_ms: segment.start_ms,
-                        paragraphs: vec![segment.text.clone()],
+                        start_ms,
+                        paragraphs: vec![text.to_string()],
                     },
                 ));
             }
@@ -627,6 +662,43 @@ mod tests {
             Locale::ZhCn
         )
         .is_empty());
+    }
+
+    #[test]
+    fn raw_transcript_rows_remain_visible_without_duplicate_alignment() {
+        let mut state = DocumentState::new(ProjectId::new("doc"), "Doc", "audio.wav");
+        let aligned = segment("covered", "speaker-0", Some("Alice"));
+        state.results.speaker_segments.push(aligned.clone());
+        state.results.transcript = vec![
+            domain::TranscriptSegment {
+                id: "covered".into(),
+                start_ms: 0,
+                end_ms: 1000,
+                text: aligned.text.clone(),
+            },
+            domain::TranscriptSegment {
+                id: "raw".into(),
+                start_ms: 1000,
+                end_ms: 2000,
+                text: "Unaligned text".into(),
+            },
+            domain::TranscriptSegment {
+                id: "covered".into(),
+                start_ms: 2000,
+                end_ms: 3000,
+                text: "Different raw text".into(),
+            },
+        ];
+        let turns = transcript_turns(&state, Locale::EnUs);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].name, "Alice");
+        assert_eq!(turns[0].paragraphs, vec!["covered"]);
+        assert_eq!(turns[1].name, "Unattributed speech");
+        assert_eq!(turns[1].start_ms, 1000);
+        assert_eq!(
+            turns[1].paragraphs,
+            vec!["Unaligned text", "Different raw text"]
+        );
     }
 
     fn profile(id: &str) -> SpeakerProfile {

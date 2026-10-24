@@ -86,6 +86,27 @@ fn workspace_search_shortcut_reopens_closed_and_folding_sidebars(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn workspace_search_opens_raw_transcripts_without_processing_metadata(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let mut document = DocumentState::new(ProjectId::new("meeting"), "Review", "audio.wav");
+    document.results.transcript.push(TranscriptSegment {
+        id: "raw-1".into(),
+        start_ms: 1000,
+        end_ms: 2000,
+        text: "原始转写内容".into(),
+    });
+    documents.put(document, "Notes");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    search(cx, &view, "原始转写内容");
+    click_selector(cx, "search-open-meeting");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Original
+    );
+    rendered(cx, "transcript-turn-0");
+}
+
+#[gpui::test]
 fn workspace_search_reveals_keyboard_results_in_a_minimum_window(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
     for index in 0..40 {
