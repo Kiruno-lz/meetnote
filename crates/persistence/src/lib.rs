@@ -177,16 +177,34 @@ impl DocumentPackage {
     }
 
     pub fn save(&self) -> Result<(), DocumentPackageError> {
-        self.validate()?;
+        let state = self.state_bytes_for_write()?;
         fs::create_dir_all(&self.directory).map_err(|source| DocumentPackageError::Write {
             path: self.directory.clone(),
             source,
         })?;
-        let state = serde_json::to_vec_pretty(&self.state)
-            .map_err(|source| DocumentPackageError::SerializeState { source })?;
         write_atomic(&self.state_path(), &state)?;
         write_atomic(&self.markdown_path(), self.markdown.as_bytes())?;
         Ok(())
+    }
+
+    /// Check both serialized inputs before changing either file. Staged
+    /// transactions use the same preflight as an ordinary package save.
+    fn state_bytes_for_write(&self) -> Result<Vec<u8>, DocumentPackageError> {
+        self.validate()?;
+        let state = serde_json::to_vec_pretty(&self.state)
+            .map_err(|source| DocumentPackageError::SerializeState { source })?;
+        for (path, length) in [
+            (self.state_path(), state.len()),
+            (self.markdown_path(), self.markdown.len()),
+        ] {
+            if length > MAX_DOCUMENT_PACKAGE_FILE_BYTES {
+                return Err(DocumentPackageError::TooLarge {
+                    path,
+                    max_bytes: MAX_DOCUMENT_PACKAGE_FILE_BYTES,
+                });
+            }
+        }
+        Ok(state)
     }
 
     fn validate(&self) -> Result<(), DocumentPackageError> {
@@ -1125,7 +1143,11 @@ impl FileDocumentRepository {
     ) -> Result<(), String> {
         validate_document_id(document.id().as_str()).map_err(|error| error.to_string())?;
         let directory = self.root().join(document.id().as_str());
-        let existing = DocumentPackage::load(&directory).ok();
+        let existing = match DocumentPackage::load(&directory) {
+            Ok(package) => Some(package),
+            Err(DocumentPackageError::NotDirectory(_)) if !directory.exists() => None,
+            Err(error) => return Err(error.to_string()),
+        };
         if let Some(existing) = &existing {
             document.schema.revision = existing.state.revision().saturating_add(1);
         }
@@ -1440,14 +1462,12 @@ impl FileDocumentRepository {
             record.markdown.clone(),
         )
         .map_err(|error| DocumentMutationStoreError::Transaction(error.to_string()))?;
+        let state = package
+            .state_bytes_for_write()
+            .map_err(|error| DocumentMutationStoreError::Transaction(error.to_string()))?;
         fs::create_dir_all(package.directory()).map_err(|error| {
             DocumentMutationStoreError::Transaction(format!(
                 "cannot create staged document {id}: {error}"
-            ))
-        })?;
-        let state = serde_json::to_vec_pretty(&package.state).map_err(|error| {
-            DocumentMutationStoreError::Transaction(format!(
-                "cannot serialize staged document {id}: {error}"
             ))
         })?;
         write_atomic(&package.state_path(), &state)
@@ -3643,6 +3663,66 @@ mod tests {
             .iter()
             .any(|name| name == &child2_trash));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oversized_staged_records_preserve_the_whole_original_workspace() {
+        for oversized_state in [false, true] {
+            let root = std::env::temp_dir().join(format!(
+                "meetnote-oversized-transaction-{}",
+                DocumentId::new_uuid()
+            ));
+            let repository = FileDocumentRepository::open(&root).unwrap();
+            let original = DocumentState::new(DocumentId::new("parent"), "Original", "a.wav");
+            repository
+                .save(original.clone(), Some("Original notes".into()))
+                .unwrap();
+            let before = repository.read(original.id()).unwrap().unwrap();
+            let mut child = DocumentRecord {
+                state: original.semantic_child(
+                    DocumentId::new("child"),
+                    "Child",
+                    0,
+                    1000,
+                    Vec::new(),
+                ),
+                markdown: "Notes".into(),
+            };
+            if oversized_state {
+                child.state.content.summary =
+                    Some("\n".repeat(MAX_DOCUMENT_PACKAGE_FILE_BYTES / 2 + 1));
+            } else {
+                child.markdown = "x".repeat(MAX_DOCUMENT_PACKAGE_FILE_BYTES + 1);
+            }
+            let result = repository.commit_agent_mutation(mutation_batch(
+                "oversized",
+                "fingerprint",
+                "undo-oversized",
+                vec![
+                    DocumentMutationWrite {
+                        record: updated_record(&original, "Updated"),
+                        expected_revision: Some(original.revision()),
+                        source_markdown_sha256: None,
+                    },
+                    DocumentMutationWrite {
+                        record: child,
+                        expected_revision: None,
+                        source_markdown_sha256: None,
+                    },
+                ],
+            ));
+            assert!(
+                result.is_err(),
+                "an oversized staged record must fail before publishing any document"
+            );
+            assert_eq!(repository.read(original.id()).unwrap().unwrap(), before);
+            assert!(!root.join("child").exists());
+            assert_no_transaction_workspace(&repository);
+            drop(repository);
+            let reopened = FileDocumentRepository::open(&root).unwrap();
+            assert_eq!(reopened.read(original.id()).unwrap().unwrap(), before);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

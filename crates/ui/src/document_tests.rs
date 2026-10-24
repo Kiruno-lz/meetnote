@@ -849,12 +849,17 @@ fn scanner_issues_list_path_and_reason_until_the_files_are_fixed(cx: &mut TestAp
     }
     assert!(cx.debug_bounds("project-row-valid").is_some());
 
-    // The broken package is repaired and the stray file removed.
+    // An external editor explicitly repairs the invalid package. Managed
+    // repository saves must refuse to overwrite unreadable existing assets.
     std::fs::remove_file(&stray).unwrap();
-    root.put(
+    persistence::DocumentPackage::new(
+        &broken,
         DocumentState::new(ProjectId::new("broken"), "Repaired", "broken.wav"),
         "# Repaired\n",
-    );
+    )
+    .unwrap()
+    .save()
+    .unwrap();
     changes.unbounded_send(DocumentChange::Changed).unwrap();
     wait_for(cx, &view, |root| {
         root.document_issues.is_empty() && root.projects.len() == 2
