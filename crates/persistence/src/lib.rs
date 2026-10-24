@@ -12,17 +12,43 @@ use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, RwLock};
 
 pub const DOCUMENT_MARKDOWN_FILENAME: &str = "document.md";
 pub const DOCUMENT_STATE_FILENAME: &str = "state.json";
-/// Bound one metadata input file without constructing a complete document.
+/// Maximum size of each document package input, including full reads.
 pub const MAX_DOCUMENT_PACKAGE_FILE_BYTES: usize = 16 * 1024 * 1024;
 const AGENT_MUTATION_DIRECTORY: &str = ".agent-mutations";
 const AGENT_MUTATION_JOURNAL_VERSION: u32 = 1;
+
+fn read_package_file(path: &Path) -> Result<Vec<u8>, DocumentPackageError> {
+    let read_error = |source| DocumentPackageError::Read {
+        path: path.to_path_buf(),
+        source,
+    };
+    let file = File::open(path).map_err(read_error)?;
+    let limit = MAX_DOCUMENT_PACKAGE_FILE_BYTES as u64;
+    let too_large = || DocumentPackageError::TooLarge {
+        path: path.to_path_buf(),
+        max_bytes: MAX_DOCUMENT_PACKAGE_FILE_BYTES,
+    };
+    if file.metadata().map_err(read_error)?.len() > limit {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::new();
+    // Enforce the limit while reading too, even if an external editor grows
+    // the file after metadata was checked.
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(read_error)?;
+    if bytes.len() > MAX_DOCUMENT_PACKAGE_FILE_BYTES {
+        return Err(too_large());
+    }
+    Ok(bytes)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocumentPackage {
@@ -53,10 +79,7 @@ impl DocumentPackage {
         }
         let state_path = directory.join(DOCUMENT_STATE_FILENAME);
         let markdown_path = directory.join(DOCUMENT_MARKDOWN_FILENAME);
-        let state_bytes = fs::read(&state_path).map_err(|source| DocumentPackageError::Read {
-            path: state_path.clone(),
-            source,
-        })?;
+        let state_bytes = read_package_file(&state_path)?;
         let legacy = serde_json::from_slice::<serde_json::Value>(&state_bytes)
             .map_err(|source| DocumentPackageError::InvalidState {
                 path: state_path.clone(),
@@ -70,11 +93,12 @@ impl DocumentPackage {
                 source,
             }
         })?;
-        let markdown =
-            fs::read_to_string(&markdown_path).map_err(|source| DocumentPackageError::Read {
+        let markdown = String::from_utf8(read_package_file(&markdown_path)?).map_err(|error| {
+            DocumentPackageError::Read {
                 path: markdown_path,
-                source,
-            })?;
+                source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+            }
+        })?;
         let package = Self {
             directory,
             state,
