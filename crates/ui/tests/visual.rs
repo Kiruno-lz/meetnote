@@ -10,6 +10,10 @@
 //! `MEETNOTE_VISUAL_FILTER=meetings-search` captures or compares only scene
 //! names containing that text. A filtered run does not validate the full matrix.
 //!
+//! Static captures use reduced motion, recorded in baseline.json, so repeat
+//! animations have a deterministic frame. L2 tests exercise normal animation
+//! timing separately; the resource probe restores normal motion.
+//!
 //! Rewrite the baselines after an intended change, then review every PNG
 //! against the visual checklist in `docs/plan/ui-plan.md`:
 //!
@@ -95,6 +99,7 @@ fn main() -> ExitCode {
     if !probe_requested {
         return screenshots;
     }
+    cx.update(|cx| cx.set_reduce_motion(false));
     let probe = resource_probe::run(&mut cx);
     if screenshots == ExitCode::SUCCESS && !probe {
         return ExitCode::FAILURE;
@@ -144,7 +149,8 @@ mod screenshots {
         (Route::Settings, "settings"),
     ];
     /// Overlays captured over a route, with their baseline file name prefix.
-    const OVERLAYS: [(Route, Overlay, &str); 21] = [
+    const OVERLAYS: [(Route, Overlay, &str); 22] = [
+        (Route::Meetings, Overlay::SavedMarkdown, "meetings-notes"),
         (Route::Meetings, Overlay::WorkspaceSearch, "meetings-search"),
         (Route::Meetings, Overlay::EmptyWorkspace, "meetings-empty"),
         (
@@ -257,6 +263,10 @@ mod screenshots {
             })
         });
         if let Some(recorded) = &recorded {
+            if json_field(recorded, "reduce_motion") != Some("true") {
+                println!("visual: baseline motion policy differs; regenerate with MEETNOTE_VISUAL_UPDATE=1");
+                return ExitCode::FAILURE;
+            }
             for (key, current) in &revisions {
                 println!(
                     "visual: {key} baseline {} / current {current}",
@@ -264,6 +274,8 @@ mod screenshots {
                 );
             }
         }
+
+        cx.update(|cx| cx.set_reduce_motion(true));
 
         let failures_directory =
             std::env::temp_dir().join(format!("meetnote-visual-{}", std::process::id()));
@@ -493,7 +505,7 @@ mod screenshots {
         let overlays = list(OVERLAYS.iter().map(|(_, _, name)| *name).collect());
         let appearances = list(APPEARANCES.iter().map(|(name, ..)| *name).collect());
         format!(
-            "{{\n{revisions}  \"scale_factor\": {scale_factor:?},\n  \"window\": {{ \"width\": {}, \"height\": {} }},\n  \"locale\": \"{}\",\n  \"routes\": [{routes}],\n  \"overlays\": [{overlays}],\n  \"appearances\": [{appearances}]\n}}\n",
+            "{{\n{revisions}  \"scale_factor\": {scale_factor:?},\n  \"reduce_motion\": true,\n  \"window\": {{ \"width\": {}, \"height\": {} }},\n  \"locale\": \"{}\",\n  \"routes\": [{routes}],\n  \"overlays\": [{overlays}],\n  \"appearances\": [{appearances}]\n}}\n",
             support::WINDOW_WIDTH,
             support::WINDOW_HEIGHT,
             support::LOCALE,
