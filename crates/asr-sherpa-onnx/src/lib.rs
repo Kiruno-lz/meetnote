@@ -1,5 +1,7 @@
 use application::{asr_descriptor, AsrBackend, AsrWindowSession, BackendFuture};
-use audio::{read_audio_mono_16k, AudioWindow, TARGET_SAMPLE_RATE_HZ};
+use audio::{
+    read_audio_mono_16k, AudioWindow, AudioWindowBounds, AudioWindowPlan, TARGET_SAMPLE_RATE_HZ,
+};
 use contracts::{
     AsrRequest, AsrResult, BackendDescriptor, BackendError, BackendErrorCode, ComputeDevice,
     ModelRef,
@@ -15,6 +17,7 @@ use std::sync::Arc;
 const SINGLE_GRAPH_MODEL_FILES: &[&str] = &["model.int8.onnx", "model.onnx"];
 const QWEN3_ENCODER_FILES: &[&str] = &["encoder.int8.onnx", "encoder.onnx"];
 const QWEN3_DECODER_FILES: &[&str] = &["decoder.int8.onnx", "decoder.onnx"];
+const WHOLE_FILE_BASELINE_LIMIT: u64 = TARGET_SAMPLE_RATE_HZ as u64 * 30;
 
 #[derive(Debug, Clone)]
 pub struct SherpaOnnxAsrBackend {
@@ -130,6 +133,34 @@ impl AsrWindowSession for SherpaWindowSession {
     ) -> Result<(), BackendError> {
         if context.is_cancelled() {
             return Err(cancelled_error());
+        }
+        let plan = inference_plan(&self.request.model);
+        if uses_bounded_inference(&self.request.model)
+            && window.samples.len() as u64 > plan.core_samples + 2 * plan.context_samples
+        {
+            for bounds in inference_bounds(&window, plan) {
+                if context.is_cancelled() {
+                    return Err(cancelled_error());
+                }
+                let start = (bounds.global_start_sample - window.global_start_sample) as usize;
+                let end = (bounds.global_end_sample - window.global_start_sample) as usize;
+                self.process_window(
+                    Arc::new(AudioWindow {
+                        sequence: window.sequence,
+                        sample_rate: window.sample_rate,
+                        samples: window.samples[start..end].to_vec().into(),
+                        global_start_sample: bounds.global_start_sample,
+                        global_end_sample: bounds.global_end_sample,
+                        valid_core_start_sample: bounds.valid_core_start_sample,
+                        valid_core_end_sample: bounds.valid_core_end_sample,
+                        source_total_samples: window.source_total_samples,
+                        is_final: window.is_final
+                            && bounds.global_end_sample == window.global_end_sample,
+                    }),
+                    context,
+                )?;
+            }
+            return Ok(());
         }
         let stream = self.recognizer.create_stream();
         stream.accept_waveform(window.sample_rate as i32, &window.samples);
@@ -257,6 +288,50 @@ fn model_family(model: &ModelRef) -> ModelFamily {
     }
 }
 
+fn uses_bounded_inference(model: &ModelRef) -> bool {
+    matches!(
+        model_family(model),
+        ModelFamily::Paraformer | ModelFamily::SenseVoice
+    )
+}
+
+fn inference_plan(model: &ModelRef) -> AudioWindowPlan {
+    let rate = u64::from(TARGET_SAMPLE_RATE_HZ);
+    match model_family(model) {
+        ModelFamily::Paraformer => AudioWindowPlan {
+            core_samples: 8 * rate,
+            context_samples: 2 * rate,
+        },
+        _ => AudioWindowPlan {
+            core_samples: 20 * rate,
+            context_samples: 5 * rate,
+        },
+    }
+}
+
+/// Partition only the parent's owned core; reuse its samples for bounded context.
+fn inference_bounds(
+    window: &AudioWindow,
+    plan: AudioWindowPlan,
+) -> impl Iterator<Item = AudioWindowBounds> + '_ {
+    plan.bounds_for_total(window.valid_core_end_sample - window.valid_core_start_sample)
+        .map(move |bounds| {
+            let start = window.valid_core_start_sample + bounds.valid_core_start_sample;
+            let end = window.valid_core_start_sample + bounds.valid_core_end_sample;
+            AudioWindowBounds {
+                sequence: bounds.sequence,
+                global_start_sample: start
+                    .saturating_sub(plan.context_samples)
+                    .max(window.global_start_sample),
+                global_end_sample: end
+                    .saturating_add(plan.context_samples)
+                    .min(window.global_end_sample),
+                valid_core_start_sample: start,
+                valid_core_end_sample: end,
+            }
+        })
+}
+
 fn validate_model_ref(model: &ModelRef) -> Result<(), BackendError> {
     if model.backend_id != "sherpa-onnx" {
         return Err(BackendError {
@@ -353,6 +428,34 @@ fn transcribe_sync(
         completed: 2,
         total: Some(3),
     });
+
+    if uses_bounded_inference(&request.model)
+        && audio.samples.len() as u64 > WHOLE_FILE_BASELINE_LIMIT
+    {
+        let total = audio.samples.len() as u64;
+        let mut session = backend.create_window_session(request)?;
+        session.process_window(
+            Arc::new(AudioWindow {
+                sequence: 0,
+                sample_rate: audio.sample_rate,
+                samples: audio.samples.into(),
+                global_start_sample: 0,
+                global_end_sample: total,
+                valid_core_start_sample: 0,
+                valid_core_end_sample: total,
+                source_total_samples: Some(total),
+                is_final: true,
+            }),
+            &context,
+        )?;
+        let result = session.finish()?;
+        context.report(Progress {
+            completed: 3,
+            total: Some(3),
+        });
+        context.completed();
+        return Ok(result);
+    }
 
     let config = build_config(&request, num_threads)?;
     let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| BackendError {
@@ -806,6 +909,54 @@ mod tests {
         let error = build_config(&request, 1).unwrap_err();
         assert_eq!(error.code, BackendErrorCode::DeviceUnavailable);
         assert!(error.message.contains("Core ML"));
+    }
+
+    #[test]
+    fn bounded_inference_preserves_every_core_sample_and_limits_context() {
+        let rate = u64::from(TARGET_SAMPLE_RATE_HZ);
+        let window = AudioWindow {
+            sequence: 3,
+            sample_rate: TARGET_SAMPLE_RATE_HZ,
+            samples: vec![0.; (90 * rate) as usize].into(),
+            global_start_sample: 45 * rate,
+            global_end_sample: 135 * rate,
+            valid_core_start_sample: 60 * rate,
+            valid_core_end_sample: 120 * rate,
+            source_total_samples: Some(200 * rate),
+            is_final: false,
+        };
+        for family in ["paraformer-zh", "sensevoice-small-int8"] {
+            let plan = inference_plan(&model_ref(family, Path::new("unused")));
+            let bounds = inference_bounds(&window, plan).collect::<Vec<_>>();
+            assert_eq!(bounds.first().unwrap().valid_core_start_sample, 60 * rate);
+            assert_eq!(bounds.last().unwrap().valid_core_end_sample, 120 * rate);
+            assert_eq!(
+                bounds.first().unwrap().global_start_sample,
+                60 * rate - plan.context_samples
+            );
+            assert_eq!(
+                bounds.last().unwrap().global_end_sample,
+                120 * rate + plan.context_samples
+            );
+            for pair in bounds.windows(2) {
+                assert_eq!(
+                    pair[0].valid_core_end_sample,
+                    pair[1].valid_core_start_sample
+                );
+                assert!(pair[0].global_start_sample <= pair[1].global_start_sample);
+                assert!(pair[0].global_end_sample <= pair[1].global_end_sample);
+            }
+            for bound in bounds {
+                assert!(
+                    bound.global_end_sample - bound.global_start_sample
+                        <= plan.core_samples + 2 * plan.context_samples
+                );
+                assert!(bound.global_start_sample >= window.global_start_sample);
+                assert!(bound.global_end_sample <= window.global_end_sample);
+                assert!(bound.valid_core_start_sample >= bound.global_start_sample);
+                assert!(bound.valid_core_end_sample <= bound.global_end_sample);
+            }
+        }
     }
 
     #[test]
