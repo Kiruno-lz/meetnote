@@ -9,7 +9,7 @@ import math
 import statistics
 from datetime import datetime, timezone
 from pathlib import Path
-from asr_benchmark import score, speech_normalized_score
+from asr_benchmark import score, speech_normalized_score, load_benchmark_run
 
 
 def main():
@@ -55,10 +55,7 @@ def main():
                 }
             )
             continue
-        predictions = [
-            json.loads(s)
-            for s in (report_path.parent / "prediction.jsonl").read_text().splitlines()
-        ]
+        _, _, predictions = load_benchmark_run(report_path.parent, report)
         groups = collections.defaultdict(list)
         for row in predictions:
             case = cases[row["caseId"]]
@@ -192,7 +189,7 @@ def main():
     ]
     for run in receipt:
         if run["failure"]:
-            lines.append(f"| {run['name']} | blocked | — | — | — | — | — | — | {run['failure']} |")
+            lines.append(f"| {run['name']} | 执行失败 | — | — | — | — | — | — | {run['failure']} |")
             continue
         for g in run["groups"]:
             rate = "—" if g["errorRate"] is None else f"{100*g['errorRate']:.2f}%"

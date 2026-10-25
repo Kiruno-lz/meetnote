@@ -67,6 +67,37 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def validate_prediction_coverage(cases: list[dict], rows: list[dict], repeats: int) -> None:
+    ids = [case["id"] for case in cases]
+    if not ids or len(set(ids)) != len(ids) or type(repeats) is not int or repeats < 1:
+        raise ValueError("invalid case inventory or repeat count")
+    expected = {(case_id, repeat) for case_id in ids for repeat in range(repeats)}
+    actual = [(row["caseId"], row["repeat"]) for row in rows]
+    if len(actual) != len(expected) or set(actual) != expected:
+        raise ValueError("incomplete or duplicate prediction coverage for expected repeats")
+
+
+def load_benchmark_run(path: Path, report: dict | None = None) -> tuple[dict, list, list]:
+    if report is None:
+        report = json.loads((path / "report.json").read_text())
+    if report["failure"]:
+        raise ValueError(f"incomplete run: {report['failure']}")
+    case_bytes = (path / "cases.json").read_bytes()
+    if hashlib.sha256(case_bytes).hexdigest() != report["casesSha256"]:
+        raise ValueError("case manifest mismatch")
+    prediction = path / "prediction.jsonl"
+    prediction_bytes = prediction.read_bytes()
+    if (
+        report.get("predictionSha256")
+        and hashlib.sha256(prediction_bytes).hexdigest() != report["predictionSha256"]
+    ):
+        raise ValueError("prediction checksum mismatch")
+    cases = json.loads(case_bytes)
+    rows = [json.loads(line) for line in prediction_bytes.splitlines()]
+    validate_prediction_coverage(cases, rows, report["config"].get("repeats", 1))
+    return report, cases, rows
+
+
 def validate_cases(cases: list[dict]) -> None:
     seen = set()
     for case in cases:
@@ -79,20 +110,14 @@ def validate_cases(cases: list[dict]) -> None:
             raise ValueError(f"audio checksum mismatch: {case['id']}")
 
 
-def summarize(cases: list[dict], rows: list[dict]) -> list[dict]:
+def summarize(cases: list[dict], rows: list[dict], expected_repeats: int = 1) -> list[dict]:
+    validate_prediction_coverage(cases, rows, expected_repeats)
     by_id = {case["id"]: case for case in cases}
-    seen = set()
     groups = defaultdict(list)
     for row in rows:
         key = row["caseId"], row["repeat"]
-        if key in seen or key[0] not in by_id:
-            raise ValueError("duplicate or unknown prediction")
-        seen.add(key)
         case = by_id[key[0]]
         groups[(case["language"], case.get("scenario", "native"), key[1])].append((case, row))
-    repeats = {row["repeat"] for row in rows}
-    if not repeats or seen != {(id, rep) for id in by_id for rep in repeats}:
-        raise ValueError("incomplete prediction coverage")
     result = []
     for (language, scenario, repeat), items in sorted(groups.items()):
         errors = units = failures = 0
@@ -163,6 +188,8 @@ def main() -> None:
         for p in artifact_paths
     ]
     args.output.mkdir(parents=True, exist_ok=True)
+    report_path = args.output / "report.json"
+    report_path.unlink(missing_ok=True)
     (args.output / "cases.json").write_bytes(args.cases.read_bytes())
     (args.output / "config.json").write_bytes(args.config.read_bytes())
     prediction = args.output / "prediction.jsonl"
@@ -205,7 +232,7 @@ def main() -> None:
         failure = failure or f"runner exit {exit_code}; incomplete output"
     # Preserve a crashed process and its partial predictions; never rank them as a full run.
     try:
-        groups = summarize(cases, rows) if not failure else []
+        groups = summarize(cases, rows, expected_repeats) if not failure else []
     except ValueError as error:
         failure = str(error)
         groups = []
@@ -216,6 +243,7 @@ def main() -> None:
         "config": config,
         "casesSha256": sha256(args.cases),
         "runnerSha256": runner_sha,
+        "predictionSha256": sha256(prediction) if prediction.exists() else None,
         "scoringVersion": "meetnote.asr-scoring.v2",
         "platform": platform.platform(),
         "machine": platform.machine(),
@@ -239,9 +267,9 @@ def main() -> None:
             "cores": os.cpu_count(),
             "memoryBytes": int(subprocess.check_output(["sysctl", "-n", "hw.memsize"])),
         }
-    (args.output / "report.json").write_text(
-        json.dumps(report, ensure_ascii=False, indent=2) + "\n"
-    )
+    report_part = args.output / ".report.json.part"
+    report_part.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
+    report_part.replace(report_path)
     print(
         json.dumps(
             {"output": str(args.output), "failure": failure, "groups": groups}, ensure_ascii=False

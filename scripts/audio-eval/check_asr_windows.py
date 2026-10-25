@@ -4,18 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from asr_benchmark import summarize, sha256
-
-
-def load_run(path):
-    report = json.loads((path / "report.json").read_text())
-    if report["failure"]:
-        raise ValueError(f"incomplete run: {report['failure']}")
-    if sha256(path / "cases.json") != report["casesSha256"]:
-        raise ValueError("case manifest mismatch")
-    cases = json.loads((path / "cases.json").read_text())
-    rows = [json.loads(line) for line in (path / "prediction.jsonl").read_text().splitlines()]
-    return cases, rows
+from asr_benchmark import summarize, load_benchmark_run
 
 
 def main():
@@ -26,8 +15,8 @@ def main():
     parser.add_argument("--max-clean", type=float, required=True)
     parser.add_argument("--max-noise", type=float, required=True)
     args = parser.parse_args()
-    cases, rows = load_run(args.run)
-    groups = summarize(cases, rows)
+    report, cases, rows = load_benchmark_run(args.run)
+    groups = summarize(cases, rows, report["config"].get("repeats", 1))
     budgets = {"composed-clean": args.max_clean, "composed-noise20db": args.max_noise}
     checked = set()
     for group in groups:
@@ -55,7 +44,7 @@ def main():
             raise ValueError(f"invalid segment timing: {row['caseId']}")
     preserved = 0
     if args.baseline:
-        before_cases, before_rows = load_run(args.baseline)
+        _, before_cases, before_rows = load_benchmark_run(args.baseline)
         before_cases = {case["id"]: case for case in before_cases}
         before_rows = {(row["caseId"], row["repeat"]): row for row in before_rows}
         for row in rows:
