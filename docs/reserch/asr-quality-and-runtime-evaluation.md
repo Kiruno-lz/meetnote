@@ -95,9 +95,23 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 
 模型驻留是后续可测方向：现有短音频每次加载 context，长音频 session 已复用一次模型。若增加跨任务缓存，必须由明确 owner 限制数量与内存，按 artifact/revision/device 失效，处理取消和工作区切换；当前结果不授权全局无限缓存或另建 worker 调度器。
 
-[组件资源回执](../quality/processing-profile.json)记录同一段 AMI 前 180 秒的独立 release CPU 分离对照：native 两次 166.715/166.256 秒，峰值 RSS 292 MiB；sherpa 两次 62.228/62.000 秒，733 MiB。未指定预期人数，输出分别为 3 与 21 位 speaker；该计数不是 DER，不能据速度更换默认分离器。同一音频的 Whisper Turbo Metal 两次 ASR 为 17.587/10.196 秒（含各次模型加载；两轮差异保留，未进一步拆分加载、内核预热与解码成本）。按独立组件均值估算串行 ASR+DIA，ASR 仅占约 7.7%；即使 ASR 时间减半，总时间预计也仅减少约 3.9%，此估算不含对齐/保存且不等于整链实测。完整处理速度应优先测量分离的 segmentation/embedding 和可验证的硬件执行路径，而不是只替换更大的 ASR 模型。
+[组件资源回执](../quality/processing-profile.json)记录同一段 AMI 前 180 秒的独立 release CPU 分离对照：native 两次 166.715/166.256 秒，峰值 RSS 292 MiB；sherpa 两次 62.228/62.000 秒，733 MiB。未指定预期人数，输出分别为 3 与 21 位 speaker；该计数不是 DER，不能据速度更换默认分离器。同一音频的 Whisper Turbo Metal 两次 ASR 为 17.587/10.196 秒（含各次模型加载；两轮差异保留，未进一步拆分加载、内核预热与解码成本）。上述 native 数值记录优化前执行；本轮 CPU embedding 对照已将同一 180 秒样本的分离中位耗时降至 47.522 秒。用新分离中位值与已有 ASR 两轮均值估算串行 ASR+DIA，ASR 约占 22.6%；ASR 时间减半预计再减少约 11.3% 总时间。该估算不含对齐/保存且不等于整链实测。完整处理速度应优先测量分离的 segmentation/embedding 和可验证的硬件执行路径，而不是只替换更大的 ASR 模型。
 
 native diarization 仍保留全录音 observation 和 AHC 二次距离数组。ASR 分窗或更快模型不解决这一内存墙；小时级与 20 小时资源需要独立 B2/B3 验收。
+
+### CPU embedding 的单点优化
+
+完整处理延迟首先受最慢阶段限制。固定权重下，30 秒 AMI 的 segmentation 为 0.725 秒，九次独立 embedding 调用的中位数在一/二/四个 intra-op 线程时为 0.531/0.281/0.146 秒；各配置依次运行，不与编译或其他评测并发。三次重复包含首个调用，未剔除预热慢样本；输入取同一段的首、中、末三个 10 秒窗，不使用 speaker gold。此探针只定位模型计算成本，不代表整链速度或 DER。
+
+[ONNX Runtime 线程管理](https://onnxruntime.ai/docs/performance/tune-performance/threading.html)提供 intra-op 与空转设置；本次只接入已有 `with_intra_threads`，保留 inter-op、图、权重、分窗与聚类参数。CPU session 使用 `min(available_parallelism, 4)`，查询失败使用一线程；accelerator session 使用一线程。分窗 session 与整文件处理共用该模型构造，无跨任务全局缓存。
+
+同时核对 [speakrs 上游固定源码](https://github.com/avencera/speakrs/tree/beb30734c9067c1ed59af3eb8ec8baa8fb17f94a)：manifest 标为 0.7.0，开发主线新增原生 CPU；所列 `segmentation-3.0.safetensors` 与 `wespeaker-multimask-tail.safetensors` 不属于当前 ONNX bundle。核对时可见最新 tag 为 v0.5.0。本轮未运行新 CPU 引擎，不使用上游其他硬件成绩替代本机结果；整体升级需要独立迁移与质量验证。
+
+速度接入门槛在完整对照前冻结为中位耗时至少下降 15%、进程峰值 RSS 不超过 baseline 的 1.2 倍、每个 embedding cosine ≥0.99999 且最大绝对误差 ≤1e-4、speaker 时间线逐段等价。`check_diarization_cpu.py` 校验同一音频/权重/配置、预测 hash 与两次完整重复，允许 speaker ID 的一致重命名；原始 UUID 不参与比较。该门禁证明 baseline 一致性，不是 DER 或新数据质量验收。
+
+生产 adapter 的 180 秒对照各执行两次，单线程为 164.227/165.602 秒，四线程为 47.458/47.586 秒；中位耗时下降 71.18%，RTF 由 0.916 降为 0.264。RSS 由 290.84 MiB 增至 301.47 MiB（+3.65%），每轮均为 45 段、3 个匿名 speaker、303 个 observation。原始 speaker segments 完全相同，606 对 embedding 的最大绝对差为 3.73e-7，最小 cosine 为 0.9999999999996658，全部冻结门槛通过。详见[CPU 对照回执](../quality/diarization-cpu-comparison.json)。这证明此样本与 baseline 的一致性，不增加自然会议质量或 DER 结论。
+
+这是延迟与 CPU 并行度的取舍：整个双轮探测进程的 user+sys CPU 时间增加约 6.35%，实际推理约使用四个 CPU；没有测量能耗。线程数受明确上限控制，不创建新调度器，不改 JobRuntime 的并发与取消边界。当前接入保留固定权重和聚类参数，后续更换推理载体仍需自己的 B2/B3 精度门。
 
 ## 复现说明
 
@@ -143,9 +157,10 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
 | `cargo test --workspace --locked` | 902 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
-| Python 评分/基线测试 | 23 passed；精确距离、归一口径、整轮缺失/重复/越界、预测 hash、旧回执失效、取消/超时与进程组回收 |
+| Python 评分/基线测试 | 31 passed；DIA 覆盖/数值/时间线/资源正反例、精确距离、归一口径、整轮缺失/重复/越界、预测 hash、旧回执失效、取消/超时与进程组回收 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
 | review 真实回归 | 当前 release 完成 12 组、128 次调用；五种 Whisper 配置各两次成功，四组 Paraformer 质量门与 96 次短路径逐段一致通过，SenseVoice 英文长输入两次成功；31 秒全零 ignored 回归已单独显式执行通过 |
+| CPU 分离对照 | 180 秒同一自然录音，baseline/candidate 各两次；47.522 秒中位耗时、+3.65% RSS，通过冻结性能/输出一致性门；不作为 DER |
 | 模型与资源 | 自动汇总选取 23 次配置执行、1016 次完成调用；另保留全部 43 次配置迭代、1768 次完成调用及失败记录。native/sherpa DIA 与同一音频 ASR 各两次独立 release 执行 |
 
 ignored 资源测试未被常规 suite 自动执行；真实推理由独立 runner 显式提供模型与音频完成。此次不据单元测试或短样本宣称 DER、词时间、20 小时资源或发布质量通过。
@@ -153,3 +168,22 @@ ignored 资源测试未被常规 suite 自动执行；真实推理由独立 runn
 ### 附录：核心核对方法
 
 Whisper 根因核对同时使用固定版本 binding 源码、macOS faulting-thread 栈和隔离真实推理，避免把进程退出码当作原因。窗口优化保留旧 executable 的 SHA，使用同一官方参考重跑；短输入与第二组中文分别核对，不能仅用文本长度接近原文件判断质量。
+
+CPU 探针的核心方法为直接加载固定 `EmbeddingModel`，对同一输入的首、中、末三个 10 秒窗分别执行三轮 `embed` 并计时、保存向量；另用相同 segmentation 模型测整段处理。只在临时源码里改变 CPU intra-op 线程数为 1/2/4，顺序构建与执行，生产对照冻结完整 baseline executable。探针源码已移出构建目标并删除，保留此核心方法：
+
+```rust
+use speakrs::inference::EmbeddingModel;
+let mut model = EmbeddingModel::with_mode(embedding_path, speakrs::ExecutionMode::Cpu)?;
+assert!(samples.len() >= 160_000);
+let mut measurements = Vec::new();
+for _ in 0..3 {
+    for start in [0, samples.len() / 2 - 80_000, samples.len() - 160_000] {
+        let started = std::time::Instant::now();
+        let vector = model.embed(&samples[start..start + 160_000])?;
+        // Record elapsed seconds and the complete vector outside the timed call.
+        measurements.push((start, started.elapsed().as_secs_f64(), vector));
+    }
+}
+```
+
+完整对照用相同 `diarization_benchmark` example，冻结基线后仅更改 vendor session 的线程数；两版分别运行 `/usr/bin/time -l <runner> diarization-native <model-dir> <audio> <prediction.jsonl>`。每个 run directory 的 `report.json` 使用 `meetnote.diarization-cpu-run.v1`，记录音频/全部模型文件/runner/预测 SHA、音频秒数、配置中的 repeats 与 embeddingThreads、进程峰值 RSS 和 failure；结构示例与真实 hash 见 CPU 对照回执。按此 manifest 运行 `check_diarization_cpu.py --baseline <before-dir> --candidate <after-dir>`，检查完成覆盖、逐段时间线、每个 observation 的来源/向量以及资源门槛。原始预测、向量与音频继续留在忽略目录。

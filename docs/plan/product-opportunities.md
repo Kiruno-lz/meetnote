@@ -14,7 +14,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 | P0：长音频全局聚类内存随观察数增长 | `crates/diarization-native/src/windowed.rs` 累积 `clustering_vectors` 与窗口 artifacts；`third_party/speakrs/src/clustering/ahc.rs` 分配 `n*(n-1)/2` 个距离 | 分窗解码不代表整条 pipeline 内存有界。仅距离数组在 5 万个 observation 时约 4.66 GiB，还未计其他对象。须先定义可接受的输入规模、质量门槛与资源策略，再修改聚类；本分支不改变聚类算法 |
 | P1：历史内容无法直接检索 | 原 `crates/ui/src/pages/chrome.rs` 只提供项目树；原 Workspace 没有面向桌面的全文搜索用例 | 用户必须记住标题并逐份打开。本分支补齐按已保存文本查找、片段预览、来源/时间与打开文档 |
 | P1：复用出口不足 | `crates/ui/src/pages/meetings.rs` 提供阅读、编辑和处理；`apps/meetnote/examples/audio_host_export.rs` 是评测导出入口 | 文件本身可读，但普通用户缺少可选择格式的桌面导出。优先补 TXT/Markdown/SRT 与剪贴板，沿用现有时间戳和 speaker label |
-| P1：模型速度不是整条链路速度 | 独立 ASR benchmark 与 `diarization_benchmark`；native observation/AHC 路径 | 已测固定 FLEURS/AMI 的 ASR 质量、RTF 与 RSS，修复回调崩溃、子词与推理长度；分离耗时、AHC 内存和精确时间对齐需分别治理。模型选择见[研究记录](../reserch/asr-quality-and-runtime-evaluation.md) |
+| P1：模型速度不是整条链路速度 | 独立 ASR benchmark 与 `diarization_benchmark`；native observation/AHC 路径 | 已测固定 FLEURS/AMI 的 ASR 质量、RTF 与 RSS，修复回调崩溃、子词与推理长度；CPU embedding 单线程是本机分离延迟主因；限定最多四线程后，同一 180 秒样本的分离中位耗时从 164.91 降至 47.52 秒，输出时间线与 embedding 通过 baseline 一致性门。AHC 内存和精确时间对齐仍需分别治理。模型选择见[研究记录](../reserch/asr-quality-and-runtime-evaluation.md) |
 | P2：维护集中度偏高 | `crates/ui/src/controller.rs` 同时编排设置、文档、模型、Speaker Library 与 Assistant；已有 editor/audio 等独立模块 | 新能力继续在所属模块实现，controller 只保留装配和跨模块调用。本分支把搜索生命周期与展示集中于 `crates/ui/src/search.rs`，不做一次性全局重构 |
 
 ## 同类产品与可借鉴功能
@@ -64,7 +64,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --locked` | 通过 |
 | `cargo build --locked -p meetnote` | 开发构建通过 |
-| `cargo test --workspace --locked` | 主测试 890 passed、0 failed、10 ignored；另有 3 次锁与读写子进程测试通过；UI 单元/交互 447 passed，route 47 passed |
+| `cargo test --workspace --locked` | 主测试 902 passed、0 failed、11 ignored；另有 3 次锁与读写子进程测试通过；UI 单元/交互 447 passed，route 47 passed |
 | 搜索与读写回归 | 搜索服务、真实文件/异步 GPUI、16 MiB 边界与超限保存、无效现有包保护、多文档暂存失败、原始转写补全均通过；route Tab 顺序覆盖搜索和笔记入口 |
 | 全量离屏图像 | 26 个场景 × 深/浅 × 玻璃/不透明共 104 张已生成，逐组核对布局并查看笔记原图；再次比较均为 0 像素差异 |
 | 修改文档的相对链接 | 通过 |

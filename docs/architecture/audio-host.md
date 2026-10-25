@@ -150,7 +150,7 @@ NativeDiarizationBackend
 ```
 
 - segmentation：`pyannote-segmentation-3.0`。
-- embedding：`wespeaker-voxceleb-resnet34`，含 external data 和最短样本配置。
+- embedding：`wespeaker-voxceleb-resnet34`，含 external data 和最短样本配置；ONNX CPU session 的 intra-op 线程数为可用逻辑 CPU 数与四的较小值，读取失败回退一线程；accelerator session 保持一个 host 线程。
 - clustering：`speakrs-ahc-plda-vbx` 与配套参数。
 - 设备：CPU；可选 Cargo `coreml` feature 提供 CoreML 执行路径。
 - stage override：只接受 descriptor 声明且与 `speakrs-community-1-cpu` bundle 兼容的三阶段配置。
