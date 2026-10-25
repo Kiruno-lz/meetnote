@@ -1,0 +1,28 @@
+# macOS ARM64 evaluation only; not a desktop runtime dependency.
+-r requirements.txt
+anyio==4.15.1
+cffi==2.1.1
+click==8.5.0
+filelock==4.2.4
+fsspec==2026.9.0
+h11==0.16.0
+hf-xet==1.7.0
+httpcore2==2.16.0
+httpx2==2.16.0
+huggingface-hub==2.3.0
+idna==3.20
+indic-numtowords==1.1.0
+mlx==0.32.4
+mlx-metal==0.32.4
+mlx-qwen3-asr==0.4.4
+more-itertools==11.2.1
+numpy==2.5.4
+packaging==26.3
+pycparser==3.12
+pyyaml==6.0.3
+regex==2026.9.29
+soundfile==0.14.0
+text2num==3.1.0
+tqdm==4.70.1
+truststore==0.10.5
+typing-extensions==4.16.0

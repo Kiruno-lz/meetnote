@@ -1,0 +1,3 @@
+# Evaluation only; product ASR remains native Rust.
+rapidfuzz==3.14.3
+whisper-normalizer==0.1.15
