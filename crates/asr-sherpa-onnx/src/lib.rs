@@ -617,12 +617,13 @@ fn merge_timestamped_tokens(
         let continues_previous = bpe_continuation;
         bpe_continuation = token.text.ends_with("@@");
         token.text = token.text.trim_end_matches("@@").to_string();
+        let within_word =
+            continues_previous || (subword_boundaries && !token.text.starts_with(' '));
         let should_merge = segments.last().is_some_and(|previous| {
-            token.start_ms <= previous.end_ms.saturating_add(750)
-                && (token.end_ms.saturating_sub(previous.start_ms) <= 15_000
-                    || (subword_boundaries && !token.text.starts_with(' '))
-                    || continues_previous)
-                && !ends_sentence(&previous.text)
+            within_word
+                || (token.start_ms <= previous.end_ms.saturating_add(750)
+                    && token.end_ms.saturating_sub(previous.start_ms) <= 15_000
+                    && !ends_sentence(&previous.text))
         });
         if should_merge {
             let previous = segments.last_mut().expect("segment exists");
@@ -1035,6 +1036,34 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Hello.", "world."]
         );
+    }
+
+    #[test]
+    fn word_continuations_survive_pauses_and_internal_punctuation() {
+        for tokens in [
+            vec!["▁ent", "omologists"],
+            vec!["ent@@", "omologists"],
+            vec!["▁U", ".", "S", "."],
+        ] {
+            let expected = if tokens.len() == 2 {
+                "entomologists"
+            } else {
+                "U.S."
+            };
+            let segments = tokens
+                .iter()
+                .enumerate()
+                .map(|(index, token)| domain::TranscriptSegment {
+                    id: String::new(),
+                    start_ms: index as u64 * 1000,
+                    end_ms: index as u64 * 1000 + 100,
+                    text: normalize_token(token),
+                })
+                .collect();
+            let actual = merge_timestamped_tokens(segments);
+            assert_eq!(actual.len(), 1);
+            assert_eq!(actual[0].text, expected);
+        }
     }
 
     #[test]
