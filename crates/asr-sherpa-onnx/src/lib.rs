@@ -492,24 +492,45 @@ fn core_owns(window: &AudioWindow, sample: u64) -> bool {
 }
 
 fn normalize_token(token: &str) -> String {
-    token.replace('▁', " ").replace("@@", "").trim().to_string()
+    token.replace('▁', " ")
 }
 
 fn merge_timestamped_tokens(
     tokens: Vec<domain::TranscriptSegment>,
 ) -> Vec<domain::TranscriptSegment> {
+    let subword_boundaries = tokens.iter().any(|token| token.text.starts_with(' '));
     let mut segments: Vec<domain::TranscriptSegment> = Vec::new();
-    for token in tokens {
+    let mut bpe_continuation = false;
+    let mut pending_word_boundary = false;
+    for mut token in tokens {
+        if token.text.trim().is_empty() {
+            pending_word_boundary |= token.text.starts_with(' ');
+            continue;
+        }
+        if pending_word_boundary && !token.text.starts_with(' ') {
+            token.text.insert(0, ' ');
+        }
+        pending_word_boundary = false;
+        let continues_previous = bpe_continuation;
+        bpe_continuation = token.text.ends_with("@@");
+        token.text = token.text.trim_end_matches("@@").to_string();
         let should_merge = segments.last().is_some_and(|previous| {
             token.start_ms <= previous.end_ms.saturating_add(750)
-                && token.end_ms.saturating_sub(previous.start_ms) <= 15_000
+                && (token.end_ms.saturating_sub(previous.start_ms) <= 15_000
+                    || (subword_boundaries && !token.text.starts_with(' '))
+                    || continues_previous)
                 && !ends_sentence(&previous.text)
         });
         if should_merge {
             let previous = segments.last_mut().expect("segment exists");
-            append_token(&mut previous.text, &token.text);
+            if subword_boundaries || continues_previous {
+                previous.text.push_str(&token.text);
+            } else {
+                append_token(&mut previous.text, &token.text);
+            }
             previous.end_ms = previous.end_ms.max(token.end_ms);
         } else {
+            token.text = token.text.trim_start().to_string();
             segments.push(token);
         }
     }
@@ -785,6 +806,84 @@ mod tests {
         let error = build_config(&request, 1).unwrap_err();
         assert_eq!(error.code, BackendErrorCode::DeviceUnavailable);
         assert!(error.message.contains("Core ML"));
+    }
+
+    #[test]
+    fn sentencepiece_boundaries_do_not_split_english_words() {
+        let tokens = [
+            "▁The",
+            "▁ent",
+            "om",
+            "ologist",
+            "s",
+            "▁study",
+            "▁insect",
+            "s",
+            ".",
+        ];
+        let segments = tokens
+            .iter()
+            .enumerate()
+            .map(|(index, token)| domain::TranscriptSegment {
+                id: String::new(),
+                start_ms: index as u64 * 100,
+                end_ms: (index as u64 + 1) * 100,
+                text: normalize_token(token),
+            })
+            .collect();
+        assert_eq!(
+            merge_timestamped_tokens(segments)[0].text,
+            "The entomologists study insects."
+        );
+    }
+
+    #[test]
+    fn bpe_continuations_do_not_split_english_words() {
+        let segments = [
+            "The",
+            "ent@@",
+            "om@@",
+            "ologist@@",
+            "s",
+            "study",
+            "insect@@",
+            "s",
+            ".",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, token)| domain::TranscriptSegment {
+            id: String::new(),
+            start_ms: index as u64 * 100,
+            end_ms: (index as u64 + 1) * 100,
+            text: normalize_token(token),
+        })
+        .collect();
+        assert_eq!(
+            merge_timestamped_tokens(segments)[0].text,
+            "The entomologists study insects."
+        );
+    }
+
+    #[test]
+    fn standalone_sentencepiece_boundaries_do_not_emit_empty_segments() {
+        let segments = ["▁Hello", ".", "▁", "world", ".", "▁"]
+            .iter()
+            .enumerate()
+            .map(|(index, token)| domain::TranscriptSegment {
+                id: String::new(),
+                start_ms: index as u64 * 100,
+                end_ms: (index as u64 + 1) * 100,
+                text: normalize_token(token),
+            })
+            .collect();
+        assert_eq!(
+            merge_timestamped_tokens(segments)
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Hello.", "world."]
+        );
     }
 
     #[test]
