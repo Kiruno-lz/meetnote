@@ -56,7 +56,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(result) => {
                 json!({"backend":args[0],"repeat":repeat,"wallSeconds":seconds,"status":"ok",
                 "segments":result.segments.len(),"speakerCount":result.speaker_count,
-                "observations":result.embedding_observations.len(),"qualityStatus":"not_assessed"})
+                "observations":result.embedding_observations.len(),"qualityStatus":"not_assessed",
+                "speakerSegments":result.segments,"embeddingObservations":result.embedding_observations})
             }
             Err(error) => {
                 json!({"backend":args[0],"repeat":repeat,"wallSeconds":seconds,"status":"failed","error":error.message})
