@@ -183,6 +183,7 @@ pub(crate) fn mode_button(
     let name = match mode {
         ContentMode::Summary => "summary",
         ContentMode::Original => "original",
+        ContentMode::Markdown => "markdown",
         ContentMode::Edit => "edit",
     };
     Button::new(format!("content-mode-{name}"), label)

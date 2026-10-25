@@ -153,6 +153,12 @@ struct Draft {
     edits: DraftValues,
 }
 
+/// A saved-document read never replaces or rebases an editing draft.
+pub(crate) struct SavedDocument {
+    pub(crate) document_id: ProjectId,
+    pub(crate) outcome: Option<Result<DocumentRecord, String>>,
+}
+
 /// The shown draft, as Save reads it.
 pub(crate) struct ShownDraft {
     pub(crate) document_id: ProjectId,
@@ -283,6 +289,27 @@ impl DocumentEditor {
         self.fill(&edits, documents, locale, cx);
         self.shown = Some(document_id.clone());
         true
+    }
+
+    /// On explicit entry to Edit, adopt the saved read only when doing so
+    /// cannot discard edits, including edits still held by the input fields.
+    pub(crate) fn follow_saved_if_clean(
+        &mut self,
+        record: &DocumentRecord,
+        documents: &[DocumentState],
+        locale: Locale,
+        cx: &mut Context<RootView>,
+    ) {
+        let clean = self.drafts.get(record.state.id()).is_none_or(|draft| {
+            if self.shown.as_ref() == Some(record.state.id()) {
+                self.field_values(cx) == draft.base
+            } else {
+                draft.edits == draft.base
+            }
+        });
+        if clean {
+            self.load(record, true, documents, locale, cx);
+        }
     }
 
     /// Replaces the draft of `record`'s document with the values it holds,

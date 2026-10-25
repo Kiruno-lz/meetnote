@@ -15,6 +15,7 @@
 
 - [架构对齐计划](plan/architecture-alignment.md)：当前架构进度、职责收敛、保留项和最小实施步骤。
 - [工程实施计划](plan/implementation-plan.md)：当前完成度、生产化缺口和验收顺序。
+- [产品瓶颈与改进优先级](plan/product-opportunities.md)：当前代码瓶颈、同类产品功能、本地全文搜索交付与后续验证。
 - [GPUI UI 计划](plan/ui-plan.md)：现有 UI、zui 技术栈与玻璃视觉系统、已知缺陷和分阶段实施。
 - [Assistant 构建计划](plan/assistant-plan.md)：Workspace、Audio、Settings 的 capability、Host 真实回应、MoonBit 插件与 Codex 经 Host 完成任务。
 - [渐进式 Benchmark 计划](plan/audio-quality-plan.md)：固定测试音频/gold、原子能力到 Agent 的自动门禁与模型比较报告。

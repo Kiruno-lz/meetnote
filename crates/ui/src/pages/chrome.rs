@@ -264,7 +264,12 @@ fn secondary_sidebar(root: &mut RootView, cx: &mut Context<RootView>) -> AnyElem
             )),
     );
     if root.ui.route == Route::Meetings {
-        column = column.child(super::meetings::project_tree(root, cx));
+        column = column.child(crate::search::input(root, cx));
+        if root.search.input.read(cx).value(cx).trim().is_empty() {
+            column = column.child(super::meetings::project_tree(root, cx));
+        } else {
+            column = column.child(crate::search::results(root, cx));
+        }
     } else {
         column = column.child(
             div()

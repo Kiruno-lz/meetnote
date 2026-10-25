@@ -15,6 +15,7 @@ mod pages;
 mod route;
 #[cfg(test)]
 mod scrollbar_tests;
+mod search;
 #[cfg(test)]
 mod shell_tests;
 #[cfg(test)]

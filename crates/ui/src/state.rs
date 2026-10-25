@@ -5,6 +5,8 @@ use std::collections::BTreeSet;
 pub enum ContentMode {
     Summary,
     Original,
+    /// The latest persisted Markdown, independent of any edit draft.
+    Markdown,
     /// The editor of the document's semantic fields.
     Edit,
 }

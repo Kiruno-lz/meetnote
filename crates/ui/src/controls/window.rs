@@ -34,6 +34,7 @@ actions!(
         ToggleSidebar,
         ImportAudio,
         SaveDocument,
+        SearchWorkspace,
     ]
 );
 
@@ -51,6 +52,7 @@ pub(crate) enum Shortcut {
     ImportAudio,
     /// Saves the visible document editor, when its owner allows it.
     SaveDocument,
+    Search,
 }
 
 impl Shortcut {
@@ -64,6 +66,7 @@ impl Shortcut {
             Self::ToggleSidebar => "ctrl-cmd-s",
             Self::ImportAudio => "cmd-o",
             Self::SaveDocument => "cmd-s",
+            Self::Search => "cmd-shift-f",
         }
     }
 }
@@ -102,6 +105,7 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new(Shortcut::ToggleSidebar.keys(), ToggleSidebar, window),
         KeyBinding::new(Shortcut::ImportAudio.keys(), ImportAudio, window),
         KeyBinding::new(Shortcut::SaveDocument.keys(), SaveDocument, window),
+        KeyBinding::new(Shortcut::Search.keys(), SearchWorkspace, window),
         KeyBinding::new("space", Confirm { secondary: false }, Some(SELECT_CONTEXT)),
     ]);
 }
@@ -171,6 +175,7 @@ pub(crate) fn root(
         .on_action(shortcut::<ToggleSidebar>(&run, Shortcut::ToggleSidebar))
         .on_action(shortcut::<ImportAudio>(&run, Shortcut::ImportAudio))
         .on_action(shortcut::<SaveDocument>(&run, Shortcut::SaveDocument))
+        .on_action(shortcut::<SearchWorkspace>(&run, Shortcut::Search))
         .relative()
         .size_full()
         .font_family(tokens.font_family)

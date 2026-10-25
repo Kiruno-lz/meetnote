@@ -35,6 +35,308 @@ use std::sync::Arc;
 pub(crate) type View = gpui::Entity<RootView>;
 type Area = gpui::Entity<controls::TextArea>;
 
+#[gpui::test]
+fn workspace_search_is_available_beside_the_project_tree(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(
+        DocumentState::new(ProjectId::new("meeting"), "Review", "audio.wav"),
+        "项目预算",
+    );
+    let (_view, cx, _changes) = open_on(cx, &documents);
+    assert!(cx.debug_bounds("workspace-search-input").is_some());
+    assert!(cx.debug_bounds("workspace-search-submit").is_some());
+}
+
+pub(crate) fn search(cx: &mut VisualTestContext, view: &View, query: &str) {
+    let input = view.read_with(cx, |root, _| root.search.input.clone());
+    focus_field(cx, &input);
+    cx.simulate_keystrokes("cmd-a");
+    cx.simulate_input(query);
+    cx.simulate_keystrokes("enter");
+    wait_for(cx, view, |root| root.search.result.is_some());
+}
+
+#[gpui::test]
+fn workspace_search_shortcut_reopens_closed_and_folding_sidebars(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "Notes");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    let width = rendered(cx, "project-sidebar").size.width;
+    for elapsed in [
+        std::time::Duration::from_secs(1),
+        std::time::Duration::from_millis(40),
+    ] {
+        cx.simulate_keystrokes("ctrl-cmd-s");
+        cx.executor().advance_clock(elapsed);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-shift-f");
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            rendered(cx, "project-sidebar").size.width,
+            width,
+            "the shortcut must reopen the real sidebar layout"
+        );
+        let input = view.read_with(cx, |root, _| root.search.input.clone());
+        assert!(cx.update(
+            |window, cx| gpui::Focusable::focus_handle(input.read(cx), cx).is_focused(window)
+        ));
+    }
+}
+
+#[gpui::test]
+fn workspace_search_shows_saved_markdown_without_replacing_a_dirty_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "原笔记");
+    let (view, cx, changes) = open_on(cx, &documents);
+    open_editor(cx, &view, "meeting");
+    let body = view.read_with(cx, |root, _| root.editor.body.clone());
+    retype_area(cx, &body, "未保存草稿");
+    std::fs::write(documents.path().join("meeting/document.md"), "新的决定").unwrap();
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    search(cx, &view, "新的决定");
+    click_selector(cx, "search-open-meeting");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|saved| saved.outcome.is_some())
+    });
+    assert!(
+        cx.debug_bounds("saved-markdown-content").is_some(),
+        "a saved-content match must have a separate reader instead of showing the dirty draft"
+    );
+    assert_eq!(
+        view.read_with(cx, |root, _| root
+            .saved_document
+            .as_ref()
+            .unwrap()
+            .outcome
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .markdown
+            .clone()),
+        "新的决定"
+    );
+    click_selector(cx, "content-mode-edit");
+    assert_eq!(area_value(cx, &body), "未保存草稿");
+    assert_eq!(documents.read("meeting").markdown, "新的决定");
+}
+
+#[gpui::test]
+fn saved_markdown_refreshes_a_clean_editor_when_edit_is_chosen(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "原笔记");
+    let (view, cx, changes) = open_on(cx, &documents);
+    open_editor(cx, &view, "meeting");
+    let body = view.read_with(cx, |root, _| root.editor.body.clone());
+    std::fs::write(documents.path().join("meeting/document.md"), "新的决定").unwrap();
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    search(cx, &view, "新的决定");
+    click_selector(cx, "search-open-meeting");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|saved| saved.outcome.is_some())
+    });
+    click_selector(cx, "content-mode-edit");
+    assert_eq!(
+        area_value(cx, &body),
+        "新的决定",
+        "a clean editor should follow the saved document when explicitly opened"
+    );
+}
+
+#[gpui::test]
+fn saved_markdown_refreshes_external_changes_and_retries_failed_reads(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "First notes");
+    let (view, cx, changes) = open_on(cx, &documents);
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|saved| saved.outcome.is_some())
+    });
+    std::fs::write(documents.path().join("meeting/document.md"), "New notes").unwrap();
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .and_then(|saved| saved.outcome.as_ref())
+            .is_some_and(|outcome| {
+                outcome
+                    .as_ref()
+                    .is_ok_and(|record| record.markdown == "New notes")
+            })
+    });
+    std::fs::remove_file(documents.path().join("meeting/document.md")).unwrap();
+    // Reopening explicitly re-reads disk, even without a watcher event.
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .and_then(|saved| saved.outcome.as_ref())
+            .is_some_and(Result::is_err)
+    });
+    rendered(cx, "saved-markdown-error");
+    std::fs::write(
+        documents.path().join("meeting/document.md"),
+        "Restored notes",
+    )
+    .unwrap();
+    click_selector(cx, "retry-saved-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .and_then(|saved| saved.outcome.as_ref())
+            .is_some_and(|outcome| {
+                outcome
+                    .as_ref()
+                    .is_ok_and(|record| record.markdown == "Restored notes")
+            })
+    });
+    rendered(cx, "saved-markdown-content");
+}
+
+#[gpui::test]
+fn workspace_search_opens_raw_transcripts_without_processing_metadata(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let mut document = DocumentState::new(ProjectId::new("meeting"), "Review", "audio.wav");
+    document.results.transcript.push(TranscriptSegment {
+        id: "raw-1".into(),
+        start_ms: 1000,
+        end_ms: 2000,
+        text: "原始转写内容".into(),
+    });
+    documents.put(document, "Notes");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    search(cx, &view, "原始转写内容");
+    click_selector(cx, "search-open-meeting");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Original
+    );
+    rendered(cx, "transcript-turn-0");
+}
+
+#[gpui::test]
+fn workspace_search_reveals_keyboard_results_in_a_minimum_window(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    for index in 0..40 {
+        let id = format!("doc-{index:02}");
+        documents.put(
+            DocumentState::new(
+                ProjectId::new(&id),
+                format!("Budget review {index}"),
+                "audio.wav",
+            ),
+            "Notes",
+        );
+    }
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    search(cx, &view, "budget");
+    for _ in 0..33 {
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+    }
+    let viewport = rendered(cx, "workspace-search-scrollbar-viewport");
+    let button = rendered(cx, "search-open-doc-30");
+    let ring = rendered(cx, "focus-ring");
+    assert!(
+        within(button, viewport),
+        "button={button:?}, viewport={viewport:?}, ring={ring:?}"
+    );
+    assert!(within(rendered(cx, "focus-ring"), viewport));
+}
+
+#[gpui::test]
+fn workspace_search_opens_hidden_child_and_retains_results(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("parent", "Weekly review"), "Notes");
+    let mut child = processed("child", "Decision");
+    child.hierarchy.parent_id = Some(ProjectId::new("parent"));
+    child.hierarchy.depth = 1;
+    child.results.transcript[0].text = "项目预算已经确认".into();
+    child.results.transcript[0].start_ms = 62_000;
+    child.results.transcript[0].end_ms = 65_000;
+    child.results.speaker_segments[0].text = "项目预算已经确认".into();
+    child.results.speaker_segments[0].start_ms = 62_000;
+    child.results.speaker_segments[0].end_ms = 65_000;
+    documents.put(child, "Notes");
+    let before = documents.package_bytes("child");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    view.update(cx, |root, _| root.ui.expanded_projects.clear());
+    cx.simulate_keystrokes("cmd-shift-f");
+    let input = view.read_with(cx, |root, _| root.search.input.clone());
+    assert!(cx
+        .update(|window, cx| gpui::Focusable::focus_handle(input.read(cx), cx).is_focused(window)));
+    search(cx, &view, "项目预算");
+    assert!(cx.debug_bounds("search-open-child").is_some());
+    assert!(cx.debug_bounds("search-open-parent").is_none());
+    click_selector(cx, "search-open-child");
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.selected_project.clone()),
+        Some(ProjectId::new("child"))
+    );
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Original
+    );
+    assert!(cx.debug_bounds("workspace-search-results").is_some());
+    let result = view.read_with(cx, |root, _| {
+        root.search
+            .result
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone()
+    });
+    assert_eq!(result.hits[0].start_ms, Some(62_000));
+    click_selector(cx, "workspace-search-clear");
+    assert!(cx.debug_bounds("project-row-child").is_some());
+    assert_eq!(
+        documents.package_bytes("child"),
+        before,
+        "search and opening results never save documents"
+    );
+}
+
+#[gpui::test]
+fn workspace_search_refreshes_external_markdown_and_handles_empty_results(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "项目预算");
+    let (view, cx, changes) = open_on(cx, &documents);
+    search(cx, &view, "项目预算");
+    click_selector(cx, "search-open-meeting");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|saved| saved.outcome.is_some())
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| root.ui.content_mode),
+        crate::state::ContentMode::Markdown
+    );
+    std::fs::write(documents.path().join("meeting/document.md"), "新的决定").unwrap();
+    changes.unbounded_send(DocumentChange::Changed).unwrap();
+    wait_for(cx, &view, |root| {
+        root.search
+            .result
+            .as_ref()
+            .is_some_and(|result| result.as_ref().is_ok_and(|result| result.hits.is_empty()))
+    });
+    assert!(cx.debug_bounds("workspace-search-empty").is_some());
+    search(cx, &view, "新的决定");
+    assert!(cx.debug_bounds("search-open-meeting").is_some());
+    search(cx, &view, "不存在的内容");
+    assert!(cx.debug_bounds("workspace-search-empty").is_some());
+}
+
 /// A documents root of its own, removed when the test ends.
 pub(crate) struct DocumentsRoot(PathBuf);
 
@@ -715,12 +1017,17 @@ fn scanner_issues_list_path_and_reason_until_the_files_are_fixed(cx: &mut TestAp
     }
     assert!(cx.debug_bounds("project-row-valid").is_some());
 
-    // The broken package is repaired and the stray file removed.
+    // An external editor explicitly repairs the invalid package. Managed
+    // repository saves must refuse to overwrite unreadable existing assets.
     std::fs::remove_file(&stray).unwrap();
-    root.put(
+    persistence::DocumentPackage::new(
+        &broken,
         DocumentState::new(ProjectId::new("broken"), "Repaired", "broken.wav"),
         "# Repaired\n",
-    );
+    )
+    .unwrap()
+    .save()
+    .unwrap();
     changes.unbounded_send(DocumentChange::Changed).unwrap();
     wait_for(cx, &view, |root| {
         root.document_issues.is_empty() && root.projects.len() == 2

@@ -524,6 +524,9 @@ pub(crate) struct RootView {
     /// but require that result before accepting another explicit save.
     pub(crate) assistant_save_pending: bool,
     pub(crate) projects: Vec<DocumentState>,
+    pub(crate) search: crate::search::WorkspaceSearch,
+    pub(crate) saved_document: Option<crate::editor::SavedDocument>,
+    saved_document_generation: u64,
     pub(crate) ui: UiState,
     pub(crate) assistant: AssistantController,
     pub(crate) assistant_inputs: AssistantInputs,
@@ -758,6 +761,7 @@ impl RootView {
             .detach();
         }
         let editor = DocumentEditor::new(locale, window, cx);
+        let search = crate::search::WorkspaceSearch::new(locale, window, cx);
         cx.subscribe_in(&editor.status, window, |this, _, event, _, cx| {
             let DropdownEvent::Confirm(value) = event;
             this.editor.set_status(value.clone());
@@ -784,6 +788,9 @@ impl RootView {
             assistant_save_pending: false,
             settings_draft,
             projects: Vec::new(),
+            search,
+            saved_document: None,
+            saved_document_generation: 0,
             ui,
             assistant: AssistantController::default(),
             assistant_inputs,
@@ -939,6 +946,9 @@ impl RootView {
     }
 
     fn begin_projects_reload(&mut self) -> u64 {
+        self.search.invalidate();
+        self.saved_document_generation += 1;
+        self.saved_document = None;
         self.projects_generation += 1;
         self.projects_generation
     }
@@ -977,6 +987,7 @@ impl RootView {
                     }
                     self.projects = snapshot.documents;
                     self.document_issues = snapshot.issues;
+                    self.refresh_workspace_search(cx);
                     if let Some(error) = self.projects_error.take() {
                         let old_notice = i18n::message(
                             self.projects_error_locale,
@@ -1720,6 +1731,7 @@ impl RootView {
         self.ui.locale = locale;
         self.settings_selectors = None;
         self.assistant_inputs.follow_locale(locale, cx);
+        self.search.follow_locale(locale, cx);
         self.editor.follow_locale(locale, &self.projects, cx);
     }
 
@@ -3186,6 +3198,7 @@ impl RootView {
             Shortcut::Forward => self.travel(true, cx),
             Shortcut::ToggleSidebar => self.toggle_sidebar(window, cx),
             Shortcut::ImportAudio => self.import_audio(&ClickEvent::default(), window, cx),
+            Shortcut::Search => self.focus_workspace_search(window, cx),
             Shortcut::SaveDocument => {
                 if self.ui.route == Route::Meetings
                     && self.ui.content_mode == ContentMode::Edit
@@ -3258,7 +3271,74 @@ impl RootView {
                 .set_offset(gpui::Point::default());
         }
         self.ui.content_mode = mode;
+        if mode == ContentMode::Edit {
+            if let Some(Ok(record)) = self
+                .saved_document
+                .as_ref()
+                .filter(|saved| self.ui.selected_project.as_ref() == Some(&saved.document_id))
+                .and_then(|saved| saved.outcome.as_ref())
+            {
+                self.editor
+                    .follow_saved_if_clean(record, &self.projects, self.ui.locale, cx);
+            }
+        }
+        if mode == ContentMode::Markdown {
+            if let Some(id) = self.ui.selected_project.clone() {
+                self.load_saved_document(id, cx);
+            }
+        }
         cx.notify();
+    }
+
+    pub(crate) fn load_saved_document(&mut self, document_id: ProjectId, cx: &mut Context<Self>) {
+        if self.documents_root_switch.switching {
+            return;
+        }
+        self.saved_document_generation += 1;
+        let generation = self.saved_document_generation;
+        self.saved_document = Some(crate::editor::SavedDocument {
+            document_id: document_id.clone(),
+            outcome: None,
+        });
+        let documents = self.services.workspace.documents().frozen();
+        cx.spawn(async move |this, cx| {
+            let outcome = runtime::spawn_blocking(move || documents.read(&document_id)).await;
+            this.update(cx, |this, cx| {
+                if generation != this.saved_document_generation {
+                    return;
+                }
+                let outcome = match outcome {
+                    Ok(Some(record)) => Ok(record),
+                    Ok(None) => Err(i18n::text(this.ui.locale, "project_missing").into()),
+                    Err(error) => Err(i18n::message(
+                        this.ui.locale,
+                        "document_read_failed",
+                        &error,
+                    )),
+                };
+                if let Some(saved) = &mut this.saved_document {
+                    saved.outcome = Some(outcome);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn ensure_saved_document(&mut self, cx: &mut Context<Self>) {
+        if self.ui.route == Route::Meetings && self.ui.content_mode == ContentMode::Markdown {
+            if let Some(id) = self.ui.selected_project.clone() {
+                if self
+                    .saved_document
+                    .as_ref()
+                    .is_none_or(|saved| saved.document_id != id)
+                {
+                    self.load_saved_document(id, cx);
+                }
+            }
+        }
     }
 
     /// Shows the selected document's draft in the editor, first reading it
@@ -4437,6 +4517,7 @@ impl RootView {
             return;
         }
         self.documents_root_switch.switching = true;
+        self.clear_workspace_search(cx);
         // The repository changes before the settings worker returns.
         // Keep the current projection until the switch settles, and let
         // the selected document start its read again afterwards.
@@ -5431,6 +5512,7 @@ impl Render for RootView {
         self.focus_awaiting_review(window, cx);
         self.ensure_settings_selectors(window, cx);
         self.ensure_document_editor(cx);
+        self.ensure_saved_document(cx);
         let selected = self
             .ui
             .selected_project
@@ -5442,6 +5524,10 @@ impl Render for RootView {
             && selected
                 .as_ref()
                 .is_some_and(|document| document.processing.latest.is_none())
+            && selected.as_ref().is_some_and(|document| {
+                document.results.transcript.is_empty()
+                    && document.results.speaker_segments.is_empty()
+            })
         {
             self.ui.content_mode = ContentMode::Summary;
         }

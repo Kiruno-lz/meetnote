@@ -72,11 +72,11 @@ revision 只能保护遵守版本协议的客户端。直接编辑 Markdown 不�
 
 文档包已有逐文件原子保存；工作树已有 WorkspaceCapabilityPort 与 batch、journal、pending、幂等、undo。repository lock、跨进程 open/recovery、真实子进程故障恢复、trash restore/purge、普通附件、嵌套目录和 symlink 不跟随均已有回归证据；ExternalAgent update/semantic write 还会校验 read projection 提供的 Markdown hash。
 
-已有 child-process 锁与恢复测试；metadata 扫描限制单包 16 MiB、校验 schema 版本并支持提前停止，不等于完整 state/Markdown 读取有界。不能把任意外部编辑器纳入事务，也不能据此标记所有写入口已完成。
+已有 child-process 锁与恢复测试；metadata 扫描限制单包 16 MiB、校验 schema 版本并支持提前停止。完整读取也对 `state.json` 与 `document.md` 各限制 16 MiB，并在读取过程中执行上限；超限报告路径且保留原文件。普通保存和事务暂存先验证 Markdown 与序列化 JSON 均未超限，再写入任一文件；repository 保存传播现有包加载错误，不将损坏包当作不存在覆盖。不能把任意外部编辑器纳入事务，也不能据此标记所有写入口已完成。
 
 - //TODO - 在 repository 持锁提交中重验 source Markdown hash；当前 DocumentService 预验与 repository revision 检查之间仍存在内容变化窗口，补屏障式冲突测试。
 - //TODO - 普通 save/save_versioned 共用 CAS 与双文件恢复；不能仅增加锁后接受旧内容，JSON/Markdown 替换间失败须可恢复。
-- //TODO - 保留加载/解析错误，不将现有包加载失败当作不存在覆盖；补无效外部文件、跨进程写入、确认与 undo 冲突测试。
-- //TODO - 完整 state/Markdown 读取加入过程资源上限，metadata 扫描限制不等于全量读取有界。
+- //TODO - 扩展跨进程写入、确认与 undo 的外部无效文件冲突测试，验证所有写入口保留加载/解析错误。
+- //TODO - 在逐文件输入上限之外验证解析后对象、文档总数与扫描峰值内存，不能将单文件读取有界视为工作区整体内存有界。
 
 上述是 Workspace 待实现项，不是 Agent Host 的额外功能；影响 Host 必测任务时，以具体服务依赖报告阻塞。

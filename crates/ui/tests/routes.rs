@@ -315,6 +315,7 @@ fn the_content_views_form_one_segmented_control(cx: &mut TestAppContext) {
     let segments = [
         "content-mode-summary",
         "content-mode-original",
+        "content-mode-markdown",
         "content-mode-edit",
     ]
     .map(|selector| visible(cx, selector));
@@ -805,6 +806,8 @@ fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
     let (_window, cx, _) = open_route(cx, Route::Meetings);
     let mut expected = SIDEBAR_STOPS.to_vec();
     expected.extend([
+        "workspace-search-input",
+        "workspace-search-submit",
         // The tree is one stop, on its selected row.
         leak(format!("project-row-{}", DOCUMENT_IDS[0])),
         // Processing waits for models; the next steps remain reachable.
@@ -812,6 +815,7 @@ fn tab_traverses_the_meetings_route_in_order(cx: &mut TestAppContext) {
         "go-to-models",
         "content-mode-summary",
         "content-mode-original",
+        "content-mode-markdown",
         "content-mode-edit",
     ]);
     assert_tab_order(cx, &expected);

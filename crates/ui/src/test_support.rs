@@ -19,6 +19,10 @@ pub use crate::route::Route;
 /// An overlay the tests open over a route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Overlay {
+    /// On Meetings: the persisted Markdown reader, separate from edit drafts.
+    SavedMarkdown,
+    /// On Meetings: real workspace text search on the shared fixture.
+    WorkspaceSearch,
     /// On Meetings: a loaded workspace with no documents.
     EmptyWorkspace,
     /// On Meetings: fixture-only read failure over the last loaded document.
@@ -273,6 +277,13 @@ impl MainWindow {
             return;
         }
         self.view.update(cx, |root, cx| match overlay {
+            Overlay::SavedMarkdown => root.set_content_mode(ContentMode::Markdown, cx),
+            Overlay::WorkspaceSearch => {
+                root.search
+                    .input
+                    .update(cx, |input, cx| input.set_value("页面", cx));
+                root.submit_workspace_search(cx);
+            }
             Overlay::AssistantSetup => {
                 root.set_fixture_assistant_connection(None);
                 cx.notify();
@@ -456,6 +467,8 @@ impl MainWindow {
             return;
         }
         self.view.update(cx, |root, cx| match overlay {
+            Overlay::SavedMarkdown => root.set_content_mode(ContentMode::Summary, cx),
+            Overlay::WorkspaceSearch => root.clear_workspace_search(cx),
             Overlay::AssistantSetup => {
                 root.set_fixture_assistant_connection(
                     root.settings_draft.assistant.active_connection_id.clone(),
@@ -543,5 +556,10 @@ impl MainWindow {
             && !root.installation.catalog.is_empty()
             && root.speaker_profiles.loaded
             && !root.audio.pending()
+            && !root.search.pending
+            && root
+                .saved_document
+                .as_ref()
+                .is_none_or(|saved| saved.outcome.is_some())
     }
 }
