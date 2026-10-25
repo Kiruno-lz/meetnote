@@ -63,7 +63,7 @@ pub(crate) fn render(
                         .children(
                             turn.paragraphs
                                 .into_iter()
-                                .map(|paragraph| div().text_sm().child(paragraph)),
+                                .map(|paragraph| div().text_sm().child(paragraph.text)),
                         )
                 }));
             let body = div()

@@ -350,6 +350,17 @@ fn main_panel(
     if root.scroll.meeting_context != context {
         root.scroll.meeting_context = context;
         root.scroll.meeting_content.set_offset(Default::default());
+        if root
+            .search
+            .opened_transcript
+            .as_ref()
+            .is_some_and(|opened| {
+                root.ui.content_mode != ContentMode::Original
+                    || project.is_none_or(|project| project.id() != &opened.hit.document_id)
+            })
+        {
+            root.search.opened_transcript = None;
+        }
     }
     // Compact the metadata beside Detail in a short window so recovery
     // feedback still leaves room for reading and editing.
@@ -422,7 +433,7 @@ fn main_panel(
             }),
             ContentMode::Original if original_available => content
                 .child(speakers_panel(root, project, &tokens, cx))
-                .child(transcript(project, locale, &tokens)),
+                .child(transcript(root, project, locale, &tokens)),
             _ => content,
         };
         panel = panel.child(document_header(
@@ -854,40 +865,111 @@ fn saved_markdown(
 
 /// The speaker-labelled transcript as turns: each speaker's name in its
 /// color over the paragraphs it says, with a quiet start time.
-fn transcript(project: &DocumentState, locale: i18n::Locale, tokens: &Tokens) -> gpui::Div {
-    div().flex().flex_col().gap(tokens.spacing.lg).children(
-        transcript_turns(project, locale)
-            .into_iter()
-            .enumerate()
-            .map(|(index, turn)| {
-                div()
-                    .debug_selector(move || format!("transcript-turn-{index}"))
-                    .max_w(READING_WIDTH)
-                    .flex()
-                    .flex_col()
-                    .gap(tokens.spacing.xs)
-                    .child(
-                        div()
-                            .flex()
-                            .items_baseline()
-                            .gap(tokens.spacing.sm)
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .text_color(tokens.speaker(turn.order))
-                                    .child(turn.name),
+fn transcript(
+    root: &mut RootView,
+    project: &DocumentState,
+    locale: i18n::Locale,
+    tokens: &Tokens,
+) -> gpui::Div {
+    let turns = transcript_turns(project, locale);
+    let opened = root.search.opened_transcript.as_mut();
+    let matched = opened.as_ref().and_then(|opened| {
+        if opened.hit.document_id != *project.id()
+            || opened.hit.document_revision != project.revision()
+        {
+            return None;
+        }
+        turns.iter().enumerate().find_map(|(turn_index, turn)| {
+            turn.paragraphs
+                .iter()
+                .position(|paragraph| {
+                    Some(&paragraph.target) == opened.hit.transcript_target.as_ref()
+                        && paragraph.text.to_lowercase().contains(&opened.query)
+                })
+                .map(|paragraph| (turn_index, paragraph))
+        })
+    });
+    let stale = opened.is_some() && matched.is_none();
+    let reveal = opened.map(|opened| opened.pending.clone());
+    let scroll = root.scroll.meeting_content.clone();
+    let reveal_inset = theme::SCROLL_FADE + tokens.spacing.xs;
+    div()
+        .flex()
+        .flex_col()
+        .gap(tokens.spacing.lg)
+        .children(stale.then(|| {
+            div()
+                .debug_selector(|| "transcript-search-stale".into())
+                .text_sm()
+                .text_color(tokens.warning_text)
+                .child(tr(locale, "search_transcript_changed"))
+        }))
+        .children(turns.into_iter().enumerate().map(|(index, turn)| {
+            div()
+                .debug_selector(move || format!("transcript-turn-{index}"))
+                .max_w(READING_WIDTH)
+                .flex()
+                .flex_col()
+                .gap(tokens.spacing.xs)
+                .child(
+                    div()
+                        .flex()
+                        .items_baseline()
+                        .gap(tokens.spacing.sm)
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(tokens.speaker(turn.order))
+                                .child(turn.name),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(tokens.text_muted)
+                                .child(timestamp(turn.start_ms)),
+                        ),
+                )
+                .children(turn.paragraphs.into_iter().enumerate().map({
+                    let scroll = scroll.clone();
+                    let reveal = reveal.clone();
+                    move |(paragraph_index, paragraph)| {
+                        let highlighted = matched == Some((index, paragraph_index));
+                        reading(paragraph.text)
+                            .when(highlighted, |paragraph| {
+                                paragraph
+                                    .debug_selector(|| "transcript-search-match".into())
+                                    .bg(tokens.selection)
+                                    .rounded(tokens.radius.sm)
+                            })
+                            .when_some(
+                                reveal.as_ref().filter(|_| highlighted).cloned(),
+                                |paragraph, pending| {
+                                    let scroll = scroll.clone();
+                                    // Use this frame's nested paragraph bounds. Item scrolling
+                                    // addresses only the content's direct children (whole turns).
+                                    paragraph.on_children_prepainted(move |bounds, window, _| {
+                                        if !pending.get() {
+                                            return;
+                                        }
+                                        if let Some(bounds) = bounds.first() {
+                                            pending.set(false);
+                                            let offset = scroll.offset();
+                                            scroll.set_offset(gpui::point(
+                                                offset.x,
+                                                offset.y + scroll.bounds().top() + reveal_inset
+                                                    - bounds.top(),
+                                            ));
+                                            // Refresh is ignored during drawing; request it after
+                                            // this frame. No delayed callback changes scroll state.
+                                            window.on_next_frame(|window, _| window.refresh());
+                                        }
+                                    })
+                                },
                             )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(tokens.text_muted)
-                                    .child(timestamp(turn.start_ms)),
-                            ),
-                    )
-                    .children(turn.paragraphs.into_iter().map(reading))
-            }),
-    )
+                    }
+                }))
+        }))
 }
 
 /// Where the foreground processing of the shown document is: its phase

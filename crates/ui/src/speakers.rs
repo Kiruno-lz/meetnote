@@ -52,7 +52,13 @@ pub(crate) struct TranscriptTurn {
     /// When its first segment starts.
     pub(crate) start_ms: u64,
     /// The text of each of its segments.
-    pub(crate) paragraphs: Vec<String>,
+    pub(crate) paragraphs: Vec<TranscriptParagraph>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptParagraph {
+    pub(crate) target: application::TranscriptSearchTarget,
+    pub(crate) text: String,
 }
 
 /// The speaker-labelled transcript of `state` as turns: consecutive segments
@@ -69,6 +75,7 @@ pub(crate) fn transcript_turns(state: &DocumentState, locale: Locale) -> Vec<Tra
                 segment.start_ms,
                 segment.end_ms,
                 segment.text.as_str(),
+                application::TranscriptSearchTarget::from(segment),
             )
         })
         .collect();
@@ -90,15 +97,25 @@ pub(crate) fn transcript_turns(state: &DocumentState, locale: Locale) -> Vec<Tra
         .collect();
     for raw in &state.results.transcript {
         if !aligned.contains(&(raw.id.as_str(), raw.text.as_str(), raw.start_ms, raw.end_ms)) {
-            segments.push((None, raw.start_ms, raw.end_ms, raw.text.as_str()));
+            segments.push((
+                None,
+                raw.start_ms,
+                raw.end_ms,
+                raw.text.as_str(),
+                application::TranscriptSearchTarget::from(raw),
+            ));
         }
     }
-    segments.sort_by_key(|(_, start, end, _)| (*start, *end));
+    segments.sort_by_key(|(_, start, end, _, _)| (*start, *end));
     let mut turns: Vec<(Option<&str>, TranscriptTurn)> = Vec::new();
-    for (speaker_id, start_ms, _, text) in segments {
+    for (speaker_id, start_ms, _, text, target) in segments {
+        let paragraph = TranscriptParagraph {
+            target,
+            text: text.to_string(),
+        };
         match turns.last_mut() {
             Some((speaker, turn)) if *speaker == speaker_id => {
-                turn.paragraphs.push(text.to_string());
+                turn.paragraphs.push(paragraph);
             }
             _ => {
                 let speaker =
@@ -112,7 +129,7 @@ pub(crate) fn transcript_turns(state: &DocumentState, locale: Locale) -> Vec<Tra
                             |speaker| speaker.name(locale),
                         ),
                         start_ms,
-                        paragraphs: vec![text.to_string()],
+                        paragraphs: vec![paragraph],
                     },
                 ));
             }
@@ -645,7 +662,10 @@ mod tests {
                     turn.order,
                     turn.name.as_str(),
                     turn.start_ms,
-                    turn.paragraphs.clone(),
+                    turn.paragraphs
+                        .iter()
+                        .map(|p| p.text.clone())
+                        .collect::<Vec<_>>(),
                 )
             })
             .collect::<Vec<_>>();
@@ -692,11 +712,22 @@ mod tests {
         let turns = transcript_turns(&state, Locale::EnUs);
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].name, "Alice");
-        assert_eq!(turns[0].paragraphs, vec!["covered"]);
+        assert_eq!(
+            turns[0]
+                .paragraphs
+                .iter()
+                .map(|p| p.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["covered"]
+        );
         assert_eq!(turns[1].name, "Unattributed speech");
         assert_eq!(turns[1].start_ms, 1000);
         assert_eq!(
-            turns[1].paragraphs,
+            turns[1]
+                .paragraphs
+                .iter()
+                .map(|p| p.text.as_str())
+                .collect::<Vec<_>>(),
             vec!["Unaligned text", "Different raw text"]
         );
     }

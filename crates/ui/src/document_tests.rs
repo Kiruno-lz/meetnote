@@ -254,6 +254,207 @@ fn workspace_search_reveals_keyboard_results_in_a_minimum_window(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn workspace_search_reveals_a_matching_paragraph_inside_one_long_speaker_turn(
+    cx: &mut TestAppContext,
+) {
+    let documents = DocumentsRoot::new();
+    let mut document = processed("meeting", "Review");
+    document.results.transcript = (0..100)
+        .map(|index| TranscriptSegment {
+            id: format!("segment-{index}"),
+            start_ms: index * 4000,
+            end_ms: (index + 1) * 4000,
+            text: if index == 70 {
+                "独特的预算决定".into()
+            } else {
+                format!("Ordinary transcript paragraph {index}.")
+            },
+        })
+        .collect();
+    document.results.diarization[0].end_ms = 400000;
+    document.results.speaker_segments = domain::align_transcript_and_speakers(
+        &document.results.transcript,
+        &document.results.diarization,
+    );
+    documents.put(document, "Notes");
+    let before = documents.package_bytes("meeting");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    cx.simulate_resize(gpui::size(px(900.), px(600.)));
+    search(cx, &view, "独特的预算决定");
+    click_selector(cx, "search-open-meeting");
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+    });
+    cx.run_until_parked();
+    let matched = rendered(cx, "transcript-search-match");
+    let viewport = rendered(cx, "meeting-content");
+    assert!(
+        within(matched, viewport),
+        "match={matched:?}, viewport={viewport:?}"
+    );
+    assert!(
+        matched.top() >= viewport.top() + crate::theme::SCROLL_FADE,
+        "the result must be outside the scroll fade: {matched:?}"
+    );
+    assert!(view.read_with(cx, |root, _| root.scroll.meeting_content.offset().y) < px(-100.));
+    assert!(
+        cx.debug_bounds("transcript-turn-1").is_none(),
+        "keep speaker grouping"
+    );
+    let offset = scroll_document(cx, &view);
+    view.update(cx, |_, cx| cx.notify());
+    cx.run_until_parked();
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        offset,
+        "a redraw must not force the reader back to the result"
+    );
+    click_selector(cx, "search-open-meeting");
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+    });
+    cx.run_until_parked();
+    assert!(within(
+        rendered(cx, "transcript-search-match"),
+        rendered(cx, "meeting-content")
+    ));
+    assert_eq!(documents.package_bytes("meeting"), before);
+}
+
+#[gpui::test]
+fn workspace_search_locates_raw_and_split_paragraphs_and_clears_on_document_change(
+    cx: &mut TestAppContext,
+) {
+    let documents = DocumentsRoot::new();
+    let mut document = processed("meeting", "Review");
+    document.results.transcript[0].text = "Only raw evidence".into();
+    let mut first = document.results.speaker_segments[0].clone();
+    first.text = "First aligned paragraph".into();
+    first.end_ms = 2000;
+    let mut second = first.clone();
+    second.start_ms = 2000;
+    second.end_ms = 4000;
+    second.text = "Second aligned evidence".into();
+    // Both aligned pieces have the same ASR ID and speaker; the time range
+    // must distinguish the second piece without splitting the reading turn.
+    document.results.speaker_segments = vec![first, second];
+    documents.put(document, "Notes");
+    documents.put(processed("other", "Other"), "Other notes");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    for (query, speaker, start) in [
+        ("Second aligned evidence", Some("speaker-0"), 2000),
+        ("Only raw evidence", None, 0),
+    ] {
+        search(cx, &view, query);
+        // The input, Submit, Clear, then the result: activate with the keyboard.
+        for _ in 0..3 {
+            cx.simulate_keystrokes("tab");
+        }
+        cx.run_until_parked();
+        assert!(
+            within(
+                rendered(cx, "focus-ring"),
+                rendered(cx, "search-open-meeting")
+            ),
+            "keyboard result for {query}"
+        );
+        cx.simulate_keystrokes("enter");
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
+        cx.run_until_parked();
+        assert!(within(
+            rendered(cx, "transcript-search-match"),
+            rendered(cx, "meeting-content")
+        ));
+        view.read_with(cx, |root, _| {
+            let target = root
+                .search
+                .opened_transcript
+                .as_ref()
+                .unwrap()
+                .hit
+                .transcript_target
+                .as_ref()
+                .unwrap();
+            assert_eq!(target.segment_id, "t-1");
+            assert_eq!(target.start_ms, start);
+            assert_eq!(target.speaker_id.as_deref(), speaker);
+        });
+    }
+    click_selector(cx, "workspace-search-clear");
+    assert!(cx.debug_bounds("transcript-search-match").is_none());
+    search(cx, &view, "Only raw evidence");
+    click_selector(cx, "search-open-meeting");
+    // A document selected between the first layout and the next frame must
+    // not inherit a deferred position or marker from the previous result.
+    view.update(cx, |root, cx| {
+        root.select_project(ProjectId::new("other"), cx)
+    });
+    cx.update(|window, cx| {
+        window.simulate_next_frame(cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("transcript-search-match").is_none());
+    assert_eq!(
+        view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+        Default::default()
+    );
+}
+
+#[gpui::test]
+fn workspace_search_rejects_changed_revision_missing_id_and_replaced_text(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "Notes");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    for changed in ["revision", "id", "text"] {
+        documents.put(processed("meeting", "Review"), "Notes");
+        let current = documents.read("meeting").state;
+        view.update(cx, |root, cx| {
+            root.projects = vec![current];
+            cx.notify();
+        });
+        search(cx, &view, "先过一下页面");
+        let mut external = documents.read("meeting").state;
+        match changed {
+            "revision" => external.schema.revision += 1,
+            "id" => {
+                external.results.transcript[0].id = "replacement".into();
+                external.results.speaker_segments[0].transcript_segment_id = "replacement".into();
+            }
+            _ => {
+                external.results.transcript[0].text = "Replaced text".into();
+                external.results.speaker_segments[0].text = "Replaced text".into();
+            }
+        }
+        documents.put(external, "Notes");
+        let current = documents.read("meeting").state;
+        // Model a fresh workspace snapshot arriving before the old result's
+        // button is activated, including an editor that did not bump revision.
+        view.update(cx, |root, cx| {
+            root.projects = vec![current];
+            cx.notify();
+        });
+        let before = documents.package_bytes("meeting");
+        click_selector(cx, "search-open-meeting");
+        rendered(cx, "transcript-search-stale");
+        assert!(
+            cx.debug_bounds("transcript-search-match").is_none(),
+            "{changed}"
+        );
+        assert_eq!(
+            view.read_with(cx, |root, _| root.scroll.meeting_content.offset()),
+            Default::default()
+        );
+        assert_eq!(documents.package_bytes("meeting"), before);
+    }
+}
+
+#[gpui::test]
 fn workspace_search_opens_hidden_child_and_retains_results(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
     documents.put(processed("parent", "Weekly review"), "Notes");

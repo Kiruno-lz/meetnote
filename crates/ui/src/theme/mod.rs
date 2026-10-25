@@ -16,7 +16,7 @@ mod material;
 mod platform;
 mod tokens;
 
-pub(crate) use edge_fade::{scroll_faded, tail_faded_label};
+pub(crate) use edge_fade::{scroll_faded, tail_faded_label, SCROLL_FADE};
 pub(crate) use frost::{frosted, layered};
 pub(crate) use material::{Material, Mode};
 pub(crate) use platform::{system_accessibility, Accessibility};
