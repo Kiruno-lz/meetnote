@@ -102,7 +102,7 @@ impl AsrWindowSession for WhisperWindowSession {
             self.threads,
             context.clone(),
         );
-        state.full(params, &window.samples).map_err(|error| {
+        params.full(&mut state, &window.samples).map_err(|error| {
             if context.is_cancelled() {
                 cancelled_error("Whisper transcription was cancelled")
             } else {
@@ -208,7 +208,7 @@ fn transcribe_sync(
 
     let params = whisper_params(request.language.as_deref(), threads, context.clone());
 
-    state.full(params, &audio.samples).map_err(|error| {
+    params.full(&mut state, &audio.samples).map_err(|error| {
         if context.is_cancelled() {
             cancelled_error("Whisper transcription was cancelled")
         } else {
@@ -256,18 +256,50 @@ fn transcribe_sync(
     })
 }
 
+/// The raw callback's owned pointee stays alive until synchronous inference ends.
+struct WhisperParameters<'a> {
+    params: FullParams<'a, 'static>,
+    cancellation: Box<JobContext>,
+}
+
+impl WhisperParameters<'_> {
+    fn full(
+        self,
+        state: &mut whisper_rs::WhisperState,
+        samples: &[f32],
+    ) -> Result<(), whisper_rs::WhisperError> {
+        let result = state.full(self.params, samples);
+        drop(self.cancellation);
+        result
+    }
+}
+
+unsafe extern "C" fn should_abort(user_data: *mut std::ffi::c_void) -> bool {
+    // SAFETY: WhisperParameters owns this stable Box<JobContext> for the whole
+    // synchronous full call. whisper.cpp only reads it; it never owns or frees it.
+    let context = unsafe { &*(user_data.cast::<JobContext>()) };
+    context.is_cancelled()
+}
+
 fn whisper_params<'a>(
     language: Option<&'a str>,
     threads: i32,
     context: JobContext,
-) -> FullParams<'a, 'static> {
+) -> WhisperParameters<'a> {
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 0 });
     params.set_n_threads(threads);
     params.set_print_special(false);
     params.set_print_progress(false);
     params.set_print_realtime(false);
     params.set_print_timestamps(false);
-    params.set_abort_callback_safe(move || context.is_cancelled());
+    let mut cancellation = Box::new(context);
+    // whisper-rs 0.16.0's safe wrapper passes Box<dyn FnMut> userdata to a
+    // trampoline that casts it to the concrete closure F. Use the typed C API
+    // with an owned stable pointee instead; no closure leaks or ABI mismatch.
+    unsafe {
+        params.set_abort_callback(Some(should_abort));
+        params.set_abort_callback_user_data((&mut *cancellation as *mut JobContext).cast());
+    }
     match language {
         Some("auto") | None => {
             params.set_language(Some("auto"));
@@ -275,7 +307,10 @@ fn whisper_params<'a>(
         }
         Some(language) => params.set_language(Some(language)),
     }
-    params
+    WhisperParameters {
+        params,
+        cancellation,
+    }
 }
 
 fn timestamp_to_sample(timestamp_10ms: i64) -> u64 {
@@ -322,6 +357,21 @@ fn cancelled_error(message: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_userdata_survives_parameter_moves_and_observes_cancellation() {
+        let (context, _) = runtime::JobRuntime::default().create_job();
+        let prepared = whisper_params(Some("en"), 4, context.clone());
+        let pointer = (&*prepared.cancellation as *const JobContext)
+            .cast_mut()
+            .cast();
+        let moved = Box::new(prepared);
+        // SAFETY: moved still owns the exact pointee passed to the native API.
+        assert!(!unsafe { should_abort(pointer) });
+        context.cancel();
+        assert!(unsafe { should_abort(pointer) });
+        drop(moved);
+    }
 
     #[test]
     fn probe_rejects_a_missing_whisper_artifact() {
