@@ -397,7 +397,17 @@ fn build_config(
     let tokens = directory.join("tokens.txt");
     let provider = match request.device {
         ComputeDevice::Auto | ComputeDevice::Cpu => "cpu",
-        ComputeDevice::CoreMl => "coreml",
+        // The pinned sherpa runtime has no provider-discovery/effective-provider
+        // receipt. Its CoreML request was observed falling back to CPU. Reject
+        // it until we can guarantee execution instead of mislabelling provenance.
+        ComputeDevice::CoreMl => {
+            return Err(BackendError {
+                code: BackendErrorCode::DeviceUnavailable,
+                message:
+                    "the pinned sherpa-onnx runtime cannot verify Core ML execution; select CPU"
+                        .into(),
+            });
+        }
         ComputeDevice::Metal => {
             return Err(BackendError {
                 code: BackendErrorCode::DeviceUnavailable,
@@ -752,6 +762,19 @@ mod tests {
             Some(root.join("model.onnx").to_str().unwrap())
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_unverified_coreml_provider_must_not_silently_run_on_cpu() {
+        let request = AsrRequest {
+            audio_path: "fixture.wav".into(),
+            model: model_ref("paraformer-zh", Path::new("unused")),
+            language: None,
+            device: ComputeDevice::CoreMl,
+        };
+        let error = build_config(&request, 1).unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::DeviceUnavailable);
+        assert!(error.message.contains("Core ML"));
     }
 
     #[test]

@@ -59,6 +59,7 @@ impl AsrBackend for WhisperRsBackend {
         &self,
         request: AsrRequest,
     ) -> Result<Box<dyn AsrWindowSession>, BackendError> {
+        validate_device(request.device)?;
         self.probe(&request.model)?;
         whisper_rs::install_logging_hooks();
         let context_parameters = WhisperContextParameters {
@@ -175,6 +176,7 @@ fn transcribe_sync(
     context: JobContext,
     threads: i32,
 ) -> Result<AsrResult, BackendError> {
+    validate_device(request.device)?;
     if context.is_cancelled() {
         return Err(BackendError {
             code: BackendErrorCode::Cancelled,
@@ -254,6 +256,17 @@ fn transcribe_sync(
         language: request.language,
         segments,
     })
+}
+
+fn validate_device(device: ComputeDevice) -> Result<(), BackendError> {
+    if device == ComputeDevice::CoreMl {
+        return Err(BackendError {
+            code: BackendErrorCode::DeviceUnavailable,
+            message: "this whisper-rs build enables Metal, not Core ML; select Auto, CPU or Metal"
+                .into(),
+        });
+    }
+    Ok(())
 }
 
 /// The raw callback's owned pointee stays alive until synchronous inference ends.
@@ -357,6 +370,27 @@ fn cancelled_error(message: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_uncompiled_coreml_backend_cannot_be_labelled_as_metal() {
+        let request = AsrRequest {
+            audio_path: "unused.wav".into(),
+            model: ModelRef {
+                backend_id: "whisper-rs".into(),
+                model_id: "whisper-base-en-ggml".into(),
+                revision: None,
+                artifact_path: "missing.bin".into(),
+                artifacts: Vec::new(),
+            },
+            language: Some("en".into()),
+            device: ComputeDevice::CoreMl,
+        };
+        let error = WhisperRsBackend::default()
+            .create_window_session(request)
+            .err()
+            .unwrap();
+        assert_eq!(error.code, BackendErrorCode::DeviceUnavailable);
+    }
 
     #[test]
     fn cancellation_userdata_survives_parameter_moves_and_observes_cancellation() {
