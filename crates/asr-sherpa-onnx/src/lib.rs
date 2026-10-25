@@ -16,9 +16,19 @@ const SINGLE_GRAPH_MODEL_FILES: &[&str] = &["model.int8.onnx", "model.onnx"];
 const QWEN3_ENCODER_FILES: &[&str] = &["encoder.int8.onnx", "encoder.onnx"];
 const QWEN3_DECODER_FILES: &[&str] = &["decoder.int8.onnx", "decoder.onnx"];
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SherpaOnnxAsrBackend {
     pub num_threads: i32,
+}
+
+impl Default for SherpaOnnxAsrBackend {
+    fn default() -> Self {
+        Self {
+            num_threads: std::thread::available_parallelism()
+                .map(|threads| threads.get().min(4) as i32)
+                .unwrap_or(1),
+        }
+    }
 }
 
 impl AsrBackend for SherpaOnnxAsrBackend {
@@ -775,6 +785,12 @@ mod tests {
         let error = build_config(&request, 1).unwrap_err();
         assert_eq!(error.code, BackendErrorCode::DeviceUnavailable);
         assert!(error.message.contains("Core ML"));
+    }
+
+    #[test]
+    fn default_threads_are_explicit_and_bounded() {
+        let threads = SherpaOnnxAsrBackend::default().num_threads;
+        assert!((1..=4).contains(&threads));
     }
 
     #[test]
