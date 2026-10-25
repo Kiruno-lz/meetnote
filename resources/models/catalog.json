@@ -32,6 +32,39 @@
       ]
     },
     {
+      "id": "sensevoice-small-int8",
+      "task": "asr",
+      "modelFamily": "sensevoice",
+      "candidateBackends": ["sherpa-onnx"],
+      "revision": "2365baeacb507f821a0c8120fcee3d484dba7a07",
+      "sourceFormat": "onnx-bundle",
+      "source": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/tree/2365baeacb507f821a0c8120fcee3d484dba7a07",
+      "sizeBytes": 239549806,
+      "estimatedVramBytes": 2147483648,
+      "sha256": null,
+      "license": "funasr-model-open-source-license-v1.1-see-upstream-license",
+      "requiresAuth": false,
+      "status": "ready",
+      "artifactFiles": ["model.int8.onnx", "tokens.txt", "LICENSE"],
+      "artifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "source": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
+          "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+        },
+        {
+          "filename": "tokens.txt",
+          "source": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt",
+          "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+        },
+        {
+          "filename": "LICENSE",
+          "source": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/LICENSE",
+          "sha256": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"
+        }
+      ]
+    },
+    {
       "id": "qwen3-asr-0.6b",
       "task": "asr",
       "modelFamily": "qwen3-asr",

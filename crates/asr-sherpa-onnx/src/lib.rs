@@ -7,12 +7,12 @@ use contracts::{
 use runtime::{JobContext, Progress};
 use sherpa_onnx::{
     OfflineParaformerModelConfig, OfflineQwen3ASRModelConfig, OfflineRecognizer,
-    OfflineRecognizerConfig,
+    OfflineRecognizerConfig, OfflineSenseVoiceModelConfig,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const PARAFORMER_MODEL_FILES: &[&str] = &["model.int8.onnx", "model.onnx"];
+const SINGLE_GRAPH_MODEL_FILES: &[&str] = &["model.int8.onnx", "model.onnx"];
 const QWEN3_ENCODER_FILES: &[&str] = &["encoder.int8.onnx", "encoder.onnx"];
 const QWEN3_DECODER_FILES: &[&str] = &["decoder.int8.onnx", "decoder.onnx"];
 
@@ -31,6 +31,7 @@ impl AsrBackend for SherpaOnnxAsrBackend {
                 "onnx",
                 "paraformer",
                 "qwen3-asr",
+                "sensevoice",
             ],
         )
     }
@@ -39,8 +40,8 @@ impl AsrBackend for SherpaOnnxAsrBackend {
         validate_model_ref(model)?;
         let directory = model_directory(model);
         match model_family(model) {
-            ModelFamily::Paraformer => {
-                require_any_file(&directory, PARAFORMER_MODEL_FILES)?;
+            ModelFamily::Paraformer | ModelFamily::SenseVoice => {
+                require_any_file(&directory, SINGLE_GRAPH_MODEL_FILES)?;
                 require_file(&directory, "tokens.txt")?;
             }
             ModelFamily::Qwen3Asr => {
@@ -229,6 +230,7 @@ impl AsrWindowSession for SherpaWindowSession {
 enum ModelFamily {
     Paraformer,
     Qwen3Asr,
+    SenseVoice,
     Unsupported,
 }
 
@@ -238,6 +240,8 @@ fn model_family(model: &ModelRef) -> ModelFamily {
         ModelFamily::Paraformer
     } else if model_id.contains("qwen3") {
         ModelFamily::Qwen3Asr
+    } else if model_id.contains("sensevoice") || model_id.contains("sense-voice") {
+        ModelFamily::SenseVoice
     } else {
         ModelFamily::Unsupported
     }
@@ -408,7 +412,7 @@ fn build_config(
 
     match model_family(&request.model) {
         ModelFamily::Paraformer => {
-            let model = require_any_file(&directory, PARAFORMER_MODEL_FILES)?;
+            let model = require_any_file(&directory, SINGLE_GRAPH_MODEL_FILES)?;
             config.model_config.paraformer = OfflineParaformerModelConfig {
                 model: Some(model.display().to_string()),
             };
@@ -422,6 +426,14 @@ fn build_config(
                 decoder: Some(decoder.display().to_string()),
                 tokenizer: Some(directory.join("tokenizer").display().to_string()),
                 ..Default::default()
+            };
+        }
+        ModelFamily::SenseVoice => {
+            let model = require_any_file(&directory, SINGLE_GRAPH_MODEL_FILES)?;
+            config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
+                model: Some(model.display().to_string()),
+                language: Some(request.language.clone().unwrap_or_else(|| "auto".into())),
+                use_itn: true,
             };
         }
         ModelFamily::Unsupported => {
@@ -662,6 +674,60 @@ mod tests {
                 ..
             })
         ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sensevoice_requires_its_assets_and_respects_language_and_device() {
+        let root = std::env::temp_dir().join(format!("meetnote-sensevoice-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let model = model_ref("sensevoice-small-int8", &root);
+        let backend = SherpaOnnxAsrBackend::default();
+        assert_eq!(
+            backend.probe(&model).unwrap_err().code,
+            BackendErrorCode::ModelMissing
+        );
+        fs::write(root.join("model.int8.onnx"), b"fixture").unwrap();
+        assert_eq!(
+            backend.probe(&model).unwrap_err().code,
+            BackendErrorCode::ModelMissing
+        );
+        fs::write(root.join("tokens.txt"), b"<blk> 0\n").unwrap();
+        backend.probe(&model).unwrap();
+        let mut request = AsrRequest {
+            audio_path: "fixture.wav".into(),
+            model,
+            language: Some("zh".into()),
+            device: ComputeDevice::Cpu,
+        };
+        let config = build_config(&request, 4).unwrap();
+        assert_eq!(
+            config.model_config.sense_voice.model.as_deref(),
+            Some(root.join("model.int8.onnx").to_str().unwrap())
+        );
+        assert_eq!(
+            config.model_config.sense_voice.language.as_deref(),
+            Some("zh")
+        );
+        assert!(config.model_config.sense_voice.use_itn);
+        assert!(config.model_config.paraformer.model.is_none());
+        assert_eq!(config.model_config.provider.as_deref(), Some("cpu"));
+        assert_eq!(config.model_config.num_threads, 4);
+        request.language = None;
+        assert_eq!(
+            build_config(&request, 1)
+                .unwrap()
+                .model_config
+                .sense_voice
+                .language
+                .as_deref(),
+            Some("auto")
+        );
+        request.device = ComputeDevice::Metal;
+        assert_eq!(
+            build_config(&request, 1).unwrap_err().code,
+            BackendErrorCode::DeviceUnavailable
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
