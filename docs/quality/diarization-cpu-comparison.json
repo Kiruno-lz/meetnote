@@ -1,0 +1,164 @@
+{
+  "schema": "meetnote.diarization-cpu-comparison.v1",
+  "date": "2026-10-25",
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "logicalCores": 10,
+    "memoryBytes": 34359738368
+  },
+  "scope": "native CPU embedding intra-op parallelism; baseline equivalence, not DER or full Audio Host latency",
+  "frozenBudgets": {
+    "minimumMedianWallReduction": 0.15,
+    "maximumPeakRssRatio": 1.2,
+    "minimumEmbeddingCosine": 0.99999,
+    "maximumEmbeddingAbsoluteError": 0.0001,
+    "speakerTimeline": "exact equality allowing consistent identity renaming"
+  },
+  "runs": {
+    "baseline": {
+      "schema": "meetnote.diarization-cpu-run.v1",
+      "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+      "audioSeconds": 180,
+      "modelArtifacts": {
+        "plda_lda.npy": "e20c9b012bebd1aabda5a38a127e63a43cf35debdc502715fc143e2fb6bc3c4b",
+        "plda_mean1.npy": "e424c0c352182aa8e0f555dec1f3b30e29a20b9ed6b25d339f112af92e51e36f",
+        "plda_mean2.npy": "6f6fb708a2037197b5b84ffeaa8f140cb878088fbecd6ab042ad26a7691bd2cf",
+        "plda_mu.npy": "d286d48acf99bbc1ed1502fed0a3e361ae5626ce1870c8be9f7397c5e47886c6",
+        "plda_psi.npy": "d7128c9ed2f28a9781971805131129f077c04f948e2df12e52dcdb99f2b4e5f5",
+        "plda_tr.npy": "e700b68cb319de3fafb5fa093eb9222c23c447084741f8d3a533640d425510ee",
+        "segmentation-3.0.onnx": "038b971741ed623af9773ecafdefa4b7bc523520099c2a68f8568b24189e8ad9",
+        "wespeaker-voxceleb-resnet34.min_num_samples.txt": "e4df891c484d7abb985dadf539fa1883a646dab6337af5cae4159c587b7050cc",
+        "wespeaker-voxceleb-resnet34.onnx": "203a4c67112167580ab1fcb62f4568c633499fb283805890aebe1c48564fcc0f",
+        "wespeaker-voxceleb-resnet34.onnx.data": "dc105e7857156611381b95cc961b277d8e1e098e7af1c919a77c68c7257ce956"
+      },
+      "configuration": {
+        "backend": "diarization-native",
+        "device": "Cpu",
+        "repeats": 2,
+        "embeddingThreads": 1,
+        "segmentationStepSeconds": 1
+      },
+      "runnerSha256": "00cb98756e163f331137a3195399e77d899a84822d7d699ae92a47889ea2b9f1",
+      "failure": null,
+      "predictionSha256": "9dc3081706530c1cd64917a20ed9d1d6bfd445690ab3d4de1803b6c5d7178b28",
+      "peakRssBytes": 304971776,
+      "processSeconds": 332.74795462493785,
+      "wallSeconds": [
+        164.226796834,
+        165.602497625
+      ],
+      "speakerCounts": [
+        3,
+        3
+      ],
+      "segmentCounts": [
+        45,
+        45
+      ],
+      "observationCounts": [
+        303,
+        303
+      ],
+      "cpuSeconds": 380.15000000000003
+    },
+    "candidate": {
+      "schema": "meetnote.diarization-cpu-run.v1",
+      "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+      "audioSeconds": 180,
+      "modelArtifacts": {
+        "plda_lda.npy": "e20c9b012bebd1aabda5a38a127e63a43cf35debdc502715fc143e2fb6bc3c4b",
+        "plda_mean1.npy": "e424c0c352182aa8e0f555dec1f3b30e29a20b9ed6b25d339f112af92e51e36f",
+        "plda_mean2.npy": "6f6fb708a2037197b5b84ffeaa8f140cb878088fbecd6ab042ad26a7691bd2cf",
+        "plda_mu.npy": "d286d48acf99bbc1ed1502fed0a3e361ae5626ce1870c8be9f7397c5e47886c6",
+        "plda_psi.npy": "d7128c9ed2f28a9781971805131129f077c04f948e2df12e52dcdb99f2b4e5f5",
+        "plda_tr.npy": "e700b68cb319de3fafb5fa093eb9222c23c447084741f8d3a533640d425510ee",
+        "segmentation-3.0.onnx": "038b971741ed623af9773ecafdefa4b7bc523520099c2a68f8568b24189e8ad9",
+        "wespeaker-voxceleb-resnet34.min_num_samples.txt": "e4df891c484d7abb985dadf539fa1883a646dab6337af5cae4159c587b7050cc",
+        "wespeaker-voxceleb-resnet34.onnx": "203a4c67112167580ab1fcb62f4568c633499fb283805890aebe1c48564fcc0f",
+        "wespeaker-voxceleb-resnet34.onnx.data": "dc105e7857156611381b95cc961b277d8e1e098e7af1c919a77c68c7257ce956"
+      },
+      "configuration": {
+        "backend": "diarization-native",
+        "device": "Cpu",
+        "repeats": 2,
+        "embeddingThreads": 4,
+        "segmentationStepSeconds": 1
+      },
+      "runnerSha256": "f431bc02659205faacd3b7a86d16125a1af213f44d2060f7860ef184513d18f7",
+      "failure": null,
+      "predictionSha256": "6c53059988ae5a2e3bb868b45e014567d90b7d85614bb6dc3ccd468a60faf38b",
+      "peakRssBytes": 316112896,
+      "processSeconds": 98.02161370916292,
+      "wallSeconds": [
+        47.458407125,
+        47.586080125
+      ],
+      "speakerCounts": [
+        3,
+        3
+      ],
+      "segmentCounts": [
+        45,
+        45
+      ],
+      "observationCounts": [
+        303,
+        303
+      ],
+      "cpuSeconds": 404.28
+    }
+  },
+  "gate": {
+    "status": "passed",
+    "baselineMedianSeconds": 164.91464722950002,
+    "candidateMedianSeconds": 47.522243625,
+    "speedup": 0.7118373387485306,
+    "peakRssRatio": 1.0365316428494682,
+    "minimumEmbeddingCosine": 0.9999999999996658,
+    "maximumEmbeddingAbsoluteError": 3.725290298461914e-07,
+    "repeats": 2,
+    "speakerTimeline": "identical after canonical identity mapping",
+    "qualityScope": "baseline equivalence; not DER"
+  },
+  "rawSpeakerSegmentsExactlyEqual": true,
+  "cpuTimeRatio": 1.0634749441010125,
+  "microProbe": [
+    {
+      "embeddingThreads": 1,
+      "calls": 9,
+      "audioSeconds": 30,
+      "medianEmbeddingCallSeconds": 0.531320416,
+      "resultSha256": "50631718a87ddc712040d839ac27276cdc2d361e0b53eb3a8e0580e1dda66609",
+      "scope": "diagnostic model calls before selecting production candidate"
+    },
+    {
+      "embeddingThreads": 2,
+      "calls": 9,
+      "audioSeconds": 30,
+      "medianEmbeddingCallSeconds": 0.280600833,
+      "resultSha256": "16c91c3472029d63ea85b1c6efbfc11f9ac9fe0eaef450e95bfee88eae8f106b",
+      "scope": "diagnostic model calls before selecting production candidate"
+    },
+    {
+      "embeddingThreads": 4,
+      "calls": 9,
+      "audioSeconds": 30,
+      "medianEmbeddingCallSeconds": 0.145848459,
+      "resultSha256": "5bb26cd9102aa5e61aca6f2d0f02dce4c01cf56b29cf51bb40c7df9edbe27f15",
+      "scope": "diagnostic model calls before selecting production candidate"
+    }
+  ],
+  "sourceArtifacts": {
+    "third_party/speakrs/src/inference/embedding/session.rs": "f6fed7ef96dfd55b3e1fa5f240f6214e7c30973674c4054e319736b8a50abcf6",
+    "crates/diarization/examples/diarization_benchmark.rs": "b5d3aeb10ba92659610461bedb92ed12a678d6a65fa9d242bd7b7d9617850db4",
+    "scripts/audio-eval/check_diarization_cpu.py": "ce8cde7ea221ac9ccf10c827fc31dda31eb49aaa2feea9b59c9726567e207441",
+    "scripts/audio-eval/test_diarization_cpu.py": "d50b40fd23b773c51d4a6a15fd636ae83b5399270b13b8edd633a2193d0fab55"
+  },
+  "baselineVendorSourceSha256": "71149bbc37f890b357d39f4059c236ebe9d5effd2fb406805cc3844c8da75dde",
+  "alternatives": {
+    "upstreamCommit": "beb30734c9067c1ed59af3eb8ec8baa8fb17f94a",
+    "manifestVersion": "0.7.0",
+    "latestVisibleTag": "v0.5.0",
+    "nativeCpu": "source inspected; requires safetensors model bundle; not executed"
+  }
+}

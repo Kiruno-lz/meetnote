@@ -39,7 +39,7 @@ B1 已有固定 FLEURS revision、archive/audio SHA、官方参考文本、句�
 | B4 Agent 语义插件 | 先用 gold transcript/speaker 投影，经 Host 调用插件 → 语义范围/工具结果 | 固定 boundary F1、Pk/WindowDiff、coverage/evidence、结构/写回成功率；不让 ASR 误差混入语义基线 |
 | B5 端到端归因 | 相同 case 逐步换为 ASR prediction、diarization prediction，再运行完整链路 | 与 B1–B4 对比质量降幅、耗时/内存/调用量，定位传播损失；不得仅给一个总分 |
 
-B1 的 `asr_benchmark` 直接运行生产 adapter；`asr_benchmark.py` 在独立进程记录失败、超时、wall 与 RSS，并采用精确 Levenshtein。B2 的 `diarization_benchmark` 只提供独立执行/资源探测，speaker count 不替代 DER。
+B1 的 `asr_benchmark` 直接运行生产 adapter；`asr_benchmark.py` 在独立进程记录失败、超时、wall 与 RSS，并采用精确 Levenshtein。B2 的 `diarization_benchmark` 保留独立执行/资源及完整 speaker timeline/embedding 输出；`check_diarization_cpu.py` 验证固定输入下的提速、资源与 baseline 一致性，speaker count 和一致性均不替代 DER。
 
 - //TODO - 给 B2 补固定 UEM/collar/overlap 的精度 runner；完整 Audio export 不能代替独立 ASR/diarization 测试。
 - //TODO - 各阶段在运行前冻结场景阈值与评分口径。低质量是 fail，不是已完成执行；不要临时放宽阈值。近似 WER/CER 不作为正式通过门，需精确分块/流式评分或明确不具备评分条件。
@@ -65,7 +65,7 @@ B1 的 `asr_benchmark` 直接运行生产 adapter；`asr_benchmark.py` 在独立
 |---|---|---|
 | B0 素材/评分器 | FLEURS 中英文各 24 个原生句子、构造 clean/noise、后续 24 个中文句子；AMI 五个非重叠会话裁剪；固定 hash、版本与精确评分正反例 | 增加自然中文会议、远场与重叠 gold，按会议/speaker 隔离 |
 | B1 模型比较 | Paraformer、SenseVoice、Whisper large/base/Turbo、Qwen MLX 已真实比较；CPU/Metal、线程与加载策略分别记录 | 扩大场景，添加可靠词时间参考与时间误差 |
-| B2 diarization | 独立 release runner 可记录执行与进程资源；计数不是质量 | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
+| B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门，计数与等价不替代 DER | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
 | B3 窗口/运行 | 已复现并修复 Whisper 回调、子词边界、设备回退与推理粒度问题；短路径和应用窗口分别核对 | 验证小时级资源、取消延迟、恢复和身份漂移；AHC 的二次内存仍需单独治理 |
 | B4/B5 | 已有 Agent runner 与历史基础；本轮未开展语义和完整误差传播验收 | 使用固定 gold 经 Host 调用，逐层替换预测定位损失 |
 
