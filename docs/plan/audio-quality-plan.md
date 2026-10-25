@@ -10,7 +10,9 @@ Agent Host 是否正常只按 [Assistant 计划](assistant-plan.md)验收；本�
 
 ## 固定 Benchmark 集
 
-- //TODO - 建立版本化 manifest：case ID、官方来源/许可/版本/哈希、素材会议/speaker/split、截取区间、通道、采样率、变换配方/seed、输出音频与 gold 哈希、适用原子任务、场景、长度和资源档位。代码/小型清单可提交，音频/模型/大产物不提交。
+B1 已有固定 FLEURS revision、archive/audio SHA、官方参考文本、句子 ID 与构造配方的 manifest；AMI 固定 ES2002a 官方音频/词标注并保存裁剪来源。`prepare_fleurs.py`、`prepare_ami_asr.py` 自动生成并拒绝 checksum 不匹配。音频、模型和逐样本大产物留在忽略目录，汇总 receipt 可提交。
+
+- //TODO - 扩展 manifest 的会议/speaker split、词/speaker gold 投影、适用任务与资源档位；现有 FLEURS 第二组仅句子 ID 分离，不能标为 speaker-disjoint holdout。
 - //TODO - 自动从 AMI、AliMeeting、AISHELL-4、CHiME-6 等已标注数据提取原生片段和构造片段；固定解码/重采样工具版本。拼接、插入静音、叠加与噪声变换同步变换词时间、speaker 身份、重叠区与有效评分区，边界跨词时自动调整到合法标注点，无法可靠投影的样本自动拒绝。
 - //TODO - 原生片段测真实分布；构造片段测精确边界/极端情况，分开统计。语义 gold 来自明确 topic 标注或预先选定的不同主题组合；不能将任意拼接点、静音或 speaker 切换自动当作语义 gold。
 - //TODO - 固定开发与留出集，按原始会议/speaker 隔离，构造变体沿用源 split；禁止同一素材的裁剪/拼接副本泄漏到另一 split。参考标注不足时标记 unsupported，不临时让用户补答案。
@@ -37,7 +39,9 @@ Agent Host 是否正常只按 [Assistant 计划](assistant-plan.md)验收；本�
 | B4 Agent 语义插件 | 先用 gold transcript/speaker 投影，经 Host 调用插件 → 语义范围/工具结果 | 固定 boundary F1、Pk/WindowDiff、coverage/evidence、结构/写回成功率；不让 ASR 误差混入语义基线 |
 | B5 端到端归因 | 相同 case 逐步换为 ASR prediction、diarization prediction，再运行完整链路 | 与 B1–B4 对比质量降幅、耗时/内存/调用量，定位传播损失；不得仅给一个总分 |
 
-- //TODO - 每个原子任务使用独立 runner 与结果，复用已有 backend/服务；完整 Audio export 不能代替独立 ASR/diarization 测试。
+B1 的 `asr_benchmark` 直接运行生产 adapter；`asr_benchmark.py` 在独立进程记录失败、超时、wall 与 RSS，并采用精确 Levenshtein。B2 的 `diarization_benchmark` 只提供独立执行/资源探测，speaker count 不替代 DER。
+
+- //TODO - 给 B2 补固定 UEM/collar/overlap 的精度 runner；完整 Audio export 不能代替独立 ASR/diarization 测试。
 - //TODO - 各阶段在运行前冻结场景阈值与评分口径。低质量是 fail，不是已完成执行；不要临时放宽阈值。近似 WER/CER 不作为正式通过门，需精确分块/流式评分或明确不具备评分条件。
 - //TODO - 自动发现可用模型、校验配置，按 case/model/配置哈希复用缓存；只重跑受改动影响的阶段。固定重复次数，保留波动范围与失败，支持断点续跑。
 - //TODO - B4 前先满足 B0–B3 所需基线与 Host 功能门；远程调用使用预置调用数/token/时长上限，有限重试，超限或缺凭据自动标记 blocked 并退出，不等待用户评审、不悄悄切换模型。相关本地失败不触发更昂贵的下游运行。
@@ -45,7 +49,9 @@ Agent Host 是否正常只按 [Assistant 计划](assistant-plan.md)验收；本�
 
 ## 模型比较报告
 
-- //TODO - 从机器结果自动生成 `docs/quality/model-comparison.md`：ASR、diarization、身份/对齐、语义插件分节；每节按场景和时长分组，给出表格与一段简要分析。此路径为待生成交付物，不填造测量结果。
+`report_asr.py` 已从逐样本原始预测自动生成[模型比较](../quality/model-comparison.md)与机器 receipt：按语言和原生/构造/AMI 场景统计，保留失败。评分器统一重算原样 CER/WER 与单独列出的英文 normalized WER，不混入时间戳、DER 或语义分数。
+
+- //TODO - 按 B2–B5 的独立参考与门槛扩展报告，未测项明确标为未评估。
 - 每行至少包含 benchmark/case 版本、场景、语言、时长/样本数、模型/backend/revision、设备/线程、冷/热、质量指标、wall/RTF、峰值 RAM/VRAM、失败率；Agent 另列调用数/token 与可获得的费用，未提供费用标 unknown。
 - 同时输出逐 case 明细、分组均值/中位数/尾部与最差样本，说明加权方法、参考/评分版本和重复波动；不同硬件、输入或评分口径不得直接排名。speaker ID 允许置换，不能要求预测标签字符串等于 gold。
 - 分析回答“哪个模型适合哪类内容/时长、质量与速度取舍、哪个原子环节退化”；不只给全局平均或跨任务单一总分。失败/unsupported/blocked 同样展示，链接可复现命令与脱敏结果。
@@ -53,14 +59,14 @@ Agent Host 是否正常只按 [Assistant 计划](assistant-plan.md)验收；本�
 
 ## 当前进度与 TODO
 
-2026-09-12 静态核对，未在本次运行质量测试。
+2026-10-25 本机真实执行，范围与结果见[研究记录](../reserch/asr-quality-and-runtime-evaluation.md)。
 
 | 交付物 | 当前状态 | 下一步 |
 |---|---|---|
-| 数据下载/转换 | 已有三个音频数据集下载清单和转换脚本，AMI/QMSum 文本转换可复用 | 固定 benchmark manifest、AMI 配对音频/gold 与 split |
-| 音频构造 | compose_semantic_audio 已能按区间拼接并记录来源/接缝 | 补词/speaker gold 的精确变换、seed/版本、原生与构造分层；接缝参考不是完整语义 gold |
-| 运行/评分 | 已有 Audio Host export、独立 backend 测试、WER/CER/DER scorer 和部分真实 smoke | B0–B3 独立 runner、统一阈值/精确评分、自动门禁 |
-| Agent 评测 | 已有 runner、语义 evaluator、部分独立预测及写回；质量未全面通过 | B4 使用固定 gold 输入和插件路径，最后执行 B5 误差归因 |
-| 阅读报告 | 零散日志与计划内数值存在，尚无自动生成的分组模型比较文档 | 建立可重跑报告生成器，历史结果满足同口径后再纳入 |
+| B0 素材/评分器 | FLEURS 中英文各 24 个原生句子、构造 clean/noise、后续 24 个中文句子；AMI 五个非重叠会话裁剪；固定 hash、版本与精确评分正反例 | 增加自然中文会议、远场与重叠 gold，按会议/speaker 隔离 |
+| B1 模型比较 | Paraformer、SenseVoice、Whisper large/base/Turbo、Qwen MLX 已真实比较；CPU/Metal、线程与加载策略分别记录 | 扩大场景，添加可靠词时间参考与时间误差 |
+| B2 diarization | 独立 release runner 可记录执行与进程资源；计数不是质量 | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
+| B3 窗口/运行 | 已复现并修复 Whisper 回调、子词边界、设备回退与推理粒度问题；短路径和应用窗口分别核对 | 验证小时级资源、取消延迟、恢复和身份漂移；AHC 的二次内存仍需单独治理 |
+| B4/B5 | 已有 Agent runner 与历史基础；本轮未开展语义和完整误差传播验收 | 使用固定 gold 经 Host 调用，逐层替换预测定位损失 |
 
 现有脚本位于 `scripts/audio-eval/` 和 `scripts/assistant-eval/`；重用而不另造产品 runtime。历史下载、smoke 和复合样本评分是已有基础，不表示专属 benchmark 或任何阶段已全部通过。

@@ -100,33 +100,36 @@ pub trait DiarizationBackend: Send + Sync {
 实现：whisper.cpp 的 Rust adapter。
 
 - 模型：单文件 GGML/GGUF。
-- 设备：`Cpu` 强制 CPU；其他选择允许 whisper.cpp 使用 GPU/Metal。
+- 设备：`Cpu` 强制 CPU，`Auto`/`Metal` 使用 Metal；当前构建不启用 Core ML，显式请求返回 `DeviceUnavailable`。
 - whole-file：读取完整 16 kHz mono 音频，输出 Whisper 时间戳段。
 - windowed：复用一个 `WhisperContext`，每个窗口创建 state；用全局 sample offset 恢复时间，以 valid-core midpoint 归属并去除重复段。
 - probe：检查模型 artifact 是现存文件；真实 context 加载在推理 session 创建时完成。
+- 取消：参数对象持有稳定的 `Box<JobContext>`，类型明确的 C 回调只在同步 `full` 调用内读取，返回后释放；避免固定 binding safe wrapper 的 userdata 类型不一致。
 
-当前 catalog 中 Whisper 条目都是 `candidate-source`，backend 可运行不等于 UI 可下载。
+当前 catalog 的 large-v3、base.en 与 large-v3-turbo Q5 已固定来源 revision、大小、SHA-256 与 MIT 许可并标为 `ready`；可安装与质量验收分开。
 
 ## `asr-sherpa-onnx`
 
 实现：sherpa-onnx offline recognizer adapter。
 
-- 模型族：Paraformer 与 Qwen3-ASR。
-- 设备：CPU/CoreML；显式拒绝 Metal provider。
-- Paraformer：要求 `model.int8.onnx` 或 `model.onnx`，以及 `tokens.txt`。
+- 模型族：Paraformer、SenseVoice 与 Qwen3-ASR。
+- 设备：CPU；默认线程数为可用 CPU 数与四的较小值。固定发行包不能保证 Core ML provider，显式 Core ML/Metal 请求返回 `DeviceUnavailable`，避免静默 CPU 回退。
+- Paraformer/SenseVoice：要求 `model.int8.onnx` 或 `model.onnx`，以及 `tokens.txt`；SenseVoice 传递请求语言并启用 ITN。
 - Qwen3-ASR：要求 `conv_frontend.onnx`、encoder、decoder、`tokenizer/` 和 `tokens.txt`。
-- whole-file：输出完整文本段。
-- windowed：复用 recognizer；优先按 token timestamp 与 valid core 拼接，没有时间戳时使用近似文本边界去重，无法可靠匹配时保留文本。
+- whole-file：30 秒以内保留完整文本 baseline；更长的 Paraformer/SenseVoice 输入改用同一个 recognizer 的有界推理与拼接。
+- windowed：复用 recognizer；优先按 token timestamp 与 valid core 拼接，SentencePiece 的显式词边界、独立边界 token 和 `@@` 词内连续标记分别处理；词内连续优先于停顿、句末标点和段长限制，避免把单词或缩写拆开；没有时间戳时使用近似文本边界去重，无法可靠匹配时保留文本。
 - probe：检查 backend ID、模型目录和模型族必需文件；真实 recognizer 创建属于加载验证。
 
-`paraformer-zh` 已是可安装路径；Qwen3-ASR adapter 存在，但 catalog bundle 尚未达到 `ready`。
+模型推理窗口独立于 application 的录音路由：Paraformer 核心 8 秒、两侧各 2 秒；SenseVoice 核心 20 秒、两侧各 5 秒。子窗口以父窗口 valid core 为原点，context 限制在父样本内，连续覆盖 core；不让重复 context 产生新的所有权区间。Qwen3-ASR 不沿用该模型特定策略。窗口仅在 valid core 的所有 sample 严格为零时跳过解码；context 中的语音不改变 core 所有权，非零弱声仍交给模型。该检查不是 VAD，不过滤低能量噪声；整段无识别结果返回 `OutputValidationFailed`。
+
+`paraformer-zh` 与 `sensevoice-small-int8` 是可安装路径；Qwen3-ASR ONNX bundle 尚未达到 `ready`。MLX Qwen 仅通过隔离评测 runner 接入，不属于桌面 provider。模型选择依据与实测边界见[转录评测](../reserch/asr-quality-and-runtime-evaluation.md)。
 
 ## `diarization-sherpa-onnx`
 
 实现：sherpa-onnx offline speaker diarization。
 
 - 模型：包含 `segmentation.onnx` 与 `embedding.onnx` 的目录。
-- 设备：CPU/CoreML。
+- 设备：CPU；固定 sherpa runtime 不提供有效 provider 的验证回执，Core ML/Metal 请求返回 `DeviceUnavailable`，不静默回退。
 - pipeline：Pyannote segmentation、speaker embedding、sherpa fast clustering。
 - stage：不支持用户覆盖 segmentation、embedding 或 clustering。
 - provenance：分别记录 segmentation、embedding 与 `sherpa-fast-clustering`。
@@ -168,7 +171,9 @@ ASR future -> diarization future -> identity -> alignment -> normalized result
 
 短音频 ASR 完成后才启动 diarization，包括 ASR future 暂停时；ASR 失败保留错误 code，并取消未启动的 diarization job。JobRuntime 继续负责状态、取消与资源记录。长音频保留 window session 的独立调度，短音频顺序测试不证明进程级 native runtime 的隔离。
 
-//TODO - 用固定模型、音频与并行/顺序对照复现无输出崩溃，定位 FFI/runtime 原因；分别验证短音频和长音频 worker，不能把顺序测试通过记为崩溃根因已解决。
+已用独立真实 Whisper 推理与 macOS faulting-thread 栈定位并修复取消回调 userdata 故障。
+
+//TODO - 用固定模型、音频验证 ASR/diarization 的并行与顺序、短音频与长音频 worker 的进程级稳定性；独立 Whisper 回调修复不能解释所有历史 runtime 故障，也不改变当前顺序调度。
 
 ### 长音频
 

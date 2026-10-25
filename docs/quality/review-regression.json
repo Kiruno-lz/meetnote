@@ -1,0 +1,613 @@
+{
+  "schema": "meetnote.asr-review-regression.v1",
+  "date": "2026-10-25",
+  "scope": "B1 crash recurrence, exact digital silence, lexical assembly, repeat integrity and frozen window quality; not word timing, DER or release acceptance",
+  "historicalWhisperFailures": [
+    {
+      "name": "whisper-base-en-cpu",
+      "historicalFailure": "runner exit -11; incomplete output",
+      "cause": "whisper-rs 0.16.0 safe abort callback userdata layout mismatch",
+      "previousSuccessfulCallsAfterFix": 58,
+      "currentRegressionCalls": 2,
+      "resolved": true
+    },
+    {
+      "name": "whisper-base-en-metal",
+      "historicalFailure": "runner exit -11; incomplete output",
+      "cause": "whisper-rs 0.16.0 safe abort callback userdata layout mismatch",
+      "previousSuccessfulCallsAfterFix": 58,
+      "currentRegressionCalls": 2,
+      "resolved": true
+    },
+    {
+      "name": "whisper-large-cpu-smoke",
+      "historicalFailure": "runner exit -11; incomplete output",
+      "cause": "whisper-rs 0.16.0 safe abort callback userdata layout mismatch",
+      "previousSuccessfulCallsAfterFix": 26,
+      "currentRegressionCalls": 2,
+      "resolved": true
+    },
+    {
+      "name": "whisper-large-metal",
+      "historicalFailure": "runner exit -11; incomplete output",
+      "cause": "whisper-rs 0.16.0 safe abort callback userdata layout mismatch",
+      "previousSuccessfulCallsAfterFix": 114,
+      "currentRegressionCalls": 2,
+      "resolved": true
+    },
+    {
+      "name": "whisper-turbo-q5-metal",
+      "historicalFailure": "runner exit -11; incomplete output",
+      "cause": "whisper-rs 0.16.0 safe abort callback userdata layout mismatch",
+      "previousSuccessfulCallsAfterFix": 114,
+      "currentRegressionCalls": 2,
+      "resolved": true
+    }
+  ],
+  "runs": [
+    {
+      "name": "mixed-silence-false",
+      "cases": 1,
+      "repeats": 2,
+      "calls": 2,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "43d2b0b98ddf21e6fb0e1adbeec848c593e15da27a52ee74bcb4593cc8b53eb9",
+      "predictionSha256": "c55d8950cac6569dfdb30d26fc813f3c9c0642f30f1d5f807c3d0e297f099657",
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "speech-silence",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 20,
+          "referenceUnits": 45,
+          "errorRate": 0.4444444444444444
+        },
+        {
+          "language": "zh",
+          "scenario": "speech-silence",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 20,
+          "referenceUnits": 45,
+          "errorRate": 0.4444444444444444
+        }
+      ]
+    },
+    {
+      "name": "mixed-silence-true",
+      "cases": 1,
+      "repeats": 2,
+      "calls": 2,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "43d2b0b98ddf21e6fb0e1adbeec848c593e15da27a52ee74bcb4593cc8b53eb9",
+      "predictionSha256": "f895a28dd9d8ccf620c52d6a7020a1b83ae192d15c1a2b0f6b5412e248c28ef8",
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "speech-silence",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 20,
+          "referenceUnits": 45,
+          "errorRate": 0.4444444444444444
+        },
+        {
+          "language": "zh",
+          "scenario": "speech-silence",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 20,
+          "referenceUnits": 45,
+          "errorRate": 0.4444444444444444
+        }
+      ]
+    },
+    {
+      "name": "paraformer-app-dev",
+      "cases": 2,
+      "repeats": 2,
+      "calls": 4,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "28f3e3eaa1201a6ad0d993a269231f3484a02db60378adc6ee2d540f76db73e1",
+      "predictionSha256": "03811efb90ad6439a83749af5db94c6422427d25004d9d87bfa790b6d4e6b128",
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 136,
+          "referenceUnits": 918,
+          "errorRate": 0.14814814814814814
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 136,
+          "referenceUnits": 918,
+          "errorRate": 0.14814814814814814
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 149,
+          "referenceUnits": 918,
+          "errorRate": 0.16230936819172112
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 149,
+          "referenceUnits": 918,
+          "errorRate": 0.16230936819172112
+        }
+      ]
+    },
+    {
+      "name": "paraformer-app-validation",
+      "cases": 2,
+      "repeats": 2,
+      "calls": 4,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "be8e2c8d2634c203bb41968f23c94756c7a03887778b5477df70881ce42b9f6a",
+      "predictionSha256": "46ddeaf2d30f1e84c56789856ff35029b7a846fbe17d95f80d07347f91f3a1f4",
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 139,
+          "referenceUnits": 951,
+          "errorRate": 0.14616193480546794
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 139,
+          "referenceUnits": 951,
+          "errorRate": 0.14616193480546794
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 168,
+          "referenceUnits": 951,
+          "errorRate": 0.17665615141955837
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 168,
+          "referenceUnits": 951,
+          "errorRate": 0.17665615141955837
+        }
+      ]
+    },
+    {
+      "name": "paraformer-dev",
+      "cases": 26,
+      "repeats": 2,
+      "calls": 52,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "31fbf7950657f0f1c0b1ea94b1468de165e115c8346690b46f290a747d39b999",
+      "predictionSha256": "3bb472be7de2b3b04ffd08429c1896bb80c7122d0bebd1021b4d2560504290ef",
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 136,
+          "referenceUnits": 918,
+          "errorRate": 0.14814814814814814
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 136,
+          "referenceUnits": 918,
+          "errorRate": 0.14814814814814814
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 150,
+          "referenceUnits": 918,
+          "errorRate": 0.16339869281045752
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 150,
+          "referenceUnits": 918,
+          "errorRate": 0.16339869281045752
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 0,
+          "cases": 24,
+          "failures": 0,
+          "errors": 108,
+          "referenceUnits": 918,
+          "errorRate": 0.11764705882352941
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 1,
+          "cases": 24,
+          "failures": 0,
+          "errors": 108,
+          "referenceUnits": 918,
+          "errorRate": 0.11764705882352941
+        }
+      ]
+    },
+    {
+      "name": "paraformer-validation",
+      "cases": 26,
+      "repeats": 2,
+      "calls": 52,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "229c73188068741624ffdd35aafcb438215815df83f8a00396d1c36b5736c518",
+      "predictionSha256": "f21781ddd4b02c50e8da58f99eb7936add733dc3ef918afd55710bf9ad188f76",
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 144,
+          "referenceUnits": 951,
+          "errorRate": 0.15141955835962145
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 144,
+          "referenceUnits": 951,
+          "errorRate": 0.15141955835962145
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 170,
+          "referenceUnits": 951,
+          "errorRate": 0.17875920084121977
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 170,
+          "referenceUnits": 951,
+          "errorRate": 0.17875920084121977
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 0,
+          "cases": 24,
+          "failures": 0,
+          "errors": 104,
+          "referenceUnits": 951,
+          "errorRate": 0.10935856992639327
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 1,
+          "cases": 24,
+          "failures": 0,
+          "errors": 104,
+          "referenceUnits": 951,
+          "errorRate": 0.10935856992639327
+        }
+      ]
+    },
+    {
+      "name": "sensevoice-word-boundaries",
+      "cases": 1,
+      "repeats": 2,
+      "calls": 2,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "6565d6b9d828be0c20c6ab255a45924ddab313081889f0cb8b541ba97c2bc7ed",
+      "predictionSha256": "39ca764f7b5aae16080c1309d8050dbee574716fe09cd2adec5bfc9ee893b260",
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "composed-clean",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 63,
+          "referenceUnits": 568,
+          "errorRate": 0.11091549295774648
+        },
+        {
+          "language": "en",
+          "scenario": "composed-clean",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 63,
+          "referenceUnits": 568,
+          "errorRate": 0.11091549295774648
+        }
+      ]
+    },
+    {
+      "name": "whisper-base-en-cpu",
+      "cases": 1,
+      "repeats": 2,
+      "calls": 2,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "d04465494b1c88771710b4b66ea23a3767411eba1560c903514039b366befa58",
+      "predictionSha256": "eaabc4d6717e5a954a92e9af8deff0a8efa8d9aa4891a1ac14fa9366a565ee78",
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "native",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 3,
+          "referenceUnits": 17,
+          "errorRate": 0.17647058823529413
+        },
+        {
+          "language": "en",
+          "scenario": "native",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 3,
+          "referenceUnits": 17,
+          "errorRate": 0.17647058823529413
+        }
+      ]
+    },
+    {
+      "name": "whisper-base-en-metal",
+      "cases": 1,
+      "repeats": 2,
+      "calls": 2,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "d04465494b1c88771710b4b66ea23a3767411eba1560c903514039b366befa58",
+      "predictionSha256": "2aa9b4e2054ecea42dafc6923f3b526cd91e1bc7cdd48f66e1971a7c1a1addda",
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "native",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 3,
+          "referenceUnits": 17,
+          "errorRate": 0.17647058823529413
+        },
+        {
+          "language": "en",
+          "scenario": "native",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 3,
+          "referenceUnits": 17,
+          "errorRate": 0.17647058823529413
+        }
+      ]
+    },
+    {
+      "name": "whisper-large-cpu-smoke",
+      "cases": 1,
+      "repeats": 2,
+      "calls": 2,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "5bdc7f61deadb0276c26f47f73e25f4e6a8857cbe1ef79ec208c83f6edfe6fd6",
+      "predictionSha256": "606ea7815080ee177ae50e5e5be34f145ffd0c7c02610352b1167292e8f15d42",
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 18,
+          "referenceUnits": 45,
+          "errorRate": 0.4
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 18,
+          "referenceUnits": 45,
+          "errorRate": 0.4
+        }
+      ]
+    },
+    {
+      "name": "whisper-large-metal",
+      "cases": 1,
+      "repeats": 2,
+      "calls": 2,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "5bdc7f61deadb0276c26f47f73e25f4e6a8857cbe1ef79ec208c83f6edfe6fd6",
+      "predictionSha256": "ef2b961bc2f968f8b53082850bbd2b30391f3570560869df0f8f69ddbe1e171e",
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 18,
+          "referenceUnits": 45,
+          "errorRate": 0.4
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 18,
+          "referenceUnits": 45,
+          "errorRate": 0.4
+        }
+      ]
+    },
+    {
+      "name": "whisper-turbo-q5-metal",
+      "cases": 1,
+      "repeats": 2,
+      "calls": 2,
+      "failure": null,
+      "runnerSha256": "5ce2f0f2e969767b695ecc71ec702a5f63ea08935556d075596e899e5207c6da",
+      "casesSha256": "5bdc7f61deadb0276c26f47f73e25f4e6a8857cbe1ef79ec208c83f6edfe6fd6",
+      "predictionSha256": "337feb24f9d1abe264465ba0540cfa798b76eeddf594454f30a40c0c0b79d2fc",
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 0,
+          "cases": 1,
+          "failures": 0,
+          "errors": 18,
+          "referenceUnits": 45,
+          "errorRate": 0.4
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "repeat": 1,
+          "cases": 1,
+          "failures": 0,
+          "errors": 18,
+          "referenceUnits": 45,
+          "errorRate": 0.4
+        }
+      ]
+    }
+  ],
+  "successfulCalls": 128,
+  "qualityGates": [
+    {
+      "name": "paraformer-app-dev",
+      "status": "passed",
+      "shortCallsPreserved": 0,
+      "budgets": {
+        "cleanCer": 0.2,
+        "noiseCer": 0.25
+      }
+    },
+    {
+      "name": "paraformer-app-validation",
+      "status": "passed",
+      "shortCallsPreserved": 0,
+      "budgets": {
+        "cleanCer": 0.2,
+        "noiseCer": 0.25
+      }
+    },
+    {
+      "name": "paraformer-dev",
+      "status": "passed",
+      "shortCallsPreserved": 48,
+      "budgets": {
+        "cleanCer": 0.2,
+        "noiseCer": 0.25
+      }
+    },
+    {
+      "name": "paraformer-validation",
+      "status": "passed",
+      "shortCallsPreserved": 48,
+      "budgets": {
+        "cleanCer": 0.2,
+        "noiseCer": 0.25
+      }
+    }
+  ],
+  "digitalSilence": {
+    "sampleRateHz": 16000,
+    "durationSeconds": 31,
+    "audioSha256": "6c42f77ac019a37d8986d5df8a83d188a75bbd4182f78579570c7f7b217de79b",
+    "frozenBaselineRunnerSha256": "ca1d4dec43780b4b69e1000e49b2f91c6b1a06efed5997769a80f6f0cb2fba69",
+    "baselineOutcome": "OutputValidationFailed",
+    "beforeFix": "four hallucinated transcript segments",
+    "currentWholeFileAndWindowSessionOutcome": "OutputValidationFailed",
+    "quietNonzeroInput": "retained; unit regression uses f32::MIN_POSITIVE"
+  },
+  "mixedSpeechAndSilence": {
+    "leadingAndTrailingZeroSeconds": 32,
+    "speechSource": "FLEURS cmn_hans_cn test sentence 1779",
+    "assertion": "all output spans intersect the speech interval in both paths, two repetitions each; not exact word alignment"
+  },
+  "sourceArtifacts": {
+    "crates/asr-sherpa-onnx/src/lib.rs": "4fecd0660ad3c16ffbe84302f05f9a60967c6ab4c9fa04d9e9ac4fb01f24a6c2",
+    "scripts/audio-eval/asr_benchmark.py": "65b7720cab6c14039f656ac54bfab9612ec06c72bd3b79a8c9e79570a8119b0c",
+    "scripts/audio-eval/check_asr_windows.py": "0e673a80fa32b63e02a0e1a1ed256afcf12b1b239402d99dc7a88fbbd7310a00",
+    "scripts/audio-eval/report_asr.py": "4cac21f591fa6e40b208232d5a5e47a5b711a062a10af0583409029d0957e32e"
+  }
+}

@@ -136,6 +136,7 @@ fn diarize_sync(
         });
     }
 
+    let provider = provider_for(request.device)?.to_string();
     backend.probe(&request.model)?;
     let audio = read_audio_mono_16k(&request.audio_path).map_err(|error| BackendError {
         code: BackendErrorCode::InvalidAudio,
@@ -147,7 +148,6 @@ fn diarize_sync(
     });
 
     let directory = PathBuf::from(&request.model.artifact_path);
-    let provider = provider_for(request.device).to_string();
     let config = OfflineSpeakerDiarizationConfig {
         segmentation: OfflineSpeakerSegmentationModelConfig {
             pyannote: OfflineSpeakerSegmentationPyannoteModelConfig {
@@ -213,7 +213,7 @@ fn diarize_sync(
     };
     let extractor = SpeakerEmbeddingExtractor::create(&SpeakerEmbeddingExtractorConfig {
         model: Some(path_string(directory.join(&backend.embedding_filename))),
-        provider: Some(provider_for(request.device).into()),
+        provider: Some(provider_for(request.device)?.into()),
         ..Default::default()
     })
     .ok_or_else(|| BackendError {
@@ -287,10 +287,15 @@ fn diarize_sync(
     })
 }
 
-fn provider_for(device: ComputeDevice) -> &'static str {
+fn provider_for(device: ComputeDevice) -> Result<&'static str, BackendError> {
     match device {
-        ComputeDevice::CoreMl | ComputeDevice::Metal => "coreml",
-        ComputeDevice::Auto | ComputeDevice::Cpu => "cpu",
+        ComputeDevice::Auto | ComputeDevice::Cpu => Ok("cpu"),
+        ComputeDevice::CoreMl | ComputeDevice::Metal => Err(BackendError {
+            code: BackendErrorCode::DeviceUnavailable,
+            message:
+                "the pinned sherpa-onnx runtime cannot verify accelerated execution; select CPU"
+                    .into(),
+        }),
     }
 }
 
@@ -301,6 +306,34 @@ fn path_string(path: impl AsRef<Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rejects_unverified_accelerators_before_loading_assets() {
+        let runtime = runtime::JobRuntime::default();
+        for device in [ComputeDevice::Metal, ComputeDevice::CoreMl] {
+            let (context, _) = runtime.create_job();
+            let error = diarize_sync(
+                SherpaOnnxDiarizationBackend::default(),
+                DiarizationRequest {
+                    audio_path: "missing.wav".into(),
+                    model: ModelRef {
+                        backend_id: "sherpa-onnx".into(),
+                        model_id: "bundle".into(),
+                        revision: None,
+                        artifact_path: "/missing/bundle".into(),
+                        artifacts: Vec::new(),
+                    },
+                    expected_speakers: None,
+                    device,
+                    speaker_library_path: None,
+                    stage_configuration: contracts::DiarizationStageConfiguration::default(),
+                },
+                context,
+            )
+            .unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::DeviceUnavailable);
+        }
+    }
 
     #[test]
     fn descriptor_does_not_expose_stage_overrides() {

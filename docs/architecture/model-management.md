@@ -42,12 +42,16 @@ models/
 | 模型 | 后端 / 状态 | 下载来源 | 权重大小 | 预期显存 | 说明 |
 |---|---|---|---:|---:|---|
 | `paraformer-zh` | `sherpa-onnx` / `ready` | [sherpa-onnx Paraformer archive](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2) | 81,904,027 B | 1 GiB | 中文离线 ASR；安装 `model.int8.onnx` 与 `tokens.txt`，支持整文件和离线分窗 |
+| `sensevoice-small-int8` | `sherpa-onnx` / `ready` | [固定 revision 资产](https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/tree/2365baeacb507f821a0c8120fcee3d484dba7a07) | 239,549,806 B | 2 GiB | 多语言 INT8；model/tokens/license bundle，遵循上游 FunASR 模型许可，不能按 toolkit 的 MIT 许可解释权重 |
 | `qwen3-asr-0.6b` | `sherpa-onnx` / `candidate-source` | [sherpa-onnx Qwen3-ASR archive](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2) | — | — | backend 已有 Qwen3 文件布局适配；catalog 尚不能安装含 tokenizer 目录的完整 bundle |
-| `whisper-large-v3-ggml` | `whisper-rs` / `candidate-source` | [whisper.cpp GGML large-v3](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin) | 3,095,033,483 B | 4 GiB | 多语言 Whisper GGML；backend 支持整文件和离线分窗，catalog 缺少固定 checksum |
-| `whisper-base-en-ggml` | `whisper-rs` / `candidate-source` | [whisper.cpp GGML base.en](https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin) | 147,964,211 B | 512 MiB | 英文 Whisper GGML；已有固定 checksum，但仍未标为可安装 |
+| `whisper-large-v3-ggml` | `whisper-rs` / `ready` | [whisper.cpp GGML large-v3](https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3.bin) | 3,095,033,483 B | 4 GiB | 多语言 Whisper GGML；已固定 revision/checksum，MIT 许可，CPU/Metal 真实执行 |
+| `whisper-base-en-ggml` | `whisper-rs` / `ready` | [whisper.cpp GGML base.en](https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin) | 147,964,211 B | 512 MiB | 英文 Whisper GGML；已固定 revision/checksum，MIT 许可，CPU/Metal 真实执行 |
+| `whisper-large-v3-turbo-q5` | `whisper-rs` / `ready` | [固定 revision GGML](https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin) | 574,041,195 B | 2 GiB | 多语言 Turbo Q5；MIT 许可，Metal 真实执行；量化质量按场景评测 |
 | `speakrs-community-1-cpu` | `diarization-native` / `ready` | [固定 revision 资产目录](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | 59,751,799 B | 1 GiB | Pyannote segmentation、WeSpeaker embedding 与 AHC/PLDA/VBx 参数，共 10 个固定 artifact；支持整文件和离线分窗 |
 | `sherpa-onnx-speaker-diarization-bundle` | `sherpa-onnx` / `candidate-source` | [segmentation archive](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2) + [3D-Speaker embedding](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx) | 45,586,674 B | 512 MiB | sherpa-onnx 离线 diarization；当前只支持整文件处理 |
 | `pyannote-speaker-diarization-3.1` | 无 backend / `requires-native-adapter` | [Pyannote 3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) | — | 1 GiB | gated 参考来源，不能进入当前处理链路 |
+
+Qwen3-ASR 0.6B/1.7B 的 MLX 量化模型仅在隔离 benchmark 中验证；不增加桌面 Python 依赖，不将驻留 session 的性能与逐次加载混为同一条件。`ready` 不代表已通过所有语言、噪声、时间戳或长会议质量门。
 
 具体 artifact URL 与 SHA-256 不在本文重复维护，以 [`catalog.json`](../../resources/models/catalog.json) 为唯一清单。
 

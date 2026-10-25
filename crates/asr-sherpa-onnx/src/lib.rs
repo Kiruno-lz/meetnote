@@ -1,5 +1,7 @@
 use application::{asr_descriptor, AsrBackend, AsrWindowSession, BackendFuture};
-use audio::{read_audio_mono_16k, AudioWindow, TARGET_SAMPLE_RATE_HZ};
+use audio::{
+    read_audio_mono_16k, AudioWindow, AudioWindowBounds, AudioWindowPlan, TARGET_SAMPLE_RATE_HZ,
+};
 use contracts::{
     AsrRequest, AsrResult, BackendDescriptor, BackendError, BackendErrorCode, ComputeDevice,
     ModelRef,
@@ -7,18 +9,29 @@ use contracts::{
 use runtime::{JobContext, Progress};
 use sherpa_onnx::{
     OfflineParaformerModelConfig, OfflineQwen3ASRModelConfig, OfflineRecognizer,
-    OfflineRecognizerConfig,
+    OfflineRecognizerConfig, OfflineSenseVoiceModelConfig,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const PARAFORMER_MODEL_FILES: &[&str] = &["model.int8.onnx", "model.onnx"];
+const SINGLE_GRAPH_MODEL_FILES: &[&str] = &["model.int8.onnx", "model.onnx"];
 const QWEN3_ENCODER_FILES: &[&str] = &["encoder.int8.onnx", "encoder.onnx"];
 const QWEN3_DECODER_FILES: &[&str] = &["decoder.int8.onnx", "decoder.onnx"];
+const WHOLE_FILE_BASELINE_LIMIT: u64 = TARGET_SAMPLE_RATE_HZ as u64 * 30;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SherpaOnnxAsrBackend {
     pub num_threads: i32,
+}
+
+impl Default for SherpaOnnxAsrBackend {
+    fn default() -> Self {
+        Self {
+            num_threads: std::thread::available_parallelism()
+                .map(|threads| threads.get().min(4) as i32)
+                .unwrap_or(1),
+        }
+    }
 }
 
 impl AsrBackend for SherpaOnnxAsrBackend {
@@ -31,6 +44,7 @@ impl AsrBackend for SherpaOnnxAsrBackend {
                 "onnx",
                 "paraformer",
                 "qwen3-asr",
+                "sensevoice",
             ],
         )
     }
@@ -39,8 +53,8 @@ impl AsrBackend for SherpaOnnxAsrBackend {
         validate_model_ref(model)?;
         let directory = model_directory(model);
         match model_family(model) {
-            ModelFamily::Paraformer => {
-                require_any_file(&directory, PARAFORMER_MODEL_FILES)?;
+            ModelFamily::Paraformer | ModelFamily::SenseVoice => {
+                require_any_file(&directory, SINGLE_GRAPH_MODEL_FILES)?;
                 require_file(&directory, "tokens.txt")?;
             }
             ModelFamily::Qwen3Asr => {
@@ -119,6 +133,39 @@ impl AsrWindowSession for SherpaWindowSession {
     ) -> Result<(), BackendError> {
         if context.is_cancelled() {
             return Err(cancelled_error());
+        }
+        // A digitally silent owned core has no speech, even when its context does.
+        // Do not use an energy threshold: quiet nonzero audio must reach the model.
+        if !core_has_signal(&window)? {
+            return Ok(());
+        }
+        let plan = inference_plan(&self.request.model);
+        if uses_bounded_inference(&self.request.model)
+            && window.samples.len() as u64 > plan.core_samples + 2 * plan.context_samples
+        {
+            for bounds in inference_bounds(&window, plan) {
+                if context.is_cancelled() {
+                    return Err(cancelled_error());
+                }
+                let start = (bounds.global_start_sample - window.global_start_sample) as usize;
+                let end = (bounds.global_end_sample - window.global_start_sample) as usize;
+                self.process_window(
+                    Arc::new(AudioWindow {
+                        sequence: window.sequence,
+                        sample_rate: window.sample_rate,
+                        samples: window.samples[start..end].to_vec().into(),
+                        global_start_sample: bounds.global_start_sample,
+                        global_end_sample: bounds.global_end_sample,
+                        valid_core_start_sample: bounds.valid_core_start_sample,
+                        valid_core_end_sample: bounds.valid_core_end_sample,
+                        source_total_samples: window.source_total_samples,
+                        is_final: window.is_final
+                            && bounds.global_end_sample == window.global_end_sample,
+                    }),
+                    context,
+                )?;
+            }
+            return Ok(());
         }
         let stream = self.recognizer.create_stream();
         stream.accept_waveform(window.sample_rate as i32, &window.samples);
@@ -213,6 +260,12 @@ impl AsrWindowSession for SherpaWindowSession {
             previous = Some(window);
         }
         segments.sort_by_key(|segment| (segment.start_ms, segment.end_ms));
+        if segments.is_empty() {
+            return Err(BackendError {
+                code: BackendErrorCode::OutputValidationFailed,
+                message: "sherpa-onnx returned an empty recognition result".into(),
+            });
+        }
         for (index, segment) in segments.iter_mut().enumerate() {
             segment.id = format!("sherpa-onnx-segment-{index}");
         }
@@ -229,6 +282,7 @@ impl AsrWindowSession for SherpaWindowSession {
 enum ModelFamily {
     Paraformer,
     Qwen3Asr,
+    SenseVoice,
     Unsupported,
 }
 
@@ -238,9 +292,76 @@ fn model_family(model: &ModelRef) -> ModelFamily {
         ModelFamily::Paraformer
     } else if model_id.contains("qwen3") {
         ModelFamily::Qwen3Asr
+    } else if model_id.contains("sensevoice") || model_id.contains("sense-voice") {
+        ModelFamily::SenseVoice
     } else {
         ModelFamily::Unsupported
     }
+}
+
+fn core_has_signal(window: &AudioWindow) -> Result<bool, BackendError> {
+    let core = window
+        .valid_core_start_sample
+        .checked_sub(window.global_start_sample)
+        .zip(
+            window
+                .valid_core_end_sample
+                .checked_sub(window.global_start_sample),
+        )
+        .and_then(|(start, end)| {
+            window
+                .samples
+                .get(usize::try_from(start).ok()?..usize::try_from(end).ok()?)
+        })
+        .ok_or_else(|| BackendError {
+            code: BackendErrorCode::InvalidAudio,
+            message: "ASR window valid core falls outside its samples".into(),
+        })?;
+    Ok(core.iter().any(|sample| *sample != 0.))
+}
+
+fn uses_bounded_inference(model: &ModelRef) -> bool {
+    matches!(
+        model_family(model),
+        ModelFamily::Paraformer | ModelFamily::SenseVoice
+    )
+}
+
+fn inference_plan(model: &ModelRef) -> AudioWindowPlan {
+    let rate = u64::from(TARGET_SAMPLE_RATE_HZ);
+    match model_family(model) {
+        ModelFamily::Paraformer => AudioWindowPlan {
+            core_samples: 8 * rate,
+            context_samples: 2 * rate,
+        },
+        _ => AudioWindowPlan {
+            core_samples: 20 * rate,
+            context_samples: 5 * rate,
+        },
+    }
+}
+
+/// Partition only the parent's owned core; reuse its samples for bounded context.
+fn inference_bounds(
+    window: &AudioWindow,
+    plan: AudioWindowPlan,
+) -> impl Iterator<Item = AudioWindowBounds> + '_ {
+    plan.bounds_for_total(window.valid_core_end_sample - window.valid_core_start_sample)
+        .map(move |bounds| {
+            let start = window.valid_core_start_sample + bounds.valid_core_start_sample;
+            let end = window.valid_core_start_sample + bounds.valid_core_end_sample;
+            AudioWindowBounds {
+                sequence: bounds.sequence,
+                global_start_sample: start
+                    .saturating_sub(plan.context_samples)
+                    .max(window.global_start_sample),
+                global_end_sample: end
+                    .saturating_add(plan.context_samples)
+                    .min(window.global_end_sample),
+                valid_core_start_sample: start,
+                valid_core_end_sample: end,
+            }
+        })
 }
 
 fn validate_model_ref(model: &ModelRef) -> Result<(), BackendError> {
@@ -340,6 +461,34 @@ fn transcribe_sync(
         total: Some(3),
     });
 
+    if uses_bounded_inference(&request.model)
+        && audio.samples.len() as u64 > WHOLE_FILE_BASELINE_LIMIT
+    {
+        let total = audio.samples.len() as u64;
+        let mut session = backend.create_window_session(request)?;
+        session.process_window(
+            Arc::new(AudioWindow {
+                sequence: 0,
+                sample_rate: audio.sample_rate,
+                samples: audio.samples.into(),
+                global_start_sample: 0,
+                global_end_sample: total,
+                valid_core_start_sample: 0,
+                valid_core_end_sample: total,
+                source_total_samples: Some(total),
+                is_final: true,
+            }),
+            &context,
+        )?;
+        let result = session.finish()?;
+        context.report(Progress {
+            completed: 3,
+            total: Some(3),
+        });
+        context.completed();
+        return Ok(result);
+    }
+
     let config = build_config(&request, num_threads)?;
     let recognizer = OfflineRecognizer::create(&config).ok_or_else(|| BackendError {
         code: BackendErrorCode::ModelLoadFailed,
@@ -393,7 +542,17 @@ fn build_config(
     let tokens = directory.join("tokens.txt");
     let provider = match request.device {
         ComputeDevice::Auto | ComputeDevice::Cpu => "cpu",
-        ComputeDevice::CoreMl => "coreml",
+        // The pinned sherpa runtime has no provider-discovery/effective-provider
+        // receipt. Its CoreML request was observed falling back to CPU. Reject
+        // it until we can guarantee execution instead of mislabelling provenance.
+        ComputeDevice::CoreMl => {
+            return Err(BackendError {
+                code: BackendErrorCode::DeviceUnavailable,
+                message:
+                    "the pinned sherpa-onnx runtime cannot verify Core ML execution; select CPU"
+                        .into(),
+            });
+        }
         ComputeDevice::Metal => {
             return Err(BackendError {
                 code: BackendErrorCode::DeviceUnavailable,
@@ -408,7 +567,7 @@ fn build_config(
 
     match model_family(&request.model) {
         ModelFamily::Paraformer => {
-            let model = require_any_file(&directory, PARAFORMER_MODEL_FILES)?;
+            let model = require_any_file(&directory, SINGLE_GRAPH_MODEL_FILES)?;
             config.model_config.paraformer = OfflineParaformerModelConfig {
                 model: Some(model.display().to_string()),
             };
@@ -422,6 +581,14 @@ fn build_config(
                 decoder: Some(decoder.display().to_string()),
                 tokenizer: Some(directory.join("tokenizer").display().to_string()),
                 ..Default::default()
+            };
+        }
+        ModelFamily::SenseVoice => {
+            let model = require_any_file(&directory, SINGLE_GRAPH_MODEL_FILES)?;
+            config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
+                model: Some(model.display().to_string()),
+                language: Some(request.language.clone().unwrap_or_else(|| "auto".into())),
+                use_itn: true,
             };
         }
         ModelFamily::Unsupported => {
@@ -460,24 +627,46 @@ fn core_owns(window: &AudioWindow, sample: u64) -> bool {
 }
 
 fn normalize_token(token: &str) -> String {
-    token.replace('▁', " ").replace("@@", "").trim().to_string()
+    token.replace('▁', " ")
 }
 
 fn merge_timestamped_tokens(
     tokens: Vec<domain::TranscriptSegment>,
 ) -> Vec<domain::TranscriptSegment> {
+    let subword_boundaries = tokens.iter().any(|token| token.text.starts_with(' '));
     let mut segments: Vec<domain::TranscriptSegment> = Vec::new();
-    for token in tokens {
+    let mut bpe_continuation = false;
+    let mut pending_word_boundary = false;
+    for mut token in tokens {
+        if token.text.trim().is_empty() {
+            pending_word_boundary |= token.text.starts_with(' ');
+            continue;
+        }
+        if pending_word_boundary && !token.text.starts_with(' ') {
+            token.text.insert(0, ' ');
+        }
+        pending_word_boundary = false;
+        let continues_previous = bpe_continuation;
+        bpe_continuation = token.text.ends_with("@@");
+        token.text = token.text.trim_end_matches("@@").to_string();
+        let within_word =
+            continues_previous || (subword_boundaries && !token.text.starts_with(' '));
         let should_merge = segments.last().is_some_and(|previous| {
-            token.start_ms <= previous.end_ms.saturating_add(750)
-                && token.end_ms.saturating_sub(previous.start_ms) <= 15_000
-                && !ends_sentence(&previous.text)
+            within_word
+                || (token.start_ms <= previous.end_ms.saturating_add(750)
+                    && token.end_ms.saturating_sub(previous.start_ms) <= 15_000
+                    && !ends_sentence(&previous.text))
         });
         if should_merge {
             let previous = segments.last_mut().expect("segment exists");
-            append_token(&mut previous.text, &token.text);
+            if subword_boundaries || continues_previous {
+                previous.text.push_str(&token.text);
+            } else {
+                append_token(&mut previous.text, &token.text);
+            }
             previous.end_ms = previous.end_ms.max(token.end_ms);
         } else {
+            token.text = token.text.trim_start().to_string();
             segments.push(token);
         }
     }
@@ -666,6 +855,60 @@ mod tests {
     }
 
     #[test]
+    fn sensevoice_requires_its_assets_and_respects_language_and_device() {
+        let root = std::env::temp_dir().join(format!("meetnote-sensevoice-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let model = model_ref("sensevoice-small-int8", &root);
+        let backend = SherpaOnnxAsrBackend::default();
+        assert_eq!(
+            backend.probe(&model).unwrap_err().code,
+            BackendErrorCode::ModelMissing
+        );
+        fs::write(root.join("model.int8.onnx"), b"fixture").unwrap();
+        assert_eq!(
+            backend.probe(&model).unwrap_err().code,
+            BackendErrorCode::ModelMissing
+        );
+        fs::write(root.join("tokens.txt"), b"<blk> 0\n").unwrap();
+        backend.probe(&model).unwrap();
+        let mut request = AsrRequest {
+            audio_path: "fixture.wav".into(),
+            model,
+            language: Some("zh".into()),
+            device: ComputeDevice::Cpu,
+        };
+        let config = build_config(&request, 4).unwrap();
+        assert_eq!(
+            config.model_config.sense_voice.model.as_deref(),
+            Some(root.join("model.int8.onnx").to_str().unwrap())
+        );
+        assert_eq!(
+            config.model_config.sense_voice.language.as_deref(),
+            Some("zh")
+        );
+        assert!(config.model_config.sense_voice.use_itn);
+        assert!(config.model_config.paraformer.model.is_none());
+        assert_eq!(config.model_config.provider.as_deref(), Some("cpu"));
+        assert_eq!(config.model_config.num_threads, 4);
+        request.language = None;
+        assert_eq!(
+            build_config(&request, 1)
+                .unwrap()
+                .model_config
+                .sense_voice
+                .language
+                .as_deref(),
+            Some("auto")
+        );
+        request.device = ComputeDevice::Metal;
+        assert_eq!(
+            build_config(&request, 1).unwrap_err().code,
+            BackendErrorCode::DeviceUnavailable
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn build_config_selects_paraformer_adapter() {
         let root =
             std::env::temp_dir().join(format!("meetnote-sherpa-config-{}", std::process::id()));
@@ -686,6 +929,202 @@ mod tests {
             Some(root.join("model.onnx").to_str().unwrap())
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_unverified_coreml_provider_must_not_silently_run_on_cpu() {
+        let request = AsrRequest {
+            audio_path: "fixture.wav".into(),
+            model: model_ref("paraformer-zh", Path::new("unused")),
+            language: None,
+            device: ComputeDevice::CoreMl,
+        };
+        let error = build_config(&request, 1).unwrap_err();
+        assert_eq!(error.code, BackendErrorCode::DeviceUnavailable);
+        assert!(error.message.contains("Core ML"));
+    }
+
+    #[test]
+    fn bounded_inference_preserves_every_core_sample_and_limits_context() {
+        let rate = u64::from(TARGET_SAMPLE_RATE_HZ);
+        let window = AudioWindow {
+            sequence: 3,
+            sample_rate: TARGET_SAMPLE_RATE_HZ,
+            samples: vec![0.; (90 * rate) as usize].into(),
+            global_start_sample: 45 * rate,
+            global_end_sample: 135 * rate,
+            valid_core_start_sample: 60 * rate,
+            valid_core_end_sample: 120 * rate,
+            source_total_samples: Some(200 * rate),
+            is_final: false,
+        };
+        for family in ["paraformer-zh", "sensevoice-small-int8"] {
+            let plan = inference_plan(&model_ref(family, Path::new("unused")));
+            let bounds = inference_bounds(&window, plan).collect::<Vec<_>>();
+            assert_eq!(bounds.first().unwrap().valid_core_start_sample, 60 * rate);
+            assert_eq!(bounds.last().unwrap().valid_core_end_sample, 120 * rate);
+            assert_eq!(
+                bounds.first().unwrap().global_start_sample,
+                60 * rate - plan.context_samples
+            );
+            assert_eq!(
+                bounds.last().unwrap().global_end_sample,
+                120 * rate + plan.context_samples
+            );
+            for pair in bounds.windows(2) {
+                assert_eq!(
+                    pair[0].valid_core_end_sample,
+                    pair[1].valid_core_start_sample
+                );
+                assert!(pair[0].global_start_sample <= pair[1].global_start_sample);
+                assert!(pair[0].global_end_sample <= pair[1].global_end_sample);
+            }
+            for bound in bounds {
+                assert!(
+                    bound.global_end_sample - bound.global_start_sample
+                        <= plan.core_samples + 2 * plan.context_samples
+                );
+                assert!(bound.global_start_sample >= window.global_start_sample);
+                assert!(bound.global_end_sample <= window.global_end_sample);
+                assert!(bound.valid_core_start_sample >= bound.global_start_sample);
+                assert!(bound.valid_core_end_sample <= bound.global_end_sample);
+            }
+        }
+    }
+
+    #[test]
+    fn sentencepiece_boundaries_do_not_split_english_words() {
+        let tokens = [
+            "▁The",
+            "▁ent",
+            "om",
+            "ologist",
+            "s",
+            "▁study",
+            "▁insect",
+            "s",
+            ".",
+        ];
+        let segments = tokens
+            .iter()
+            .enumerate()
+            .map(|(index, token)| domain::TranscriptSegment {
+                id: String::new(),
+                start_ms: index as u64 * 100,
+                end_ms: (index as u64 + 1) * 100,
+                text: normalize_token(token),
+            })
+            .collect();
+        assert_eq!(
+            merge_timestamped_tokens(segments)[0].text,
+            "The entomologists study insects."
+        );
+    }
+
+    #[test]
+    fn bpe_continuations_do_not_split_english_words() {
+        let segments = [
+            "The",
+            "ent@@",
+            "om@@",
+            "ologist@@",
+            "s",
+            "study",
+            "insect@@",
+            "s",
+            ".",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(index, token)| domain::TranscriptSegment {
+            id: String::new(),
+            start_ms: index as u64 * 100,
+            end_ms: (index as u64 + 1) * 100,
+            text: normalize_token(token),
+        })
+        .collect();
+        assert_eq!(
+            merge_timestamped_tokens(segments)[0].text,
+            "The entomologists study insects."
+        );
+    }
+
+    #[test]
+    fn standalone_sentencepiece_boundaries_do_not_emit_empty_segments() {
+        let segments = ["▁Hello", ".", "▁", "world", ".", "▁"]
+            .iter()
+            .enumerate()
+            .map(|(index, token)| domain::TranscriptSegment {
+                id: String::new(),
+                start_ms: index as u64 * 100,
+                end_ms: (index as u64 + 1) * 100,
+                text: normalize_token(token),
+            })
+            .collect();
+        assert_eq!(
+            merge_timestamped_tokens(segments)
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Hello.", "world."]
+        );
+    }
+
+    #[test]
+    fn word_continuations_survive_pauses_and_internal_punctuation() {
+        for tokens in [
+            vec!["▁ent", "omologists"],
+            vec!["ent@@", "omologists"],
+            vec!["▁U", ".", "S", "."],
+        ] {
+            let expected = if tokens.len() == 2 {
+                "entomologists"
+            } else {
+                "U.S."
+            };
+            let segments = tokens
+                .iter()
+                .enumerate()
+                .map(|(index, token)| domain::TranscriptSegment {
+                    id: String::new(),
+                    start_ms: index as u64 * 1000,
+                    end_ms: index as u64 * 1000 + 100,
+                    text: normalize_token(token),
+                })
+                .collect();
+            let actual = merge_timestamped_tokens(segments);
+            assert_eq!(actual.len(), 1);
+            assert_eq!(actual[0].text, expected);
+        }
+    }
+
+    #[test]
+    fn digital_silence_uses_the_owned_core_and_preserves_quiet_signal() {
+        let mut window = AudioWindow {
+            sequence: 0,
+            sample_rate: 16000,
+            samples: vec![1., 0., -0., 1.].into(),
+            global_start_sample: 0,
+            global_end_sample: 4,
+            valid_core_start_sample: 1,
+            valid_core_end_sample: 3,
+            source_total_samples: Some(4),
+            is_final: false,
+        };
+        assert!(!core_has_signal(&window).unwrap());
+        window.samples = vec![1., f32::MIN_POSITIVE, 0., 1.].into();
+        assert!(core_has_signal(&window).unwrap());
+        window.valid_core_end_sample = 5;
+        assert_eq!(
+            core_has_signal(&window).unwrap_err().code,
+            BackendErrorCode::InvalidAudio
+        );
+    }
+
+    #[test]
+    fn default_threads_are_explicit_and_bounded() {
+        let threads = SherpaOnnxAsrBackend::default().num_threads;
+        assert!((1..=4).contains(&threads));
     }
 
     #[test]

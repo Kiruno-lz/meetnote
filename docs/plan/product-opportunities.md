@@ -2,7 +2,7 @@
 
 ## 判断与边界
 
-调研日期：2026-10-24。代码基线：`740e7a2`；实施分支：`codex/workspace-discovery`。竞品依据为当日可访问的官方页面，页面更新时间不等于功能首次发布日期，未实际购买或逐项试用竞品。
+更新日期：2026-10-25；实施分支：`codex/workspace-discovery`。竞品调研基于 2026-10-24 可访问的官方页面，页面更新时间不等于功能首次发布日期，未实际购买或逐项试用竞品。
 
 MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模型管理和受控 Agent 工具。下一步应把已有事实变成易查找、可核对、可带走的资料。产品优势在于本地文件、音频证据和外部 Agent 能力边界；继续增加 backend 或扩成通用 Agent Runtime，不能直接解决资料积累后的使用成本。
 
@@ -14,7 +14,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 | P0：长音频全局聚类内存随观察数增长 | `crates/diarization-native/src/windowed.rs` 累积 `clustering_vectors` 与窗口 artifacts；`third_party/speakrs/src/clustering/ahc.rs` 分配 `n*(n-1)/2` 个距离 | 分窗解码不代表整条 pipeline 内存有界。仅距离数组在 5 万个 observation 时约 4.66 GiB，还未计其他对象。须先定义可接受的输入规模、质量门槛与资源策略，再修改聚类；本分支不改变聚类算法 |
 | P1：历史内容无法直接检索 | 原 `crates/ui/src/pages/chrome.rs` 只提供项目树；原 Workspace 没有面向桌面的全文搜索用例 | 用户必须记住标题并逐份打开。本分支补齐按已保存文本查找、片段预览、来源/时间与打开文档 |
 | P1：复用出口不足 | `crates/ui/src/pages/meetings.rs` 提供阅读、编辑和处理；`apps/meetnote/examples/audio_host_export.rs` 是评测导出入口 | 文件本身可读，但普通用户缺少可选择格式的桌面导出。优先补 TXT/Markdown/SRT 与剪贴板，沿用现有时间戳和 speaker label |
-| P1：事实能力与质量验收仍有距离 | `docs/plan/audio-quality-plan.md`、`docs/plan/implementation-plan.md` 分别规定真实模型、WER/CER/DER、长音频资源和发布门槛 | 单元测试通过不能替代识别质量、身份误匹配率或 20 小时资源证据。按固定数据集生成可复现 receipt，先测量再决定模型与阈值 |
+| P1：模型速度不是整条链路速度 | 独立 ASR benchmark 与 `diarization_benchmark`；native observation/AHC 路径 | 已测固定 FLEURS/AMI 的 ASR 质量、RTF 与 RSS，修复回调崩溃、子词与推理长度；分离耗时、AHC 内存和精确时间对齐需分别治理。模型选择见[研究记录](../reserch/asr-quality-and-runtime-evaluation.md) |
 | P2：维护集中度偏高 | `crates/ui/src/controller.rs` 同时编排设置、文档、模型、Speaker Library 与 Assistant；已有 editor/audio 等独立模块 | 新能力继续在所属模块实现，controller 只保留装配和跨模块调用。本分支把搜索生命周期与展示集中于 `crates/ui/src/search.rs`，不做一次性全局重构 |
 
 ## 同类产品与可借鉴功能
@@ -52,7 +52,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 1. **导出与复制**：//TODO - 在 Workspace/application 生成 TXT/Markdown/SRT，桌面只负责选择目标和反馈；测试中英文、多 speaker、跨小时时间、空转写与覆盖取消，回读导出文件。
 2. **原文定位**：//TODO - 搜索结果携带稳定 segment ID，打开后定位并标记对应段落；测试结果刷新后 ID 消失、跨文档跳转、滚动和键盘返回。播放功能另行验证真实音频后再加入 seek。
 3. **模板与有依据的行动项**：//TODO - 复用现有 Skill/profile 与 capability；输出保留 document/segment 来源，区分 AI 推断、人工确认与已执行状态，使用固定真实 provider 数据集验证遗漏和无依据生成。
-4. **长音频与真实模型质量**：//TODO - 按音频质量计划记录 WER/CER/DER、身份误匹配、RSS、耗时与取消/故障 receipt；资源约束与精度取舍达标后再承诺长录音生产支持。
+4. **长音频与真实模型质量**：已有[ASR 模型比较](../quality/model-comparison.md)；//TODO - 扩展自然中文会议与重叠场景，补 DER、身份误匹配、词时间、取消/故障及小时级 RSS；资源约束与精度取舍达标后再承诺长录音生产支持。
 5. **资料规模优化**：//TODO - 测量 100/1000/10000 文档的冷、热查询、取消延迟与峰值 RSS；达到明确交互预算后再决定是否建立可重建全文索引。未来外部 Agent 搜索必须经版本化 capability 与 scope 校验，不能直接暴露内部 DocumentService。
 
 ## 验证记录
@@ -71,4 +71,4 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 
 全量截图可用 `MEETNOTE_VISUAL=1 MEETNOTE_VISUAL_UPDATE=1 cargo test --locked -p ui --test visual` 重建，去掉 `MEETNOTE_VISUAL_UPDATE=1` 后执行复比；`MEETNOTE_VISUAL_FILTER=meetings-search` 仅验证搜索场景。静态截图固定使用“减少动态效果”模式并在 baseline 元数据中记录，防止循环动画影响稳定帧；常规动画时序由交互测试覆盖，资源探测前恢复常规动态效果。图像与 baseline 是本地派生产物，不提交到仓库。
 
-10 个 ignored 测试没有执行。真实模型精度、20 小时资源、音频播放、原生无障碍手验、签名与 notarization 均不在本轮已验证结果中。
+上表验证搜索与文档包能力，真实模型执行和精度由独立[ASR 比较](../quality/model-comparison.md)记录。常规 workspace suite 不自动执行需要本地模型的 ignored 测试；20 小时资源、音频播放、原生无障碍手验、签名与 notarization 尚未验收。
