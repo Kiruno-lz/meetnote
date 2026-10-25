@@ -56,14 +56,24 @@ def canonical_timeline(row):
     return names, timeline
 
 
-def compare_runs(before, after):
+def measure_runs(before, after):
     left, left_rows = load_run(before)
     right, right_rows = load_run(after)
     for key in ("audioSha256", "audioSeconds", "modelArtifacts"):
         if not left[key] or left[key] != right[key]:
             raise ValueError(f"different inputs: {key}")
     configs = [
-        {k: v for k, v in r["configuration"].items() if k != "embeddingThreads"}
+        {
+            k: v
+            for k, v in r["configuration"].items()
+            if k
+            not in (
+                "embeddingThreads",
+                "embeddingSpinning",
+                "segmentationSpinning",
+                "embeddingSpinDurationUs",
+            )
+        }
         for r in (left, right)
     ]
     if configs[0] != configs[1]:
@@ -104,10 +114,8 @@ def compare_runs(before, after):
     candidate = statistics.median(r["wallSeconds"] for r in right_rows)
     speedup = 1 - candidate / baseline
     rss_ratio = right["peakRssBytes"] / left["peakRssBytes"]
-    if speedup < 0.15 or rss_ratio > 1.2:
-        raise ValueError(f"runtime budget failed: speedup={speedup:.4f}, RSS ratio={rss_ratio:.4f}")
     return {
-        "status": "passed",
+        "qualityStatus": "baseline_equivalent",
         "baselineMedianSeconds": baseline,
         "candidateMedianSeconds": candidate,
         "speedup": speedup,
@@ -120,13 +128,45 @@ def compare_runs(before, after):
     }
 
 
+def compare_runs(before, after):
+    result = measure_runs(before, after)
+    if result["speedup"] < 0.15 or result["peakRssRatio"] > 1.2:
+        raise ValueError(f"runtime budget failed: {result}")
+    return {"status": "passed", **result}
+
+
+def compare_idle_cpu(before, after):
+    result = measure_runs(before, after)
+    left, _ = load_run(before)
+    right, _ = load_run(after)
+    if left["configuration"]["embeddingThreads"] != right["configuration"]["embeddingThreads"]:
+        raise ValueError("CPU efficiency comparison changed thread count")
+    times = [r.get("cpuSeconds") for r in (left, right)]
+    if any(
+        not isinstance(t, (int, float)) or isinstance(t, bool) or not math.isfinite(t) or t <= 0
+        for t in times
+    ):
+        raise ValueError("missing or invalid process CPU time")
+    saving = 1 - times[1] / times[0]
+    wall_ratio = result["candidateMedianSeconds"] / result["baselineMedianSeconds"]
+    if saving < 0.1 or wall_ratio > 1.05 or result["peakRssRatio"] > 1.1:
+        raise ValueError(
+            f"CPU efficiency budget failed: CPU saving={saving}, wall ratio={wall_ratio}"
+        )
+    return {"status": "passed", **result, "cpuTimeReduction": saving, "wallRatio": wall_ratio}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--criterion", choices=("speed", "quality", "idle-cpu"), default="speed")
     args = parser.parse_args()
-    text = json.dumps(compare_runs(args.baseline, args.candidate), indent=2) + "\n"
+    check = {"speed": compare_runs, "quality": measure_runs, "idle-cpu": compare_idle_cpu}[
+        args.criterion
+    ]
+    text = json.dumps(check(args.baseline, args.candidate), indent=2) + "\n"
     if args.output:
         args.output.write_text(text)
     print(text, end="")

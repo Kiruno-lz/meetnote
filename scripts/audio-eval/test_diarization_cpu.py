@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_diarization_cpu import compare_runs
+from check_diarization_cpu import compare_runs, measure_runs, compare_idle_cpu
 
 
 class DiarizationCpuTests(unittest.TestCase):
@@ -149,6 +149,43 @@ class DiarizationCpuTests(unittest.TestCase):
                 )
             with self.assertRaisesRegex(ValueError, "embedding"):
                 compare_runs(before, after)
+
+    def test_measurement_does_not_confuse_equivalence_with_a_speed_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            before, after = self.pair(Path(tmp))
+            self.edit(after, lambda _, rows: [row.update(wallSeconds=110) for row in rows])
+            self.assertEqual(measure_runs(before, after)["qualityStatus"], "baseline_equivalent")
+            with self.assertRaises(ValueError):
+                compare_runs(before, after)
+
+    def test_idle_cpu_gate_preserves_latency_and_thread_count(self):
+        for mode in ("pass", "slow", "no_savings", "different_threads", "missing_cpu"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
+                before, after = self.pair(Path(tmp))
+                self.edit(before, lambda report, _: report.update(cpuSeconds=400))
+                self.edit(
+                    after,
+                    lambda report, rows: (
+                        report.update(cpuSeconds=300),
+                        report["configuration"].update(embeddingSpinning=False),
+                        [row.update(wallSeconds=102) for row in rows],
+                    ),
+                )
+                if mode == "slow":
+                    self.edit(after, lambda _, rows: [row.update(wallSeconds=106) for row in rows])
+                elif mode == "no_savings":
+                    self.edit(after, lambda report, _: report.update(cpuSeconds=380))
+                elif mode == "different_threads":
+                    self.edit(
+                        after, lambda report, _: report["configuration"].update(embeddingThreads=10)
+                    )
+                elif mode == "missing_cpu":
+                    self.edit(after, lambda report, _: report.update(cpuSeconds=None))
+                if mode == "pass":
+                    self.assertEqual(compare_idle_cpu(before, after)["status"], "passed")
+                else:
+                    with self.assertRaises(ValueError):
+                        compare_idle_cpu(before, after)
 
     def test_insufficient_speed_and_excess_memory_are_rejected(self):
         for mode in ("speed", "memory"):
