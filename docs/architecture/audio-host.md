@@ -117,10 +117,10 @@ pub trait DiarizationBackend: Send + Sync {
 - Paraformer/SenseVoice：要求 `model.int8.onnx` 或 `model.onnx`，以及 `tokens.txt`；SenseVoice 传递请求语言并启用 ITN。
 - Qwen3-ASR：要求 `conv_frontend.onnx`、encoder、decoder、`tokenizer/` 和 `tokens.txt`。
 - whole-file：30 秒以内保留完整文本 baseline；更长的 Paraformer/SenseVoice 输入改用同一个 recognizer 的有界推理与拼接。
-- windowed：复用 recognizer；优先按 token timestamp 与 valid core 拼接，SentencePiece 的显式词边界、独立边界 token 和 `@@` 词内连续标记分别处理；没有时间戳时使用近似文本边界去重，无法可靠匹配时保留文本。
+- windowed：复用 recognizer；优先按 token timestamp 与 valid core 拼接，SentencePiece 的显式词边界、独立边界 token 和 `@@` 词内连续标记分别处理；词内连续优先于停顿、句末标点和段长限制，避免把单词或缩写拆开；没有时间戳时使用近似文本边界去重，无法可靠匹配时保留文本。
 - probe：检查 backend ID、模型目录和模型族必需文件；真实 recognizer 创建属于加载验证。
 
-模型推理窗口独立于 application 的录音路由：Paraformer 核心 8 秒、两侧各 2 秒；SenseVoice 核心 20 秒、两侧各 5 秒。子窗口以父窗口 valid core 为原点，context 限制在父样本内，连续覆盖 core；不让重复 context 产生新的所有权区间。Qwen3-ASR 不沿用该模型特定策略。
+模型推理窗口独立于 application 的录音路由：Paraformer 核心 8 秒、两侧各 2 秒；SenseVoice 核心 20 秒、两侧各 5 秒。子窗口以父窗口 valid core 为原点，context 限制在父样本内，连续覆盖 core；不让重复 context 产生新的所有权区间。Qwen3-ASR 不沿用该模型特定策略。窗口仅在 valid core 的所有 sample 严格为零时跳过解码；context 中的语音不改变 core 所有权，非零弱声仍交给模型。该检查不是 VAD，不过滤低能量噪声；整段无识别结果返回 `OutputValidationFailed`。
 
 `paraformer-zh` 与 `sensevoice-small-int8` 是可安装路径；Qwen3-ASR ONNX bundle 尚未达到 `ready`。MLX Qwen 仅通过隔离评测 runner 接入，不属于桌面 provider。模型选择依据与实测边界见[转录评测](../reserch/asr-quality-and-runtime-evaluation.md)。
 

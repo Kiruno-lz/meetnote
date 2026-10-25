@@ -33,11 +33,26 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 |---|---|
 | Whisper 取消回调的 userdata 类型不一致 | 固定 `whisper-rs 0.16.0` 的 safe wrapper 将双层 Box 的地址交给按具体 closure 类型读取的 trampoline。五组 CPU/Metal 对照发生 SIGSEGV，macOS 栈落在 trampoline → `JobContext::is_cancelled`。adapter 改用类型明确的 C 回调和自有 `Box<JobContext>`，由参数对象持有到同步 `full` 返回后释放；不改 vendor，不泄漏 closure |
 | Core ML 请求静默回退 CPU | 本机真实运行日志出现 `CoreML ... Fallback to cpu!`。当前 sherpa ASR/diarization adapter 明确拒绝不能保证执行的 Core ML/Metal 请求，返回 `DeviceUnavailable`；不把 CPU wall time 记录为 Core ML 加速 |
-| SentencePiece 子词被插空格 | 原合并将 `ent`、`om`、`ologist`、`s` 拼成多个词。保留 SentencePiece 显式词边界和 Paraformer `@@` 连续标记，在词内直接连接；单独的词边界标记只影响下一个词，不产生空段。正常整词行为保持独立，新增回归先失败再修复 |
+| SentencePiece 子词被插空格 | 原合并将 `ent`、`om`、`ologist`、`s` 拼成多个词。保留 SentencePiece 显式词边界和 Paraformer `@@` 连续标记，在词内直接连接，连续标记优先于 750 ms 停顿和标点分段，保留 `entomologists` 与 `U.S.`；单独的词边界标记只影响下一个词，不产生空段。正常整词行为保持独立，新增回归先失败再修复 |
 | 单次推理长度与应用长音频路由混淆 | 原 application 在 30 分钟才进入长音频路径，但同一批中文拼成 295.42 秒后，Paraformer 整文件 CER 达 94.88%，短片段为 11.76%；加线程保持相同错误率。ASR backend 的模型推理粒度必须独立于 Audio Host 的长录音路由 |
+| 长全零输入产生虚构转写 | 同一 31 秒全零 WAV，冻结 baseline 返回空识别错误，原分窗实现却生成四段中文。分窗只跳过严格全零的 valid core，不用能量阈值，保留非零弱声与上下文所有权；全段无结果统一返回 `OutputValidationFailed`。真实模型回归先失败再通过，这不是通用 VAD |
+| 评测缺轮仍被视为完整 | 原评分器从已有行推断轮数；删除完整一轮后，门槛与汇总仍接受结果。现按 config 的 repeats 校验 case×repeat 精确覆盖，拒绝重复、缺项与越界；新预测绑定 SHA-256，重跑先作废旧成功回执，最终回执原子替换 |
+| 中断遗留推理进程 | 原 wrapper 只处理超时，Ctrl-C 可留下独立 session 的推理进程。现 SIGINT/SIGTERM/超时统一结束整个进程组并 wait 回收，保留部分输出和取消/超时原因；损坏的最后一行不会阻止失败回执生成 |
 | sherpa 默认线程隐式降为一线程 | 原 `Default` 产生零，运行时通过 `max(1)` 使用一线程。相同权重与输入下四线程改善 wall time；默认值改为可用逻辑 CPU 数与四的较小值，保持明确上限 |
 
 窗口扫描比较了 Paraformer 的 6+2/8+2/10+2.5 秒（核心+单侧上下文），开发构造 clean 的 CER 分别为 16.88%/14.81%/15.58%，noise 为 21.35%/16.34%/18.19%。30 秒推理上限的初稿仍有 36.17% clean CER，未通过预先设定的 20% 门槛，不能作为最终修复。最终采用 8+2 秒；SenseVoice 采用 20+5 秒。30 秒以内 whole-file 输入保留 baseline；应用 60+15 秒窗口内部仍按模型粒度处理。子窗口从父 valid core 开始分配，而不是从重复 context 开始分配，避免嵌套窗口多解码与跨父窗口上下文顺序倒退。
+
+原始目录保留的“五次失败”均为修复前 Whisper 回调 SIGSEGV（`runner exit -11`），不是五个仍未解决的独立问题。五份 macOS faulting-thread 栈与固定 binding 源码共同定位 userdata 布局错误。既有修复后完整/扩展对照共完成 370 次调用；此次 review 又用当前 release executable 对每组最先失败的原始病例各执行两次，10 次全部成功。下面的定点复测只证明这五条崩溃路径，不增加独立质量样本数。
+
+| 原始失败配置 | 既有修复后调用 | 当前定点复测 |
+|---|---:|---:|
+| base.en CPU | 58 | 2/2 成功 |
+| base.en Metal | 58 | 2/2 成功 |
+| large-v3 CPU | 26 | 2/2 成功 |
+| large-v3 Metal | 114 | 2/2 成功 |
+| Turbo Q5 Metal | 114 | 2/2 成功 |
+
+首尾各 32 秒全零、中间保留原始 FLEURS 中文音频的输入，整文件与 application-window 路径各执行两次，所有输出段均与中间语音范围相交，没有完全落在静音区的虚构文本。Paraformer 无可靠词时间时仍输出近似窗口范围，不把此检查当作词时间精度证明。复测 SHA、覆盖与质量门结果见[review 回归回执](../quality/review-regression.json)。
 
 短音频 ASR→diarization 的顺序调度继续保留。此次回调栈解释本轮独立 Whisper 崩溃；它不能反向证明历史所有 native runtime 故障均只有同一个原因，也不构成恢复无界并行的依据。
 
@@ -90,7 +105,7 @@ native diarization 仍保留全录音 observation 和 AHC 二次距离数组。A
 2. 从上述固定 FLEURS revision 下载 `data/cmn_hans_cn/audio/test.tar.gz`、`data/en_us/audio/test.tar.gz`，分别放入 `<root>/downloads/zh-test.tar.gz`、`en-test.tar.gz`。`prepare_fleurs.py --root <root>` 校验 archive SHA、读取官方 TSV 并产生病例；`--offset 24 --language zh` 构建第二组句子。
 3. `prepare_ami_asr.py --audio <ES2002a.Mix-Headset.wav> --annotations <ami_public_manual_1.6.2.zip> --root <root>` 同时校验官方素材与标注 SHA，产生独立 AMI 病例。
 4. `cargo build --release --locked -p asr --example asr_benchmark`；使用配置文件指定 `model`、`device`、`threads`、`repeats`、`windowed`。模型路径必须是已安装本地资产，backend 不下载。
-5. `asr_benchmark.py --cases <cases.json> --config <configuration.json> --runner <asr_benchmark> --output <run-directory>` 执行与评分。模型加载、崩溃、超时与缺失结果均保留；模型输出不掺入 gold。MLX runner 换为 `scripts/audio-eval/mlx_qwen_probe.py`。
+5. `asr_benchmark.py --cases <cases.json> --config <configuration.json> --runner <asr_benchmark> --output <run-directory>` 执行与评分。模型加载、崩溃、超时、取消与缺失结果均保留；成功回执必须覆盖配置中的每个 case 与 repeat，读取时同时校验 manifest 和新回执中的预测 SHA-256；模型输出不掺入 gold。MLX runner 换为 `scripts/audio-eval/mlx_qwen_probe.py`。
 6. `cargo build --release --locked -p diarization --example diarization_benchmark`；`diarization_benchmark <backend> <model-directory> <audio> <output.jsonl>` 独立运行两次，配合 `/usr/bin/time -l` 记录进程 RSS；未提供 speaker gold 时明确记为未评估精度。
 7. `check_asr_windows.py --run <candidate-run> --baseline <original-run> --max-clean .2 --max-noise .25` 检查冻结质量门、时间范围和短路径逐段不变。旧 Paraformer clean 94.88% 触发失败；开发与第二组的 whole/window 路径均须通过。
 8. `report_asr.py --root <root> --output <report-directory> --date 2026-10-25` 从逐样本预测重新计算统一口径的表格与 receipt；原始结果不因评分器更新而删除。
@@ -126,10 +141,11 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 |---|---|
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
-| `cargo test --workspace --locked` | 900 个主测试通过、0 failed、10 ignored；另有三次锁/读写子进程测试通过 |
+| `cargo test --workspace --locked` | 902 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
-| Python 评分/基线测试 | 15 passed；精确距离、标点、归一口径、加权、失败/缺项与输入 hash 校验 |
+| Python 评分/基线测试 | 23 passed；精确距离、归一口径、整轮缺失/重复/越界、预测 hash、旧回执失效、取消/超时与进程组回收 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
+| review 真实回归 | 当前 release 完成 12 组、128 次调用；五种 Whisper 配置各两次成功，四组 Paraformer 质量门与 96 次短路径逐段一致通过，SenseVoice 英文长输入两次成功；31 秒全零 ignored 回归已单独显式执行通过 |
 | 模型与资源 | 自动汇总选取 23 次配置执行、1016 次完成调用；另保留全部 43 次配置迭代、1768 次完成调用及失败记录。native/sherpa DIA 与同一音频 ASR 各两次独立 release 执行 |
 
 ignored 资源测试未被常规 suite 自动执行；真实推理由独立 runner 显式提供模型与音频完成。此次不据单元测试或短样本宣称 DER、词时间、20 小时资源或发布质量通过。

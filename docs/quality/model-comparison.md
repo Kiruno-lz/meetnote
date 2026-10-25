@@ -56,13 +56,13 @@
 | sensevoice-final-text | zh/composed-clean | 1×2 | 12.64% | — | 0.0576 | 17.006/17.087 | 1074 | 0 |
 | sensevoice-final-text | zh/composed-noise20db | 1×2 | 16.88% | — | 0.0576 | 17.022/17.074 | 1074 | 0 |
 | sensevoice-final-text-app | en/composed-clean | 1×2 | 11.09% | 9.47% | 0.0606 | 14.899/15.048 | 1081 | 0 |
-| whisper-base-en-cpu | blocked | — | — | — | — | — | — | runner exit -11; incomplete output |
+| whisper-base-en-cpu | 执行失败 | — | — | — | — | — | — | runner exit -11; incomplete output |
 | whisper-base-en-cpu-fixed | en/ami-oracle-nonoverlap | 5×2 | 31.58% | 26.00% | 0.0508 | 0.381/0.410 | 382 | 0 |
 | whisper-base-en-cpu-fixed | en/native | 24×2 | 9.68% | 8.60% | 0.0399 | 0.389/0.452 | 382 | 0 |
-| whisper-base-en-metal | blocked | — | — | — | — | — | — | runner exit -11; incomplete output |
+| whisper-base-en-metal | 执行失败 | — | — | — | — | — | — | runner exit -11; incomplete output |
 | whisper-base-en-metal-fixed | en/ami-oracle-nonoverlap | 5×2 | 29.47% | 24.00% | 0.0291 | 0.217/0.257 | 331 | 0 |
 | whisper-base-en-metal-fixed | en/native | 24×2 | 9.68% | 8.60% | 0.0242 | 0.233/0.338 | 331 | 0 |
-| whisper-large-metal | blocked | — | — | — | — | — | — | runner exit -11; incomplete output |
+| whisper-large-metal | 执行失败 | — | — | — | — | — | — | runner exit -11; incomplete output |
 | whisper-large-metal-fixed | en/ami-oracle-nonoverlap | 5×2 | 20.00% | 12.00% | 0.3377 | 2.654/2.793 | 3719 | 0 |
 | whisper-large-metal-fixed | en/composed-clean | 1×2 | 61.09% | 60.70% | 0.1694 | 41.649/41.796 | 3719 | 0 |
 | whisper-large-metal-fixed | en/composed-noise20db | 1×2 | 106.69% | 105.96% | 0.2000 | 49.174/49.247 | 3719 | 0 |
@@ -70,7 +70,7 @@
 | whisper-large-metal-fixed | zh/composed-clean | 1×2 | 38.78% | — | 0.1129 | 33.344/33.465 | 3719 | 0 |
 | whisper-large-metal-fixed | zh/composed-noise20db | 1×2 | 26.25% | — | 0.1733 | 51.210/51.214 | 3719 | 0 |
 | whisper-large-metal-fixed | zh/native | 24×2 | 10.13% | — | 0.2475 | 2.986/3.356 | 3719 | 0 |
-| whisper-turbo-q5-metal | blocked | — | — | — | — | — | — | runner exit -11; incomplete output |
+| whisper-turbo-q5-metal | 执行失败 | — | — | — | — | — | — | runner exit -11; incomplete output |
 | whisper-turbo-q5-metal-fixed | en/ami-oracle-nonoverlap | 5×2 | 23.16% | 15.00% | 0.1757 | 1.309/1.391 | 958 | 0 |
 | whisper-turbo-q5-metal-fixed | en/composed-clean | 1×2 | 59.51% | 58.60% | 0.0814 | 20.000/20.031 | 958 | 0 |
 | whisper-turbo-q5-metal-fixed | en/composed-noise20db | 1×2 | 89.79% | 89.12% | 0.0886 | 21.770/21.792 | 958 | 0 |

@@ -9,8 +9,8 @@
   "normalization": "meetnote.asr-scoring.v2: NFKC + casefold; Chinese remove punctuation, English punctuation to spaces except apostrophes; no script conversion; report literal WER and whisper-normalizer-0.1.15 normalized WER separately",
   "qualityScope": "B1 ASR; timestamp error, DER, identity and semantic quality not assessed",
   "scorerArtifacts": {
-    "asr_benchmark.py": "f4686bd15b2db6d3cdee1ee972b8e082e895e1eaee33ecd098dfcb8a7b76e49a",
-    "report_asr.py": "bbd688cfcd5cf927266e85d381b901885e3a38318681cbc1939fcaf9f062c159",
+    "asr_benchmark.py": "65b7720cab6c14039f656ac54bfab9612ec06c72bd3b79a8c9e79570a8119b0c",
+    "report_asr.py": "4cac21f591fa6e40b208232d5a5e47a5b711a062a10af0583409029d0957e32e",
     "requirements.txt": "e2830bea04650755503f68c0ef3c1dd03931a95a2e052d33cc40416803078e80",
     "requirements-mlx.txt": "15fcbf00fe96a026ba291309c1c45b3c05553f5e76ba77d31b8487a262192f18"
   },
