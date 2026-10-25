@@ -1,0 +1,93 @@
+{
+  "schema": "meetnote.audio-resource-profile.v1",
+  "date": "2026-10-25",
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "cores": 10,
+    "memoryBytes": 34359738368
+  },
+  "qualityStatus": "not_assessed",
+  "diarizationRunnerSha256": "6cfcabe9e93f6adeba05466fde3ce4f86824b3f0d2ed305d0d6754e654cb3b9d",
+  "diarization": [
+    {
+      "backend": "diarization-native",
+      "model": "speakrs-community-1-cpu",
+      "device": "Cpu",
+      "threads": "backend-default",
+      "audioSeconds": 180,
+      "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+      "exitCode": 0,
+      "peakRssBytes": 306413568,
+      "runs": [
+        {
+          "backend": "diarization-native",
+          "observations": 303,
+          "qualityStatus": "not_assessed",
+          "repeat": 0,
+          "segments": 45,
+          "speakerCount": 3,
+          "status": "ok",
+          "wallSeconds": 166.714995917
+        },
+        {
+          "backend": "diarization-native",
+          "observations": 303,
+          "qualityStatus": "not_assessed",
+          "repeat": 1,
+          "segments": 45,
+          "speakerCount": 3,
+          "status": "ok",
+          "wallSeconds": 166.256316417
+        }
+      ],
+      "qualityStatus": "not_assessed"
+    },
+    {
+      "backend": "sherpa-onnx",
+      "model": "sherpa-onnx-speaker-diarization-bundle",
+      "device": "Cpu",
+      "threads": "backend-default",
+      "audioSeconds": 180,
+      "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+      "exitCode": 0,
+      "peakRssBytes": 768442368,
+      "runs": [
+        {
+          "backend": "sherpa-onnx",
+          "observations": 38,
+          "qualityStatus": "not_assessed",
+          "repeat": 0,
+          "segments": 38,
+          "speakerCount": 21,
+          "status": "ok",
+          "wallSeconds": 62.22849675
+        },
+        {
+          "backend": "sherpa-onnx",
+          "observations": 38,
+          "qualityStatus": "not_assessed",
+          "repeat": 1,
+          "segments": 38,
+          "speakerCount": 21,
+          "status": "ok",
+          "wallSeconds": 62.00044125
+        }
+      ],
+      "qualityStatus": "not_assessed"
+    }
+  ],
+  "asr": {
+    "model": "whisper-large-v3-turbo-q5",
+    "device": "Metal",
+    "threads": 4,
+    "audioSeconds": 180,
+    "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+    "wallSeconds": [
+      17.586905666,
+      10.19649725
+    ],
+    "runnerSha256": "4ba49d5db45f67f20f9f3e9fb8fc225b8a457fe3920b462d6ef0e7efa0a43488",
+    "qualityStatus": "not_assessed",
+    "peakRssBytes": 848412672
+  }
+}

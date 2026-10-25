@@ -1,0 +1,1932 @@
+{
+  "schema": "meetnote.asr-comparison.v1",
+  "date": "2026-10-25",
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "cores": 10,
+    "memoryBytes": 34359738368
+  },
+  "normalization": "meetnote.asr-scoring.v2: NFKC + casefold; Chinese remove punctuation, English punctuation to spaces except apostrophes; no script conversion; report literal WER and whisper-normalizer-0.1.15 normalized WER separately",
+  "qualityScope": "B1 ASR; timestamp error, DER, identity and semantic quality not assessed",
+  "scorerArtifacts": {
+    "asr_benchmark.py": "f4686bd15b2db6d3cdee1ee972b8e082e895e1eaee33ecd098dfcb8a7b76e49a",
+    "report_asr.py": "bbd688cfcd5cf927266e85d381b901885e3a38318681cbc1939fcaf9f062c159",
+    "requirements.txt": "e2830bea04650755503f68c0ef3c1dd03931a95a2e052d33cc40416803078e80",
+    "requirements-mlx.txt": "15fcbf00fe96a026ba291309c1c45b3c05553f5e76ba77d31b8487a262192f18"
+  },
+  "runs": [
+    {
+      "name": "paraformer-cpu-1",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "paraformer-zh",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 1,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.94880174291939,
+          "normalizedWer": null,
+          "errors": 1742,
+          "referenceUnits": 1836,
+          "rtf": 0.0875201083068174,
+          "medianSeconds": 25.855190395999998,
+          "p95Seconds": 25.862682292,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.9967320261437909,
+          "normalizedWer": null,
+          "errors": 1830,
+          "referenceUnits": 1836,
+          "rtf": 0.08660432978132829,
+          "medianSeconds": 25.584651104000002,
+          "p95Seconds": 25.63592775,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.11764705882352941,
+          "normalizedWer": null,
+          "errors": 216,
+          "referenceUnits": 1836,
+          "rtf": 0.07562334350815199,
+          "medianSeconds": 0.8961324584999999,
+          "p95Seconds": 1.066061166,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1354809344,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 1,
+      "modelArtifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 81828675,
+          "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 75352,
+          "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+        }
+      ],
+      "casesSha256": "e002a98a5d7397b6bc53ff75842d88c6ac00ed2df4f0e405f792c9531334713d",
+      "runnerSha256": "ca1d4dec43780b4b69e1000e49b2f91c6b1a06efed5997769a80f6f0cb2fba69",
+      "failure": null
+    },
+    {
+      "name": "paraformer-cpu-4",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "paraformer-zh",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.94880174291939,
+          "normalizedWer": null,
+          "errors": 1742,
+          "referenceUnits": 1836,
+          "rtf": 0.02780050782276082,
+          "medianSeconds": 8.212826021000001,
+          "p95Seconds": 8.239562917,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.9967320261437909,
+          "normalizedWer": null,
+          "errors": 1830,
+          "referenceUnits": 1836,
+          "rtf": 0.027179952059779293,
+          "medianSeconds": 8.029501437499999,
+          "p95Seconds": 8.065218833,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.11764705882352941,
+          "normalizedWer": null,
+          "errors": 216,
+          "referenceUnits": 1836,
+          "rtf": 0.053496045812049545,
+          "medianSeconds": 0.630781854,
+          "p95Seconds": 0.712272167,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1367425024,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 81828675,
+          "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 75352,
+          "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+        }
+      ],
+      "casesSha256": "e002a98a5d7397b6bc53ff75842d88c6ac00ed2df4f0e405f792c9531334713d",
+      "runnerSha256": "ca1d4dec43780b4b69e1000e49b2f91c6b1a06efed5997769a80f6f0cb2fba69",
+      "failure": null
+    },
+    {
+      "name": "paraformer-cpu-6",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "paraformer-zh",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 6,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.94880174291939,
+          "normalizedWer": null,
+          "errors": 1742,
+          "referenceUnits": 1836,
+          "rtf": 0.024682630801909144,
+          "medianSeconds": 7.2917427915,
+          "p95Seconds": 7.33590625,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.9967320261437909,
+          "normalizedWer": null,
+          "errors": 1830,
+          "referenceUnits": 1836,
+          "rtf": 0.02455397259156455,
+          "medianSeconds": 7.253734583,
+          "p95Seconds": 7.2974939580000004,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.11764705882352941,
+          "normalizedWer": null,
+          "errors": 216,
+          "referenceUnits": 1836,
+          "rtf": 0.051789961195857534,
+          "medianSeconds": 0.612200146,
+          "p95Seconds": 0.704117792,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1377075200,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 6,
+      "modelArtifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 81828675,
+          "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 75352,
+          "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+        }
+      ],
+      "casesSha256": "e002a98a5d7397b6bc53ff75842d88c6ac00ed2df4f0e405f792c9531334713d",
+      "runnerSha256": "ca1d4dec43780b4b69e1000e49b2f91c6b1a06efed5997769a80f6f0cb2fba69",
+      "failure": null
+    },
+    {
+      "name": "paraformer-final-text-app-dev",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "paraformer-zh",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": true
+      },
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.14814814814814814,
+          "normalizedWer": null,
+          "errors": 272,
+          "referenceUnits": 1836,
+          "rtf": 0.01771811340633674,
+          "medianSeconds": 5.2342850625,
+          "p95Seconds": 5.273847792,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.16230936819172112,
+          "normalizedWer": null,
+          "errors": 298,
+          "referenceUnits": 1836,
+          "rtf": 0.017495538201543565,
+          "medianSeconds": 5.1685318955,
+          "p95Seconds": 5.194833583,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 418332672,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 81828675,
+          "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 75352,
+          "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+        }
+      ],
+      "casesSha256": "e65466474f37eb60299b4b2ed70ef0d4c9ae53f49c210124765b4a7700d29609",
+      "runnerSha256": "4f75f2c326e5b817d09e8590718be0600aef9e7a3c65b1668447394ac4a42e94",
+      "failure": null
+    },
+    {
+      "name": "paraformer-final-text-app-validation",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "paraformer-zh",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": true
+      },
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.14616193480546794,
+          "normalizedWer": null,
+          "errors": 278,
+          "referenceUnits": 1902,
+          "rtf": 0.018113638521233027,
+          "medianSeconds": 5.041750146,
+          "p95Seconds": 5.09894875,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.17665615141955837,
+          "normalizedWer": null,
+          "errors": 336,
+          "referenceUnits": 1902,
+          "rtf": 0.01777869130380111,
+          "medianSeconds": 4.9485209375,
+          "p95Seconds": 4.962758375,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 423231488,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 81828675,
+          "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 75352,
+          "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+        }
+      ],
+      "casesSha256": "637792683eed7d66f248c1c9ba948a7646e92e010c2a08367f7cf22d5a8adb84",
+      "runnerSha256": "4f75f2c326e5b817d09e8590718be0600aef9e7a3c65b1668447394ac4a42e94",
+      "failure": null
+    },
+    {
+      "name": "paraformer-final-text-dev",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "paraformer-zh",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.14814814814814814,
+          "normalizedWer": null,
+          "errors": 272,
+          "referenceUnits": 1836,
+          "rtf": 0.01712399338230316,
+          "medianSeconds": 5.058770125,
+          "p95Seconds": 5.064512,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.16339869281045752,
+          "normalizedWer": null,
+          "errors": 300,
+          "referenceUnits": 1836,
+          "rtf": 0.017100536383792563,
+          "medianSeconds": 5.051840458499999,
+          "p95Seconds": 5.053971792,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.11764705882352941,
+          "normalizedWer": null,
+          "errors": 216,
+          "referenceUnits": 1836,
+          "rtf": 0.05385551198131692,
+          "medianSeconds": 0.6370020415,
+          "p95Seconds": 0.697547792,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 466419712,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 81828675,
+          "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 75352,
+          "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+        }
+      ],
+      "casesSha256": "e002a98a5d7397b6bc53ff75842d88c6ac00ed2df4f0e405f792c9531334713d",
+      "runnerSha256": "4f75f2c326e5b817d09e8590718be0600aef9e7a3c65b1668447394ac4a42e94",
+      "failure": null
+    },
+    {
+      "name": "paraformer-final-text-validation",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "paraformer-zh",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.15141955835962145,
+          "normalizedWer": null,
+          "errors": 288,
+          "referenceUnits": 1902,
+          "rtf": 0.017380499717970826,
+          "medianSeconds": 4.837688291499999,
+          "p95Seconds": 4.856746166,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.17875920084121977,
+          "normalizedWer": null,
+          "errors": 340,
+          "referenceUnits": 1902,
+          "rtf": 0.017370241429546598,
+          "medianSeconds": 4.8348329995,
+          "p95Seconds": 4.839187541,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.10935856992639327,
+          "normalizedWer": null,
+          "errors": 208,
+          "referenceUnits": 1902,
+          "rtf": 0.05671780826263303,
+          "medianSeconds": 0.6290266664999999,
+          "p95Seconds": 0.712646167,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 466599936,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 81828675,
+          "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 75352,
+          "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+        }
+      ],
+      "casesSha256": "60e7839da1f249faf7b410440694798b9321672c6b3ab2bff708ea3f4fa9a0af",
+      "runnerSha256": "4f75f2c326e5b817d09e8590718be0600aef9e7a3c65b1668447394ac4a42e94",
+      "failure": null
+    },
+    {
+      "name": "paraformer-validation-before",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "paraformer-zh",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.9348054679284963,
+          "normalizedWer": null,
+          "errors": 1778,
+          "referenceUnits": 1902,
+          "rtf": 0.03102406731335777,
+          "medianSeconds": 8.635238896,
+          "p95Seconds": 9.791956167,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.9968454258675079,
+          "normalizedWer": null,
+          "errors": 1896,
+          "referenceUnits": 1902,
+          "rtf": 0.027713548103039453,
+          "medianSeconds": 7.713788979,
+          "p95Seconds": 7.859015541,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.10935856992639327,
+          "normalizedWer": null,
+          "errors": 208,
+          "referenceUnits": 1902,
+          "rtf": 0.05900094406675597,
+          "medianSeconds": 0.6540823955,
+          "p95Seconds": 0.739716334,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1273167872,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 81828675,
+          "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 75352,
+          "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+        }
+      ],
+      "casesSha256": "60e7839da1f249faf7b410440694798b9321672c6b3ab2bff708ea3f4fa9a0af",
+      "runnerSha256": "ca1d4dec43780b4b69e1000e49b2f91c6b1a06efed5997769a80f6f0cb2fba69",
+      "failure": null
+    },
+    {
+      "name": "qwen-0.6b-ami",
+      "configuration": {
+        "model": {
+          "backendId": "mlx-qwen3",
+          "modelId": "qwen3-asr-0.6b",
+          "revision": "83ce2a8ef9a382d2ba2209aab383bc51fff366f5"
+        },
+        "device": "Metal",
+        "threads": 1,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "cases": 5,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.16842105263157894,
+          "normalizedWer": 0.12,
+          "errors": 32,
+          "referenceUnits": 190,
+          "rtf": 0.033174521212592685,
+          "medianSeconds": 0.2536537710111588,
+          "p95Seconds": 0.4230283328797668,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1003175936,
+      "initialSessionLoadSeconds": 0.1824301250744611,
+      "modelLoading": "resident",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 1,
+      "modelArtifacts": [
+        {
+          "filename": "README.md",
+          "bytes": 2676,
+          "sha256": "9eee01c419d4e67f8001008bcb968ac9153cd21b738754b9997bd19dba79d0a3"
+        },
+        {
+          "filename": "config.json",
+          "bytes": 6193,
+          "sha256": "76d3ae4601ce939830b2517f4a6cadb86cc51316c3900af6b020b051c21a478c"
+        },
+        {
+          "filename": "merges.txt",
+          "bytes": 1671853,
+          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+        },
+        {
+          "filename": "quantization_config.json",
+          "bytes": 35,
+          "sha256": "964fe0bcf1c9cb41a0a66616e64c2bfcf93bd5581f3abd869b0e72d3dbc66154"
+        },
+        {
+          "filename": "tokenizer_config.json",
+          "bytes": 12487,
+          "sha256": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c"
+        },
+        {
+          "filename": "vocab.json",
+          "bytes": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        },
+        {
+          "filename": "weights.safetensors",
+          "bytes": 835619431,
+          "sha256": "940d73134ef51218d923cce36a58f23e2286b16313a35e3b273937041069f844"
+        }
+      ],
+      "casesSha256": "1cf1c20a556e4fa73a8aa016d4a32f80d5f5bb374c700f477b4f26de7fff1750",
+      "runnerSha256": "2ef6cfb99650524a049092861b25b2b570b1c15faa70c430bb7ef2ac952b4a80",
+      "failure": null
+    },
+    {
+      "name": "qwen-0.6b-mlx",
+      "configuration": {
+        "model": {
+          "backendId": "mlx-qwen3",
+          "modelId": "qwen3-asr-0.6b",
+          "revision": "83ce2a8ef9a382d2ba2209aab383bc51fff366f5"
+        },
+        "device": "Metal",
+        "threads": 1,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.10387323943661972,
+          "normalizedWer": 0.1,
+          "errors": 118,
+          "referenceUnits": 1136,
+          "rtf": 0.02740080648487322,
+          "medianSeconds": 6.735666250111535,
+          "p95Seconds": 6.771580458153039,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.7306338028169014,
+          "normalizedWer": 0.7280701754385965,
+          "errors": 830,
+          "referenceUnits": 1136,
+          "rtf": 0.0160025828509449,
+          "medianSeconds": 3.933754916419275,
+          "p95Seconds": 3.9436273330356926,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.058098591549295774,
+          "normalizedWer": 0.05263157894736842,
+          "errors": 66,
+          "referenceUnits": 1136,
+          "rtf": 0.030341460821842903,
+          "medianSeconds": 0.29141318751499057,
+          "p95Seconds": 0.4613760830834508,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.10784313725490197,
+          "normalizedWer": null,
+          "errors": 198,
+          "referenceUnits": 1836,
+          "rtf": 0.02144118148015619,
+          "medianSeconds": 6.334153832867742,
+          "p95Seconds": 6.439222999848425,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.11764705882352941,
+          "normalizedWer": null,
+          "errors": 216,
+          "referenceUnits": 1836,
+          "rtf": 0.021627497503598395,
+          "medianSeconds": 6.3891953125130385,
+          "p95Seconds": 6.460898125078529,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.09477124183006536,
+          "normalizedWer": null,
+          "errors": 174,
+          "referenceUnits": 1836,
+          "rtf": 0.02480908387871598,
+          "medianSeconds": 0.26718083349987864,
+          "p95Seconds": 0.3774790409952402,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1078640640,
+      "initialSessionLoadSeconds": 0.2470519170165062,
+      "modelLoading": "resident",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 1,
+      "modelArtifacts": [
+        {
+          "filename": "README.md",
+          "bytes": 2676,
+          "sha256": "9eee01c419d4e67f8001008bcb968ac9153cd21b738754b9997bd19dba79d0a3"
+        },
+        {
+          "filename": "config.json",
+          "bytes": 6193,
+          "sha256": "76d3ae4601ce939830b2517f4a6cadb86cc51316c3900af6b020b051c21a478c"
+        },
+        {
+          "filename": "merges.txt",
+          "bytes": 1671853,
+          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+        },
+        {
+          "filename": "quantization_config.json",
+          "bytes": 35,
+          "sha256": "964fe0bcf1c9cb41a0a66616e64c2bfcf93bd5581f3abd869b0e72d3dbc66154"
+        },
+        {
+          "filename": "tokenizer_config.json",
+          "bytes": 12487,
+          "sha256": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c"
+        },
+        {
+          "filename": "vocab.json",
+          "bytes": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        },
+        {
+          "filename": "weights.safetensors",
+          "bytes": 835619431,
+          "sha256": "940d73134ef51218d923cce36a58f23e2286b16313a35e3b273937041069f844"
+        }
+      ],
+      "casesSha256": "59020bce684223798279bfca55b5ec2346e6c48cf8e363d528d048edbeacfec6",
+      "runnerSha256": "2ef6cfb99650524a049092861b25b2b570b1c15faa70c430bb7ef2ac952b4a80",
+      "failure": null
+    },
+    {
+      "name": "qwen-1.7b-ami",
+      "configuration": {
+        "model": {
+          "backendId": "mlx-qwen3",
+          "modelId": "qwen3-asr-1.7b",
+          "revision": "b2315a2537123353af98e37fc93eae078f1b7cf3"
+        },
+        "device": "Metal",
+        "threads": 1,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "cases": 5,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.21052631578947367,
+          "normalizedWer": 0.13,
+          "errors": 40,
+          "referenceUnits": 190,
+          "rtf": 0.049954800214443616,
+          "medianSeconds": 0.39585947908926755,
+          "p95Seconds": 0.5718786250799894,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1474379776,
+      "initialSessionLoadSeconds": 0.19809504179283977,
+      "modelLoading": "resident",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 1,
+      "modelArtifacts": [
+        {
+          "filename": "README.md",
+          "bytes": 3062,
+          "sha256": "068f60c3da23f52128792b5187c2dd3a06c8ccb8e399898aadc60ef433a0e621"
+        },
+        {
+          "filename": "config.json",
+          "bytes": 6194,
+          "sha256": "2e74a751548b8ad7d7526d29365ad8144c345d8b412b1152d25dc6698452712f"
+        },
+        {
+          "filename": "merges.txt",
+          "bytes": 1671853,
+          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+        },
+        {
+          "filename": "quantization_config.json",
+          "bytes": 60,
+          "sha256": "067339b858243ad9d5e22764b3b82c759a765c9f0aadfe4939d0c233f15b9e7d"
+        },
+        {
+          "filename": "tokenizer_config.json",
+          "bytes": 12487,
+          "sha256": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c"
+        },
+        {
+          "filename": "vocab.json",
+          "bytes": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        },
+        {
+          "filename": "weights.safetensors",
+          "bytes": 1309676755,
+          "sha256": "5c9177b6fc67851d3c1af234ab8bd9d240faf07d08499bf3e751257d1ec88c5f"
+        }
+      ],
+      "casesSha256": "1cf1c20a556e4fa73a8aa016d4a32f80d5f5bb374c700f477b4f26de7fff1750",
+      "runnerSha256": "2ef6cfb99650524a049092861b25b2b570b1c15faa70c430bb7ef2ac952b4a80",
+      "failure": null
+    },
+    {
+      "name": "qwen-1.7b-mlx",
+      "configuration": {
+        "model": {
+          "backendId": "mlx-qwen3",
+          "modelId": "qwen3-asr-1.7b",
+          "revision": "b2315a2537123353af98e37fc93eae078f1b7cf3"
+        },
+        "device": "Metal",
+        "threads": 1,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.13380281690140844,
+          "normalizedWer": 0.13157894736842105,
+          "errors": 152,
+          "referenceUnits": 1136,
+          "rtf": 0.04011667496928241,
+          "medianSeconds": 9.861481040949002,
+          "p95Seconds": 10.064512040931731,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.7288732394366197,
+          "normalizedWer": 0.7192982456140351,
+          "errors": 828,
+          "referenceUnits": 1136,
+          "rtf": 0.025966443263336633,
+          "medianSeconds": 6.3830710829934105,
+          "p95Seconds": 6.425277250120416,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.03345070422535211,
+          "normalizedWer": 0.028070175438596492,
+          "errors": 38,
+          "referenceUnits": 1136,
+          "rtf": 0.0444729858157782,
+          "medianSeconds": 0.4314177710330114,
+          "p95Seconds": 0.7061463750433177,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.09259259259259259,
+          "normalizedWer": null,
+          "errors": 170,
+          "referenceUnits": 1836,
+          "rtf": 0.0328689661480322,
+          "medianSeconds": 9.710149979451671,
+          "p95Seconds": 9.716806374955922,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.09912854030501089,
+          "normalizedWer": null,
+          "errors": 182,
+          "referenceUnits": 1836,
+          "rtf": 0.03299433151660706,
+          "medianSeconds": 9.747185416636057,
+          "p95Seconds": 9.778299667173997,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.09041394335511982,
+          "normalizedWer": null,
+          "errors": 166,
+          "referenceUnits": 1836,
+          "rtf": 0.034854032410051694,
+          "medianSeconds": 0.41758081200532615,
+          "p95Seconds": 0.5535881251562387,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1542324224,
+      "initialSessionLoadSeconds": 0.20216308301314712,
+      "modelLoading": "resident",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 1,
+      "modelArtifacts": [
+        {
+          "filename": "README.md",
+          "bytes": 3062,
+          "sha256": "068f60c3da23f52128792b5187c2dd3a06c8ccb8e399898aadc60ef433a0e621"
+        },
+        {
+          "filename": "config.json",
+          "bytes": 6194,
+          "sha256": "2e74a751548b8ad7d7526d29365ad8144c345d8b412b1152d25dc6698452712f"
+        },
+        {
+          "filename": "merges.txt",
+          "bytes": 1671853,
+          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+        },
+        {
+          "filename": "quantization_config.json",
+          "bytes": 60,
+          "sha256": "067339b858243ad9d5e22764b3b82c759a765c9f0aadfe4939d0c233f15b9e7d"
+        },
+        {
+          "filename": "tokenizer_config.json",
+          "bytes": 12487,
+          "sha256": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c"
+        },
+        {
+          "filename": "vocab.json",
+          "bytes": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        },
+        {
+          "filename": "weights.safetensors",
+          "bytes": 1309676755,
+          "sha256": "5c9177b6fc67851d3c1af234ab8bd9d240faf07d08499bf3e751257d1ec88c5f"
+        }
+      ],
+      "casesSha256": "59020bce684223798279bfca55b5ec2346e6c48cf8e363d528d048edbeacfec6",
+      "runnerSha256": "2ef6cfb99650524a049092861b25b2b570b1c15faa70c430bb7ef2ac952b4a80",
+      "failure": null
+    },
+    {
+      "name": "sensevoice-final",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "sensevoice-small-int8",
+          "revision": "2365baeacb507f821a0c8120fcee3d484dba7a07"
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "cases": 5,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.2631578947368421,
+          "normalizedWer": 0.2,
+          "errors": 50,
+          "referenceUnits": 190,
+          "rtf": 0.09289041634486457,
+          "medianSeconds": 0.6548229164999999,
+          "p95Seconds": 0.892742042,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.11091549295774648,
+          "normalizedWer": 0.09473684210526316,
+          "errors": 126,
+          "referenceUnits": 1136,
+          "rtf": 0.05824040939508584,
+          "medianSeconds": 14.3166574375,
+          "p95Seconds": 14.340816167,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.7623239436619719,
+          "normalizedWer": 0.7578947368421053,
+          "errors": 866,
+          "referenceUnits": 1136,
+          "rtf": 0.05819136851558051,
+          "medianSeconds": 14.3046022085,
+          "p95Seconds": 14.30913125,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.09507042253521127,
+          "normalizedWer": 0.07894736842105263,
+          "errors": 108,
+          "referenceUnits": 1136,
+          "rtf": 0.07870550008255017,
+          "medianSeconds": 0.7543090625,
+          "p95Seconds": 1.141529916,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.12636165577342048,
+          "normalizedWer": null,
+          "errors": 232,
+          "referenceUnits": 1836,
+          "rtf": 0.057523812989980355,
+          "medianSeconds": 16.993684833499998,
+          "p95Seconds": 17.06677975,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.16884531590413943,
+          "normalizedWer": null,
+          "errors": 310,
+          "referenceUnits": 1836,
+          "rtf": 0.05786813167016451,
+          "medianSeconds": 17.095403458,
+          "p95Seconds": 17.141361,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.10348583877995643,
+          "normalizedWer": null,
+          "errors": 190,
+          "referenceUnits": 1836,
+          "rtf": 0.07196850334301308,
+          "medianSeconds": 0.8546357295,
+          "p95Seconds": 1.037565792,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1225424896,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "LICENSE",
+          "bytes": 71,
+          "sha256": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"
+        },
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 239233841,
+          "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 315894,
+          "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+        }
+      ],
+      "casesSha256": "9a2f1c88e0b5bc1dbdaa7b2bb78f11bb5bfcc515435357128458afc9a23366ff",
+      "runnerSha256": "78390ace00e8f15c6cc40ef30c8a77e6d5fdb4e0200db3ef8aa62a32c3976bce",
+      "failure": null
+    },
+    {
+      "name": "sensevoice-final-text",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "sensevoice-small-int8",
+          "revision": "2365baeacb507f821a0c8120fcee3d484dba7a07"
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.11091549295774648,
+          "normalizedWer": 0.09473684210526316,
+          "errors": 126,
+          "referenceUnits": 1136,
+          "rtf": 0.0585241689386543,
+          "medianSeconds": 14.3864112085,
+          "p95Seconds": 14.439853959,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.7623239436619719,
+          "normalizedWer": 0.7578947368421053,
+          "errors": 866,
+          "referenceUnits": 1136,
+          "rtf": 0.058643588804816536,
+          "medianSeconds": 14.415767,
+          "p95Seconds": 14.50484875,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.12636165577342048,
+          "normalizedWer": null,
+          "errors": 232,
+          "referenceUnits": 1836,
+          "rtf": 0.05756609622063502,
+          "medianSeconds": 17.0061761455,
+          "p95Seconds": 17.086640708,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.16884531590413943,
+          "normalizedWer": null,
+          "errors": 310,
+          "referenceUnits": 1836,
+          "rtf": 0.05761930267415882,
+          "medianSeconds": 17.021894396,
+          "p95Seconds": 17.07366825,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1125941248,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "LICENSE",
+          "bytes": 71,
+          "sha256": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"
+        },
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 239233841,
+          "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 315894,
+          "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+        }
+      ],
+      "casesSha256": "261b5d2dbf254aa827824f1b38b01958d1b5cf1b84b67b5d2cf4bc09188be30c",
+      "runnerSha256": "4f75f2c326e5b817d09e8590718be0600aef9e7a3c65b1668447394ac4a42e94",
+      "failure": null
+    },
+    {
+      "name": "sensevoice-final-text-app",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "sensevoice-small-int8",
+          "revision": "2365baeacb507f821a0c8120fcee3d484dba7a07"
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": true
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.11091549295774648,
+          "normalizedWer": 0.09473684210526316,
+          "errors": 126,
+          "referenceUnits": 1136,
+          "rtf": 0.06060853071556424,
+          "medianSeconds": 14.8987890205,
+          "p95Seconds": 15.047595790999999,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1133150208,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "LICENSE",
+          "bytes": 71,
+          "sha256": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"
+        },
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 239233841,
+          "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 315894,
+          "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+        }
+      ],
+      "casesSha256": "6565d6b9d828be0c20c6ab255a45924ddab313081889f0cb8b541ba97c2bc7ed",
+      "runnerSha256": "4f75f2c326e5b817d09e8590718be0600aef9e7a3c65b1668447394ac4a42e94",
+      "failure": null
+    },
+    {
+      "name": "whisper-base-en-cpu",
+      "failure": "runner exit -11; incomplete output",
+      "groups": [],
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-base-en-ggml",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "runnerSha256": "ca1d4dec43780b4b69e1000e49b2f91c6b1a06efed5997769a80f6f0cb2fba69",
+      "casesSha256": "753a0a88650a748a2bd3c2fa778b1f5098abbd932af410d83ef5d06dfbcd632e",
+      "peakRssBytes": 366477312
+    },
+    {
+      "name": "whisper-base-en-cpu-fixed",
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-base-en-ggml",
+          "revision": null
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "cases": 5,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.3157894736842105,
+          "normalizedWer": 0.26,
+          "errors": 60,
+          "referenceUnits": 190,
+          "rtf": 0.05075626060606061,
+          "medianSeconds": 0.38104245800000003,
+          "p95Seconds": 0.409873542,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.09683098591549295,
+          "normalizedWer": 0.08596491228070176,
+          "errors": 110,
+          "referenceUnits": 1136,
+          "rtf": 0.03987803988866311,
+          "medianSeconds": 0.389196104,
+          "p95Seconds": 0.451625208,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 400211968,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "ggml-base.en.bin",
+          "bytes": 147964211,
+          "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+        }
+      ],
+      "casesSha256": "b9901eb115a89c86d7185e90c67f8a8b642eff7e773e60ccfcd3382cab0a013d",
+      "runnerSha256": "1a4b75ad38e3e168c4cd114d69f9a2bb609f749e4c89d83353db90331cddd470",
+      "failure": null
+    },
+    {
+      "name": "whisper-base-en-metal",
+      "failure": "runner exit -11; incomplete output",
+      "groups": [],
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-base-en-ggml",
+          "revision": null
+        },
+        "device": "Metal",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "runnerSha256": "ca1d4dec43780b4b69e1000e49b2f91c6b1a06efed5997769a80f6f0cb2fba69",
+      "casesSha256": "753a0a88650a748a2bd3c2fa778b1f5098abbd932af410d83ef5d06dfbcd632e",
+      "peakRssBytes": 296026112
+    },
+    {
+      "name": "whisper-base-en-metal-fixed",
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-base-en-ggml",
+          "revision": null
+        },
+        "device": "Metal",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "cases": 5,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.29473684210526313,
+          "normalizedWer": 0.24,
+          "errors": 56,
+          "referenceUnits": 190,
+          "rtf": 0.02913790167605256,
+          "medianSeconds": 0.2170345625,
+          "p95Seconds": 0.256971291,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.09683098591549295,
+          "normalizedWer": 0.08596491228070176,
+          "errors": 110,
+          "referenceUnits": 1136,
+          "rtf": 0.02424929391457116,
+          "medianSeconds": 0.23280979200000002,
+          "p95Seconds": 0.337772125,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 346947584,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "ggml-base.en.bin",
+          "bytes": 147964211,
+          "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+        }
+      ],
+      "casesSha256": "b9901eb115a89c86d7185e90c67f8a8b642eff7e773e60ccfcd3382cab0a013d",
+      "runnerSha256": "1a4b75ad38e3e168c4cd114d69f9a2bb609f749e4c89d83353db90331cddd470",
+      "failure": null
+    },
+    {
+      "name": "whisper-large-metal",
+      "failure": "runner exit -11; incomplete output",
+      "groups": [],
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-large-v3-ggml",
+          "revision": null
+        },
+        "device": "Metal",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "runnerSha256": "ca1d4dec43780b4b69e1000e49b2f91c6b1a06efed5997769a80f6f0cb2fba69",
+      "casesSha256": "59020bce684223798279bfca55b5ec2346e6c48cf8e363d528d048edbeacfec6",
+      "peakRssBytes": 3658383360
+    },
+    {
+      "name": "whisper-large-metal-fixed",
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-large-v3-ggml",
+          "revision": null
+        },
+        "device": "Metal",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "cases": 5,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.2,
+          "normalizedWer": 0.12,
+          "errors": 38,
+          "referenceUnits": 190,
+          "rtf": 0.33766152624027895,
+          "medianSeconds": 2.654188625,
+          "p95Seconds": 2.793151458,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.6109154929577465,
+          "normalizedWer": 0.6070175438596491,
+          "errors": 694,
+          "referenceUnits": 1136,
+          "rtf": 0.1694279716032056,
+          "medianSeconds": 41.6487839795,
+          "p95Seconds": 41.795541417,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 1.0669014084507042,
+          "normalizedWer": 1.0596491228070175,
+          "errors": 1212,
+          "referenceUnits": 1136,
+          "rtf": 0.2000404828736474,
+          "medianSeconds": 49.1739515,
+          "p95Seconds": 49.246614833,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.04929577464788732,
+          "normalizedWer": 0.03684210526315789,
+          "errors": 56,
+          "referenceUnits": 1136,
+          "rtf": 0.267673096327576,
+          "medianSeconds": 2.632353021,
+          "p95Seconds": 3.069711417,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.3877995642701525,
+          "normalizedWer": null,
+          "errors": 712,
+          "referenceUnits": 1836,
+          "rtf": 0.1128684751794056,
+          "medianSeconds": 33.343604937500004,
+          "p95Seconds": 33.464969708,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.2625272331154684,
+          "normalizedWer": null,
+          "errors": 482,
+          "referenceUnits": 1836,
+          "rtf": 0.17334702203642272,
+          "medianSeconds": 51.21017725,
+          "p95Seconds": 51.214208791,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.10130718954248366,
+          "normalizedWer": null,
+          "errors": 186,
+          "referenceUnits": 1836,
+          "rtf": 0.24745979024560913,
+          "medianSeconds": 2.985741729,
+          "p95Seconds": 3.355702042,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 3899162624,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "ggml-large-v3.bin",
+          "bytes": 3095033483,
+          "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+        }
+      ],
+      "casesSha256": "9a2f1c88e0b5bc1dbdaa7b2bb78f11bb5bfcc515435357128458afc9a23366ff",
+      "runnerSha256": "1a4b75ad38e3e168c4cd114d69f9a2bb609f749e4c89d83353db90331cddd470",
+      "failure": null
+    },
+    {
+      "name": "whisper-turbo-q5-metal",
+      "failure": "runner exit -11; incomplete output",
+      "groups": [],
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-large-v3-turbo-q5",
+          "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
+        },
+        "device": "Metal",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "runnerSha256": "ca1d4dec43780b4b69e1000e49b2f91c6b1a06efed5997769a80f6f0cb2fba69",
+      "casesSha256": "59020bce684223798279bfca55b5ec2346e6c48cf8e363d528d048edbeacfec6",
+      "peakRssBytes": 782860288
+    },
+    {
+      "name": "whisper-turbo-q5-metal-fixed",
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-large-v3-turbo-q5",
+          "revision": "5359861c739e955e79d9a303bcbc70fb988958b1"
+        },
+        "device": "Metal",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "cases": 5,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.23157894736842105,
+          "normalizedWer": 0.15,
+          "errors": 44,
+          "referenceUnits": 190,
+          "rtf": 0.1757149688254224,
+          "medianSeconds": 1.309231938,
+          "p95Seconds": 1.391494958,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.5950704225352113,
+          "normalizedWer": 0.5859649122807018,
+          "errors": 676,
+          "referenceUnits": 1136,
+          "rtf": 0.08136184445325849,
+          "medianSeconds": 20.0003686035,
+          "p95Seconds": 20.030976666,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.897887323943662,
+          "normalizedWer": 0.8912280701754386,
+          "errors": 1020,
+          "referenceUnits": 1136,
+          "rtf": 0.08855982070213979,
+          "medianSeconds": 21.769775125000002,
+          "p95Seconds": 21.791578458,
+          "truncated": 0
+        },
+        {
+          "language": "en",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "WER",
+          "errorRate": 0.06338028169014084,
+          "normalizedWer": 0.05263157894736842,
+          "errors": 72,
+          "referenceUnits": 1136,
+          "rtf": 0.13402161481881297,
+          "medianSeconds": 1.3137873745,
+          "p95Seconds": 1.376754292,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-clean",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.1514161220043573,
+          "normalizedWer": null,
+          "errors": 278,
+          "referenceUnits": 1836,
+          "rtf": 0.0695580303043125,
+          "medianSeconds": 20.5488333125,
+          "p95Seconds": 20.55481575,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "composed-noise20db",
+          "cases": 1,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.15359477124183007,
+          "normalizedWer": null,
+          "errors": 282,
+          "referenceUnits": 1836,
+          "rtf": 0.06547919247850517,
+          "medianSeconds": 19.343863042,
+          "p95Seconds": 19.350850834,
+          "truncated": 0
+        },
+        {
+          "language": "zh",
+          "scenario": "native",
+          "cases": 24,
+          "repeats": 2,
+          "failures": 0,
+          "metric": "CER",
+          "errorRate": 0.11002178649237472,
+          "normalizedWer": null,
+          "errors": 202,
+          "referenceUnits": 1836,
+          "rtf": 0.1146017801850815,
+          "medianSeconds": 1.3708851874999999,
+          "p95Seconds": 1.419872708,
+          "truncated": 0
+        }
+      ],
+      "peakRssBytes": 1004896256,
+      "initialSessionLoadSeconds": null,
+      "modelLoading": "per-call",
+      "runtimeDevice": "not-instrumented",
+      "runtimeThreads": 4,
+      "modelArtifacts": [
+        {
+          "filename": "ggml-large-v3-turbo-q5_0.bin",
+          "bytes": 574041195,
+          "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
+        }
+      ],
+      "casesSha256": "9a2f1c88e0b5bc1dbdaa7b2bb78f11bb5bfcc515435357128458afc9a23366ff",
+      "runnerSha256": "1a4b75ad38e3e168c4cd114d69f9a2bb609f749e4c89d83353db90331cddd470",
+      "failure": null
+    }
+  ],
+  "caseResultsPath": "report-details/quality/comparison-details.json",
+  "caseResultsSha256": "8cb8522cec3ea4983e2747c7a6f1d871bf15e60cad670e4ec387239e464346be"
+}

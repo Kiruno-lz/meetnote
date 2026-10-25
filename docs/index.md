@@ -19,6 +19,8 @@
 - [GPUI UI 计划](plan/ui-plan.md)：现有 UI、zui 技术栈与玻璃视觉系统、已知缺陷和分阶段实施。
 - [Assistant 构建计划](plan/assistant-plan.md)：Workspace、Audio、Settings 的 capability、Host 真实回应、MoonBit 插件与 Codex 经 Host 完成任务。
 - [渐进式 Benchmark 计划](plan/audio-quality-plan.md)：固定测试音频/gold、原子能力到 Agent 的自动门禁与模型比较报告。
+- [本机模型比较](quality/model-comparison.md)：固定参考的 ASR 精度、速度、资源与失败汇总。
+- [转录质量与后端选型](reserch/asr-quality-and-runtime-evaluation.md)：模型、FFI、推理窗口与执行载体的实测依据。
 
 ## 研究依据
 
