@@ -54,6 +54,7 @@ block = { path = "third_party/block" }
 # speakrs 0.5 keeps its inference-artifact layout private. This exact-version
 # vendor patch adds one validated constructor so MeetNote can reuse the library's
 # own recording-wide AHC/PLDA/VBx post-inference stage for bounded audio windows.
+# CPU embedding sessions also use measured, bounded intra-op parallelism.
 speakrs = { path = "third_party/speakrs" }
 
 [patch."https://github.com/zeronsh/zui"]

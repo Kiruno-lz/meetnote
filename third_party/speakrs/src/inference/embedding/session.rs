@@ -19,9 +19,18 @@ impl EmbeddingModel {
         mode: ExecutionMode,
         cuda_graph: bool,
     ) -> Result<Session, ort::Error> {
+        // CPU embedding dominates the native pipeline on the measured bundle.
+        // Bound parallelism per session; accelerator sessions retain one host thread.
+        let threads = if matches!(mode, ExecutionMode::Cpu) {
+            std::thread::available_parallelism()
+                .map(|count| count.get().min(4))
+                .unwrap_or(1)
+        } else {
+            1
+        };
         let builder = Session::builder()?
             .with_independent_thread_pool()?
-            .with_intra_threads(1)?
+            .with_intra_threads(threads)?
             .with_inter_threads(1)?
             .with_memory_pattern(true)?;
         let mut builder =
