@@ -134,6 +134,11 @@ impl AsrWindowSession for SherpaWindowSession {
         if context.is_cancelled() {
             return Err(cancelled_error());
         }
+        // A digitally silent owned core has no speech, even when its context does.
+        // Do not use an energy threshold: quiet nonzero audio must reach the model.
+        if !core_has_signal(&window)? {
+            return Ok(());
+        }
         let plan = inference_plan(&self.request.model);
         if uses_bounded_inference(&self.request.model)
             && window.samples.len() as u64 > plan.core_samples + 2 * plan.context_samples
@@ -255,6 +260,12 @@ impl AsrWindowSession for SherpaWindowSession {
             previous = Some(window);
         }
         segments.sort_by_key(|segment| (segment.start_ms, segment.end_ms));
+        if segments.is_empty() {
+            return Err(BackendError {
+                code: BackendErrorCode::OutputValidationFailed,
+                message: "sherpa-onnx returned an empty recognition result".into(),
+            });
+        }
         for (index, segment) in segments.iter_mut().enumerate() {
             segment.id = format!("sherpa-onnx-segment-{index}");
         }
@@ -286,6 +297,27 @@ fn model_family(model: &ModelRef) -> ModelFamily {
     } else {
         ModelFamily::Unsupported
     }
+}
+
+fn core_has_signal(window: &AudioWindow) -> Result<bool, BackendError> {
+    let core = window
+        .valid_core_start_sample
+        .checked_sub(window.global_start_sample)
+        .zip(
+            window
+                .valid_core_end_sample
+                .checked_sub(window.global_start_sample),
+        )
+        .and_then(|(start, end)| {
+            window
+                .samples
+                .get(usize::try_from(start).ok()?..usize::try_from(end).ok()?)
+        })
+        .ok_or_else(|| BackendError {
+            code: BackendErrorCode::InvalidAudio,
+            message: "ASR window valid core falls outside its samples".into(),
+        })?;
+    Ok(core.iter().any(|sample| *sample != 0.))
 }
 
 fn uses_bounded_inference(model: &ModelRef) -> bool {
@@ -1064,6 +1096,29 @@ mod tests {
             assert_eq!(actual.len(), 1);
             assert_eq!(actual[0].text, expected);
         }
+    }
+
+    #[test]
+    fn digital_silence_uses_the_owned_core_and_preserves_quiet_signal() {
+        let mut window = AudioWindow {
+            sequence: 0,
+            sample_rate: 16000,
+            samples: vec![1., 0., -0., 1.].into(),
+            global_start_sample: 0,
+            global_end_sample: 4,
+            valid_core_start_sample: 1,
+            valid_core_end_sample: 3,
+            source_total_samples: Some(4),
+            is_final: false,
+        };
+        assert!(!core_has_signal(&window).unwrap());
+        window.samples = vec![1., f32::MIN_POSITIVE, 0., 1.].into();
+        assert!(core_has_signal(&window).unwrap());
+        window.valid_core_end_sample = 5;
+        assert_eq!(
+            core_has_signal(&window).unwrap_err().code,
+            BackendErrorCode::InvalidAudio
+        );
     }
 
     #[test]
