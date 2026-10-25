@@ -174,6 +174,107 @@ class BenchmarkIntegrityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "checksum"):
                 load_run(run)
 
+    def launch_waiting_runner(self, root, timeout=60):
+        run = self.make_run(root, repeats=1)
+        fake = root / "waiting.py"
+        fake.write_text(
+            "import json,os,subprocess,sys,time\nfrom pathlib import Path\n"
+            'child=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"])\n'
+            'Path(sys.argv[3]).write_text("{partial")\n'
+            'ready=Path(sys.argv[3]).with_suffix(".pids.part")\n'
+            "ready.write_text(json.dumps([os.getpid(),child.pid]))\n"
+            'ready.replace(ready.with_suffix(""))\n'
+            "time.sleep(60)\n"
+        )
+        with (root / "wrapper.log").open("w") as log:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "asr_benchmark.py"),
+                    "--cases",
+                    str(run / "cases.json"),
+                    "--config",
+                    str(run / "config.json"),
+                    "--runner",
+                    str(fake),
+                    "--output",
+                    str(run),
+                    "--timeout",
+                    str(timeout),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=log,
+                start_new_session=True,
+            )
+        pids_path = run / "prediction.pids"
+        deadline = time.monotonic() + 10
+        while not pids_path.exists() and time.monotonic() < deadline and process.poll() is None:
+            time.sleep(0.02)
+        self.assertTrue(pids_path.exists(), "runner did not start")
+        return run, process, json.loads(pids_path.read_text())
+
+    def cleanup(self, process, pids):
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+            process.wait(timeout=10)
+        try:
+            os.killpg(pids[0], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        for pid in pids:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+    def test_timeout_reaps_workers_and_records_partial_output_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run, process, pids = self.launch_waiting_runner(Path(tmp), timeout=1)
+            try:
+                self.assertEqual(process.wait(timeout=10), 1)
+                self.assertEqual(
+                    json.loads((run / "report.json").read_text())["failure"], "timeout"
+                )
+                for pid in pids:
+                    state = subprocess.run(
+                        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+                    ).stdout.strip()
+                    self.assertTrue(not state or state.startswith("Z"))
+            finally:
+                self.cleanup(process, pids)
+
+    def test_previous_success_is_invalidated_before_runner_starts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run, process, pids = self.launch_waiting_runner(Path(tmp))
+            try:
+                self.assertFalse((run / "report.json").exists())
+            finally:
+                self.cleanup(process, pids)
+
+    def test_interrupt_and_termination_reap_the_runner_process_group(self):
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=sig), tempfile.TemporaryDirectory() as tmp:
+                run, process, pids = self.launch_waiting_runner(Path(tmp))
+                try:
+                    process.send_signal(sig)
+                    self.assertNotEqual(process.wait(timeout=10), 0)
+                    for pid in pids:
+                        # A reparented zombie is terminated, not a live resource leak.
+                        state = subprocess.run(
+                            ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+                        ).stdout.strip()
+                        self.assertTrue(
+                            not state or state.startswith("Z"),
+                            f"child {pid} remains alive: {state}",
+                        )
+                    self.assertTrue(
+                        (run / "report.json").exists(), (Path(tmp) / "wrapper.log").read_text()
+                    )
+                    self.assertEqual(
+                        json.loads((run / "report.json").read_text())["failure"], "cancelled"
+                    )
+                finally:
+                    self.cleanup(process, pids)
 
 
 if __name__ == "__main__":

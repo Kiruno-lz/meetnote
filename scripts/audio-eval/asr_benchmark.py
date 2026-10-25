@@ -98,6 +98,21 @@ def load_benchmark_run(path: Path, report: dict | None = None) -> tuple[dict, li
     return report, cases, rows
 
 
+def stop_process_group(process: subprocess.Popen) -> None:
+    # Benchmark output is disposable and has no shutdown protocol. Kill the
+    # entire isolated group before reaping its leader, including native workers
+    # that ignore SIGTERM. Do not race a second signal against reparented zombies.
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+
+
+def interrupted(_signum, _frame):
+    raise KeyboardInterrupt
+
+
 def validate_cases(cases: list[dict]) -> None:
     seen = set()
     for case in cases:
@@ -210,23 +225,38 @@ def main() -> None:
     started = time.monotonic()
     exit_code = None
     failure = None
-    with (args.output / "stderr.log").open("w") as log:
-        try:
-            process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True)
-            exit_code = process.wait(timeout=args.timeout)
-        except subprocess.TimeoutExpired:
-            failure = "timeout"
-            os.killpg(process.pid, signal.SIGTERM)
+    process = None
+    previous_term = signal.signal(signal.SIGTERM, interrupted)
+    try:
+        with (args.output / "stderr.log").open("w") as log:
             try:
-                process.wait(timeout=5)
+                process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True)
+                exit_code = process.wait(timeout=args.timeout)
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-    rows = (
-        [json.loads(line) for line in prediction.read_text().splitlines()]
-        if prediction.exists()
-        else []
-    )
+                failure = "timeout"
+            except KeyboardInterrupt:
+                failure = "cancelled"
+            except OSError as error:
+                failure = f"runner launch failed: {error}"
+    finally:
+        previous_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        try:
+            if process is not None:
+                stop_process_group(process)
+                exit_code = process.returncode
+        finally:
+            signal.signal(signal.SIGINT, previous_int)
+            signal.signal(signal.SIGTERM, previous_term)
+    try:
+        rows = (
+            [json.loads(line) for line in prediction.read_text().splitlines()]
+            if prediction.exists()
+            else []
+        )
+    except (OSError, ValueError) as error:
+        rows = []
+        failure = failure or f"invalid prediction output: {error}"
     expected_repeats = config.get("repeats", 1)
     if exit_code != 0 or len(rows) != len(cases) * expected_repeats:
         failure = failure or f"runner exit {exit_code}; incomplete output"
@@ -277,7 +307,7 @@ def main() -> None:
         flush=True,
     )
     if failure:
-        raise SystemExit(1)
+        raise SystemExit(130 if failure == "cancelled" else 1)
 
 
 if __name__ == "__main__":
