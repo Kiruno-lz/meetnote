@@ -23,6 +23,7 @@ mod run;
 mod session;
 mod tail;
 mod tensor;
+mod threading;
 
 #[cfg(feature = "coreml")]
 use chunk::ChunkSessionSpec;
