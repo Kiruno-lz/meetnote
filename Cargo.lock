@@ -1536,7 +1536,11 @@ version = "0.1.0"
 dependencies = [
  "application",
  "contracts",
+ "diarization-native",
+ "diarization-sherpa-onnx",
+ "futures",
  "runtime",
+ "serde_json",
 ]
 
 [[package]]
