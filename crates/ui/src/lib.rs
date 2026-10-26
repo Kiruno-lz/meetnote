@@ -1798,10 +1798,22 @@ mod tests {
             if view.read_with(cx, |root, _| done(root)) {
                 return;
             }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the UI state did not settle within 20 seconds"
-            );
+            if std::time::Instant::now() >= deadline {
+                let state = view.read_with(cx, |root, _| {
+                    format!(
+                        "route={:?} mode={:?} selected={:?} shown={:?} loading={:?} read_errors={:?} projects_loaded={} audio_pending={}",
+                        root.ui.route,
+                        root.ui.content_mode,
+                        root.ui.selected_project,
+                        root.editor.shown(),
+                        root.editor.loading,
+                        root.editor.read_errors.keys().collect::<Vec<_>>(),
+                        root.projects_loaded,
+                        root.audio.pending(),
+                    )
+                });
+                panic!("the UI state did not settle within 20 seconds: {state}");
+            }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
