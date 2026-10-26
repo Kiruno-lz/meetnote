@@ -65,17 +65,40 @@ pub fn run_windowed_pipeline(
     diarization_context: JobContext,
     config: LongAudioConfig,
 ) -> crate::BackendFuture<PipelineResult> {
-    Box::pin(runtime::spawn_blocking(move || {
-        run_windowed_pipeline_sync(
-            asr_backend,
-            diarization_backend,
-            asr_request,
-            diarization_request,
-            asr_context,
-            diarization_context,
-            config,
-        )
-    }))
+    let scheduling_context = asr_context.clone();
+    Box::pin(async move {
+        // The recording is one admitted unit: its scoped ASR/DIA workers must
+        // not acquire nested permits, which would deadlock a single-slot runtime.
+        asr_context
+            .cancellation_token()
+            .link(&diarization_context.cancellation_token());
+        scheduling_context
+            .spawn_blocking_cancellable(move || {
+                run_windowed_pipeline_sync(
+                    asr_backend,
+                    diarization_backend,
+                    asr_request,
+                    diarization_request,
+                    asr_context,
+                    diarization_context,
+                    config,
+                )
+            })
+            .await
+            .map_err(|_| {
+                if scheduling_context.is_cancelled() {
+                    BackendError {
+                        code: BackendErrorCode::Cancelled,
+                        message: "windowed audio processing was cancelled".into(),
+                    }
+                } else {
+                    BackendError {
+                        code: BackendErrorCode::InferenceFailed,
+                        message: "windowed audio worker exited without a result".into(),
+                    }
+                }
+            })?
+    })
 }
 
 fn run_windowed_pipeline_sync(
@@ -305,6 +328,8 @@ mod tests {
 
     struct FakeWindowAsr {
         seen: SeenWindows,
+        created: Option<std::sync::mpsc::Sender<()>>,
+        panic_on_create: bool,
     }
 
     struct FakeAsrSession {
@@ -333,6 +358,10 @@ mod tests {
             &self,
             request: AsrRequest,
         ) -> Result<Box<dyn AsrWindowSession>, BackendError> {
+            if let Some(created) = &self.created {
+                let _ = created.send(());
+            }
+            assert!(!self.panic_on_create, "injected session creation panic");
             Ok(Box::new(FakeAsrSession {
                 seen: self.seen.clone(),
                 request,
@@ -483,6 +512,8 @@ mod tests {
         let result = futures::executor::block_on(run_windowed_pipeline(
             Arc::new(FakeWindowAsr {
                 seen: asr_seen.clone(),
+                created: None,
+                panic_on_create: false,
             }),
             Arc::new(FakeWindowDiarization {
                 seen: diarization_seen.clone(),
@@ -535,6 +566,131 @@ mod tests {
         assert_eq!(result.windowing.unwrap().window_count, 3);
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(library_path).unwrap();
+    }
+
+    #[test]
+    fn windowed_pipeline_obeys_its_runtime_gate_without_nested_permits() {
+        check_windowed_admission(None, false);
+    }
+
+    #[test]
+    fn queued_windowed_asr_cancellation_does_not_load_models() {
+        check_windowed_admission(Some(true), false);
+    }
+
+    #[test]
+    fn queued_windowed_diarization_cancellation_does_not_load_models() {
+        check_windowed_admission(Some(false), false);
+    }
+
+    #[test]
+    fn windowed_session_creation_panic_is_failure_not_cancellation() {
+        check_windowed_admission(None, true);
+    }
+
+    fn check_windowed_admission(cancel_asr: Option<bool>, panic_on_create: bool) {
+        use std::sync::mpsc::channel;
+        use std::time::Duration;
+
+        let path = write_wav(4_000);
+        let runtime = JobRuntime::with_max_concurrency(1);
+        let (blocker, _) = runtime.create_job();
+        let (occupied_tx, occupied_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let blocker_thread = std::thread::spawn(move || {
+            futures::executor::block_on(blocker.spawn_blocking(move || {
+                occupied_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            }));
+        });
+        occupied_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let (asr_context, _) = runtime.create_job();
+        let (diarization_context, _) = runtime.create_job();
+        let cancelled_context = cancel_asr.map(|asr| {
+            if asr {
+                asr_context.clone()
+            } else {
+                diarization_context.clone()
+            }
+        });
+        let (created_tx, created_rx) = channel();
+        let model = ModelRef {
+            backend_id: "fake".into(),
+            model_id: "fake".into(),
+            revision: None,
+            artifact_path: "fake".into(),
+            artifacts: Vec::new(),
+        };
+        let pipeline = run_windowed_pipeline(
+            Arc::new(FakeWindowAsr {
+                seen: Default::default(),
+                created: Some(created_tx),
+                panic_on_create,
+            }),
+            Arc::new(FakeWindowDiarization {
+                seen: Default::default(),
+            }),
+            AsrRequest {
+                audio_path: path.display().to_string(),
+                model: model.clone(),
+                language: Some("en".into()),
+                device: ComputeDevice::Cpu,
+            },
+            DiarizationRequest {
+                audio_path: path.display().to_string(),
+                model,
+                expected_speakers: None,
+                device: ComputeDevice::Cpu,
+                speaker_library_path: None,
+                stage_configuration: Default::default(),
+            },
+            asr_context,
+            diarization_context,
+            LongAudioConfig {
+                activation_samples: 0,
+                decode_chunk_samples: 333,
+                window_plan: AudioWindowPlan::new(1_600, 400).unwrap(),
+            },
+        );
+        let (completed_tx, completed_rx) = channel();
+        let pipeline_thread = std::thread::spawn(move || {
+            let _ = completed_tx.send(futures::executor::block_on(pipeline));
+        });
+        let loaded_while_occupied = created_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+        let cancelled_while_queued = cancelled_context.map(|context| {
+            context.cancel();
+            completed_rx.recv_timeout(Duration::from_secs(2))
+        });
+        // Release and join before asserting so a failing regression cannot strand workers.
+        release_tx.send(()).unwrap();
+        blocker_thread.join().unwrap();
+        let result = match cancelled_while_queued {
+            Some(result) => result.expect("queued cancellation must finish before permit release"),
+            None => completed_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        };
+        pipeline_thread.join().unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            !loaded_while_occupied,
+            "pipeline bypassed its runtime worker gate"
+        );
+        if cancel_asr.is_some() {
+            assert_eq!(result.err().unwrap().code, BackendErrorCode::Cancelled);
+            assert!(
+                created_rx.try_recv().is_err(),
+                "cancelled queue loaded a model"
+            );
+        } else if panic_on_create {
+            assert_eq!(
+                result.err().unwrap().code,
+                BackendErrorCode::InferenceFailed
+            );
+            assert!(created_rx.try_recv().is_ok());
+        } else {
+            assert_eq!(result.unwrap().windowing.unwrap().window_count, 3);
+            assert!(created_rx.try_recv().is_ok());
+        }
     }
 
     fn speaker_observation() -> SpeakerEmbeddingObservation {
