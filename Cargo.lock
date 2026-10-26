@@ -1556,6 +1556,7 @@ dependencies = [
  "hound",
  "kodama",
  "ndarray",
+ "ort",
  "runtime",
  "serde",
  "speakrs",

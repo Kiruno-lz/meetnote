@@ -21,7 +21,9 @@ impl<'a> SegmentationWindows<'a> {
             offset += step_samples;
         }
 
-        let padded = if offset < audio.len() && audio.len() > window_samples {
+        // Nonempty audio without a full window must still reach the model.
+        let padded = if offset < audio.len() && (offsets.is_empty() || audio.len() > window_samples)
+        {
             let mut padded = vec![0.0f32; window_samples];
             let remaining = audio.len() - offset;
             padded[..remaining].copy_from_slice(&audio[offset..]);

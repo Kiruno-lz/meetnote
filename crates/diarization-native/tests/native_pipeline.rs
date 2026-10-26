@@ -12,6 +12,8 @@ fn real_model_produces_valid_segments_and_observations() {
         .expect("MEETNOTE_DIARIZATION_MODEL_DIR is required");
     let audio_path = std::env::var("MEETNOTE_DIARIZATION_AUDIO")
         .expect("MEETNOTE_DIARIZATION_AUDIO is required");
+    let decoded = audio::read_audio_mono_16k(&audio_path).expect("decode reference audio");
+    let audio_end_ms = decoded.samples.len() as u64 * 1_000 / 16_000;
     let backend = NativeDiarizationBackend::default();
     let model = ModelRef {
         backend_id: "diarization-native".into(),
@@ -77,9 +79,11 @@ fn real_model_produces_valid_segments_and_observations() {
         .result
         .segments
         .iter()
-        .all(|segment| segment.end_ms > segment.start_ms));
+        .all(|segment| segment.end_ms > segment.start_ms && segment.end_ms <= audio_end_ms));
     assert!(output
         .observations
         .iter()
-        .all(|observation| observation.vector.len() == 256));
+        .all(|observation| observation.vector.len() == 256
+            && observation.end_ms > observation.start_ms
+            && observation.end_ms <= audio_end_ms));
 }
