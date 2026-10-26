@@ -203,6 +203,15 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 验证时另修复 UI 模型夹具的相对共享 `models` 路径：从仓库根启动会读取真实安装，使四项引导测试失败。每个夹具改用独立绝对临时路径，路径/缺失状态回归先红后绿，四项原失败测试通过。首次完整并发回归另外出现两项 UI 失败及占满共享 worker 的测试停滞；两项各按 0–31 种子重跑及最终完整回归通过，未将停滞归因于 AHC，也不声称路径隔离已经修复它。共享资源干扰已按下节受控验证；历史失败的唯一根因没有据此全部闭合。
 
 
+
+### vector centroid 的内存候选试接
+
+当前 AHC 的距离数组仍为二次规模。核对 [fastcluster 固定源码](https://github.com/fastcluster/fastcluster/blob/efc82a184125494cbd639803b64a5c9a4e45c1b0/fastcluster.py)，`linkage_vector(method="centroid", metric="euclidean")` 直接处理完整向量，官方存储复杂度为 O(ND)；这与压缩 observation 或改成 single linkage 是不同方案。
+
+仅在 uv 隔离评测环境固定 fastcluster 1.3.0、SciPy 1.18.1、NumPy 2.5.4，未改产品依赖。seed 86739 生成 N=3/8/32/64、D=2/8/32 的归一化向量，转为 f32 再回到相同 f64 输入；每组四棵树，在 0.2/0.6/1.0/1.6 上按 distance 规则和标签置换比较，共 48 棵树、192 次分组零差异，最大合并高度差约 8.88e-16。此试接只核对 API 与标准语义，没有测内存/耗时，也不证明 native f32 或模型 DER 一致，见[候选回执](../quality/centroid-vector-trial.json)。
+
+//TODO - 先以固定向量与 dtype 对照 Rust/C++ 所有权、异常及取消边界，再测 N=1,000/10,000 的进程峰值 RSS、wall 与合并差异；真实保留集 DER 不退化后才评估原生接入。省去距离数组仍不解决 session 保留全部 window artifact 的内存，不能据此宣布小时级资源通过。产品继续使用当前 native 链路。复现核心为 `linkage_vector(X, method="centroid", metric="euclidean")` 对照 SciPy `linkage`，再用同一个 `fcluster(..., criterion="distance")` 比较按首次出现重编号的完整标签；无临时代码留在项目。
+
 ### UI 回归的共享 worker 隔离
 
 全并行用例共用进程级 IO pool。队列搜索回归为验证取消后释放捕获引用，会占满所有 slot；只让“主动阻塞”的用例持有互斥锁，不能保护未拿锁的普通 UI IO。受控复现先确认全部 slot 已启动，再提交独立 heartbeat：200 ms 内不能完成，释放 slot 后完成并 join，隔离要求显式失败。这个机制能够造成跨测试干扰，不将它当作每一次历史超时的唯一根因。
