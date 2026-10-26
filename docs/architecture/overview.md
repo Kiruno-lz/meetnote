@@ -71,6 +71,8 @@ Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事
 | `crates/runtime` | JobRuntime、任务状态、进度、取消和 worker gate |
 | `crates/settings` | 设置、选择和本地配置持久化 |
 
+全局 `runtime::spawn_blocking` 承载匿名后台读取，复用共享 worker gate；其 context 由 future/worker 持有，不向私有 registry 累积任务历史，未轮询即丢弃、正常完成和 worker panic 都不会留下注册记录。显式 `JobRuntime::create_job` 仍保留可查询的任务状态，按调用方生命周期移除。
+
 ## 数据与依赖
 
 ```text
