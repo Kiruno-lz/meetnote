@@ -238,7 +238,8 @@
       "nativeShortAudioSeconds": 8.67,
       "nativeTestResult": "failed: zero segments and observations on known speech",
       "nativeShortLogSha256": "760993c3c6651546fd4e5bbcd73da798390f2e825e0470c2a75caa4170a83c97",
-      "status": "separate inference issue to compare against frozen runner; not hidden by the passing 180-second smoke"
+      "status": "resolved: short-input window omission and no-speaker handling validated separately",
+      "resolutionReceipt": "short-diarization-validation.json"
     },
     "scope": "queued cancellation and admitted real loading only; not DER, cancellation latency during native inference, long-audio resources or speaker-count hint acceptance"
   }

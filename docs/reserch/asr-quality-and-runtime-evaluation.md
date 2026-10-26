@@ -234,7 +234,27 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 整文件 native/Sherpa diarization 同样存在不可取消的准入，两个 adapter 各由真实 executor 首次轮询至 Pending 后取消，旧实现均等到 blocker 释放才返回，红线成立。现共用同一 helper，取消直接唤醒 executor，不依赖手动重轮询；window session 路径保持独立，不嵌套申请。完整工作区 943 项主 harness 与 3 项已有子 harness 通过，另有父测试显式执行的 UI child；原生 180 秒加载 smoke 与 Sherpa 8.67 秒共享身份 smoke 分别通过，后者两次真实分离，只证明加载/非空输出及该样本身份关联。
 
-本轮首次尝试 native 8.67 秒已知语音样本时，实际返回零 segment/observation，非空输出断言失败；没有删除这条失败，也不把较长样本通过当作短音频通过。下一轮以固定旧 executable 和 segmentation 窗口规划验证是否遗漏短于 10 秒的输入。两者的输入/model hash、执行范围和回归结果纳入同一[worker 回执](../quality/worker-admission-evaluation.json)。
+本轮首次尝试 native 8.67 秒已知语音样本时，实际返回零 segment/observation，非空输出断言失败；没有删除这条失败，也不把较长样本通过当作短音频通过。固定旧 executable 对照和补窗修复见下节。两者的输入/model hash、执行范围和回归结果纳入同一[worker 回执](../quality/worker-admission-evaluation.json)。
+
+
+### native 短录音覆盖与源边界
+
+固定旧 runner 对五段 AMI 语音各执行两轮，4.63/5.14/6.19/8.67 秒样本均没有 segment/observation。根因是 segmentation 收集器只对长于模型窗口的音频补尾窗，小于 10 秒的非空输入得到零窗口。对照 [pyannote 的短输入规则](https://github.com/pyannote/pyannote-audio/blob/623ab14d69a039b474fc1fb2551b657aa00c0ce4/src/pyannote/audio/core/inference.py)，复用已有零填充路径，使这种输入恰有一个窗口；空输入仍无窗口，较长输入调度不变，未新增 provider、模型或阈值。实际私有 planner 的短/空/完整/长尾 4 项和原 tensor 2 项测试通过；锁定的 ort 仅新增 test 依赖边，无新增 package。
+
+12.66 秒对照还暴露旧终点 12.974 秒。真实源范围断言先红后绿，按源长度裁剪时间段、移除纯填充区间，保留 ID/置信度并按实际标签计数。原始“较长对照逐段完全相同”门因此明确未通过并被替换：保留原始无效输出，不为它评分；候选须与显式源范围投影等价，embedding 不变。修订发生在候选比较前，初始/修订协议 SHA 均保留，没有按候选 DER 调整参考或阈值。
+
+第一版补窗后，预先冻结的静音门发现两次 panic：speakrs 合法无语音结果有 embedding tensor，但簇矩阵为 0×0，adapter 仍按 tensor 索引。独立 review 将同一红线扩到 window session，再复用显式空状态/形状校验；两入口实际静音测试通过，异常非空形状报告错误。未添加音量门绕过模型。失败 runner、原始预测及 SHA 保留，最终 release 重新跑完整矩阵。
+
+| 训练裁剪时长 | 旧零 collar DER | 修复后 DER | 修复后单次中位耗时 |
+|---:|---:|---:|---:|
+| 6.19 秒 | 100%（空输出） | 9.05% | 366.41 ms |
+| 4.63 秒 | 100%（空输出） | 2.84% | 362.94 ms |
+| 5.14 秒 | 100%（空输出） | 14.31% | 367.86 ms |
+| 8.67 秒 | 100%（空输出） | 1.81% | 369.84 ms |
+
+每项两轮相同；原生语音段和 embedding 均非空且在源范围内。12.66 秒候选为有效输出，DER 1.36%，时间段等于旧结果的显式源范围投影，向量逐值相同。8 秒已知全零音频两轮均成功返回零段/零 observation；180 秒对照时间段与向量等价，四项 DER 分量完全相同，主 DER 仍为 27.98%。这些是单一训练会议的 word-activity 诊断，单人裁剪不证明重叠分离、跨录音身份或中文会议质量。计时含 backend 加载/解码/推理，不含外层 probe 或 ASR；旧短路径漏执行，不将其更短耗时作为提速目标。
+
+完整工作区 952 项主 harness 与 3 项已有子 harness 通过，另显式执行 UI child 与两个真实 native 测试入口。模型矩阵共 40 次 backend 调用，首版 2 次失败没有抹去；最终矩阵 14 次全部成功。小时级资源与二次 AHC 内存不在本门范围。完整配置、模型/输入/runner/参考 SHA、协议修订与执行范围见[短录音回执](../quality/short-diarization-validation.json)。
 
 ### 转写分段与时间定位：Unicode 接入和 VAD 试接
 
@@ -435,3 +455,7 @@ while let Some(segment) = vad.front() {
 #### 共享 worker 干扰的受控复现核心
 
 旧布局中，`OccupiedUiWorkers::new()` 逐 slot 等待 started 信号，直到当前进程全部 IO slot 被占用；另起 driver 提交普通 `runtime::spawn_blocking` heartbeat，等待 200 ms，先释放占用并 join driver，再断言 heartbeat 必须提前完成，得到红线。永久隔离测试在 child 执行同一占用和完整搜索断言，stdout 发布 `UI_WORKERS_HELD`，stdin 等待父进程释放；父进程实际执行独立 IO，校验 5 秒内完成，再关闭 stdin。child 正常退出和完成标记均必须存在。临时同进程探针已删除，保留探针 SHA 和永久父/子实现。
+
+#### 短录音覆盖实验核心
+
+用已有 `diarization_benchmark` 永久入口、CPU 六线程、自动人数、无 Library，每文件两轮；固定旧 executable 和模型 artifact hash，先记录五段原 AMI WAV 与全零 8 秒 WAV，再测试候选。以既有 `prepare_ami_diarization.py` 按 `ami-cases.json.startSample / 16` 投影固定 RTTM/UEM，逐块验证 crop 是原 Mix-Headset 的精确 PCM。零/500 ms 完整 collar 均由既有独立评分器处理；无效旧时间段明确无分数，未清洗后冒充基线。12.66 秒仅另做源范围投影等价性，180 秒直接使用原冻结对照。按报告 sourceCommit 区分初版/修复版 executable，先等待全部原始回执写完再评分。静音测试另以显式路径读取并验证所有样本为零，分别经过整文件与真实 window session。临时执行/汇总脚本删除，保留核心方法、源码 SHA 和忽略目录中的原始回执。
