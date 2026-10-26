@@ -5734,6 +5734,8 @@ dependencies = [
 name = "runtime"
 version = "0.1.0"
 dependencies = [
+ "async-lock",
+ "event-listener",
  "futures",
  "serde",
  "thiserror 2.0.20",
