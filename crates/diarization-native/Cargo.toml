@@ -22,3 +22,4 @@ uuid.workspace = true
 [dev-dependencies]
 futures.workspace = true
 hound.workspace = true
+kodama = "=0.3.0"
