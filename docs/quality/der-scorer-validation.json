@@ -6,7 +6,7 @@
   "source": "https://github.com/pyannote/pyannote-metrics/tree/4.0.0",
   "license": "MIT",
   "sourceDistributionSha256": "aec037eb7ca4c0ad5c5bbcc19bc04e9acf24ba42c95f025497378e31db6a0ff4",
-  "scorerSha256": "dd5a1e59c005f664de018e944b9f1aa3a7bd4d68686d7e6c38115c572190103d",
+  "scorerSha256": "5c9d82d039f1c185920dbec3d6d42f2891099ff986b6bee0225b1128b946385d",
   "requirementsSha256": "671a2d9527f6d72d27005a324078b14d1733a88350d3dfb36f9b920e6d84b31e",
   "environment": {
     "pyannote.metrics": "4.0.0",
@@ -152,14 +152,15 @@
     "cliRedFailures": 5,
     "snapshotHashRegression": "red then green",
     "missingInputRegression": "red then green",
-    "combinedPythonPassed": 64,
-    "basePythonPassed": 47,
+    "combinedPythonPassed": 65,
+    "basePythonPassed": 48,
     "basePythonSkipped": 17,
     "workspaceMainPassed": 927,
     "workspaceChildPassed": 3,
     "workspaceIgnoredNotRun": 11,
     "exportProtocolWithoutOptionalDer": "passed",
-    "exportProtocolWithOptionalDer": "passed"
+    "exportProtocolWithOptionalDer": "passed",
+    "directMeetingIdentityRegression": "red then green; reject a supplied prediction meetingId that differs from reference"
   },
   "acceptance": "scorer implementation verified; actual diarization model quality remains not assessed"
 }

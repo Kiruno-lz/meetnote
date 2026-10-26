@@ -50,7 +50,8 @@ misses. The report is `audio_metrics_partial` if any DER is unscored; no hand-bu
 DER fallback is used. The dependency file explicitly includes the undeclared
 `typing_extensions` import required by this release.
 
-The CLI rejects empty, duplicate, missing and unexpected meeting IDs, protects
+Direct scoring also rejects a supplied prediction meeting ID that differs from
+its reference. The CLI rejects empty, duplicate, missing and unexpected meeting IDs, protects
 input paths and hardlinks, hashes the exact input snapshots used for scoring, and
 publishes reports atomically. Failed reruns remove stale reports. Numerical
 regressions require the optional environment; the regular Rust export protocol

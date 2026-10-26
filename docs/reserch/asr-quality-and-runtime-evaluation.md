@@ -165,7 +165,7 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 先核对已有 MeetEval：其 DER wrapper 需要额外 Perl scorer，缺少时会从未固定 master URL 下载，不适合当前离线、可追溯入口。改用独立环境中锁定的 [pyannote.metrics 4.0.0](https://github.com/pyannote/pyannote-metrics/tree/4.0.0) / core 6.1.0，复用 Hungarian mapping 与标准时域评分，不实现另一套匹配算法。它的 full-duration collar 在参考边界两侧各排除一半，不能与原来的语音膨胀混称；同 speaker 重叠段先合并，其他 speaker 重叠保留。该版本遗漏声明 `typing_extensions` 导致首次真实导入失败，已在可选 requirements 中显式锁定，完整重测通过。
 
-独立 review 增补了参考/预测标签数量不同、重命名不变性、空预测、无参考语音、collar 排除全部参考、20 speaker、非法时间/精度范围，以及无依赖/无分离输出的未评分语义。评分命令另先复现并修复覆盖输入、重复/空/多余会议、旧成功报告残留和输入外部编辑时 hash 不对应；现按原始字节快照评分并原子发布，失败不保留旧成功回执。完整记录见[评分器回执](../quality/der-scorer-validation.json)。Rust export 在有/无可选依赖两种环境均明确验证，不将 unavailable 当作零。真实会议的 UEM、speaker gold、模型 DER 和 AHC 取舍仍未验收；旧手写 DER 不能作为模型质量证据。
+独立 review 增补了参考/预测标签数量不同、重命名不变性、空预测、无参考语音、collar 排除全部参考、20 speaker、非法时间/精度范围，以及无依赖/无分离输出的未评分语义。评分命令另先复现并修复覆盖输入、重复/空/多余会议、旧成功报告残留和输入外部编辑时 hash 不对应；现按原始字节快照评分并原子发布，失败不保留旧成功回执。函数入口对显式携带的 meetingId 同样核对，先复现跨会议预测被接受后再拒绝混配。完整记录见[评分器回执](../quality/der-scorer-validation.json)。Rust export 在有/无可选依赖两种环境均明确验证，不将 unavailable 当作零。真实会议的 UEM、speaker gold、模型 DER 和 AHC 取舍仍未验收；旧手写 DER 不能作为模型质量证据。
 
 ### 共享 worker 的排队资源
 
@@ -277,7 +277,7 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
 | `cargo test --workspace --locked` | 927 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
-| Python 评分/基线测试 | timing + DER 环境 64 passed；基础环境 47 passed、17 项可选 timing/DER 测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
+| Python 评分/基线测试 | timing + DER 环境 65 passed；基础环境 48 passed、17 项可选 timing/DER 测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
 | review 真实回归 | 当前 release 完成 12 组、128 次调用；五种 Whisper 配置各两次成功，四组 Paraformer 质量门与 96 次短路径逐段一致通过，SenseVoice 英文长输入两次成功；31 秒全零 ignored 回归已单独显式执行通过 |
 | CPU 分离对照 | 180 秒同一自然录音，baseline/candidate 各两次；35.233 秒中位耗时；宽区间与三种空转实验均保留，通过设备预算的性能/输出一致性门；不作为 DER |
