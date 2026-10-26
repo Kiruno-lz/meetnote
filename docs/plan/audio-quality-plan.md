@@ -10,13 +10,13 @@ Agent Host 是否正常只按 [Assistant 计划](assistant-plan.md)验收；本�
 
 ## 固定 Benchmark 集
 
-B1 已有固定 FLEURS revision、archive/audio SHA、官方参考文本、句子 ID 与构造配方的 manifest；AMI 固定 ES2002a 官方音频/词标注并保存裁剪来源。`prepare_fleurs.py`、`prepare_ami_asr.py` 自动生成并拒绝 checksum 不匹配。音频、模型和逐样本大产物留在忽略目录，汇总 receipt 可提交。
+B1 已有固定 FLEURS revision、archive/audio SHA、官方参考文本、句子 ID 与构造配方的 manifest；AMI 固定 ES2002a 官方音频/词标注并保存裁剪来源。`prepare_fleurs.py`、`prepare_ami_asr.py` 自动生成并拒绝 checksum 不匹配。AMI 当前五个裁剪保留 `wordTiming`：95 个官方词 ID、原文与相对 16 kHz sample 区间，来源标为 forced alignment、`manuallyVerified: false`；全部参考通过校验后才替换裁剪音频，跨边界或不可用词时间拒绝生成，不能将词间空隙当作已知静音，见[词时间参考回执](../quality/ami-word-reference.json)。音频、模型和逐样本大产物留在忽略目录，汇总 receipt 可提交。
 
 - //TODO - 扩展 manifest 的会议/speaker split、词/speaker gold 投影、适用任务与资源档位；现有 FLEURS 第二组仅句子 ID 分离，不能标为 speaker-disjoint holdout。
 - //TODO - 自动从 AMI、AliMeeting、AISHELL-4、CHiME-6 等已标注数据提取原生片段和构造片段；固定解码/重采样工具版本。拼接、插入静音、叠加与噪声变换同步变换词时间、speaker 身份、重叠区与有效评分区，边界跨词时自动调整到合法标注点，无法可靠投影的样本自动拒绝。
 - //TODO - 原生片段测真实分布；构造片段测精确边界/极端情况，分开统计。语义 gold 来自明确 topic 标注或预先选定的不同主题组合；不能将任意拼接点、静音或 speaker 切换自动当作语义 gold。
 - //TODO - 固定开发与留出集，按原始会议/speaker 隔离，构造变体沿用源 split；禁止同一素材的裁剪/拼接副本泄漏到另一 split。参考标注不足时标记 unsupported，不临时让用户补答案。
-- //TODO - 优先完成 AMI 音频与官方词级时间/speaker 标注的成对构造，再扩充其他场景；已有 AMI 手工文本 topic 评测不等于音频 benchmark 已就绪。
+- //TODO - 当前五个 AMI 非重叠裁剪已有词时间投影；补完整会议/重叠场景、speaker/UEM 投影与时间误差评分，核对强制对齐参考的可信度后再扩充其他场景；已有 AMI 手工文本 topic 评测不等于音频 benchmark 已就绪。
 
 | 维度 | 初始必备覆盖 |
 |---|---|
@@ -65,7 +65,7 @@ B3 的 `cargo run --release --locked -p domain --example alignment_benchmark -- 
 
 | 交付物 | 当前状态 | 下一步 |
 |---|---|---|
-| B0 素材/评分器 | FLEURS 中英文各 24 个原生句子、构造 clean/noise、后续 24 个中文句子；AMI 五个非重叠会话裁剪；固定 hash、版本与精确评分正反例 | 增加自然中文会议、远场与重叠 gold，按会议/speaker 隔离 |
+| B0 素材/评分器 | FLEURS 中英文各 24 个原生句子、构造 clean/noise、后续 24 个中文句子；AMI 五个非重叠会话裁剪及 95 个官方 forced-alignment 词时间投影；固定 hash、版本与精确评分正反例 | 增加自然中文会议、远场与重叠 gold，按会议/speaker 隔离 |
 | B1 模型比较 | Paraformer、SenseVoice、Whisper large/base/Turbo、Qwen MLX 已真实比较；CPU/Metal、线程与加载策略分别记录；Unicode 分段接入保留这组真实输出，Silero VAD 裁剪因英文/低音量退化拒绝默认集成，见[边界回执](../quality/asr-boundary-evaluation.json) | 扩大场景，添加可靠词时间参考与时间误差 |
 | B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门，计数与等价不替代 DER | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
 | B3 窗口/运行 | 已复现并修复 Whisper 回调、子词边界、设备回退与推理粒度问题；短路径和应用窗口分别核对；对齐区间索引通过构造 gold、128 组穷举对照及资源门，长音频接入所属 runtime 并发门 | 验证小时级资源、取消延迟、恢复和身份漂移；AHC 的二次内存仍需单独治理 |

@@ -1,0 +1,93 @@
+{
+  "schema": "meetnote.ami-word-reference.v1",
+  "date": "2026-10-26",
+  "sourceRevision": "c876e49",
+  "scope": "reference projection only; no model inference, timestamp score or quality acceptance",
+  "pythonVersion": "3.12.14",
+  "source": {
+    "audioUrl": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/ES2002a/audio/ES2002a.Mix-Headset.wav",
+    "audioSha256": "9c76866990fcc8b84006dc32d273ad99df439090b748ebe72103bb78c3216ee7",
+    "annotationUrl": "https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip",
+    "annotationsSha256": "b56e5babb2496b8795deeeda7e71178d7fbc9963f94276cf2a3f4b56ebbc9f9d",
+    "license": "CC-BY-4.0",
+    "transcriptionProcess": "https://groups.inf.ed.ac.uk/ami/corpus/transcription.shtml",
+    "timingOrigin": "official forced alignment",
+    "manuallyVerified": false
+  },
+  "generatorSha256": "7b262f937de8b3da2b26ca98348d7b55d1c24454d09e25e216d990563c13d37b",
+  "preparedManifestSha256": "209cc9e51913e150d5bd574fee62991b155db837c5c106861d1e4e5a17eeccf9",
+  "caseCount": 5,
+  "words": 95,
+  "audioSeconds": 37.29,
+  "sampleRateHz": 16000,
+  "preservedFromPreviousCases": [
+    "audio SHA-256",
+    "reference text",
+    "source word IDs",
+    "speaker ID",
+    "source sample crop offsets",
+    "duration"
+  ],
+  "independentCheck": "rational arithmetic from official XML decimal strings; nearest sample with half-even rounding",
+  "policies": {
+    "clippedWords": "reject before replacing any crop",
+    "invalidNonfiniteEmptyOrUnorderedTimes": "reject",
+    "subSampleDurationAfterRounding": "reject",
+    "wordOverlap": "preserve",
+    "gapsAreKnownSilence": false,
+    "timestampScore": "not_assessed",
+    "diarizationQuality": "not_assessed"
+  },
+  "cases": [
+    {
+      "id": "ami-ES2002a-0",
+      "audioSha256": "9ac2cae979b74b296f9d8d4d0b0e12e2111f9b54ed555c7ce8eb1a22ad627bab",
+      "words": 28,
+      "sourceSpeaker": "B",
+      "cropSamples": [
+        1427200,
+        1629760
+      ]
+    },
+    {
+      "id": "ami-ES2002a-1",
+      "audioSha256": "42e7f1e398c332f0570f27fd79a376827cacf68adb9b00b12e19c8d35976fd4a",
+      "words": 22,
+      "sourceSpeaker": "C",
+      "cropSamples": [
+        4286400,
+        4385440
+      ]
+    },
+    {
+      "id": "ami-ES2002a-2",
+      "audioSha256": "7e3a8f07ba2a075e074eb09987181fc66c473b818e81eb1a86ba0b1b03d36eb0",
+      "words": 12,
+      "sourceSpeaker": "B",
+      "cropSamples": [
+        5477120,
+        5551200
+      ]
+    },
+    {
+      "id": "ami-ES2002a-3",
+      "audioSha256": "46c5981f66ad62e7e66dc5da0e7f438e957c6e603a71f24a822c87ec8e270348",
+      "words": 8,
+      "sourceSpeaker": "D",
+      "cropSamples": [
+        7984960,
+        8067200
+      ]
+    },
+    {
+      "id": "ami-ES2002a-4",
+      "audioSha256": "5ab60058843644c12f757a0a0d333b7141714efdb89e72bf325b385fdd0f816a",
+      "words": 25,
+      "sourceSpeaker": "A",
+      "cropSamples": [
+        9146240,
+        9284960
+      ]
+    }
+  ]
+}
