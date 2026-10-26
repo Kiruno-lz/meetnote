@@ -126,6 +126,158 @@ fn workspace_search_shows_saved_markdown_without_replacing_a_dirty_draft(cx: &mu
 }
 
 #[gpui::test]
+fn saved_markdown_copy_preserves_source_and_dirty_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let markdown = "# 会议 Review\r\n\r\n- [x] 保留 **Markdown**\r\n";
+    documents.put(processed("meeting", "Review"), markdown);
+    let before = documents.package_bytes("meeting");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    open_editor(cx, &view, "meeting");
+    let body = view.read_with(cx, |root, _| root.editor.body.clone());
+    retype_area(cx, &body, "未保存草稿");
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|s| s.outcome.is_some())
+    });
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let button = rendered(cx, "copy-saved-markdown");
+        assert!(
+            within(button, rendered(cx, "meeting-content")),
+            "copy must fit the smallest reading plane"
+        );
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()));
+        if locale == i18n::Locale::ZhCn {
+            click_selector(cx, "copy-saved-markdown");
+        } else {
+            for _ in 0..40 {
+                cx.simulate_keystrokes("tab");
+                if cx
+                    .debug_bounds("focus-ring")
+                    .is_some_and(|ring| within(ring, button))
+                {
+                    break;
+                }
+            }
+            assert!(
+                cx.debug_bounds("focus-ring")
+                    .is_some_and(|ring| within(ring, button)),
+                "copy is keyboard reachable"
+            );
+            cx.simulate_keystrokes("enter");
+            // Native buttons activate on release, unlike text-field Submit.
+            cx.simulate_event(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse("enter").unwrap(),
+            });
+        }
+        cx.run_until_parked();
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some(markdown),
+            "copy must activate in {locale:?}"
+        );
+        assert_eq!(
+            view.read_with(cx, |root, _| root.ui.notice.clone()),
+            i18n::text(locale, "saved_markdown_copied")
+        );
+    }
+    click_selector(cx, "content-mode-edit");
+    assert_eq!(area_value(cx, &body), "未保存草稿");
+    assert_eq!(
+        documents.package_bytes("meeting"),
+        before,
+        "copy is read-only"
+    );
+}
+
+#[gpui::test]
+fn saved_markdown_copy_rejects_unavailable_or_unselected_snapshots(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "Saved notes");
+    let record = documents.read("meeting");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    for scenario in [
+        "loading",
+        "failed",
+        "empty",
+        "other-document",
+        "other-view",
+        "other-route",
+        "switching",
+        "removed",
+    ] {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()));
+        view.update(cx, |root, cx| {
+            root.ui.route = Route::Meetings;
+            root.ui.content_mode = crate::state::ContentMode::Markdown;
+            root.ui.selected_project = Some(record.state.id().clone());
+            root.projects = vec![record.state.clone()];
+            root.documents_root_switch.switching = false;
+            root.saved_document = Some(crate::editor::SavedDocument {
+                document_id: record.state.id().clone(),
+                outcome: Some(Ok(record.clone())),
+            });
+            match scenario {
+                "loading" => root.saved_document.as_mut().unwrap().outcome = None,
+                "failed" => {
+                    root.saved_document.as_mut().unwrap().outcome = Some(Err("read failed".into()))
+                }
+                "empty" => {
+                    root.saved_document.as_mut().unwrap().outcome = Some(Ok(DocumentRecord {
+                        state: record.state.clone(),
+                        markdown: String::new(),
+                    }))
+                }
+                "other-document" => root.ui.selected_project = Some(ProjectId::new("other")),
+                "other-view" => root.ui.content_mode = crate::state::ContentMode::Edit,
+                "other-route" => root.ui.route = Route::Settings,
+                "switching" => root.documents_root_switch.switching = true,
+                "removed" => root.projects.clear(),
+                _ => unreachable!(),
+            }
+            root.copy_saved_markdown(cx);
+        });
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("sentinel"),
+            "must not copy {scenario}"
+        );
+    }
+}
+
+#[gpui::test]
+fn empty_saved_markdown_copy_preserves_the_clipboard(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|s| s.outcome.is_some())
+    });
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()));
+    click_selector(cx, "copy-saved-markdown");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("sentinel")
+    );
+}
+
+#[gpui::test]
 fn saved_markdown_refreshes_a_clean_editor_when_edit_is_chosen(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
     documents.put(processed("meeting", "Review"), "原笔记");
