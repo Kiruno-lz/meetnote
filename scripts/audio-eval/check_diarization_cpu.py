@@ -8,8 +8,9 @@ import statistics
 from pathlib import Path
 
 
-def load_run(path):
-    report = json.loads((path / "report.json").read_text())
+def load_run(path, require_embeddings=True):
+    report_bytes = (path / "report.json").read_bytes()
+    report = json.loads(report_bytes)
     content = (path / "prediction.jsonl").read_bytes()
     if report["schema"] != "meetnote.diarization-cpu-run.v1" or report["failure"]:
         raise ValueError("failed or unsupported run")
@@ -28,15 +29,18 @@ def load_run(path):
     for row in rows:
         if (
             row["status"] != "ok"
+            or type(row["wallSeconds"]) not in (int, float)
             or not math.isfinite(row["wallSeconds"])
             or row["wallSeconds"] <= 0
         ):
             raise ValueError("failed or invalid measurement")
-        if (
-            not row["speakerSegments"]
-            or not row["embeddingObservations"]
-            or row["segments"] != len(row["speakerSegments"])
-            or row["observations"] != len(row["embeddingObservations"])
+        if row["segments"] != len(row["speakerSegments"]) or (
+            require_embeddings
+            and (
+                not row["speakerSegments"]
+                or not row["embeddingObservations"]
+                or row["observations"] != len(row["embeddingObservations"])
+            )
         ):
             raise ValueError("missing speaker timeline or embeddings")
         for seg in row["speakerSegments"]:
@@ -44,6 +48,7 @@ def load_run(path):
                 raise ValueError("invalid speaker timeline")
     if type(report["peakRssBytes"]) is not int or report["peakRssBytes"] <= 0:
         raise ValueError("missing process peak RSS")
+    report["loadedReportSha256"] = hashlib.sha256(report_bytes).hexdigest()
     return report, sorted(rows, key=lambda r: r["repeat"])
 
 
