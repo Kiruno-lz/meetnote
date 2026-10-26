@@ -41,6 +41,8 @@ B1 已有固定 FLEURS revision、archive/audio SHA、官方参考文本、句�
 
 B1 的可选 `knownSilenceRangesMs` 标注以区间并集计算转写与已知静音的交集，分组输出 `knownSilence`；失败标为未测，不能当作零覆盖或词对齐通过。B1 的 `asr_benchmark` 直接运行生产 adapter；`asr_benchmark.py` 在独立进程记录失败、超时、wall 与 RSS，并采用精确 Levenshtein。B2 的 `diarization_benchmark` 保留独立执行/资源及完整 speaker timeline/embedding 输出；`check_diarization_cpu.py` 验证固定输入下的提速、资源与 baseline 一致性，speaker count 和一致性均不替代 DER。
 
+Whisper 的 1–16 线程范围及 large/Turbo 补查见[线程回执](../quality/whisper-thread-evaluation.json)：六线程改善本机单任务 CPU 耗时，但两个独立推理进程的反向批次增加 44.78%，拒绝全局默认提高。JobRuntime worker 名额与各 native pool 的线程预算必须分开验证；后续在同进程和固定总 CPU 预算下补吞吐、取消与小时级资源证据。
+
 B3 的 `cargo run --release --locked -p domain --example alignment_benchmark -- <short|long|nested> <repeats> [max_median_ms]` 直接调用生产对齐函数，并逐字段核对构造 gold。`long` 为 48,000 个转写段和 16,000 个说话人段，`nested` 再加全程覆盖段；两者各五轮、先后顺序反转，各自固定本机中位耗时门为 100 ms。旧扫描超过门槛，区间索引后分别为 10.3/14.1 ms；短场景为 0.0089→0.0115 ms，固定上限 1 ms。峰值 RSS 观测约 35.4 MiB；耗时包含每次索引构建和输出生成，完整回执见[对齐资源评测](../quality/alignment-resource-evaluation.json)。20 小时仅是构造时间轴长度，不代表真实长录音、ASR/DER 质量或 Audio Host 总资源验收。
 
 B1 可选安装 `requirements-timing.txt`，用 `report_asr_timing.py --run <run-dir> --output <report.json> --collar 0.5 2` 运行锁定的 MeetEval 0.4.3 单人英语 tcWER。输入 run 必须由带 `wordTiming` 的病例生成，原始病例与预测 hash、重复覆盖和词参考一致性均校验；普通 WER 使用原归一口径。参考保留官方词区间，hypothesis 使用官方 `character_based_points` 近似，0.5 秒仅用于敏感性检查；输出始终声明词级精度/质量验收未评估，不能据分数切换默认模型。失败不保留旧完整报告，输入文件不可覆盖，推理失败保留未测状态。EOF 校验在 sample 域进行，避免浮点时长误拒合法整数毫秒。真实结果及 Whisper 源音频越界修复见[时间诊断回执](../quality/asr-temporal-evaluation.json)。

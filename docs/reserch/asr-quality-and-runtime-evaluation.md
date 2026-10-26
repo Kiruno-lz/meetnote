@@ -136,6 +136,29 @@ embedding 是固定 bundle 的主要耗时点。先前一/四线程的 180 秒�
 
 同时核对的 [speakrs 开发主线](https://github.com/avencera/speakrs/tree/beb30734c9067c1ed59af3eb8ec8baa8fb17f94a)引入 safetensors 原生 CPU 资产，manifest 标为 0.7.0、当时最新可见 tag 为 v0.5.0；它不属于本轮固定 ONNX bundle，未运行新引擎，不用其其他硬件成绩替代本机验证。当前更改保留 inter-op、图、权重、分窗与聚类参数。
 
+### Whisper 线程范围与并发复核
+
+Whisper 默认固定四线程与 native diarization 的预算是独立路径。上游 [whisper-bench](https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/examples/bench/README.md) 只测随机输入的 encoder，不能代替真实解码。此轮用生产 adapter、固定 base.en、六个已知 FLEURS 英语输入共 65.68 秒，CPU/Metal 各测 1/2/4/6/8/10/12/16 线程，每个输入两轮，再反转设备和线程顺序；模型逐次加载，保留首轮异常，不剔除慢调用。
+
+下表中位数汇总两个执行顺序；CPU 12/16 行均触发每配置 120 秒预算，部分预测不能算完整精度通过，RSS 缺失不记零。其余完成调用的归一化文本均与四线程控制一致，见[线程评测回执](../quality/whisper-thread-evaluation.json)。
+
+| 每 session 线程 | CPU 中位 ms | Metal 中位 ms |
+|---:|---:|---:|
+| 1 | 796.40 | 247.15 |
+| 2 | 535.69 | 243.19 |
+| 4 | 399.23 | 238.19 |
+| 6 | 347.79 | 239.46 |
+| 8 | 389.30 | 243.23 |
+| 10 | 452.17 | 237.16 |
+| 12 | 两次超时 | 236.52 |
+| 16 | 两次超时 | 235.07 |
+
+运行前固定的候选为 `N <= 2` 使用 N，其余 `N - ceil(N/3)`，查询失败一线程；本机 N=10，对应六线程。它通过单任务门：CPU 中位耗时下降 12.89%，Metal 增加 0.54%，两设备比值几何平均 0.936，RSS 在 1.2 倍内。独立 review 要求补测 large-v3 与 Turbo Q5 的中英各一句、两轮，CPU/Metal 四组均保留文本、耗时与资源门通过。
+
+但 per-session 默认影响同时运行的任务。进一步用两个独立 native 进程、每个两句英语两轮，按四→六、六→四顺序对照。反向批次总耗时为 3.330/2.300 秒，六线程比四线程增加 44.78%，超过预先定义的 1.1 倍上限；逐调用中位数也退化。正向四线程进程保留一次原因未明的 7.672 秒首调用，不能把两批平均后掩盖反向失败。该诊断共享主机 CPU，但不是同进程 JobRuntime 或长音频并发验收。
+
+结论：拒绝将六线程预算推广为 Whisper 全局默认，保留既有默认与显式覆盖；没有根据单任务最优点增加总资源竞争。48 个 native 进程共完成 403 次调用，另有四个超时配置与缺失调用明确保留。//TODO - 先在现有 JobRuntime 明确多录音的总 CPU/模型 session 预算，再在同进程、不同模型和小时级输入上验证吞吐、取消与 RSS；不能只放大每 session 线程，也不另建一套调度器。其他设备的 P/E 核、当前负载和 NUMA 不能由 `available_parallelism` 的近似值推断。
+
 ### 共享 worker 的排队资源
 
 复查 JobRuntime 发现，旧 gate 在新建 OS 线程后才等待名额；可取消入口的 future 即使未轮询或排队中被丢弃，该线程仍保留捕获的请求和资源。两个红线测试先复现 Arc owner 未释放，再复用已有依赖图中锁定的 [async-lock 3.4.2 semaphore](https://docs.rs/async-lock/3.4.2/async_lock/struct.Semaphore.html) 和 event-listener 5.4.2：先异步准入，再创建线程；取消监听先注册再检查标记，避免丢通知。实际 worker 持有 owned permit 到退出，运行中丢弃 receiver/取消 token 不能绕开并发预算。没有新增执行器、线程池或 native 线程默认值。
@@ -276,6 +299,10 @@ for _ in 0..3 {
 ```
 
 完整对照用相同 `diarization_benchmark` example，冻结基线后仅更改 vendor session 的线程数；两版分别运行 `/usr/bin/time -l <runner> diarization-native <model-dir> <audio> <prediction.jsonl>`。每个 run directory 的 `report.json` 使用 `meetnote.diarization-cpu-run.v1`，记录音频/全部模型文件/runner/预测 SHA、音频秒数、配置中的 repeats、embeddingThreads 及试验中的空转参数、user+sys CPU 时间、进程峰值 RSS 和 failure；结构示例与真实 hash 见 CPU 对照回执。按此 manifest 运行 `check_diarization_cpu.py --baseline <before-dir> --candidate <after-dir>`，检查完成覆盖、逐段时间线、每个 observation 的来源/向量以及资源门槛；`--criterion quality` 只测输出等价，`--criterion idle-cpu` 独立检查 CPU 效率门，默认 `speed` 保持至少 15% 提速和 1.2 倍 RSS 的原门槛。原始预测、向量与音频继续留在忽略目录。
+
+#### Whisper 线程试验核心
+
+冻结同一个 release `asr_benchmark` executable，输入和模型 checksum 预热后按固定配置运行 `asr_benchmark.py --cases <cases.json> --config <device-thread.json> --runner <frozen-runner> --output <run> --timeout 120`，配置只改 `device`/`threads`，保持 whole-file 与每句两轮。按升序 Cpu→Metal、降序 Metal→Cpu 执行，不并行构建。补充 large/Turbo 使用原生中英各一句；竞争诊断同时启动两个原 benchmark 子进程，并分别保留其报告、预测与整批 wall。两种顺序都检查质量与资源门；所有文本对照按原病例 language 归一，时间范围按源 sample 检查。源码无需新增实验开关，使用已有永久 benchmark；原始结果和冻结协议位于忽略目录，汇总回执记录 runner、输入、模型和预测 SHA。
 
 #### 排队资源实验核心
 
