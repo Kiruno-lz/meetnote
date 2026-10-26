@@ -479,7 +479,7 @@ fn parse_speaker_label(label: &str) -> Result<u32, NativeDiarizationError> {
 }
 
 /// `false` is speakrs' explicit no-speaker sentinel, not a missing inference.
-fn validate_cluster_layout(
+pub(crate) fn validate_cluster_layout(
     cluster_shape: &[usize],
     embedding_shape: &[usize],
     has_segments: bool,

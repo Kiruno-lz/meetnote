@@ -99,25 +99,47 @@ fn real_silent_model_returns_no_speakers_without_panicking() {
     assert!(decoded.samples.iter().all(|sample| *sample == 0.0));
     let backend = NativeDiarizationBackend::default();
     let (context, _) = JobRuntime::default().create_job();
-    let result = futures::executor::block_on(backend.analyze(
-        DiarizationRequest {
-            audio_path,
-            model: ModelRef {
-                backend_id: "diarization-native".into(),
-                model_id: "speakrs-community-1-cpu".into(),
-                revision: Some(diarization_native::SPEAKRS_MODEL_REVISION.into()),
-                artifact_path: model_dir,
-                artifacts: Vec::new(),
-            },
-            expected_speakers: None,
-            device: ComputeDevice::Cpu,
-            speaker_library_path: None,
-            stage_configuration: Default::default(),
+    let request = DiarizationRequest {
+        audio_path,
+        model: ModelRef {
+            backend_id: "diarization-native".into(),
+            model_id: "speakrs-community-1-cpu".into(),
+            revision: Some(diarization_native::SPEAKRS_MODEL_REVISION.into()),
+            artifact_path: model_dir,
+            artifacts: Vec::new(),
         },
-        context,
-    ))
-    .expect("a completed no-speaker inference must succeed");
+        expected_speakers: None,
+        device: ComputeDevice::Cpu,
+        speaker_library_path: None,
+        stage_configuration: Default::default(),
+    };
+    let result = futures::executor::block_on(backend.analyze(request.clone(), context.clone()))
+        .expect("a completed no-speaker inference must succeed");
     assert!(result.result.segments.is_empty());
     assert!(result.observations.is_empty());
     assert_eq!(result.result.speaker_count, Some(0));
+    let mut session = backend.create_window_session(request).unwrap();
+    let end = decoded.samples.len() as u64;
+    session
+        .process_window(
+            std::sync::Arc::new(audio::AudioWindow {
+                sequence: 0,
+                sample_rate: 16_000,
+                samples: decoded.samples.into(),
+                global_start_sample: 0,
+                global_end_sample: end,
+                valid_core_start_sample: 0,
+                valid_core_end_sample: end,
+                source_total_samples: Some(end),
+                is_final: true,
+            }),
+            &context,
+        )
+        .unwrap();
+    let windowed = session
+        .finish()
+        .expect("silent windows must preserve the no-speaker state");
+    assert!(windowed.segments.is_empty());
+    assert!(windowed.embedding_observations.is_empty());
+    assert_eq!(windowed.speaker_count, Some(0));
 }

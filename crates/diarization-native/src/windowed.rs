@@ -1,4 +1,4 @@
-use crate::engine::{execution_mode, SPEAKRS_MODEL_REVISION};
+use crate::engine::{execution_mode, validate_cluster_layout, SPEAKRS_MODEL_REVISION};
 use crate::model::{prepare_model_bundle, PreparedNativeModelBundle};
 use crate::{
     EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
@@ -136,6 +136,13 @@ impl SpeakrsWindowSession {
                     &self.pipeline_config,
                 )
                 .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
+            if !validate_cluster_layout(
+                result.hard_clusters.shape(),
+                result.embeddings.shape(),
+                !result.segments.is_empty(),
+            )? {
+                continue;
+            }
             let space = embedding_space_for(&self.request, result.embeddings.shape())?;
             if let Some(existing) = &embedding_space {
                 if !existing.compatible_with(&space) {
