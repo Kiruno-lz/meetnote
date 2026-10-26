@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import platform
 import re
 import os
@@ -113,6 +114,45 @@ def interrupted(_signum, _frame):
     raise KeyboardInterrupt
 
 
+def merged_intervals(ranges: list, limit_ms: float) -> list[tuple[float, float]]:
+    if not isinstance(ranges, list) or not math.isfinite(limit_ms) or limit_ms <= 0:
+        raise ValueError("invalid timing intervals or duration")
+    spans = []
+    for span in ranges:
+        if (
+            not isinstance(span, (list, tuple))
+            or len(span) != 2
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in span)
+        ):
+            raise ValueError("invalid timing interval")
+        start, end = span
+        if not 0 <= start < end <= limit_ms:
+            raise ValueError("timing interval outside audio")
+        spans.append((start, end))
+    merged = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def silence_overlap_ms(silence: list, speech: list) -> float:
+    # Both inputs are sorted interval unions; never double-count overlapping
+    # reference labels or overlapping ASR segments.
+    i = j = 0
+    overlap = 0
+    while i < len(silence) and j < len(speech):
+        a, b = silence[i], speech[j]
+        overlap += max(0, min(a[1], b[1]) - max(a[0], b[0]))
+        if a[1] <= b[1]:
+            i += 1
+        else:
+            j += 1
+    return overlap
+
+
 def validate_cases(cases: list[dict]) -> None:
     seen = set()
     for case in cases:
@@ -123,6 +163,8 @@ def validate_cases(cases: list[dict]) -> None:
             raise ValueError("case needs positive duration and nonempty gold")
         if sha256(Path(case["audioPath"])) != case["sha256"]:
             raise ValueError(f"audio checksum mismatch: {case['id']}")
+        if "knownSilenceRangesMs" in case:
+            merged_intervals(case["knownSilenceRangesMs"], case["durationSeconds"] * 1000)
 
 
 def summarize(cases: list[dict], rows: list[dict], expected_repeats: int = 1) -> list[dict]:
@@ -138,9 +180,27 @@ def summarize(cases: list[dict], rows: list[dict], expected_repeats: int = 1) ->
         errors = units = failures = 0
         walls = []
         duration = 0
+        annotated = measured = 0
+        silence_duration = silence_overlap = 0
         for case, row in items:
             walls.append(row["wallSeconds"])
             duration += case["durationSeconds"]
+            if "knownSilenceRangesMs" in case:
+                annotated += 1
+                limit = case["durationSeconds"] * 1000
+                silence = merged_intervals(case["knownSilenceRangesMs"], limit)
+                silence_duration += sum(end - start for start, end in silence)
+                if row["status"] == "ok":
+                    if "transcript" not in row:
+                        raise ValueError(
+                            "annotated timing measurement requires transcript segments"
+                        )
+                    speech = merged_intervals(
+                        [(segment["startMs"], segment["endMs"]) for segment in row["transcript"]],
+                        limit,
+                    )
+                    silence_overlap += silence_overlap_ms(silence, speech)
+                    measured += 1
             if row["status"] != "ok":
                 failures += 1
                 continue
@@ -174,6 +234,14 @@ def summarize(cases: list[dict], rows: list[dict], expected_repeats: int = 1) ->
                 "maxCaseSeconds": max(walls),
             }
         )
+        if annotated:
+            result[-1]["knownSilence"] = {
+                "scope": "known_silence_only_not_word_alignment",
+                "annotatedCases": annotated,
+                "measuredCases": measured,
+                "referenceMs": silence_duration,
+                "overlapMs": silence_overlap if measured == annotated else None,
+            }
     return result
 
 

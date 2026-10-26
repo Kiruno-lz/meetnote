@@ -2,7 +2,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from asr_benchmark import normalize, score, summarize, validate_cases, speech_normalized_score
+from asr_benchmark import (
+    normalize,
+    score,
+    summarize,
+    validate_cases,
+    speech_normalized_score,
+    merged_intervals,
+)
 
 
 class AsrBenchmarkTests(unittest.TestCase):
@@ -59,6 +66,49 @@ class AsrBenchmarkTests(unittest.TestCase):
             summarize(cases, rows[:1])
         with self.assertRaises(ValueError):
             summarize(cases, [rows[0], rows[0]])
+
+    def test_known_silence_is_measured_as_interval_union_without_claiming_alignment(self):
+        case = {
+            "id": "pause",
+            "language": "zh",
+            "durationSeconds": 5,
+            "reference": "你好",
+            "knownSilenceRangesMs": [[1000, 3000], [2000, 4000]],
+        }
+        row = {
+            "caseId": "pause",
+            "repeat": 0,
+            "status": "ok",
+            "wallSeconds": 0.1,
+            "transcript": [
+                {"startMs": 0, "endMs": 2000, "text": "你"},
+                {"startMs": 1500, "endMs": 3500, "text": "好"},
+            ],
+        }
+        timing = summarize([case], [row])[0]["knownSilence"]
+        self.assertEqual(timing["scope"], "known_silence_only_not_word_alignment")
+        self.assertEqual(timing["referenceMs"], 3000)
+        self.assertEqual(timing["overlapMs"], 2500)
+        self.assertEqual(timing["measuredCases"], 1)
+        failed = dict(row, status="failed")
+        timing = summarize([case], [failed])[0]["knownSilence"]
+        self.assertIsNone(timing["overlapMs"], "failure is not zero silence overlap")
+        self.assertEqual(timing["measuredCases"], 0)
+
+    def test_timing_intervals_reject_nonfinite_boolean_and_out_of_range_values(self):
+        for spans in (
+            [[0, float("nan")]],
+            [[False, 100]],
+            [[-1, 100]],
+            [[0, 6000]],
+            [[4, 4]],
+            [[1]],
+        ):
+            with self.subTest(spans=spans), self.assertRaises(ValueError):
+                merged_intervals(spans, 5000)
+        self.assertEqual(
+            merged_intervals([[2000, 3000], [0, 1000], [1000, 2500]], 5000), [(0, 3000)]
+        )
 
     def test_manifest_hash_mismatch_is_rejected_before_model_execution(self):
         with tempfile.TemporaryDirectory() as root:
