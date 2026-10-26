@@ -167,6 +167,8 @@ def score_record(
     reference: dict[str, Any], prediction: dict[str, Any], collar_ms: int = 0
 ) -> dict[str, Any]:
     validate_audio_host_prediction(prediction)
+    if "meetingId" in prediction and prediction["meetingId"] != reference.get("meetingId"):
+        raise EvaluationError("prediction meetingId does not match its reference")
     if "referenceSpeakerSegments" in prediction:
         raise EvaluationError(
             "prediction must not contain referenceSpeakerSegments; gold annotations "

@@ -16,6 +16,21 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(tokens("Hello, world!", "en"), ["hello", ",", "world", "!"])
         self.assertEqual(edit_distance(["a", "b"], ["a", "c"]), 1)
 
+    def test_direct_scoring_rejects_a_prediction_for_another_meeting(self):
+        from metrics import EvaluationError
+
+        reference = {"meetingId": "a", "transcript": [], "referenceSpeakerSegments": []}
+        prediction = {
+            "meetingId": "b",
+            "schemaVersion": 2,
+            "predictionKind": "audio_host_prediction",
+            "sourceDomain": "audio",
+            "assistantSemanticQualityStatus": "not_assessed",
+            "transcript": [],
+        }
+        with self.assertRaisesRegex(EvaluationError, "meetingId"):
+            score_record(reference, prediction)
+
 
 class MetricsAvailabilityTests(unittest.TestCase):
     def test_missing_standard_scorer_is_unavailable_instead_of_perfect_der(self):
