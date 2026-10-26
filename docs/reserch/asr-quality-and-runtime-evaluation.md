@@ -183,6 +183,16 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 真实调用发现 Whisper 对 `ami-ES2002a-4` 的 8670 ms 源音频返回 9000 ms 结束点，两轮一致。显式设置 base.en 权重和第五裁剪路径的真实 ignored 测试先失败；随后整文件与窗口共用有界 sample 范围转换，裁去 decoder padding 的时间，纯 padding 段不进入结果。修复后真实测试通过，十次配对调用保留全部文本、ID、起点和分段，仅两次 EOF 从 9000 改为 8670 ms。SenseVoice 十次、Whisper 前后各十次，共三十次独立 ASR 调用均成功；没有放宽评分器范围检查。该修复只保证源音频范围，不将 EOF 当作真实发声结束点。
 
+### 原生 Whisper 词级分段试接
+
+在现有锁定的 whisper-rs 0.16.0 / whisper-rs-sys 0.15.0 上，隔离验证上游标为 experimental 的[词级时间戳](https://github.com/ggml-org/whisper.cpp#word-level-timestamp-experimental)。沿用同一解码参数、base.en 权重、Metal 配置、四线程和 sample 范围过滤，仅设置 `token_timestamps=true`、`max_len=1`、`split_on_word=true`。没有启用 DTW；binding 的 DTW token point 与普通 segment 起止时间是不同字段，不能混称。
+
+先冻结文本原样/归一化均须保留、时间范围有效、tcWER 改善、耗时和 RSS 门槛，再按 coarse→words、words→coarse 两种顺序各执行两轮。五个 AMI 病例每种配置共二十次调用，控制组 transcript 与上一轮生产输出完全一致。两种顺序下 WER 均为 29.47%；词级分段的 tcWER 0.5 秒从 64.21% 降至 35.79%，2 秒从 32.63% 降至 29.47%。两次中位耗时分别为 215.2→226.0 ms、207.1→218.6 ms，过程 RSS 比值 0.991/0.983。首个 coarse 调用实际耗时 7.896 秒，原因未定位，原值保留，不把它解释成已证实的冷启动收益。每两轮输出段数从 14 增为 176。
+
+独立 review 后补入六个固定 FLEURS 英语输入、42.94 秒的两句加二十秒全零间隔，以及原句缩小 30 dB 的输入，每种配置各两轮、共三十二次调用。词级模式在 `fleurs-en-1935` 两轮均被现有时间范围过滤丢弃 `there`，尽管原始 decoder 文本包含该词；六句 WER 从 17/136 增为 18/136。构造静音覆盖从 3340 降至 3160 ms，低音量文本一致，均不能抵消文本保留门失败。没有依据短样本调整过滤规则以迁就候选。
+
+结论：拒绝默认接入，见[完整回执](../quality/whisper-word-timing-evaluation.json)。即使消除这次丢词，直接将 canonical segment 改成逐词仍会改变转录阅读的段落密度、逐段字面搜索以及持久化容量；需要独立的产品 contract 和跨段用例验证。此次七十二次调用仅验证局部候选，不代表词级精度、中文、小时级资源或生产验收。临时 probe、dev dependency 和 shim 已清理，生产默认参数不变。
+
 ## 复现说明
 
 1. `uv venv --python 3.12 eval-data/asr-eval/venv`，在该环境安装 `scripts/audio-eval/requirements.txt`。MLX 实验安装 `scripts/audio-eval/requirements-mlx.txt` 的固定依赖，桌面不依赖这些包。
@@ -258,6 +268,18 @@ for _ in 0..3 {
 ```
 
 完整对照用相同 `diarization_benchmark` example，冻结基线后仅更改 vendor session 的线程数；两版分别运行 `/usr/bin/time -l <runner> diarization-native <model-dir> <audio> <prediction.jsonl>`。每个 run directory 的 `report.json` 使用 `meetnote.diarization-cpu-run.v1`，记录音频/全部模型文件/runner/预测 SHA、音频秒数、配置中的 repeats、embeddingThreads 及试验中的空转参数、user+sys CPU 时间、进程峰值 RSS 和 failure；结构示例与真实 hash 见 CPU 对照回执。按此 manifest 运行 `check_diarization_cpu.py --baseline <before-dir> --candidate <after-dir>`，检查完成覆盖、逐段时间线、每个 observation 的来源/向量以及资源门槛；`--criterion quality` 只测输出等价，`--criterion idle-cpu` 独立检查 CPU 效率门，默认 `speed` 保持至少 15% 提速和 1.2 倍 RSS 的原门槛。原始预测、向量与音频继续留在忽略目录。
+
+#### 原生词级分段试接核心
+
+临时 ignored probe 复用 backend 私有的 `whisper_params` 和 `bounded_sample_range`，每次重新加载同一模型；控制组逐段核对生产 runner 后，只对候选应用：
+
+```rust
+prepared.params.set_token_timestamps(true);
+prepared.params.set_max_len(1);
+prepared.params.set_split_on_word(true);
+```
+
+同时保存原始 decoder 字符流、过滤前的非空文本、过滤后 transcript 与耗时，按 case/repeat 比较归一化文本和去空白字符流；检查输出时间在源 sample 范围内。两组反转顺序，不并行编译或计时。使用同一 AMI `wordTiming` 与 MeetEval 0.4.3 评分；补充 FLEURS 六句和构造静音/音量病例只测文本与已知静音，不伪造词时间。回执保留临时源码、native executable、模型、输入、预测和冻结协议 SHA；失败后删除临时代码，不将试验开关加入产品配置。
 
 #### 分段评测的复现核心
 
