@@ -1,0 +1,144 @@
+{
+  "schema": "meetnote.worker-admission-resource-screen.v1",
+  "protocol": {
+    "queuedJobs": 64,
+    "maxConcurrency": 1,
+    "executionOrders": [
+      [
+        "baseline",
+        "candidate"
+      ],
+      [
+        "candidate",
+        "baseline"
+      ]
+    ],
+    "measurement": "macOS ps -M live thread count while the one running blocker is held; Arc captured resource owners before and after dropping queued futures",
+    "gates": {
+      "candidateQueuedThreadDeltaMaximum": 0,
+      "candidateRetainedOwnersAfterDrop": 1,
+      "allCapturedOwnersAfterRelease": 1
+    },
+    "scope": "synthetic admission resource screen, no model or latency claim"
+  },
+  "sourceHashes": {
+    "baselineSha256": "9a3b72274fe596682354da56057474297d24edc7170822a8b3a331de9cadd591",
+    "candidateSha256": "0197ee2beaa727ea040f72a689f0b3dbf79d15d54abb905adb570576a860aa9b",
+    "probeSha256": "da7bdb5bcd505fa16a4e5baf7892bc3d873f14ddda75d76bb1beb58e1d0bfced"
+  },
+  "executableSha256": "c4990686f95616b23d08964d8e2d6c7542cdf6096ae919c1e8a9ccfeb06590a4",
+  "runs": [
+    {
+      "mode": "baseline",
+      "phases": [
+        {
+          "phase": "occupied",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "queued",
+          "owners": 65,
+          "liveThreads": 67
+        },
+        {
+          "phase": "dropped",
+          "owners": 65,
+          "liveThreads": 67
+        },
+        {
+          "phase": "released",
+          "owners": 1
+        }
+      ]
+    },
+    {
+      "mode": "candidate",
+      "phases": [
+        {
+          "phase": "occupied",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "queued",
+          "owners": 65,
+          "liveThreads": 3
+        },
+        {
+          "phase": "dropped",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "released",
+          "owners": 1
+        }
+      ]
+    },
+    {
+      "mode": "candidate",
+      "phases": [
+        {
+          "phase": "occupied",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "queued",
+          "owners": 65,
+          "liveThreads": 3
+        },
+        {
+          "phase": "dropped",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "released",
+          "owners": 1
+        }
+      ]
+    },
+    {
+      "mode": "baseline",
+      "phases": [
+        {
+          "phase": "occupied",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "queued",
+          "owners": 65,
+          "liveThreads": 67
+        },
+        {
+          "phase": "dropped",
+          "owners": 65,
+          "liveThreads": 67
+        },
+        {
+          "phase": "released",
+          "owners": 1
+        }
+      ]
+    }
+  ],
+  "decision": "accept_async_admission",
+  "limitations": [
+    "Synthetic queue test; not ASR speed, model memory or production long-audio acceptance.",
+    "Thread count sampled while one blocker held; process peak memory not assessed."
+  ],
+  "validation": {
+    "redRegressions": 2,
+    "runtimeUnitTestsPassed": 12,
+    "workspaceMainTestsPassed": 926,
+    "workspaceChildTestsPassed": 3,
+    "workspaceFailed": 0,
+    "ignoredNotExecuted": 11,
+    "allTargetsCheck": "passed",
+    "desktopDevelopmentBuild": "passed",
+    "review": "separate read-only inspection of dependency edges, cancellation listener ordering, permit ownership, receiver drop and panic; no unresolved findings"
+  }
+}

@@ -136,6 +136,14 @@ embedding 是固定 bundle 的主要耗时点。先前一/四线程的 180 秒�
 
 同时核对的 [speakrs 开发主线](https://github.com/avencera/speakrs/tree/beb30734c9067c1ed59af3eb8ec8baa8fb17f94a)引入 safetensors 原生 CPU 资产，manifest 标为 0.7.0、当时最新可见 tag 为 v0.5.0；它不属于本轮固定 ONNX bundle，未运行新引擎，不用其其他硬件成绩替代本机验证。当前更改保留 inter-op、图、权重、分窗与聚类参数。
 
+### 共享 worker 的排队资源
+
+复查 JobRuntime 发现，旧 gate 在新建 OS 线程后才等待名额；可取消入口的 future 即使未轮询或排队中被丢弃，该线程仍保留捕获的请求和资源。两个红线测试先复现 Arc owner 未释放，再复用已有依赖图中锁定的 [async-lock 3.4.2 semaphore](https://docs.rs/async-lock/3.4.2/async_lock/struct.Semaphore.html) 和 event-listener 5.4.2：先异步准入，再创建线程；取消监听先注册再检查标记，避免丢通知。实际 worker 持有 owned permit 到退出，运行中丢弃 receiver/取消 token 不能绕开并发预算。没有新增执行器、线程池或 native 线程默认值。
+
+独立资源实验占住唯一名额后轮询 64 个排队 future，以 `ps -M -p <pid>` 读取进程线程数；两个执行顺序一致，见[回执](../quality/worker-admission-evaluation.json)。旧/新线程数分别从 3 增至 67/维持 3；丢弃队列后，捕获资源 owner 从 65 保持 65/降至唯一测试 owner。释放 blocker 后两者均回到唯一 owner。本构造只验证排队资源，不证明推理、RSS 或长音频提速。
+
+独立 review 覆盖未轮询/已轮询丢弃、不可取消入口、32 个不同 task waker 的联动取消、运行中丢弃/取消仍持有名额，以及 panic 后下一个任务可执行。原长音频单名额、ASR/DIA 任一阶段排队取消和 panic 分类回归继续验证；worker 异常返回与用户取消仍由调用方检查 token 区分。临时计数 probe 已删除，复现核心保留于附录。
+
 ### 转写分段与时间定位：Unicode 接入和 VAD 试接
 
 2026-10-26 只收窄到分段/时间定位，不更换 ASR 或分离默认模型。Review 的三个问题均先红后绿：中文被当作词内延续跨句/长停顿合并；CPU 比较失败留下旧通过文件；ASR 前置校验失败留下旧成功回执。CPU 输出同时拒绝覆盖输入回执/预测并原子发布；ASR 在读取输入前失效旧回执，前置失败不再能读取为本次成功。
@@ -236,7 +244,7 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 |---|---|
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
-| `cargo test --workspace --locked` | 920 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
+| `cargo test --workspace --locked` | 926 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
 | Python 评分/基线测试 | timing 环境 49 passed；基础环境 41 passed、8 项可选 timing 测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
@@ -268,6 +276,10 @@ for _ in 0..3 {
 ```
 
 完整对照用相同 `diarization_benchmark` example，冻结基线后仅更改 vendor session 的线程数；两版分别运行 `/usr/bin/time -l <runner> diarization-native <model-dir> <audio> <prediction.jsonl>`。每个 run directory 的 `report.json` 使用 `meetnote.diarization-cpu-run.v1`，记录音频/全部模型文件/runner/预测 SHA、音频秒数、配置中的 repeats、embeddingThreads 及试验中的空转参数、user+sys CPU 时间、进程峰值 RSS 和 failure；结构示例与真实 hash 见 CPU 对照回执。按此 manifest 运行 `check_diarization_cpu.py --baseline <before-dir> --candidate <after-dir>`，检查完成覆盖、逐段时间线、每个 observation 的来源/向量以及资源门槛；`--criterion quality` 只测输出等价，`--criterion idle-cpu` 独立检查 CPU 效率门，默认 `speed` 保持至少 15% 提速和 1.2 倍 RSS 的原门槛。原始预测、向量与音频继续留在忽略目录。
+
+#### 排队资源实验核心
+
+固定 `with_max_concurrency(1)`，在独立 driver 中运行持有 release channel 的 blocker，并等待其 started 信号。为同一 runtime 创建 64 个 `spawn_blocking_cancellable` future，每个捕获同一个 `Arc<()>` 的副本，逐个用 noop waker 轮询至 Pending。由外部进程分别在 blocker 已开始、排队完成、丢弃所有 future 三个握手点执行 `ps -M -p <pid>`，记录线程数及 `Arc::strong_count`；最后关闭 release channel、等待 blocker 和捕获 owner 释放。旧源码以独立 module 加入同一个临时 release probe，运行 baseline→candidate、candidate→baseline，不并行编译/采样，不使用模型或用户数据。保存源码、二进制与协议 SHA，实验后删除 example。
 
 #### 原生词级分段试接核心
 

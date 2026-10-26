@@ -190,7 +190,7 @@ AudioChunkReader
 
 默认窗口阈值为 30 分钟，core 为 60 秒，前后 context 各 15 秒，采样率为 16 kHz。后端必须同时声明并实现窗口 session；不允许静默退回整文件或拼接窗口局部 speaker label。
 
-整条录音通过所属 ASR `JobContext` 的共享 worker gate 取得一个名额后，才创建两种模型 session 和解码器。ASR/diarization 取消 token 互联，任一阶段取消都能终止排队且不加载模型；运行中仍由 decoder/backend 合作取消，并等待 scoped worker 退出。录音内两条 worker 不重复申请名额，单名额 runtime 不会因嵌套申请死锁。该限制控制录音任务数，不等于 native 推理库的线程总数；worker 异常退出报告推理失败，不能伪装成用户取消。
+整条录音通过所属 ASR `JobContext` 的共享 worker gate 异步取得一个名额后，才创建阻塞 worker、两种模型 session 和解码器；排队不占等待线程，丢弃未获准的 future 会释放捕获资源。ASR/diarization 取消 token 互联，任一阶段取消都能终止排队且不加载模型；运行中仍由 decoder/backend 合作取消，并等待 scoped worker 退出。录音内两条 worker 不重复申请名额，单名额 runtime 不会因嵌套申请死锁。该限制控制录音任务数，不等于 native 推理库的线程总数；worker 异常退出报告推理失败，不能伪装成用户取消。
 
 当前 native session 保留全部窗口 artifact 与 observation，AHC 使用二次规模的 pairwise distance；20 小时资源上限和多录音真实模型资源验收仍属于生产化阻塞项，见[工程实施计划](../plan/implementation-plan.md)。
 
