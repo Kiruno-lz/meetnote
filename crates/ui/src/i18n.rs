@@ -32,6 +32,8 @@ impl Locale {
 
 pub fn text(locale: Locale, key: &str) -> &'static str {
     match (locale, key) {
+        (Locale::ZhCn, "search_transcript_changed") => "命中的原文已变更，请重新搜索。",
+        (Locale::EnUs, "search_transcript_changed") => "The matching transcript has changed. Search again.",
         (Locale::ZhCn, "saved_markdown") => "笔记",
         (Locale::EnUs, "saved_markdown") => "Notes",
         (Locale::ZhCn, "saved_markdown_hint") => "已保存的 Markdown；未保存的修改保留在编辑器中。",

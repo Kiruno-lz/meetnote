@@ -149,9 +149,14 @@ mod screenshots {
         (Route::Settings, "settings"),
     ];
     /// Overlays captured over a route, with their baseline file name prefix.
-    const OVERLAYS: [(Route, Overlay, &str); 22] = [
+    const OVERLAYS: [(Route, Overlay, &str); 23] = [
         (Route::Meetings, Overlay::SavedMarkdown, "meetings-notes"),
         (Route::Meetings, Overlay::WorkspaceSearch, "meetings-search"),
+        (
+            Route::Meetings,
+            Overlay::TranscriptSearchMatch,
+            "meetings-search-match",
+        ),
         (Route::Meetings, Overlay::EmptyWorkspace, "meetings-empty"),
         (
             Route::Meetings,
@@ -319,6 +324,9 @@ mod screenshots {
                 // An overlay may start a check on a worker, such as the
                 // audio check of the document it selects.
                 wait_for_startup(cx, &window);
+                if overlay == Overlay::TranscriptSearchMatch {
+                    cx.update(|cx| window.open_first_search_result(cx));
+                }
                 cx.update_window(handle, |_, window, cx| window.draw(cx).clear())
                     .expect("the route window draws");
                 std::thread::sleep(OVERLAY_SETTLE);

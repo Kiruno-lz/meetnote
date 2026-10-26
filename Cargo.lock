@@ -305,6 +305,7 @@ dependencies = [
  "futures",
  "runtime",
  "sherpa-onnx",
+ "unicode-segmentation",
 ]
 
 [[package]]

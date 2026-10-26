@@ -19,6 +19,40 @@ pub struct DocumentSearchHit {
     pub source: SearchSource,
     pub snippet: String,
     pub start_ms: Option<u64>,
+    pub document_revision: u64,
+    pub transcript_target: Option<TranscriptSearchTarget>,
+}
+
+/// Identity of a rendered raw or speaker-aligned paragraph. Alignment may
+/// split one ASR segment, so an ID alone is not a unique paragraph address.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptSearchTarget {
+    pub segment_id: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub speaker_id: Option<String>,
+}
+
+impl From<&domain::TranscriptSegment> for TranscriptSearchTarget {
+    fn from(segment: &domain::TranscriptSegment) -> Self {
+        Self {
+            segment_id: segment.id.clone(),
+            start_ms: segment.start_ms,
+            end_ms: segment.end_ms,
+            speaker_id: None,
+        }
+    }
+}
+
+impl From<&domain::SpeakerTaggedSegment> for TranscriptSearchTarget {
+    fn from(segment: &domain::SpeakerTaggedSegment) -> Self {
+        Self {
+            segment_id: segment.transcript_segment_id.clone(),
+            start_ms: segment.start_ms,
+            end_ms: segment.end_ms,
+            speaker_id: Some(segment.speaker_id.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -97,6 +131,8 @@ fn find_hit(record: &DocumentRecord, query: &str) -> Option<DocumentSearchHit> {
             source,
             snippet,
             start_ms,
+            document_revision: state.revision(),
+            transcript_target: None,
         })
     };
     hit(state.title(), SearchSource::Title, None)
@@ -121,6 +157,10 @@ fn find_hit(record: &DocumentRecord, query: &str) -> Option<DocumentSearchHit> {
                     SearchSource::Transcript,
                     Some(segment.start_ms),
                 )
+                .map(|mut hit| {
+                    hit.transcript_target = Some(segment.into());
+                    hit
+                })
             })
         })
         .or_else(|| {
@@ -130,6 +170,10 @@ fn find_hit(record: &DocumentRecord, query: &str) -> Option<DocumentSearchHit> {
                     SearchSource::Transcript,
                     Some(segment.start_ms),
                 )
+                .map(|mut hit| {
+                    hit.transcript_target = Some(segment.into());
+                    hit
+                })
             })
         })
         .or_else(|| hit(&record.markdown, SearchSource::Markdown, None))

@@ -185,6 +185,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=3600)
     args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
+    report_path = args.output / "report.json"
+    report_path.unlink(missing_ok=True)
     cases = json.loads(args.cases.read_text())
     validate_cases(cases)
     config = json.loads(args.config.read_text())
@@ -202,9 +205,6 @@ def main() -> None:
         }
         for p in artifact_paths
     ]
-    args.output.mkdir(parents=True, exist_ok=True)
-    report_path = args.output / "report.json"
-    report_path.unlink(missing_ok=True)
     (args.output / "cases.json").write_bytes(args.cases.read_bytes())
     (args.output / "config.json").write_bytes(args.config.read_bytes())
     prediction = args.output / "prediction.jsonl"

@@ -23,6 +23,8 @@ pub enum Overlay {
     SavedMarkdown,
     /// On Meetings: real workspace text search on the shared fixture.
     WorkspaceSearch,
+    /// On Meetings: the first search result opened at its marked paragraph.
+    TranscriptSearchMatch,
     /// On Meetings: a loaded workspace with no documents.
     EmptyWorkspace,
     /// On Meetings: fixture-only read failure over the last loaded document.
@@ -278,10 +280,17 @@ impl MainWindow {
         }
         self.view.update(cx, |root, cx| match overlay {
             Overlay::SavedMarkdown => root.set_content_mode(ContentMode::Markdown, cx),
-            Overlay::WorkspaceSearch => {
-                root.search
-                    .input
-                    .update(cx, |input, cx| input.set_value("页面", cx));
+            Overlay::WorkspaceSearch | Overlay::TranscriptSearchMatch => {
+                root.search.input.update(cx, |input, cx| {
+                    input.set_value(
+                        if overlay == Overlay::TranscriptSearchMatch {
+                            "结构测试"
+                        } else {
+                            "页面"
+                        },
+                        cx,
+                    )
+                });
                 root.submit_workspace_search(cx);
             }
             Overlay::AssistantSetup => {
@@ -458,6 +467,26 @@ impl MainWindow {
         });
     }
 
+    /// Activate the first result after the real workspace search has settled.
+    pub fn open_first_search_result(&self, cx: &mut App) {
+        self.view.update(cx, |root, cx| {
+            let hit = root
+                .search
+                .result
+                .as_ref()
+                .expect("search completed")
+                .as_ref()
+                .expect("search succeeded")
+                .hits
+                .first()
+                .expect("search matched")
+                .clone();
+            assert_eq!(hit.source, application::SearchSource::Transcript);
+            assert!(hit.transcript_target.is_some());
+            root.open_search_hit(&hit, cx);
+        });
+    }
+
     /// Closes `overlay` again.
     pub fn close_overlay(&self, overlay: Overlay, cx: &mut App) {
         if matches!(overlay, Overlay::FocusedButton | Overlay::FocusedSelect) {
@@ -468,7 +497,9 @@ impl MainWindow {
         }
         self.view.update(cx, |root, cx| match overlay {
             Overlay::SavedMarkdown => root.set_content_mode(ContentMode::Summary, cx),
-            Overlay::WorkspaceSearch => root.clear_workspace_search(cx),
+            Overlay::WorkspaceSearch | Overlay::TranscriptSearchMatch => {
+                root.clear_workspace_search(cx)
+            }
             Overlay::AssistantSetup => {
                 root.set_fixture_assistant_connection(
                     root.settings_draft.assistant.active_connection_id.clone(),

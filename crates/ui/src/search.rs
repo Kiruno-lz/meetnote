@@ -21,6 +21,13 @@ pub(crate) struct WorkspaceSearch {
     generation: u64,
     cancellation: CancellationToken,
     scroll: ScrollHandle,
+    pub(crate) opened_transcript: Option<OpenedTranscript>,
+}
+
+pub(crate) struct OpenedTranscript {
+    pub(crate) hit: DocumentSearchHit,
+    pub(crate) query: String,
+    pub(crate) pending: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl WorkspaceSearch {
@@ -55,6 +62,7 @@ impl WorkspaceSearch {
             generation: 0,
             cancellation: CancellationToken::new(),
             scroll: ScrollHandle::new(),
+            opened_transcript: None,
         }
     }
 
@@ -63,6 +71,7 @@ impl WorkspaceSearch {
         self.generation += 1;
         self.pending = false;
         self.result = None;
+        self.opened_transcript = None;
     }
 
     pub(crate) fn follow_locale(&self, locale: Locale, cx: &mut Context<RootView>) {
@@ -127,7 +136,7 @@ impl RootView {
         cx.notify();
     }
 
-    fn open_search_hit(&mut self, hit: &DocumentSearchHit, cx: &mut Context<Self>) {
+    pub(crate) fn open_search_hit(&mut self, hit: &DocumentSearchHit, cx: &mut Context<Self>) {
         // Expand ancestors so clearing the search reveals the same selection.
         let mut id = Some(hit.document_id.clone());
         for _ in 0..3 {
@@ -145,6 +154,13 @@ impl RootView {
         };
         self.navigate(Route::Meetings, cx);
         self.select_project(hit.document_id.clone(), cx);
+        self.search.opened_transcript = hit.transcript_target.as_ref().map(|_| OpenedTranscript {
+            hit: hit.clone(),
+            query: self.search.query.trim().to_lowercase(),
+            pending: std::rc::Rc::new(std::cell::Cell::new(true)),
+        });
+        // Reopening a result is an explicit request to return to its evidence.
+        self.scroll.meeting_content.set_offset(Default::default());
         if hit.source == SearchSource::Markdown {
             self.load_saved_document(hit.document_id.clone(), cx);
         }

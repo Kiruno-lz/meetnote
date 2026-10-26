@@ -71,6 +71,60 @@ fn search_finds_all_persisted_fields_and_collapsed_children_once() {
 }
 
 #[test]
+fn search_addresses_split_alignment_and_raw_paragraphs_without_using_row_indices() {
+    let repository = Arc::new(InMemoryDocumentRepository::default());
+    let mut state = document("meeting", "Review");
+    state.schema.revision = 7;
+    state.results.transcript = vec![TranscriptSegment {
+        id: "asr-1".into(),
+        start_ms: 0,
+        end_ms: 8000,
+        text: "Opening. Raw-only evidence.".into(),
+    }];
+    state.results.speaker_segments = vec![
+        domain::SpeakerTaggedSegment {
+            transcript_segment_id: "asr-1".into(),
+            start_ms: 0,
+            end_ms: 4000,
+            text: "Opening.".into(),
+            speaker_id: "speaker-0".into(),
+            speaker_label: None,
+            speaker_profile_id: None,
+        },
+        domain::SpeakerTaggedSegment {
+            transcript_segment_id: "asr-1".into(),
+            start_ms: 4000,
+            end_ms: 8000,
+            text: "Aligned evidence.".into(),
+            speaker_id: "speaker-1".into(),
+            speaker_label: None,
+            speaker_profile_id: None,
+        },
+    ];
+    repository.save(state, None).unwrap();
+    let service = DocumentService::new(repository);
+    for (query, start, end, speaker) in [
+        ("Aligned evidence", 4000, 8000, Some("speaker-1")),
+        ("Raw-only", 0, 8000, None),
+    ] {
+        let result = service
+            .search(query, 50, &CancellationToken::new())
+            .unwrap();
+        let hit = &result.hits[0];
+        assert_eq!(hit.document_revision, 7);
+        assert_eq!(
+            hit.transcript_target,
+            Some(application::TranscriptSearchTarget {
+                segment_id: "asr-1".into(),
+                start_ms: start,
+                end_ms: end,
+                speaker_id: speaker.map(str::to_string),
+            })
+        );
+    }
+}
+
+#[test]
 fn search_unicode_snippet_keeps_the_actual_match_and_bounds_its_length() {
     let repository = Arc::new(InMemoryDocumentRepository::default());
     repository
