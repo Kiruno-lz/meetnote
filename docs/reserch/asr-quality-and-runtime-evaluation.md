@@ -187,7 +187,20 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 固定 kodama 0.3.0 的公开 API 仅提供 linkage/dendrogram，没有平面切树接口；保留现有依赖，将私有切树独立为可直接测试的模块。旧实现的展开和整树归类都递归访问左右子树，10 万叶子的合法左深树在 2 MiB 线程栈中分别溢出，普通与优化构建均复现。新实现以显式 `(node, inherited_label)` 栈遍历，右后左先入栈，保持原标签次序；没有扩大线程栈。
 
-独立 review 补测混合子树、阈值包含相等边界和子进程完成标记，4 项通过。旧/新源码对 0 至 128 叶、每种尺寸 8 棵树、9 个阈值共 9,288 次逐标签比较完全一致。生产 adapter 在固定 180 秒训练裁剪运行两轮，时间段/向量逐项等价，四个 DER 分项记录完全一致；中位 35.77 秒，不作提速声明。它只修复切树栈风险，不解决二次距离内存；非单调合并高度的距离语义另行验证，不以行为等价替代算法正确性。见[切树回执](../quality/ahc-tree-validation.json)。
+独立 review 补测混合子树、阈值包含相等边界和子进程完成标记，4 项通过。旧/新源码对 0 至 128 叶、每种尺寸 8 棵树、9 个阈值共 9,288 次逐标签比较完全一致。生产 adapter 在固定 180 秒训练裁剪运行两轮，时间段/向量逐项等价，四个 DER 分项记录完全一致；中位 35.77 秒，不作提速声明。它只修复切树栈风险，不解决二次距离内存；非单调合并高度的距离语义见下一节，行为等价不能替代算法正确性。见[切树回执](../quality/ahc-tree-validation.json)。
+
+
+### AHC 非单调高度的距离切分
+
+原 centroid 树只比较当前根的合并距离；子节点高于阈值而父节点较低时，会将本不满足距离上限的 observation 合并。三个单位向量两两距离 `sqrt(3)`，最后一次 centroid 合并降为 1.5；阈值 1.6 时旧实现得到一类，标准 distance cut 得到三类。直接 kodama linkage 和多层反例先红后绿，修复对每个节点计算后代最大高度，再复用既有显式栈切树，不改归一化、linkage、0.6 默认阈值或 VBx。
+
+核对 [SciPy distance 定义](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.fcluster.html)和 [pyannote 当前 VBx 初始化](https://github.com/pyannote/pyannote-audio/blob/623ab14d69a039b474fc1fb2551b657aa00c0ce4/src/pyannote/audio/pipelines/clustering.py#L596)：后者同样是归一化 embedding、centroid/euclidean 和 `fcluster(..., criterion="distance")`。复用标准语义比引入新模型/阈值或 Python 运行时更符合当前原生链路；并未据此改变二次距离算法或压缩 observation。
+
+以相同 f32 距离树输入 Rust 与 SciPy 1.18.1，504 棵树、9 个阈值的 4,536 次分组比较中，旧实现 1,701 次不一致，其中归一化向量实际 centroid 树 104 次；修复后为零。比较允许标签置换，不把分组一致冒称 linkage 浮点完全一致。独立 review 检查子节点先于父节点、有效兄弟簇、包含相等边界，以及普通/优化构建的深树路径。完整工作区 941 项主 harness 与 3 项已有子 harness 通过，11 项 ignored 不作真实执行证据。
+
+固定 180 秒训练裁剪的两轮 native 输出与基线逐段/向量等价，DER 全部分项不变；零 collar 27.98%，500 ms 完整 collar 26.61%。中位 37.83 秒，相对 36.63 秒基线约慢 3.28%，RSS 约 291 MiB；均通过运行前冻结的 1.1 倍耗时、1.2 倍 RSS 和 DER 不退化门，没有提速或留出验收声明。完整来源和门槛见[距离切分回执](../quality/ahc-distance-validation.json)。
+
+验证时另修复 UI 模型夹具的相对共享 `models` 路径：从仓库根启动会读取真实安装，使四项引导测试失败。每个夹具改用独立绝对临时路径，路径/缺失状态回归先红后绿，四项原失败测试通过。首次完整并发回归另外出现两项 UI 失败及占满共享 worker 的测试停滞；两项各按 0–31 种子重跑及最终完整回归通过，未将停滞归因于 AHC，也不声称路径隔离已经修复它。//TODO - 在受控占满共享 worker 时捕获 UI 测试的线程栈和完成握手，验证进程隔离是否消除跨测试干扰；不得通过放宽超时或忽略测试掩盖。
 
 ### DER 评分器的正确性
 
@@ -398,3 +411,7 @@ while let Some(segment) = vad.front() {
 #### 深树与切分等价性实验核心
 
 从固定旧 commit 抽取原切树函数，与生产私有模块分别编译进临时纯 Rust driver，复用锁定 kodama；小树以固定种子 `0x86739` 从当前可用节点中逐次抽取两节点合并，逐阈值比较完整标签数组。深树先合并叶对，再将已有根作为左孩子与下一叶对合并，避免右尾调用优化；子进程在线程 `.stack_size(2 * 1024 * 1024)` 中核对 100,000 个标签并输出唯一完成标记。优化诊断使用 `rustc --test -O` 编译同一生产模块与测试；完整 cargo workspace 测试另行运行。实验后移除临时 driver，保留永久回归和来源 SHA。
+
+#### AHC 距离规则交叉验证核心
+
+用 NumPy seed 86739 对 2 至 64 个叶子分别构造四组归一化向量（2/3/8/32 维）的 SciPy centroid 树和四组合法随机合并树，将距离统一转为 f32 后同时送给两个 Rust 私有切树实现与 SciPy `fcluster(criterion="distance")`。阈值为 0/0.2/0.4/0.6/0.8/1/1.2/1.6/2；按每个标签首次出现的次序重编号，比较完整分组。临时 driver 从 stdin 读取 Step，避免另造 inference provider；实验后删除。native 复核另用已有永久 benchmark，固定六线程、相同模型/音频 hash、自动人数和无 Library 两次调用，标准 DER 与向量等价性分别核对；先等待原始回执完整写入，再评分。

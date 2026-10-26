@@ -79,7 +79,7 @@ B1 可选安装 `requirements-timing.txt`，用 `report_asr_timing.py --run <run
 |---|---|---|
 | B0 素材/评分器 | FLEURS 中英文各 24 个原生句子、构造 clean/noise、后续 24 个中文句子；AMI 五个非重叠会话裁剪及 95 个官方 forced-alignment 词时间投影；固定 hash、版本与精确评分正反例 | 增加自然中文会议、远场与重叠 gold，按会议/speaker 隔离 |
 | B1 模型比较 | Paraformer、SenseVoice、Whisper large/base/Turbo、Qwen MLX 已真实比较；CPU/Metal、线程与加载策略分别记录；Unicode 分段接入保留这组真实输出，Silero VAD 裁剪因英文/低音量退化拒绝默认集成，见[边界回执](../quality/asr-boundary-evaluation.json) | 扩大场景，添加可靠词时间参考与时间误差 |
-| B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门；标准 DER 评分器经手算反例与导出协议验证；已有 ES2002a 180 秒 word-activity 参考与两轮独立模型 DER 诊断，未作留出/生产验收 | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
+| B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门；标准 DER 评分器经手算反例与导出协议验证；已有 ES2002a 180 秒 word-activity 参考与两轮独立模型 DER 诊断，AHC 距离切分与固定 SciPy 分组交叉验证通过，真实训练裁剪输出不变，未作留出/生产验收 | 用隔离留出参考验证模型与聚类取舍 |
 | B3 窗口/运行 | 已复现并修复 Whisper 回调、子词边界、设备回退与推理粒度问题；短路径和应用窗口分别核对；对齐区间索引通过构造 gold、128 组穷举对照及资源门，长音频接入所属 runtime 并发门 | 验证小时级资源、取消延迟、恢复和身份漂移；AHC 的二次内存仍需单独治理 |
 | B4/B5 | 已有 Agent runner 与历史基础；本轮未开展语义和完整误差传播验收 | 使用固定 gold 经 Host 调用，逐层替换预测定位损失 |
 
