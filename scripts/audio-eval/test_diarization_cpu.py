@@ -1,6 +1,8 @@
 import copy
 import hashlib
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -186,6 +188,47 @@ class DiarizationCpuTests(unittest.TestCase):
                 else:
                     with self.assertRaises(ValueError):
                         compare_idle_cpu(before, after)
+
+    def test_cli_output_cannot_replace_either_input_receipt_or_prediction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            before, after = self.pair(Path(tmp))
+            for directory in (before, after):
+                for name in ("report.json", "prediction.jsonl"):
+                    output = directory / name
+                    original = output.read_bytes()
+                    command = [
+                        sys.executable,
+                        str(Path(__file__).with_name("check_diarization_cpu.py")),
+                        "--baseline",
+                        str(before),
+                        "--candidate",
+                        str(after),
+                        "--output",
+                        str(output),
+                    ]
+                    self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+                    self.assertEqual(output.read_bytes(), original)
+
+    def test_failed_cli_recheck_invalidates_previous_success(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            before, after = self.pair(root)
+            output = root / "comparison.json"
+            command = [
+                sys.executable,
+                str(Path(__file__).with_name("check_diarization_cpu.py")),
+                "--baseline",
+                str(before),
+                "--candidate",
+                str(after),
+                "--output",
+                str(output),
+            ]
+            self.assertEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            self.assertEqual(json.loads(output.read_text())["status"], "passed")
+            self.edit(after, lambda _, rows: [row.update(wallSeconds=120) for row in rows])
+            self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+            self.assertFalse(output.exists(), "a failed check cannot leave a passing comparison")
 
     def test_insufficient_speed_and_excess_memory_are_rejected(self):
         for mode in ("speed", "memory"):

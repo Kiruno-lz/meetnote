@@ -163,12 +163,23 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--criterion", choices=("speed", "quality", "idle-cpu"), default="speed")
     args = parser.parse_args()
+    if args.output:
+        inputs = {
+            (directory / name).resolve()
+            for directory in (args.baseline, args.candidate)
+            for name in ("report.json", "prediction.jsonl")
+        }
+        if args.output.resolve() in inputs:
+            raise ValueError("comparison output must not replace an input file")
+        args.output.unlink(missing_ok=True)
     check = {"speed": compare_runs, "quality": measure_runs, "idle-cpu": compare_idle_cpu}[
         args.criterion
     ]
     text = json.dumps(check(args.baseline, args.candidate), indent=2) + "\n"
     if args.output:
-        args.output.write_text(text)
+        partial = args.output.with_name("." + args.output.name + ".part")
+        partial.write_text(text)
+        partial.replace(args.output)
     print(text, end="")
 
 
