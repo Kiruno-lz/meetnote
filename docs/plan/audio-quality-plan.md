@@ -41,6 +41,8 @@ B1 已有固定 FLEURS revision、archive/audio SHA、官方参考文本、句�
 
 B1 的可选 `knownSilenceRangesMs` 标注以区间并集计算转写与已知静音的交集，分组输出 `knownSilence`；失败标为未测，不能当作零覆盖或词对齐通过。B1 的 `asr_benchmark` 直接运行生产 adapter；`asr_benchmark.py` 在独立进程记录失败、超时、wall 与 RSS，并采用精确 Levenshtein。B2 的 `diarization_benchmark` 保留独立执行/资源及完整 speaker timeline/embedding 输出；`check_diarization_cpu.py` 验证固定输入下的提速、资源与 baseline 一致性，speaker count 和一致性均不替代 DER。
 
+B3 的 `cargo run --release --locked -p domain --example alignment_benchmark -- <short|long|nested> <repeats> [max_median_ms]` 直接调用生产对齐函数，并逐字段核对构造 gold。`long` 为 48,000 个转写段和 16,000 个说话人段，`nested` 再加全程覆盖段；两者各五轮、先后顺序反转，各自固定本机中位耗时门为 100 ms。旧扫描超过门槛，区间索引后分别为 10.3/14.1 ms；短场景为 0.0089→0.0115 ms，固定上限 1 ms。峰值 RSS 观测约 35.4 MiB；耗时包含每次索引构建和输出生成，完整回执见[对齐资源评测](../quality/alignment-resource-evaluation.json)。20 小时仅是构造时间轴长度，不代表真实长录音、ASR/DER 质量或 Audio Host 总资源验收。
+
 - //TODO - 给 B2 补固定 UEM/collar/overlap 的精度 runner；完整 Audio export 不能代替独立 ASR/diarization 测试。
 - //TODO - 各阶段在运行前冻结场景阈值与评分口径。低质量是 fail，不是已完成执行；不要临时放宽阈值。近似 WER/CER 不作为正式通过门，需精确分块/流式评分或明确不具备评分条件。
 - //TODO - 自动发现可用模型、校验配置，按 case/model/配置哈希复用缓存；只重跑受改动影响的阶段。固定重复次数，保留波动范围与失败，支持断点续跑。
@@ -66,7 +68,7 @@ B1 的可选 `knownSilenceRangesMs` 标注以区间并集计算转写与已知�
 | B0 素材/评分器 | FLEURS 中英文各 24 个原生句子、构造 clean/noise、后续 24 个中文句子；AMI 五个非重叠会话裁剪；固定 hash、版本与精确评分正反例 | 增加自然中文会议、远场与重叠 gold，按会议/speaker 隔离 |
 | B1 模型比较 | Paraformer、SenseVoice、Whisper large/base/Turbo、Qwen MLX 已真实比较；CPU/Metal、线程与加载策略分别记录；Unicode 分段接入保留这组真实输出，Silero VAD 裁剪因英文/低音量退化拒绝默认集成，见[边界回执](../quality/asr-boundary-evaluation.json) | 扩大场景，添加可靠词时间参考与时间误差 |
 | B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门，计数与等价不替代 DER | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
-| B3 窗口/运行 | 已复现并修复 Whisper 回调、子词边界、设备回退与推理粒度问题；短路径和应用窗口分别核对 | 验证小时级资源、取消延迟、恢复和身份漂移；AHC 的二次内存仍需单独治理 |
+| B3 窗口/运行 | 已复现并修复 Whisper 回调、子词边界、设备回退与推理粒度问题；短路径和应用窗口分别核对；对齐区间索引通过构造 gold、128 组穷举对照及资源门，长音频接入所属 runtime 并发门 | 验证小时级资源、取消延迟、恢复和身份漂移；AHC 的二次内存仍需单独治理 |
 | B4/B5 | 已有 Agent runner 与历史基础；本轮未开展语义和完整误差传播验收 | 使用固定 gold 经 Host 调用，逐层替换预测定位损失 |
 
 现有脚本位于 `scripts/audio-eval/` 和 `scripts/assistant-eval/`；重用而不另造产品 runtime。历史下载、smoke 和复合样本评分是已有基础，不表示专属 benchmark 或任何阶段已全部通过。

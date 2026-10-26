@@ -194,6 +194,12 @@ AudioChunkReader
 
 当前 native session 保留全部窗口 artifact 与 observation，AHC 使用二次规模的 pairwise distance；20 小时资源上限和多录音真实模型资源验收仍属于生产化阻塞项，见[工程实施计划](../plan/implementation-plan.md)。
 
+### 转写与说话人归属
+
+`domain::align_transcript_and_speakers` 按单个说话人段的最大时间交集确定归属；交集相同时选择开始更早的段，仍相同时保留输入中最后一个段的规则，无交集标为 unknown。不拆分转写段，不改变文本、时间、顺序或匹配身份，也不将多个片段的交集累加为新的归属策略。
+
+每次调用使用锁定的 [intervaltree 0.2.7](https://docs.rs/intervaltree/0.2.7/intervaltree/struct.IntervalTree.html) 构建只读区间索引，仅查询重叠候选；索引携带原始位置以固定同分规则，支持乱序和嵌套区间。空转写直接返回；零长/反向区间不能产生归属。索引是本次调用的派生状态，不缓存到文档或引入 IO；密集重叠仍需比较全部命中候选，不保证任意输入都提速。资源对照与复现入口见[音频质量计划](../plan/audio-quality-plan.md)。
+
 ## Probe 与错误
 
 固定生命周期：
