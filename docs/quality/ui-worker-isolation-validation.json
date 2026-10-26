@@ -1,0 +1,67 @@
+{
+  "schema": "meetnote.ui-worker-isolation-validation.v1",
+  "date": "2026-10-26",
+  "scope": "test process resource isolation; no production scheduler, model or ui behavior change",
+  "isolationCommit": "f3e6d5f",
+  "diagnosticCommit": "5748931",
+  "sourceSha256": "93d7513246262cb556cd8b1845b1f86f32d9ed3d23d96081ef86575ba7239d9d",
+  "waitHelperSourceSha256": "77cc3cda1b8fb633b7b656a50bbce541ec52a19b38ab6d3711e61fef890d7e10",
+  "baseline": {
+    "baselineFixtureCommit": "1d65245",
+    "controlledProbeSha256": "200e2d3f59af6244a3b3cc5a17699d08d6ba15e3c4424c2ea01c0b4a791ed822",
+    "baseline": "all shared slots started; unrelated IO cannot finish before releasing the same-process fixture; explicit assertion fails",
+    "release": "all slots released and heartbeat driver joined before failing assertion",
+    "existingFullSuiteFailureLogSha256": "7c69687c9f7787825d77befa7e048b7566f06cf9c44eb62012e484641a0a2655"
+  },
+  "candidate": {
+    "execution": "plain parent test explicitly invokes private ignored gpui child with --exact --ignored",
+    "childHoldHandshake": "all child IO slots started before parent heartbeat; stdin EOF releases hold",
+    "parentIoHeartbeat": "completed within five seconds while child retained all its own slots",
+    "childCompletion": "successful exit and UI_EXHAUSTION_VERIFIED marker required; zero matching tests cannot pass",
+    "executionTimeoutSeconds": 40,
+    "cleanup": "kill and reap on deadline; delete temporary log; release child on failed heartbeat",
+    "oldAssertions": "clear/edit/resubmit release obsolete repository owners; replacement query completes; workspace bytes remain identical"
+  },
+  "verification": {
+    "parentWithIterations32": "passed; ordinary test avoids nested quadratic iteration counts",
+    "explicitChildIterations32": "passed; exactly 32 completion markers in captured output",
+    "threeConsecutiveFullUiRuns": [
+      {
+        "passed": 455,
+        "failed": 0,
+        "childEntryRegisteredIgnored": 1,
+        "childExecutedByParent": true,
+        "logSha256": "5ca5a149fbf45c8b81823f9b66f534a093eb4464e6f23ea74ee37c1356b0cc4c"
+      },
+      {
+        "passed": 455,
+        "failed": 0,
+        "childEntryRegisteredIgnored": 1,
+        "childExecutedByParent": true,
+        "logSha256": "6f89970499077d83be729ec0fffb0e601af031bc1a87602a52b977ed79eb8a7d"
+      },
+      {
+        "passed": 455,
+        "failed": 0,
+        "childEntryRegisteredIgnored": 1,
+        "childExecutedByParent": true,
+        "logSha256": "9ed564a652ec0d4b25c62cd7674ddcd3d5a0676ea9ef2040d7d866007ab57dd0"
+      }
+    ],
+    "workspacePrimaryHarnessPassed": 941,
+    "existingNestedHarnessPassed": 3,
+    "explicitlyExecutedUiChild": 1,
+    "workspaceFailed": 0,
+    "reportedIgnored": 12,
+    "notExecutedIgnored": 11,
+    "cargoFmt": "passed",
+    "cargoCheckWorkspace": "passed",
+    "workspaceLogSha256": "c1fb6d9d9e1d7fc792e48672efc85643e038691fd6f54ecd926beaf2abd9e7cd"
+  },
+  "limitations": [
+    "A controlled same-process heartbeat reproduces resource interference; it does not uniquely attribute every historical UI failure.",
+    "One editor-read readiness timeout occurred before added state diagnostics and was not reproduced in 32 focused seeds or three later full UI runs.",
+    "Passing these runs does not prove all real-worker scheduling interleavings.",
+    "The private ignored entry point is explicitly executed by its parent; remaining ignored native tests are not claimed as run in this cycle."
+  ]
+}

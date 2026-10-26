@@ -200,7 +200,18 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 固定 180 秒训练裁剪的两轮 native 输出与基线逐段/向量等价，DER 全部分项不变；零 collar 27.98%，500 ms 完整 collar 26.61%。中位 37.83 秒，相对 36.63 秒基线约慢 3.28%，RSS 约 291 MiB；均通过运行前冻结的 1.1 倍耗时、1.2 倍 RSS 和 DER 不退化门，没有提速或留出验收声明。完整来源和门槛见[距离切分回执](../quality/ahc-distance-validation.json)。
 
-验证时另修复 UI 模型夹具的相对共享 `models` 路径：从仓库根启动会读取真实安装，使四项引导测试失败。每个夹具改用独立绝对临时路径，路径/缺失状态回归先红后绿，四项原失败测试通过。首次完整并发回归另外出现两项 UI 失败及占满共享 worker 的测试停滞；两项各按 0–31 种子重跑及最终完整回归通过，未将停滞归因于 AHC，也不声称路径隔离已经修复它。//TODO - 在受控占满共享 worker 时捕获 UI 测试的线程栈和完成握手，验证进程隔离是否消除跨测试干扰；不得通过放宽超时或忽略测试掩盖。
+验证时另修复 UI 模型夹具的相对共享 `models` 路径：从仓库根启动会读取真实安装，使四项引导测试失败。每个夹具改用独立绝对临时路径，路径/缺失状态回归先红后绿，四项原失败测试通过。首次完整并发回归另外出现两项 UI 失败及占满共享 worker 的测试停滞；两项各按 0–31 种子重跑及最终完整回归通过，未将停滞归因于 AHC，也不声称路径隔离已经修复它。共享资源干扰已按下节受控验证；历史失败的唯一根因没有据此全部闭合。
+
+
+### UI 回归的共享 worker 隔离
+
+全并行用例共用进程级 IO pool。队列搜索回归为验证取消后释放捕获引用，会占满所有 slot；只让“主动阻塞”的用例持有互斥锁，不能保护未拿锁的普通 UI IO。受控复现先确认全部 slot 已启动，再提交独立 heartbeat：200 ms 内不能完成，释放 slot 后完成并 join，隔离要求显式失败。这个机制能够造成跨测试干扰，不将它当作每一次历史超时的唯一根因。
+
+对照[标准 Rust 测试组织](https://doc.rust-lang.org/book/ch11-03-test-organization.html)和当前私有 API 边界，保留原 GPUI 断言，在独立进程运行此资源耗尽场景，避免为 integration test 暴露 RootView。普通父测试显式用 `--exact --ignored` 运行私有 child；子进程占满自身 pool 后，握手暂停，父进程的真实 IO heartbeat 仍通过，随后释放 child。成功退出与唯一完成标记共同防止零匹配测试假绿；40 秒截止后 kill/wait，日志清理，未增产品配置或调度器。
+
+独立 review 确认 clear/edit/resubmit、owner 数、文件字节和重新搜索断言均保留；父测试不是 GPUI 多种子循环，`ITERATIONS=32` 仅交给 child，避免平方重复。显式运行的 child 日志核对 32 个完成标记；连续三轮完整 UI 各 455 通过，随后完整工作区 941 项主 harness 与 3 项已有子 harness 通过。统计中的 12 项 ignored 包含由父测试显式执行的 1 项 UI child，其他 11 项不能据此声称执行。见[隔离回执](../quality/ui-worker-isolation-validation.json)。
+
+另一次失败发生在编辑器草稿就绪等待，尚未进入详情开关断言；32 个单例种子及后续三轮完整并行均未复现。缩放点击受控场景在旧实现也通过，未按猜测修改点击 helper。等待截止仍为 20 秒，失败仅补充 route/mode/selection、shown/loading/read-error ID 等状态，不记录文档内容或凭据。//TODO - 若再次复现，按模式未切换、读取仍在队列和已产生错误三类状态捕获线程栈与 read 命令握手，先建立确定性红线再修复；当前通过次数不能替代根因证据。
 
 ### DER 评分器的正确性
 
@@ -415,3 +426,7 @@ while let Some(segment) = vad.front() {
 #### AHC 距离规则交叉验证核心
 
 用 NumPy seed 86739 对 2 至 64 个叶子分别构造四组归一化向量（2/3/8/32 维）的 SciPy centroid 树和四组合法随机合并树，将距离统一转为 f32 后同时送给两个 Rust 私有切树实现与 SciPy `fcluster(criterion="distance")`。阈值为 0/0.2/0.4/0.6/0.8/1/1.2/1.6/2；按每个标签首次出现的次序重编号，比较完整分组。临时 driver 从 stdin 读取 Step，避免另造 inference provider；实验后删除。native 复核另用已有永久 benchmark，固定六线程、相同模型/音频 hash、自动人数和无 Library 两次调用，标准 DER 与向量等价性分别核对；先等待原始回执完整写入，再评分。
+
+#### 共享 worker 干扰的受控复现核心
+
+旧布局中，`OccupiedUiWorkers::new()` 逐 slot 等待 started 信号，直到当前进程全部 IO slot 被占用；另起 driver 提交普通 `runtime::spawn_blocking` heartbeat，等待 200 ms，先释放占用并 join driver，再断言 heartbeat 必须提前完成，得到红线。永久隔离测试在 child 执行同一占用和完整搜索断言，stdout 发布 `UI_WORKERS_HELD`，stdin 等待父进程释放；父进程实际执行独立 IO，校验 5 秒内完成，再关闭 stdin。child 正常退出和完成标记均必须存在。临时同进程探针已删除，保留探针 SHA 和永久父/子实现。
