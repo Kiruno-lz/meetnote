@@ -83,8 +83,75 @@ impl Drop for OccupiedUiWorkers {
     }
 }
 
+#[test]
+fn workspace_search_releases_obsolete_queued_repository_handles() {
+    // Protect the heartbeat from other intentionally blocked cases. Ordinary
+    // tests remain free to use this process's IO pool while the child fills its own.
+    let _alone = crate::tests::hold_a_worker_alone();
+    let log_path = temp_directory().with_extension("log");
+    let log = std::fs::File::create(&log_path).unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "document_tests::queued_search_worker_exhaustion_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("MEETNOTE_UI_EXHAUSTION_HOLD", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(log.try_clone().unwrap())
+        .stderr(log)
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40);
+    let mut heartbeat = None;
+    let (status, timed_out) = loop {
+        let output = std::fs::read_to_string(&log_path).unwrap();
+        if heartbeat.is_none() && output.contains("UI_WORKERS_HELD") {
+            let (sent, received) = std::sync::mpsc::channel();
+            let driver = std::thread::spawn(move || {
+                futures::executor::block_on(runtime::spawn_blocking(move || {
+                    let _ = sent.send(());
+                }));
+            });
+            heartbeat = Some(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .is_ok(),
+            );
+            // EOF releases the child even if the heartbeat failed.
+            drop(child.stdin.take());
+            if heartbeat == Some(true) {
+                driver.join().unwrap();
+            }
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            break (status, false);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            break (child.wait().unwrap(), true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let output = std::fs::read_to_string(&log_path).unwrap();
+    std::fs::remove_file(log_path).unwrap();
+    assert!(!timed_out, "isolated worker test timed out: {output}");
+    assert!(status.success(), "isolated worker test failed: {output}");
+    assert_eq!(
+        heartbeat,
+        Some(true),
+        "child interfered with the parent IO pool: {output}"
+    );
+    assert!(
+        output.contains("UI_EXHAUSTION_VERIFIED"),
+        "child did not finish its assertions: {output}"
+    );
+}
+
 #[gpui::test]
-fn workspace_search_releases_obsolete_queued_repository_handles(cx: &mut TestAppContext) {
+#[ignore = "executed by the process-isolated queued-search regression"]
+fn queued_search_worker_exhaustion_child(cx: &mut TestAppContext) {
     let _alone = crate::tests::hold_a_worker_alone();
     let documents = DocumentsRoot::new();
     documents.put(processed("meeting", "Review"), "预算");
@@ -103,6 +170,11 @@ fn workspace_search_releases_obsolete_queued_repository_handles(cx: &mut TestApp
     view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
     wait_for(cx, &view, |root| !root.audio.pending());
     let occupied = OccupiedUiWorkers::new();
+    if std::env::var_os("MEETNOTE_UI_EXHAUSTION_HOLD").is_some() {
+        println!("UI_WORKERS_HELD");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0]);
+    }
     cx.run_until_parked();
     let owners = Arc::strong_count(&repository);
     let input = view.read_with(cx, |root, _| root.search.input.clone());
@@ -151,6 +223,7 @@ fn workspace_search_releases_obsolete_queued_repository_handles(cx: &mut TestApp
         1,
         "a new search must still finish normally"
     );
+    println!("UI_EXHAUSTION_VERIFIED");
 }
 
 #[gpui::test]
