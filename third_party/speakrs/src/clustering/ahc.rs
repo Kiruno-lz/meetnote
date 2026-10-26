@@ -9,7 +9,7 @@ use flat::flat_clusters;
 /// Agglomerative hierarchical clustering settings for speaker embeddings.
 #[derive(Debug, Clone, Copy)]
 pub struct AhcConfig {
-    /// Maximum dendrogram merge distance to keep observations in one flat cluster.
+    /// Maximum merge distance anywhere within a flat cluster subtree.
     pub threshold: f32,
 }
 

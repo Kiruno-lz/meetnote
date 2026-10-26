@@ -8,6 +8,18 @@ pub(super) fn flat_clusters(
     if observations == 0 {
         return Vec::new();
     }
+    // Centroid linkage can invert merge heights. A distance cut must bound every
+    // merge inside a subtree, not just its root (SciPy fcluster "distance").
+    let mut maximum_heights: Vec<f32> = Vec::with_capacity(steps.len());
+    for step in steps {
+        let mut height = step.dissimilarity;
+        for child in [step.cluster1, step.cluster2] {
+            if child >= observations {
+                height = height.max(maximum_heights[child - observations]);
+            }
+        }
+        maximum_heights.push(height);
+    }
     let mut labels = vec![usize::MAX; observations];
     let mut next_label = 0;
     // Keep traversal state on the heap: centroid linkage may produce a deep tree.
@@ -23,7 +35,7 @@ pub(super) fn flat_clusters(
         }
         let step = &steps[node - observations];
         let label = inherited_label.or_else(|| {
-            (step.dissimilarity <= threshold).then(|| {
+            (maximum_heights[node - observations] <= threshold).then(|| {
                 let label = next_label;
                 next_label += 1;
                 label
