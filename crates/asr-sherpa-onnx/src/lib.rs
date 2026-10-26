@@ -1,4 +1,6 @@
-use application::{asr_descriptor, AsrBackend, AsrWindowSession, BackendFuture};
+use application::{
+    asr_descriptor, run_backend_worker, AsrBackend, AsrWindowSession, BackendFuture,
+};
 use audio::{
     read_audio_mono_16k, AudioWindow, AudioWindowBounds, AudioWindowPlan, TARGET_SAMPLE_RATE_HZ,
 };
@@ -81,9 +83,9 @@ impl AsrBackend for SherpaOnnxAsrBackend {
     fn transcribe(&self, request: AsrRequest, context: JobContext) -> BackendFuture<AsrResult> {
         let num_threads = self.num_threads.max(1);
         let worker_context = context.clone();
-        Box::pin(
-            context.spawn_blocking(move || transcribe_sync(request, worker_context, num_threads)),
-        )
+        run_backend_worker(context, move || {
+            transcribe_sync(request, worker_context, num_threads)
+        })
     }
 
     fn supports_windowed_audio(&self) -> bool {

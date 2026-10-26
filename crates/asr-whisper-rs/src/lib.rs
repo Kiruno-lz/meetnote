@@ -1,4 +1,6 @@
-use application::{asr_descriptor, AsrBackend, AsrWindowSession, BackendFuture};
+use application::{
+    asr_descriptor, run_backend_worker, AsrBackend, AsrWindowSession, BackendFuture,
+};
 use audio::{read_audio_mono_16k, AudioWindow, TARGET_SAMPLE_RATE_HZ};
 use contracts::{
     AsrRequest, AsrResult, BackendDescriptor, BackendError, BackendErrorCode, ComputeDevice,
@@ -48,7 +50,9 @@ impl AsrBackend for WhisperRsBackend {
     fn transcribe(&self, request: AsrRequest, context: JobContext) -> BackendFuture<AsrResult> {
         let threads = self.threads.max(1);
         let worker_context = context.clone();
-        Box::pin(context.spawn_blocking(move || transcribe_sync(request, worker_context, threads)))
+        run_backend_worker(context, move || {
+            transcribe_sync(request, worker_context, threads)
+        })
     }
 
     fn supports_windowed_audio(&self) -> bool {
