@@ -13,6 +13,7 @@ use sherpa_onnx::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use unicode_segmentation::UnicodeSegmentation;
 
 const SINGLE_GRAPH_MODEL_FILES: &[&str] = &["model.int8.onnx", "model.onnx"];
 const QWEN3_ENCODER_FILES: &[&str] = &["encoder.int8.onnx", "encoder.onnx"];
@@ -634,10 +635,32 @@ fn merge_timestamped_tokens(
     tokens: Vec<domain::TranscriptSegment>,
 ) -> Vec<domain::TranscriptSegment> {
     let subword_boundaries = tokens.iter().any(|token| token.text.starts_with(' '));
+    // SentencePiece marks whitespace, not every word. Unicode word starts
+    // distinguish CJK characters from Latin continuations without script ranges.
+    // Keep a single forward iterator over the decoded text rather than scanning
+    // the accumulated transcript for every token.
+    let decoded: String = tokens
+        .iter()
+        .map(|token| token.text.trim_end_matches("@@"))
+        .collect();
+    let mut word_starts = decoded
+        .unicode_word_indices()
+        .map(|(start, _)| start)
+        .peekable();
+    let mut byte_offset = 0;
     let mut segments: Vec<domain::TranscriptSegment> = Vec::new();
     let mut bpe_continuation = false;
     let mut pending_word_boundary = false;
     for mut token in tokens {
+        let token_offset = byte_offset;
+        byte_offset += token.text.trim_end_matches("@@").len();
+        while word_starts
+            .peek()
+            .is_some_and(|start| *start < token_offset)
+        {
+            word_starts.next();
+        }
+        let starts_word = word_starts.peek() == Some(&token_offset);
         if token.text.trim().is_empty() {
             pending_word_boundary |= token.text.starts_with(' ');
             continue;
@@ -649,8 +672,8 @@ fn merge_timestamped_tokens(
         let continues_previous = bpe_continuation;
         bpe_continuation = token.text.ends_with("@@");
         token.text = token.text.trim_end_matches("@@").to_string();
-        let within_word =
-            continues_previous || (subword_boundaries && !token.text.starts_with(' '));
+        let within_word = continues_previous
+            || (subword_boundaries && !token.text.starts_with(' ') && !starts_word);
         let should_merge = segments.last().is_some_and(|previous| {
             within_word
                 || (token.start_ms <= previous.end_ms.saturating_add(750)
@@ -1095,6 +1118,42 @@ mod tests {
             let actual = merge_timestamped_tokens(segments);
             assert_eq!(actual.len(), 1);
             assert_eq!(actual[0].text, expected);
+        }
+    }
+
+    #[test]
+    fn sentencepiece_cjk_sentence_and_pause_boundaries_are_not_word_continuations() {
+        for parts in [
+            vec![
+                (0, "▁the"),
+                (200, "你"),
+                (400, "好"),
+                (600, "。"),
+                (20000, "下"),
+                (20200, "次"),
+                (20400, "见"),
+            ],
+            vec![
+                (0, "▁你"),
+                (200, "好"),
+                (20000, "下"),
+                (20200, "次"),
+                (20400, "见"),
+            ],
+        ] {
+            let tokens = parts
+                .iter()
+                .map(|(start, text)| domain::TranscriptSegment {
+                    id: String::new(),
+                    start_ms: *start,
+                    end_ms: start + 100,
+                    text: normalize_token(text),
+                })
+                .collect();
+            let merged = merge_timestamped_tokens(tokens);
+            assert_eq!(merged.len(), 2, "{merged:?}");
+            assert_eq!(merged[1].start_ms, 20000);
+            assert_eq!(merged[1].text, "下次见");
         }
     }
 

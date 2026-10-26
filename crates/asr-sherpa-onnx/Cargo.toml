@@ -10,6 +10,7 @@ contracts = { path = "../contracts" }
 domain = { path = "../domain" }
 runtime = { path = "../runtime" }
 sherpa-onnx = "1.13.6"
+unicode-segmentation = "=1.13.3"
 
 [dev-dependencies]
 futures.workspace = true
