@@ -1,5 +1,6 @@
 use application::{
-    diarization_descriptor, BackendFuture, DiarizationBackend, DiarizationStageProvenance,
+    diarization_descriptor, run_backend_worker, BackendFuture, DiarizationBackend,
+    DiarizationStageProvenance,
 };
 use audio::read_audio_mono_16k;
 use contracts::{
@@ -111,7 +112,9 @@ impl DiarizationBackend for SherpaOnnxDiarizationBackend {
     ) -> BackendFuture<DiarizationResult> {
         let backend = self.clone();
         let worker_context = context.clone();
-        Box::pin(context.spawn_blocking(move || diarize_sync(backend, request, worker_context)))
+        run_backend_worker(context, move || {
+            diarize_sync(backend, request, worker_context)
+        })
     }
 }
 

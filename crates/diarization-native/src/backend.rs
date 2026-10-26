@@ -4,7 +4,7 @@ use crate::{
     SpeakerLibraryService, SpeakrsEngine, SPEAKRS_MODEL_ID, SPEAKRS_MODEL_REVISION,
 };
 use application::{
-    diarization_descriptor_with_stages, BackendFuture, DiarizationBackend,
+    diarization_descriptor_with_stages, run_backend_worker, BackendFuture, DiarizationBackend,
     DiarizationStageProvenance,
 };
 use audio::read_audio_mono_16k;
@@ -88,11 +88,11 @@ impl NativeDiarizationBackend {
     ) -> NativeBackendFuture<NativeDiarizationOutput> {
         let backend = self.clone();
         let worker_context = context.clone();
-        Box::pin(context.spawn_blocking(move || {
+        run_backend_worker(context, move || {
             backend
                 .analyze_sync(request, worker_context)
                 .map_err(BackendError::from)
-        }))
+        })
     }
 
     fn analyze_sync(
