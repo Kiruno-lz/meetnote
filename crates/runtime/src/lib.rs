@@ -125,14 +125,21 @@ impl Default for CancellationToken {
     }
 }
 
+static BLOCKING_RUNTIME: std::sync::OnceLock<JobRuntime> = std::sync::OnceLock::new();
+
 pub fn spawn_blocking<T, F>(work: F) -> impl Future<Output = T> + Send
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    static RUNTIME: std::sync::OnceLock<JobRuntime> = std::sync::OnceLock::new();
-    let runtime = RUNTIME.get_or_init(JobRuntime::default).clone();
+    let runtime = BLOCKING_RUNTIME.get_or_init(JobRuntime::default);
     let (context, _) = runtime.create_job();
+    // Anonymous work exposes no job ID or event stream. Its context owns the
+    // record and shared gate; the private registry must not retain UI reads
+    // forever, including futures dropped unpolled or workers that panic.
+    runtime
+        .remove(context.job_id())
+        .expect("anonymous worker context must be registered");
     context.started();
     async move {
         let value = context.spawn_blocking_uncancellable(work).await;
@@ -562,6 +569,31 @@ impl Default for JobRuntime {
 mod tests {
     use super::*;
     use futures::StreamExt;
+
+    #[test]
+    fn anonymous_blocking_work_does_not_accumulate_registered_jobs() {
+        let count = || BLOCKING_RUNTIME.get().unwrap().list().unwrap().len();
+        let unpolled = spawn_blocking(|| 1);
+        drop(unpolled);
+        let after_unpolled = count();
+
+        assert_eq!(futures::executor::block_on(spawn_blocking(|| 42)), 42);
+        let after_completed = count();
+
+        let panic = std::panic::catch_unwind(|| {
+            futures::executor::block_on(spawn_blocking(|| panic!("injected worker panic")));
+        });
+        assert!(
+            panic.is_err(),
+            "anonymous workers must retain panic propagation"
+        );
+        let after_panicked = count();
+        assert_eq!(
+            [after_unpolled, after_completed, after_panicked],
+            [0, 0, 0],
+            "anonymous UI reads have no public job handle or retained job history"
+        );
+    }
 
     #[test]
     fn creates_monotonic_job_ids_and_reports_progress() {
