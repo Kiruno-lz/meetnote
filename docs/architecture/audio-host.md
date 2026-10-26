@@ -101,7 +101,7 @@ pub trait DiarizationBackend: Send + Sync {
 
 - 模型：单文件 GGML/GGUF。
 - 设备：`Cpu` 强制 CPU，`Auto`/`Metal` 使用 Metal；当前构建不启用 Core ML，显式请求返回 `DeviceUnavailable`。
-- whole-file：读取完整 16 kHz mono 音频，输出 Whisper 时间戳段。
+- whole-file：读取完整 16 kHz mono 音频，输出 Whisper 时间戳段；与 windowed 共用 sample 范围标准化，将模型 padding 内的结束时间裁到实际解码边界，纯 padding 段不进入结果。该约束保证时间属于源音频，不等于词级对齐。
 - windowed：复用一个 `WhisperContext`，每个窗口创建 state；用全局 sample offset 恢复时间，以 valid-core midpoint 归属并去除重复段。
 - probe：检查模型 artifact 是现存文件；真实 context 加载在推理 session 创建时完成。
 - 取消：参数对象持有稳定的 `Box<JobContext>`，类型明确的 C 回调只在同步 `full` 调用内读取，返回后释放；避免固定 binding safe wrapper 的 userdata 类型不一致。

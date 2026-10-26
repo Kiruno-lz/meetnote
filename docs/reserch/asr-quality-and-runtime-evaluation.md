@@ -166,11 +166,29 @@ embedding 是固定 bundle 的主要耗时点。先前一/四线程的 180 秒�
 
 现有 `asr_benchmark.py` 增加可选 `knownSilenceRangesMs` 与分组 `knownSilence`：参考区间与预测区间各自合并取并集后计算交集，重叠段不重复计量；失败标为未测，不能记作零覆盖。范围与有限数值先校验，不影响未提供标注的旧病例。它仅测已知静音覆盖，不是词对齐分数；真实插入静音已逐字节核对为零。临时 VAD probe/裁剪编排源码已删除，保留回执与附录核心方法。
 
+### 粗时间诊断接入与 Whisper EOF 边界
+
+为区分文本识别与粗时间合理性，隔离接入 [MeetEval 0.4.3 的 SISO 时间约束 WER](https://raw.githubusercontent.com/fgnt/meeteval/badcd3c7cf82f98d2ac1f292801fbe6e9093ee2f/meeteval/wer/wer/time_constrained.py)。`requirements-timing.txt` 仅属于离线评测，不进入桌面推理。`report_asr_timing.py` 复用生产 benchmark 的 hash/完整覆盖校验和原样 WER 归一口径；按语言、场景、repeat、collar 输出原样 WER 与 tcWER，同时保留逐 case 统计。旧 run 缺少 `wordTiming` 时需用新病例重跑，不修改旧快照。
+
+[固定版本的官方说明](https://raw.githubusercontent.com/fgnt/meeteval/badcd3c7cf82f98d2ac1f292801fbe6e9093ee2f/doc/tcpwer.md)明确指出：hypothesis 的 `full_segment` 可用超长段绕过约束。试接采用其推荐的 `character_based_points`，参考使用既有官方词区间，不重新估计参考时间。运行前冻结 0.5/2 秒两个 collar；0.5 秒为敏感性探测，官方在 LibriCSS 推荐的 2–5 秒范围不能直接变成当前短 AMI 的精度门。近似点不能证明模型提供了词时间；本工具只做单人英语粗时间诊断，不评 DER、中文时间或词级精度，也不修改默认模型。
+
+同一组五个 AMI 裁剪、95 个参考词，SenseVoice/Whisper 各两轮。下表为两轮一致的结果；Whisper 为修复源音频越界后的输出，原配置在诊断阶段被明确拒绝，见[完整回执](../quality/asr-temporal-evaluation.json)。
+
+| 模型 / 配置 | 原样 WER | tcWER，0.5 秒 | tcWER，2 秒 |
+|---|---:|---:|---:|
+| SenseVoice small int8，CPU 四线程 | 26.32% | 71.58% | 29.47% |
+| Whisper base.en，Metal 配置、四线程 | 29.47% | 64.21% | 32.63% |
+
+collar 敏感性很大，差值同时包含粗段内近似与参考误差，不是“词时间错误率”，不得用于默认模型排名或质量通过声明。纯文本正确但整体平移、超长整段的正反例均经工具验证；未评估项与失败保持可见。报告原子发布，失败重跑清除旧报告、拒绝覆盖输入；EOF 比较回到 sample 域，已先复现并修复 `1.001 * 1000` 浮点误差导致合法 1001 ms 被拒绝的问题。
+
+真实调用发现 Whisper 对 `ami-ES2002a-4` 的 8670 ms 源音频返回 9000 ms 结束点，两轮一致。显式设置 base.en 权重和第五裁剪路径的真实 ignored 测试先失败；随后整文件与窗口共用有界 sample 范围转换，裁去 decoder padding 的时间，纯 padding 段不进入结果。修复后真实测试通过，十次配对调用保留全部文本、ID、起点和分段，仅两次 EOF 从 9000 改为 8670 ms。SenseVoice 十次、Whisper 前后各十次，共三十次独立 ASR 调用均成功；没有放宽评分器范围检查。该修复只保证源音频范围，不将 EOF 当作真实发声结束点。
+
 ## 复现说明
 
 1. `uv venv --python 3.12 eval-data/asr-eval/venv`，在该环境安装 `scripts/audio-eval/requirements.txt`。MLX 实验安装 `scripts/audio-eval/requirements-mlx.txt` 的固定依赖，桌面不依赖这些包。
 2. 从上述固定 FLEURS revision 下载 `data/cmn_hans_cn/audio/test.tar.gz`、`data/en_us/audio/test.tar.gz`，分别放入 `<root>/downloads/zh-test.tar.gz`、`en-test.tar.gz`。`prepare_fleurs.py --root <root>` 校验 archive SHA、读取官方 TSV 并产生病例；`--offset 24 --language zh` 构建第二组句子。
 3. `prepare_ami_asr.py --audio <ES2002a.Mix-Headset.wav> --annotations <ami_public_manual_1.6.2.zip> --root <root>` 同时校验官方素材与标注 SHA，产生独立 AMI 病例与 `wordTiming`。词时间先校验有效性、顺序与完整包含关系，再以最近 sample、half-even 取整；保留词重叠，不裁短跨边界词，也不从间隙推导静音。
+   可选时间诊断在独立 Python 3.12 环境安装 `scripts/audio-eval/requirements-timing.txt`；先以含 `wordTiming` 的病例执行原 ASR benchmark，再运行 `report_asr_timing.py --run <run-dir> --output <temporal.json> --collar 0.5 2`。保存环境版本、原始预测与 scorer/normalizer SHA；`status: complete` 仅表示诊断完成，`qualityAcceptance` 固定为 `not_assessed`。
 4. `cargo build --release --locked -p asr --example asr_benchmark`；使用配置文件指定 `model`、`device`、`threads`、`repeats`、`windowed`。模型路径必须是已安装本地资产，backend 不下载。
 5. `asr_benchmark.py --cases <cases.json> --config <configuration.json> --runner <asr_benchmark> --output <run-directory>` 执行与评分。模型加载、崩溃、超时、取消与缺失结果均保留；成功回执必须覆盖配置中的每个 case 与 repeat，读取时同时校验 manifest 和新回执中的预测 SHA-256；模型输出不掺入 gold。MLX runner 换为 `scripts/audio-eval/mlx_qwen_probe.py`。
 6. `cargo build --release --locked -p diarization --example diarization_benchmark`；`diarization_benchmark <backend> <model-directory> <audio> <output.jsonl>` 独立运行两次，配合 `/usr/bin/time -l` 记录进程 RSS；未提供 speaker gold 时明确记为未评估精度。
@@ -208,9 +226,9 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 |---|---|
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
-| `cargo test --workspace --locked` | 919 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过 |
+| `cargo test --workspace --locked` | 920 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
-| Python 评分/基线测试 | 41 passed；DIA 覆盖/数值/时间线/资源正反例、精确距离、归一口径、整轮缺失/重复/越界、预测 hash、旧回执失效、取消/超时与进程组回收、AMI 官方词时间投影与拒绝无效参考 |
+| Python 评分/基线测试 | timing 环境 49 passed；基础环境 41 passed、8 项可选 timing 测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
 | review 真实回归 | 当前 release 完成 12 组、128 次调用；五种 Whisper 配置各两次成功，四组 Paraformer 质量门与 96 次短路径逐段一致通过，SenseVoice 英文长输入两次成功；31 秒全零 ignored 回归已单独显式执行通过 |
 | CPU 分离对照 | 180 秒同一自然录音，baseline/candidate 各两次；35.233 秒中位耗时；宽区间与三种空转实验均保留，通过设备预算的性能/输出一致性门；不作为 DER |
