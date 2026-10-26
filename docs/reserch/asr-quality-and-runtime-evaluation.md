@@ -159,6 +159,14 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 结论：拒绝将六线程预算推广为 Whisper 全局默认，保留既有默认与显式覆盖；没有根据单任务最优点增加总资源竞争。48 个 native 进程共完成 403 次调用，另有四个超时配置与缺失调用明确保留。//TODO - 先在现有 JobRuntime 明确多录音的总 CPU/模型 session 预算，再在同进程、不同模型和小时级输入上验证吞吐、取消与 RSS；不能只放大每 session 线程，也不另建一套调度器。其他设备的 P/E 核、当前负载和 NUMA 不能由 `available_parallelism` 的近似值推断。
 
+### DER 评分器的正确性
+
+评测代码 review 发现原 DER 同时把说话人替换计作 miss 与 false alarm、只把排序靠前的预测标签纳入候选映射，且同 speaker 重叠段结束时过早清除活动状态。三个手算反例先分别得到错误的 100%/198%/50%，正确答案应为 50%/1%/0%。这些数字是评分器反例，不是模型质量。
+
+先核对已有 MeetEval：其 DER wrapper 需要额外 Perl scorer，缺少时会从未固定 master URL 下载，不适合当前离线、可追溯入口。改用独立环境中锁定的 [pyannote.metrics 4.0.0](https://github.com/pyannote/pyannote-metrics/tree/4.0.0) / core 6.1.0，复用 Hungarian mapping 与标准时域评分，不实现另一套匹配算法。它的 full-duration collar 在参考边界两侧各排除一半，不能与原来的语音膨胀混称；同 speaker 重叠段先合并，其他 speaker 重叠保留。该版本遗漏声明 `typing_extensions` 导致首次真实导入失败，已在可选 requirements 中显式锁定，完整重测通过。
+
+独立 review 增补了参考/预测标签数量不同、重命名不变性、空预测、无参考语音、collar 排除全部参考、20 speaker、非法时间/精度范围，以及无依赖/无分离输出的未评分语义。评分命令另先复现并修复覆盖输入、重复/空/多余会议、旧成功报告残留和输入外部编辑时 hash 不对应；现按原始字节快照评分并原子发布，失败不保留旧成功回执。完整记录见[评分器回执](../quality/der-scorer-validation.json)。Rust export 在有/无可选依赖两种环境均明确验证，不将 unavailable 当作零。真实会议的 UEM、speaker gold、模型 DER 和 AHC 取舍仍未验收；旧手写 DER 不能作为模型质量证据。
+
 ### 共享 worker 的排队资源
 
 复查 JobRuntime 发现，旧 gate 在新建 OS 线程后才等待名额；可取消入口的 future 即使未轮询或排队中被丢弃，该线程仍保留捕获的请求和资源。两个红线测试先复现 Arc owner 未释放，再复用已有依赖图中锁定的 [async-lock 3.4.2 semaphore](https://docs.rs/async-lock/3.4.2/async_lock/struct.Semaphore.html) 和 event-listener 5.4.2：先异步准入，再创建线程；取消监听先注册再检查标记，避免丢通知。实际 worker 持有 owned permit 到退出，运行中丢弃 receiver/取消 token 不能绕开并发预算。没有新增执行器、线程池或 native 线程默认值。
@@ -269,7 +277,7 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
 | `cargo test --workspace --locked` | 927 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
-| Python 评分/基线测试 | timing 环境 49 passed；基础环境 41 passed、8 项可选 timing 测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
+| Python 评分/基线测试 | timing + DER 环境 64 passed；基础环境 47 passed、17 项可选 timing/DER 测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
 | review 真实回归 | 当前 release 完成 12 组、128 次调用；五种 Whisper 配置各两次成功，四组 Paraformer 质量门与 96 次短路径逐段一致通过，SenseVoice 英文长输入两次成功；31 秒全零 ignored 回归已单独显式执行通过 |
 | CPU 分离对照 | 180 秒同一自然录音，baseline/candidate 各两次；35.233 秒中位耗时；宽区间与三种空转实验均保留，通过设备预算的性能/输出一致性门；不作为 DER |

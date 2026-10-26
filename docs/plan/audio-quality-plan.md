@@ -43,6 +43,8 @@ B1 的可选 `knownSilenceRangesMs` 标注以区间并集计算转写与已知�
 
 Whisper 的 1–16 线程范围及 large/Turbo 补查见[线程回执](../quality/whisper-thread-evaluation.json)：六线程改善本机单任务 CPU 耗时，但两个独立推理进程的反向批次增加 44.78%，拒绝全局默认提高。JobRuntime worker 名额与各 native pool 的线程预算必须分开验证；后续在同进程和固定总 CPU 预算下补吞吐、取消与小时级资源证据。
 
+B2 的 `metrics.py` 使用独立 `requirements-diarization.txt` 中锁定的 pyannote.metrics 4.0.0 / core 6.1.0，替换错误的手写 DER：最优标签映射、重叠与参考边界 collar 由库处理；collar 参数是以参考边界为中心的完整时长。没有依赖、缺少分离输出或参考 speaker time 为零时明确未评分，不能记作零 DER。`durationMs` 缺失时范围标为 observed extent；完整会议仍须显式 UEM/gold 和独立模型执行。手算反例、20 speaker 映射、输入快照/失败回执与 Rust export 验证见[评分器回执](../quality/der-scorer-validation.json)。
+
 B3 的 `cargo run --release --locked -p domain --example alignment_benchmark -- <short|long|nested> <repeats> [max_median_ms]` 直接调用生产对齐函数，并逐字段核对构造 gold。`long` 为 48,000 个转写段和 16,000 个说话人段，`nested` 再加全程覆盖段；两者各五轮、先后顺序反转，各自固定本机中位耗时门为 100 ms。旧扫描超过门槛，区间索引后分别为 10.3/14.1 ms；短场景为 0.0089→0.0115 ms，固定上限 1 ms。峰值 RSS 观测约 35.4 MiB；耗时包含每次索引构建和输出生成，完整回执见[对齐资源评测](../quality/alignment-resource-evaluation.json)。20 小时仅是构造时间轴长度，不代表真实长录音、ASR/DER 质量或 Audio Host 总资源验收。
 
 B1 可选安装 `requirements-timing.txt`，用 `report_asr_timing.py --run <run-dir> --output <report.json> --collar 0.5 2` 运行锁定的 MeetEval 0.4.3 单人英语 tcWER。输入 run 必须由带 `wordTiming` 的病例生成，原始病例与预测 hash、重复覆盖和词参考一致性均校验；普通 WER 使用原归一口径。参考保留官方词区间，hypothesis 使用官方 `character_based_points` 近似，0.5 秒仅用于敏感性检查；输出始终声明词级精度/质量验收未评估，不能据分数切换默认模型。失败不保留旧完整报告，输入文件不可覆盖，推理失败保留未测状态。EOF 校验在 sample 域进行，避免浮点时长误拒合法整数毫秒。真实结果及 Whisper 源音频越界修复见[时间诊断回执](../quality/asr-temporal-evaluation.json)。
@@ -71,7 +73,7 @@ B1 可选安装 `requirements-timing.txt`，用 `report_asr_timing.py --run <run
 |---|---|---|
 | B0 素材/评分器 | FLEURS 中英文各 24 个原生句子、构造 clean/noise、后续 24 个中文句子；AMI 五个非重叠会话裁剪及 95 个官方 forced-alignment 词时间投影；固定 hash、版本与精确评分正反例 | 增加自然中文会议、远场与重叠 gold，按会议/speaker 隔离 |
 | B1 模型比较 | Paraformer、SenseVoice、Whisper large/base/Turbo、Qwen MLX 已真实比较；CPU/Metal、线程与加载策略分别记录；Unicode 分段接入保留这组真实输出，Silero VAD 裁剪因英文/低音量退化拒绝默认集成，见[边界回执](../quality/asr-boundary-evaluation.json) | 扩大场景，添加可靠词时间参考与时间误差 |
-| B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门，计数与等价不替代 DER | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
+| B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门；标准 DER 评分器经手算反例与导出协议验证，未测模型质量 | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
 | B3 窗口/运行 | 已复现并修复 Whisper 回调、子词边界、设备回退与推理粒度问题；短路径和应用窗口分别核对；对齐区间索引通过构造 gold、128 组穷举对照及资源门，长音频接入所属 runtime 并发门 | 验证小时级资源、取消延迟、恢复和身份漂移；AHC 的二次内存仍需单独治理 |
 | B4/B5 | 已有 Agent runner 与历史基础；本轮未开展语义和完整误差传播验收 | 使用固定 gold 经 Host 调用，逐层替换预测定位损失 |
 
