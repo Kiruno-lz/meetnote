@@ -58,6 +58,15 @@ regressions require the optional environment; the regular Rust export protocol
 also checks the explicit unavailable case. Neither fixture validation nor export
 success proves a model's DER. See the [validation receipt](../../docs/quality/der-scorer-validation.json).
 
+For independent CPU diarization runs, `report_diarization.py --run <cpu-run>
+--reference <diarization-reference.json> --output <report.json> --collar-ms 0 500`
+checks audio/model/runner/prediction provenance and repeat coverage before scoring.
+It reports no ASR or Assistant scores. Explicit empty hypotheses count as misses;
+failed or incomplete executions cannot score as zero. The embedding comparison
+gate remains stricter than the quality-only loader. Existing output files must be
+reports of this tool before they can be replaced; audio and input artifacts are
+protected. See the [known-training-crop diagnostic](../../docs/quality/diarization-baseline-evaluation.json).
+
 Targeted checks:
 
 ```sh

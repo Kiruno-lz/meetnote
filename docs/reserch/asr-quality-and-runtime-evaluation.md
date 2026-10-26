@@ -163,9 +163,24 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 在更改 AHC 或身份策略前，需要可追溯的 B2 参考。比较自行从 XML 造规则与复用 [BUT/pyannote AMI setup](https://github.com/pyannote/AMI-diarization-setup/tree/67c2d539286e89f68952d5dcf83912bd9f01dfae)，采用后者固定 commit 的 only_words RTTM、原 UEM 和训练分区清单；其规则保留词活动、合并相邻同 speaker 区间，不把该协议等同于人工声学静音标注。
 
-`prepare_ami_diarization.py` 使用已有 pyannote.database loader，输出单个有 hash/sample 来源的参考文件；波形分块比较证明 `ami-first180.wav` 是官方 Mix-Headset 的精确开头，23 个投影区间、4 个参考 speaker 与独立 Decimal 运算逐项一致。测试覆盖重叠/身份、裁剪偏移、PCM 格式与内容、UEM 空隙、来源 pin、输入别名保护及完整 fixture 发布，全部 6 项通过。这个 ES2002a 裁剪明确属于 train，不能称为留出集；当前只完成参考准备，未执行该参考上的模型 DER。完整来源及范围见[参考回执](../quality/ami-diarization-reference.json)。
+`prepare_ami_diarization.py` 使用已有 pyannote.database loader，输出单个有 hash/sample 来源的参考文件；波形分块比较证明 `ami-first180.wav` 是官方 Mix-Headset 的精确开头，23 个投影区间、4 个参考 speaker 与独立 Decimal 运算逐项一致。测试覆盖重叠/身份、裁剪偏移、PCM 格式与内容、UEM 空隙、来源 pin、输入别名保护及完整 fixture 发布，全部 6 项通过。这个 ES2002a 裁剪明确属于 train，不能称为留出集；参考生成本身不执行模型；独立模型评分见后续基线。完整来源及范围见[参考回执](../quality/ami-diarization-reference.json)。
 
 复现时为 `prepare_ami_diarization.py` 显式提供 `--source-audio`、`--audio`、`--rttm`、`--uem`、`--split-file`、`--start-ms` 与 `--root`。所有参考来源均验证固定 SHA；真实音频/标注留在忽略目录，失败不替换已有参考。单个 crop 必须被原 UEM 全覆盖；不通过拼接或填补 UEM 伪造有效评分范围。
+
+### 独立 diarization 基线
+
+在改变聚类前，以固定的 ES2002a 开头 180 秒、CPU native、自动说话人数、无 Speaker Library 运行生产 adapter 两轮；运行前冻结零 collar 主指标、500 ms 完整 collar 敏感性指标和包含重叠，不按结果改参考或阈值。`report_diarization.py` 复用现有 CPU run 的 hash/失败/重复校验和标准 DER，显式空输出作为漏检，不因缺少 embedding 而假称未执行；原 CPU 对照仍要求完整向量。两个入口分别检查，不削弱等价性门。
+
+| 完整 collar | DER | 漏检率 | 误检率 | 混淆率 | 有效 speaker 时间 |
+|---:|---:|---:|---:|---:|---:|
+| 0 ms，主指标 | 27.98% | 4.90% | 19.41% | 3.67% | 113.49 秒 |
+| 500 ms，仅敏感性 | 26.61% | 2.94% | 21.36% | 2.31% | 94.91 秒 |
+
+两轮分项一致；全部四次评分与直接对原 RTTM/UEM 调用 pyannote 的结果一致。每轮 45 个时间段、3 个匿名 speaker、303 个 observation，中位执行 36.63 秒，进程峰值 RSS 约 305 MiB。与前次六线程输出逐段/向量等价；计时约慢 3.95%，本轮没有速度改动或提速声明。完整 hash、配置、原始秒数与方法见[分离基线回执](../quality/diarization-baseline-evaluation.json)。
+
+这是真实模型在已知训练裁剪上的 word-activity 诊断，不是留出 DER。参考只含词活动，误检秒数可能包含协议未计的发声，不能全部叫作已知静音中的虚构语音；也不能仅按参考 4 人与预测 3 类强制聚类数。下一次参数/算法改变先检查参考语义，再用固定基线和隔离留出参考测误差，不能用更好看的 speaker count 代替 DER。
+
+独立 review 先复现并修复合法 1001 ms 被浮点乘法误拒、backend/设备来源错配仍能评分，以及 bool wallSeconds 被当成一秒从而伪造提速。评分报告保留输入快照 hash，拒绝缺失/失败执行、错误音频与评分空隙，原子发布并保护原始音频、参考和 native 产物；无 ASR/Assistant 质量声明。
 
 ### DER 评分器的正确性
 
@@ -287,7 +302,7 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
 | `cargo test --workspace --locked` | 933 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
-| Python 评分/基线测试 | timing + DER 环境 71 passed；基础环境 48 passed、23 项可选 timing/DER/参考投影测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
+| Python 评分/基线测试 | timing + DER 环境 80 passed；基础环境 50 passed、30 项可选 timing/DER/参考投影测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
 | review 真实回归 | 当前 release 完成 12 组、128 次调用；五种 Whisper 配置各两次成功，四组 Paraformer 质量门与 96 次短路径逐段一致通过，SenseVoice 英文长输入两次成功；31 秒全零 ignored 回归已单独显式执行通过 |
 | CPU 分离对照 | 180 秒同一自然录音，baseline/candidate 各两次；35.233 秒中位耗时；宽区间与三种空转实验均保留，通过设备预算的性能/输出一致性门；不作为 DER |
