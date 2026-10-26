@@ -159,6 +159,14 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 结论：拒绝将六线程预算推广为 Whisper 全局默认，保留既有默认与显式覆盖；没有根据单任务最优点增加总资源竞争。48 个 native 进程共完成 403 次调用，另有四个超时配置与缺失调用明确保留。//TODO - 先在现有 JobRuntime 明确多录音的总 CPU/模型 session 预算，再在同进程、不同模型和小时级输入上验证吞吐、取消与 RSS；不能只放大每 session 线程，也不另建一套调度器。其他设备的 P/E 核、当前负载和 NUMA 不能由 `available_parallelism` 的近似值推断。
 
+### AMI 分离参考投影
+
+在更改 AHC 或身份策略前，需要可追溯的 B2 参考。比较自行从 XML 造规则与复用 [BUT/pyannote AMI setup](https://github.com/pyannote/AMI-diarization-setup/tree/67c2d539286e89f68952d5dcf83912bd9f01dfae)，采用后者固定 commit 的 only_words RTTM、原 UEM 和训练分区清单；其规则保留词活动、合并相邻同 speaker 区间，不把该协议等同于人工声学静音标注。
+
+`prepare_ami_diarization.py` 使用已有 pyannote.database loader，输出单个有 hash/sample 来源的参考文件；波形分块比较证明 `ami-first180.wav` 是官方 Mix-Headset 的精确开头，23 个投影区间、4 个参考 speaker 与独立 Decimal 运算逐项一致。测试覆盖重叠/身份、裁剪偏移、PCM 格式与内容、UEM 空隙、来源 pin、输入别名保护及完整 fixture 发布，全部 6 项通过。这个 ES2002a 裁剪明确属于 train，不能称为留出集；当前只完成参考准备，未执行该参考上的模型 DER。完整来源及范围见[参考回执](../quality/ami-diarization-reference.json)。
+
+复现时为 `prepare_ami_diarization.py` 显式提供 `--source-audio`、`--audio`、`--rttm`、`--uem`、`--split-file`、`--start-ms` 与 `--root`。所有参考来源均验证固定 SHA；真实音频/标注留在忽略目录，失败不替换已有参考。单个 crop 必须被原 UEM 全覆盖；不通过拼接或填补 UEM 伪造有效评分范围。
+
 ### DER 评分器的正确性
 
 评测代码 review 发现原 DER 同时把说话人替换计作 miss 与 false alarm、只把排序靠前的预测标签纳入候选映射，且同 speaker 重叠段结束时过早清除活动状态。三个手算反例先分别得到错误的 100%/198%/50%，正确答案应为 50%/1%/0%。这些数字是评分器反例，不是模型质量。
@@ -279,7 +287,7 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
 | `cargo test --workspace --locked` | 933 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
-| Python 评分/基线测试 | timing + DER 环境 65 passed；基础环境 48 passed、17 项可选 timing/DER 测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
+| Python 评分/基线测试 | timing + DER 环境 71 passed；基础环境 48 passed、23 项可选 timing/DER/参考投影测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
 | review 真实回归 | 当前 release 完成 12 组、128 次调用；五种 Whisper 配置各两次成功，四组 Paraformer 质量门与 96 次短路径逐段一致通过，SenseVoice 英文长输入两次成功；31 秒全零 ignored 回归已单独显式执行通过 |
 | CPU 分离对照 | 180 秒同一自然录音，baseline/candidate 各两次；35.233 秒中位耗时；宽区间与三种空转实验均保留，通过设备预算的性能/输出一致性门；不作为 DER |

@@ -16,7 +16,9 @@ B1 已有固定 FLEURS revision、archive/audio SHA、官方参考文本、句�
 - //TODO - 自动从 AMI、AliMeeting、AISHELL-4、CHiME-6 等已标注数据提取原生片段和构造片段；固定解码/重采样工具版本。拼接、插入静音、叠加与噪声变换同步变换词时间、speaker 身份、重叠区与有效评分区，边界跨词时自动调整到合法标注点，无法可靠投影的样本自动拒绝。
 - //TODO - 原生片段测真实分布；构造片段测精确边界/极端情况，分开统计。语义 gold 来自明确 topic 标注或预先选定的不同主题组合；不能将任意拼接点、静音或 speaker 切换自动当作语义 gold。
 - //TODO - 固定开发与留出集，按原始会议/speaker 隔离，构造变体沿用源 split；禁止同一素材的裁剪/拼接副本泄漏到另一 split。参考标注不足时标记 unsupported，不临时让用户补答案。
-- //TODO - 当前五个 AMI 非重叠裁剪已有词时间投影；补完整会议/重叠场景、speaker/UEM 投影与时间误差评分，核对强制对齐参考的可信度后再扩充其他场景；已有 AMI 手工文本 topic 评测不等于音频 benchmark 已就绪。
+AMI 的 B2 参考复用 [BUT/pyannote 固定 setup](https://github.com/pyannote/AMI-diarization-setup/tree/67c2d539286e89f68952d5dcf83912bd9f01dfae)：`prepare_ami_diarization.py` 校验 only_words RTTM、UEM、训练分区清单与官方源音频，并逐块核对 crop PCM。现有 ES2002a 开头 180 秒得到 23 个参考区间、4 个 speaker，重叠与身份保留，裁剪边界按源偏移恢复；仅允许完整包含于 UEM 的单个评分窗，不能填平未标注空隙。输出带音频/来源 SHA、sample 范围、train 分区与 forced-alignment 时间语义，见[参考回执](../quality/ami-diarization-reference.json)。原始标注和音频不进入仓库。
+
+- //TODO - 五个 AMI 非重叠 B1 裁剪已有词时间投影，B2 已有已知训练录音的 speaker/UEM 投影；补自然会议和会议/speaker 隔离的留出参考及独立模型评分，再扩充其他场景。训练裁剪、word-activity 参考和 AMI 手工文本 topic 评测都不能代替留出音频质量验收。
 
 | 维度 | 初始必备覆盖 |
 |---|---|
@@ -73,7 +75,7 @@ B1 可选安装 `requirements-timing.txt`，用 `report_asr_timing.py --run <run
 |---|---|---|
 | B0 素材/评分器 | FLEURS 中英文各 24 个原生句子、构造 clean/noise、后续 24 个中文句子；AMI 五个非重叠会话裁剪及 95 个官方 forced-alignment 词时间投影；固定 hash、版本与精确评分正反例 | 增加自然中文会议、远场与重叠 gold，按会议/speaker 隔离 |
 | B1 模型比较 | Paraformer、SenseVoice、Whisper large/base/Turbo、Qwen MLX 已真实比较；CPU/Metal、线程与加载策略分别记录；Unicode 分段接入保留这组真实输出，Silero VAD 裁剪因英文/低音量退化拒绝默认集成，见[边界回执](../quality/asr-boundary-evaluation.json) | 扩大场景，添加可靠词时间参考与时间误差 |
-| B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门；标准 DER 评分器经手算反例与导出协议验证，未测模型质量 | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
+| B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门；标准 DER 评分器经手算反例与导出协议验证；已有 ES2002a 180 秒固定 word-activity 参考，未测模型质量 | 固定 UEM/collar/overlap，计算 DER 分项，验证模型与聚类取舍 |
 | B3 窗口/运行 | 已复现并修复 Whisper 回调、子词边界、设备回退与推理粒度问题；短路径和应用窗口分别核对；对齐区间索引通过构造 gold、128 组穷举对照及资源门，长音频接入所属 runtime 并发门 | 验证小时级资源、取消延迟、恢复和身份漂移；AHC 的二次内存仍需单独治理 |
 | B4/B5 | 已有 Agent runner 与历史基础；本轮未开展语义和完整误差传播验收 | 使用固定 gold 经 Host 调用，逐层替换预测定位损失 |
 

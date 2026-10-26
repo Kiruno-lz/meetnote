@@ -7,7 +7,7 @@
   "license": "MIT",
   "sourceDistributionSha256": "aec037eb7ca4c0ad5c5bbcc19bc04e9acf24ba42c95f025497378e31db6a0ff4",
   "scorerSha256": "5c9d82d039f1c185920dbec3d6d42f2891099ff986b6bee0225b1128b946385d",
-  "requirementsSha256": "671a2d9527f6d72d27005a324078b14d1733a88350d3dfb36f9b920e6d84b31e",
+  "requirementsSha256": "8b282ed7f5af5b826c7fa35bab0170e883b6d29cc21f71cb9b77423486184cad",
   "environment": {
     "pyannote.metrics": "4.0.0",
     "pyannote.core": "6.1.0",
