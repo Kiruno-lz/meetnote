@@ -231,6 +231,11 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 短音频复查发现 Whisper/Sherpa 整文件入口仍使用不可取消准入。两个真实 adapter 的单名额回归先失败：排队取消只能在 blocker 释放后返回。现通过 application `run_backend_worker` 统一复用可取消准入与错误转换，原 backend 仍持有解码/模型执行；6 项回归覆盖两种入口、未轮询取消释放捕获资源、运行中等待退出、错误原样和 panic 分类。显式设置本地模型/音频的 Whisper 与 Paraformer ignored 测试各一次通过，证明准入后的加载/输出链路继续工作，不作为精度或取消延迟的真实模型验收。证据融入[worker 回执](../quality/worker-admission-evaluation.json)。
 
+
+整文件 native/Sherpa diarization 同样存在不可取消的准入，两个 adapter 各由真实 executor 首次轮询至 Pending 后取消，旧实现均等到 blocker 释放才返回，红线成立。现共用同一 helper，取消直接唤醒 executor，不依赖手动重轮询；window session 路径保持独立，不嵌套申请。完整工作区 943 项主 harness 与 3 项已有子 harness 通过，另有父测试显式执行的 UI child；原生 180 秒加载 smoke 与 Sherpa 8.67 秒共享身份 smoke 分别通过，后者两次真实分离，只证明加载/非空输出及该样本身份关联。
+
+本轮首次尝试 native 8.67 秒已知语音样本时，实际返回零 segment/observation，非空输出断言失败；没有删除这条失败，也不把较长样本通过当作短音频通过。下一轮以固定旧 executable 和 segmentation 窗口规划验证是否遗漏短于 10 秒的输入。两者的输入/model hash、执行范围和回归结果纳入同一[worker 回执](../quality/worker-admission-evaluation.json)。
+
 ### 转写分段与时间定位：Unicode 接入和 VAD 试接
 
 2026-10-26 只收窄到分段/时间定位，不更换 ASR 或分离默认模型。Review 的三个问题均先红后绿：中文被当作词内延续跨句/长停顿合并；CPU 比较失败留下旧通过文件；ASR 前置校验失败留下旧成功回执。CPU 输出同时拒绝覆盖输入回执/预测并原子发布；ASR 在读取输入前失效旧回执，前置失败不再能读取为本次成功。
