@@ -35,6 +35,124 @@ use std::sync::Arc;
 pub(crate) type View = gpui::Entity<RootView>;
 type Area = gpui::Entity<controls::TextArea>;
 
+/// Hold every shared blocking slot while UI events continue to run. Release
+/// even on assertion failure so other tests cannot inherit a stranded queue.
+#[derive(Default)]
+struct OccupiedUiWorkers {
+    workers: Vec<(std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>)>,
+}
+
+impl OccupiedUiWorkers {
+    fn new() -> Self {
+        let count = std::thread::available_parallelism()
+            .map(|n| n.get().min(4))
+            .unwrap_or(2);
+        let mut occupied = Self::default();
+        for _ in 0..count {
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let worker = std::thread::spawn(move || {
+                futures::executor::block_on(runtime::spawn_blocking(move || {
+                    started_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                }));
+            });
+            occupied.workers.push((release_tx, worker));
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        occupied
+    }
+}
+
+impl Drop for OccupiedUiWorkers {
+    fn drop(&mut self) {
+        // Release all slots before waiting for any driver to finish.
+        let workers: Vec<_> = self
+            .workers
+            .drain(..)
+            .map(|(release, worker)| {
+                drop(release);
+                worker
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    }
+}
+
+#[gpui::test]
+fn workspace_search_releases_obsolete_queued_repository_handles(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "预算");
+    let bytes = documents.package_bytes("meeting");
+    let repository = Arc::new(documents.repository());
+    let mut services =
+        desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(repository.clone()),
+    );
+    let (view, cx) = open_desktop_on(cx, services);
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    wait_for(cx, &view, |root| !root.audio.pending());
+    let occupied = OccupiedUiWorkers::new();
+    cx.run_until_parked();
+    let owners = Arc::strong_count(&repository);
+    let input = view.read_with(cx, |root, _| root.search.input.clone());
+    focus_field(cx, &input);
+    cx.simulate_input("预算");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |root, _| root.search.pending));
+    assert_eq!(Arc::strong_count(&repository), owners + 1);
+    click_selector(cx, "workspace-search-clear");
+    cx.run_until_parked();
+    assert_eq!(
+        Arc::strong_count(&repository),
+        owners,
+        "clear must discard the queued search before any shared worker becomes free"
+    );
+
+    focus_field(cx, &input);
+    cx.simulate_input("预算");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter"); // Replacing a queued query keeps exactly one owner.
+    cx.run_until_parked();
+    assert_eq!(Arc::strong_count(&repository), owners + 1);
+    cx.simulate_input("草稿");
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |root, _| root.search.pending));
+    assert_eq!(
+        Arc::strong_count(&repository),
+        owners,
+        "editing the query must discard its previous queued read"
+    );
+    assert_eq!(documents.package_bytes("meeting"), bytes);
+    drop(occupied);
+    crate::document_tests::search(cx, &view, "预算");
+    assert_eq!(
+        view.read_with(cx, |root, _| root
+            .search
+            .result
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .hits
+            .len()),
+        1,
+        "a new search must still finish normally"
+    );
+}
+
 #[gpui::test]
 fn workspace_search_is_available_beside_the_project_tree(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
