@@ -2,7 +2,7 @@
 
 ## 判断与边界
 
-更新日期：2026-10-25；实施分支：`codex/workspace-discovery`。竞品调研基于 2026-10-24 至 2026-10-25 可访问的官方页面，页面更新时间不等于功能首次发布日期，未实际购买或逐项试用竞品。
+更新日期：2026-10-26；实施分支：`codex/workspace-discovery`。竞品调研基于 2026-10-24 至 2026-10-25 可访问的官方页面，页面更新时间不等于功能首次发布日期，未实际购买或逐项试用竞品。
 
 MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模型管理和受控 Agent 工具。下一步应把已有事实变成易查找、可核对、可带走的资料。产品优势在于本地文件、音频证据和外部 Agent 能力边界；继续增加 backend 或扩成通用 Agent Runtime，不能直接解决资料积累后的使用成本。
 
@@ -14,7 +14,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 | P0：长音频全局聚类内存随观察数增长 | `crates/diarization-native/src/windowed.rs` 累积 `clustering_vectors` 与窗口 artifacts；`third_party/speakrs/src/clustering/ahc.rs` 分配 `n*(n-1)/2` 个距离 | 分窗解码不代表整条 pipeline 内存有界。仅距离数组在 5 万个 observation 时约 4.66 GiB，还未计其他对象。须先定义可接受的输入规模、质量门槛与资源策略，再修改聚类；本分支不改变聚类算法 |
 | P1：检索后的原文核对成本 | `document_search.rs` 返回已保存文本命中；`meetings.rs` 将连续同 speaker 的段落归为一个回合 | 只打开文档不能解决长转写内的翻找。本分支让结果携带 segment ID、时间范围、speaker 来源和文档 revision，打开后定位并标记实际段落；不拆散现有发言分组 |
 | P1：复用出口不足 | `crates/ui/src/pages/meetings.rs` 提供阅读、编辑和处理；`apps/meetnote/examples/audio_host_export.rs` 是评测导出入口 | 文件本身可读，但普通用户缺少可选择格式的桌面导出。优先补 TXT/Markdown/SRT 与剪贴板，沿用现有时间戳和 speaker label |
-| P1：模型速度不是整条链路速度 | 独立 ASR benchmark 与 `diarization_benchmark`；native observation/AHC 路径 | 已测固定 FLEURS/AMI 的 ASR 质量、RTF 与 RSS，修复回调崩溃、子词与推理长度；CPU embedding 单线程是本机分离延迟主因；按设备可用并行度保留约三分之一余量后，本机使用六线程，同一 180 秒样本的分离中位耗时为 35.23 秒（单线程 164.91 秒，四线程 47.52 秒），输出时间线与 embedding 通过 baseline 一致性门。AHC 内存和精确时间对齐仍需分别治理。模型选择见[研究记录](../reserch/asr-quality-and-runtime-evaluation.md) |
+| P1：模型速度不是整条链路速度 | 独立 ASR benchmark 与 `diarization_benchmark`；native observation/AHC 路径 | 已测固定 FLEURS/AMI 的 ASR 质量、RTF 与 RSS，修复回调崩溃、子词与推理长度；CPU embedding 单线程是本机分离延迟主因；按设备可用并行度保留约三分之一余量后，本机使用六线程，同一 180 秒样本的分离中位耗时为 35.23 秒（单线程 164.91 秒，四线程 47.52 秒），输出时间线与 embedding 通过 baseline 一致性门。AHC 内存和精确时间对齐仍需分别治理。分段切口已修复 Unicode 词边界并保留真实文本 baseline；Silero VAD 裁剪虽将已知静音覆盖从 9.8 秒降至零，却导致英文和低音量中文识别退化，拒绝默认集成，见[边界回执](../quality/asr-boundary-evaluation.json)。模型选择见[研究记录](../reserch/asr-quality-and-runtime-evaluation.md) |
 | P2：维护集中度偏高 | `crates/ui/src/controller.rs` 同时编排设置、文档、模型、Speaker Library 与 Assistant；已有 editor/audio 等独立模块 | 新能力继续在所属模块实现，controller 只保留装配和跨模块调用。本分支把搜索生命周期与展示集中于 `crates/ui/src/search.rs`，不做一次性全局重构 |
 
 ## 同类产品与可借鉴功能
@@ -66,7 +66,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --all-targets --locked` | 通过 |
 | `cargo build --locked -p meetnote` | 开发构建通过 |
-| `cargo test --workspace --locked` | 主测试 908 passed、0 failed、11 ignored；另有 3 次锁与读写子进程测试通过；UI 单元/交互 450 passed，route 47 passed |
+| `cargo test --workspace --locked` | 主测试 909 passed、0 failed、11 ignored；另有 3 次锁与读写子进程测试通过；UI 单元/交互 450 passed，route 47 passed |
 | 搜索与读写回归 | 搜索服务 6 项、桌面搜索 12 项回归通过；覆盖真实文件/异步 GPUI、段落定位与失效保护；16 MiB 边界与超限保存、无效现有包保护、多文档暂存失败、原始转写补全通过；route Tab 顺序覆盖搜索和笔记入口 |
 | 全量离屏图像 | 27 个场景 × 深/浅 × 玻璃/不透明共 108 张复比均为 0 像素差异；新增原文命中场景的 4 张原图已逐张查看，确认标记与文字清晰 |
 | 修改文档的相对链接 | 通过 |

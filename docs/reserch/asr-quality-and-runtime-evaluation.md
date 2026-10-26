@@ -136,6 +136,36 @@ embedding 是固定 bundle 的主要耗时点。先前一/四线程的 180 秒�
 
 同时核对的 [speakrs 开发主线](https://github.com/avencera/speakrs/tree/beb30734c9067c1ed59af3eb8ec8baa8fb17f94a)引入 safetensors 原生 CPU 资产，manifest 标为 0.7.0、当时最新可见 tag 为 v0.5.0；它不属于本轮固定 ONNX bundle，未运行新引擎，不用其其他硬件成绩替代本机验证。当前更改保留 inter-op、图、权重、分窗与聚类参数。
 
+### 转写分段与时间定位：Unicode 接入和 VAD 试接
+
+2026-10-26 只收窄到分段/时间定位，不更换 ASR 或分离默认模型。Review 的三个问题均先红后绿：中文被当作词内延续跨句/长停顿合并；CPU 比较失败留下旧通过文件；ASR 前置校验失败留下旧成功回执。CPU 输出同时拒绝覆盖输入回执/预测并原子发布；ASR 在读取输入前失效旧回执，前置失败不再能读取为本次成功。
+
+[SentencePiece 官方说明](https://github.com/google/sentencepiece/blob/master/README.md)把 `▁` 定义为空白转义；没有 `▁` 不能证明仍在同一个自然语言词内。采用已锁定的 [unicode-segmentation 1.13.3](https://docs.rs/unicode-segmentation/1.13.3/unicode_segmentation/trait.UnicodeSegmentation.html)，按 [UAX #29](https://unicode.org/reports/tr29/) 的词起点，在完整还原文本上单次前向遍历 UTF-8 偏移；`@@` 明确连续性保留优先级。没有自行维护汉字范围、词典或语言分支。中文句末/长停顿回归恢复分段，英文子词、独立空白、缩写回归保持通过；UAX 词边界不是语义断句或所有语言的词典分词。
+
+固定 FLEURS 中英各前 6 句、两轮，对 Paraformer/SenseVoice 的旧/新 executable 对照；另用前两句中文原音频插入 20 秒数字静音，形成 43.8 秒构造输入。SenseVoice 再反转 runner 顺序复测以检查进程 RSS 波动，共 76 对调用的完整 transcript 均一致。原生调用中位耗时为 SenseVoice 0.776→0.770 秒、Paraformer 0.614→0.617 秒；这组真实样本未触发 Unicode 修复，不据此宣称 CER/WER 或定位改善。SenseVoice 的 baseline 峰值 RSS 为 865–1044 MiB、candidate 为 1039–1043 MiB；不得把初次进程高水位差异直接归因为分词开销。完整输入、模型、预测和 runner hash 见[分段评测回执](../quality/asr-boundary-evaluation.json)。
+
+时间定位仍有独立缺口：SenseVoice 在静音构造输入中保留的“明”覆盖 11.10–24.96 秒，其中 9.8 秒落入已知静音 `[15160, 35160]` ms。Unicode 调整不改变这组结果。没有可靠 duration/词对齐时，token 的 next timestamp 或离线窗口范围不能等同于真实发声边界。
+
+#### Silero VAD 隔离试接
+
+选择现有 sherpa-onnx 1.13.6 的原生 [Silero VAD 接口](https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.6/rust-api-examples/examples/silero_vad_remove_silence.rs)，不引入 Python 推理 runtime。模型来自 [sherpa 官方列表](https://k2-fsa.github.io/sherpa/onnx/vad/silero-vad.html)，MIT license；本次下载 643854 字节，观测 SHA-256 为 `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6`，不是发布者签名声明。模型仅放在忽略目录，已真实加载；未加入桌面 catalog 或处理路径。
+
+试验固定 CPU 一线程、threshold 0.5、min silence/speech 各 0.25 秒、max speech 30 秒、512 sample 窗、每侧 padding 200 ms；相邻 padding 重叠时合并，保持原时间偏移。每个语音片段复用当前生产 ASR adapter，按原文件重新汇总文本与时间，VAD 不决定 speaker 或语义。原生 12 句、静音构造 1 个、中英各 1 个降低 30 dB 的变体、纯静音分别记录；低音量变体不等于真实噪声场景。VAD 共 31 次执行，裁剪后的 ASR 共 50 次，两轮重复，保留每次重新加载模型的成本。
+
+运行前冻结门槛：原生/低音量错误率不得增加超过 1 个百分点，不新增空预测；构造静音内覆盖最多 0.5 秒；中位耗时最多增加 10%；ASR 子进程 RSS 最多 1.2 倍。时间含各原文件的 VAD 加载/检测与全部 crop ASR 调用，不是常驻模型成绩。ASR RSS 单独记录，不代表 Audio Host 总内存。
+
+| 场景 / 指标 | 当前原路径 | VAD 裁剪路径 | 判断 |
+|---|---:|---:|---|
+| 英文原生 WER，6 句 × 2 | 7.21% | 10.81% | 超出质量门 |
+| 中文原生 CER，6 句 × 2 | 17.58% | 17.19% | 仅本小集改善 |
+| 中文降低 30 dB CER，1 句 × 2 | 40.00% | 66.67% | 超出质量门 |
+| 中文降低 30 dB 中位耗时 | 1.022 秒 | 1.510 秒 | 增加约 47.8%，超出延迟门 |
+| 20 秒已知静音内覆盖，两轮一致 | 9.8 秒 | 0 秒 | 边界改善不能抵消识别退化 |
+
+结论：拒绝把该裁剪方案作为默认集成；没有调阈值追逐本小集，也没有修改生产路由。VAD 的语音活动证据和 ASR 文本/词时间必须分别验收，不能用更整齐的时间段掩盖遗漏或识别退化。//TODO - 先从 AMI 的官方词时间建立配对参考，再验证自然会议、长静音、低音量、重叠与噪声；对任何可选活动检测方案同时检查文本、覆盖、词时间、取消和资源，保留原音频与可恢复的原路径。
+
+现有 `asr_benchmark.py` 增加可选 `knownSilenceRangesMs` 与分组 `knownSilence`：参考区间与预测区间各自合并取并集后计算交集，重叠段不重复计量；失败标为未测，不能记作零覆盖。范围与有限数值先校验，不影响未提供标注的旧病例。它仅测已知静音覆盖，不是词对齐分数；真实插入静音已逐字节核对为零。临时 VAD probe/裁剪编排源码已删除，保留回执与附录核心方法。
+
 ## 复现说明
 
 1. `uv venv --python 3.12 eval-data/asr-eval/venv`，在该环境安装 `scripts/audio-eval/requirements.txt`。MLX 实验安装 `scripts/audio-eval/requirements-mlx.txt` 的固定依赖，桌面不依赖这些包。
@@ -178,9 +208,9 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 |---|---|
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
-| `cargo test --workspace --locked` | 904 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过 |
+| `cargo test --workspace --locked` | 909 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
-| Python 评分/基线测试 | 33 passed；DIA 覆盖/数值/时间线/资源正反例、精确距离、归一口径、整轮缺失/重复/越界、预测 hash、旧回执失效、取消/超时与进程组回收 |
+| Python 评分/基线测试 | 38 passed；DIA 覆盖/数值/时间线/资源正反例、精确距离、归一口径、整轮缺失/重复/越界、预测 hash、旧回执失效、取消/超时与进程组回收 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
 | review 真实回归 | 当前 release 完成 12 组、128 次调用；五种 Whisper 配置各两次成功，四组 Paraformer 质量门与 96 次短路径逐段一致通过，SenseVoice 英文长输入两次成功；31 秒全零 ignored 回归已单独显式执行通过 |
 | CPU 分离对照 | 180 秒同一自然录音，baseline/candidate 各两次；35.233 秒中位耗时；宽区间与三种空转实验均保留，通过设备预算的性能/输出一致性门；不作为 DER |
@@ -210,3 +240,38 @@ for _ in 0..3 {
 ```
 
 完整对照用相同 `diarization_benchmark` example，冻结基线后仅更改 vendor session 的线程数；两版分别运行 `/usr/bin/time -l <runner> diarization-native <model-dir> <audio> <prediction.jsonl>`。每个 run directory 的 `report.json` 使用 `meetnote.diarization-cpu-run.v1`，记录音频/全部模型文件/runner/预测 SHA、音频秒数、配置中的 repeats、embeddingThreads 及试验中的空转参数、user+sys CPU 时间、进程峰值 RSS 和 failure；结构示例与真实 hash 见 CPU 对照回执。按此 manifest 运行 `check_diarization_cpu.py --baseline <before-dir> --candidate <after-dir>`，检查完成覆盖、逐段时间线、每个 observation 的来源/向量以及资源门槛；`--criterion quality` 只测输出等价，`--criterion idle-cpu` 独立检查 CPU 效率门，默认 `speed` 保持至少 15% 提速和 1.2 倍 RSS 的原门槛。原始预测、向量与音频继续留在忽略目录。
+
+#### 分段评测的复现核心
+
+1. 从固定 FLEURS manifest 取每种语言前 6 个原生病例，原 ASR 配置四线程、每个病例两轮；冻结旧/新 runner SHA 后顺序执行。SenseVoice 再反转顺序复核；不得并行构建和计时。
+2. 将首两句中文的 16 kHz mono PCM 按原采样拼接，中间插入 `20 * 16000` 个零；manifest 增加 `knownSilenceRangesMs: [[15160, 35160]]`。中英首句分别以 `10 ** (-30 / 20)` 缩放 PCM 并重新固定 hash，参考文本不变。只把构造变换本身标为 gold。
+3. 用官方 VAD 模型和以下核心代码建立临时 example；执行后删除该源码。对 ranges 两侧加各 3200 sample padding、夹在源文件范围内并合并重叠区间；逐段通过相同 `asr_benchmark` executable 识别，恢复原 sample offset，再按原文件和 repeat 汇总评分。不能将各 crop 都赋予完整原文作为独立 gold。
+
+```rust
+use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
+let config = VadModelConfig {
+    silero_vad: SileroVadModelConfig {
+        model: Some(model_path.into()), threshold: 0.5,
+        min_silence_duration: 0.25, min_speech_duration: 0.25,
+        max_speech_duration: 30.0, window_size: 512,
+    },
+    ten_vad: Default::default(), sample_rate: 16000, num_threads: 1,
+    provider: Some("cpu".into()), debug: false,
+};
+let vad = VoiceActivityDetector::create(&config, 60.0).expect("load VAD");
+let mut ranges = Vec::new();
+for chunk in samples.chunks(512) {
+    vad.accept_waveform(chunk);
+    while let Some(segment) = vad.front() {
+        ranges.push((segment.start(), segment.start() + segment.n()));
+        vad.pop();
+    }
+}
+vad.flush();
+while let Some(segment) = vad.front() {
+    ranges.push((segment.start(), segment.start() + segment.n()));
+    vad.pop();
+}
+```
+
+4. 用当前 `asr_benchmark.py` 对带静音标注的 manifest 运行，`report.json.groups[].knownSilence` 应能复现原路径每轮 9800 ms 的交集；裁剪路径以相同 `summarize` 方法对恢复时间后的输出计算为 0。回执保存源音频、权重、runner、输入/预测 hash 与预先冻结的门槛，原始音频、裁剪和输出不提交。
