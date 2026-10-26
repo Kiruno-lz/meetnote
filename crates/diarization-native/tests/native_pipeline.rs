@@ -87,3 +87,37 @@ fn real_model_produces_valid_segments_and_observations() {
             && observation.end_ms > observation.start_ms
             && observation.end_ms <= audio_end_ms));
 }
+
+#[test]
+#[ignore = "requires explicit MEETNOTE_DIARIZATION_MODEL_DIR and MEETNOTE_DIARIZATION_SILENCE_AUDIO"]
+fn real_silent_model_returns_no_speakers_without_panicking() {
+    let model_dir = std::env::var("MEETNOTE_DIARIZATION_MODEL_DIR").expect("explicit model path");
+    let audio_path =
+        std::env::var("MEETNOTE_DIARIZATION_SILENCE_AUDIO").expect("explicit silence path");
+    let decoded = audio::read_audio_mono_16k(&audio_path).unwrap();
+    assert!(!decoded.samples.is_empty());
+    assert!(decoded.samples.iter().all(|sample| *sample == 0.0));
+    let backend = NativeDiarizationBackend::default();
+    let (context, _) = JobRuntime::default().create_job();
+    let result = futures::executor::block_on(backend.analyze(
+        DiarizationRequest {
+            audio_path,
+            model: ModelRef {
+                backend_id: "diarization-native".into(),
+                model_id: "speakrs-community-1-cpu".into(),
+                revision: Some(diarization_native::SPEAKRS_MODEL_REVISION.into()),
+                artifact_path: model_dir,
+                artifacts: Vec::new(),
+            },
+            expected_speakers: None,
+            device: ComputeDevice::Cpu,
+            speaker_library_path: None,
+            stage_configuration: Default::default(),
+        },
+        context,
+    ))
+    .expect("a completed no-speaker inference must succeed");
+    assert!(result.result.segments.is_empty());
+    assert!(result.observations.is_empty());
+    assert_eq!(result.result.speaker_count, Some(0));
+}

@@ -334,6 +334,13 @@ impl NativeDiarizationEngine for SpeakrsEngine {
         let result = pipeline
             .run(samples)
             .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
+        if !validate_cluster_layout(
+            result.hard_clusters.shape(),
+            result.embeddings.shape(),
+            !result.segments.is_empty(),
+        )? {
+            return Ok(EngineOutput::default());
+        }
         let embedding_space = EmbeddingSpace {
             backend_id: "diarization-native".into(),
             model_id: "wespeaker-voxceleb-resnet34".into(),
@@ -471,6 +478,26 @@ fn parse_speaker_label(label: &str) -> Result<u32, NativeDiarizationError> {
         })
 }
 
+/// `false` is speakrs' explicit no-speaker sentinel, not a missing inference.
+fn validate_cluster_layout(
+    cluster_shape: &[usize],
+    embedding_shape: &[usize],
+    has_segments: bool,
+) -> Result<bool, NativeDiarizationError> {
+    if cluster_shape == [0, 0] && !has_segments {
+        return Ok(false);
+    }
+    if embedding_shape.len() != 3
+        || cluster_shape != &embedding_shape[..2]
+        || (has_segments && cluster_shape.contains(&0))
+    {
+        return Err(NativeDiarizationError::InvalidOutput(format!(
+            "speaker cluster shape {cluster_shape:?} does not match embeddings {embedding_shape:?}"
+        )));
+    }
+    Ok(true)
+}
+
 /// Padding is inference context, never additional source-audio time.
 fn bound_segments_to_audio(segments: &mut Vec<EngineSegment>, audio_end_ms: u64) -> u32 {
     segments.retain_mut(|segment| {
@@ -496,6 +523,15 @@ fn seconds_to_ms(seconds: f64) -> Result<u64, NativeDiarizationError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn empty_speaker_sentinel_is_valid_but_inconsistent_clusters_are_errors() {
+        assert!(!super::validate_cluster_layout(&[0, 0], &[1, 3, 256], false).unwrap());
+        assert!(super::validate_cluster_layout(&[1, 3], &[1, 3, 256], true).unwrap());
+        assert!(super::validate_cluster_layout(&[0, 0], &[1, 3, 256], true).is_err());
+        assert!(super::validate_cluster_layout(&[1, 2], &[1, 3, 256], true).is_err());
+        assert!(super::validate_cluster_layout(&[1, 3], &[], true).is_err());
+    }
+
     #[test]
     fn padding_segments_are_clipped_or_removed_without_renumbering_speakers() {
         let segment = |cluster_id, start_ms, end_ms| super::EngineSegment {
