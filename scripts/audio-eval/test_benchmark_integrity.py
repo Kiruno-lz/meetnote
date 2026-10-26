@@ -174,6 +174,43 @@ class BenchmarkIntegrityTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "checksum"):
                 load_run(run)
 
+    def test_preflight_failure_invalidates_previous_success(self):
+        for failure in ("audio", "config", "model"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                run = self.make_run(root, repeats=1)
+                runner = root / "success.py"
+                runner.write_text(
+                    "import json,sys\nfrom pathlib import Path\n"
+                    'row={"caseId":"a","repeat":0,"status":"ok","text":"gold","wallSeconds":.1}\n'
+                    'Path(sys.argv[3]).write_text(json.dumps(row)+"\\n")\n'
+                )
+                command = [
+                    sys.executable,
+                    str(SCRIPTS / "asr_benchmark.py"),
+                    "--cases",
+                    str(run / "cases.json"),
+                    "--config",
+                    str(run / "config.json"),
+                    "--runner",
+                    str(runner),
+                    "--output",
+                    str(run),
+                ]
+                result = subprocess.run(command, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                if failure == "audio":
+                    (root / "fixture.wav").write_bytes(b"changed")
+                elif failure == "config":
+                    (run / "config.json").write_text("{incomplete")
+                else:
+                    (root / "model.bin").unlink()
+                self.assertNotEqual(subprocess.run(command, capture_output=True).returncode, 0)
+                self.assertFalse(
+                    (run / "report.json").exists(),
+                    "preflight failure must invalidate the old receipt",
+                )
+
     def launch_waiting_runner(self, root, timeout=60):
         run = self.make_run(root, repeats=1)
         fake = root / "waiting.py"
