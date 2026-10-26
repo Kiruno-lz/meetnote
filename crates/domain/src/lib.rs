@@ -744,24 +744,33 @@ pub fn align_transcript_and_speakers(
     transcript: &[TranscriptSegment],
     diarization: &[DiarizationSegment],
 ) -> Vec<SpeakerTaggedSegment> {
+    if transcript.is_empty() {
+        return Vec::new();
+    }
+    let intervals: intervaltree::IntervalTree<_, _> = diarization
+        .iter()
+        .enumerate()
+        .filter(|(_, candidate)| candidate.start_ms < candidate.end_ms)
+        .map(|(index, candidate)| (candidate.start_ms..candidate.end_ms, (index, candidate)))
+        .collect();
     transcript
         .iter()
         .map(|segment| {
-            let speaker = diarization
-                .iter()
-                .filter_map(|candidate| {
-                    let overlap_start = segment.start_ms.max(candidate.start_ms);
-                    let overlap_end = segment.end_ms.min(candidate.end_ms);
-                    if overlap_end > overlap_start {
-                        Some((overlap_end - overlap_start, candidate))
-                    } else {
-                        None
-                    }
-                })
-                .max_by_key(|(overlap, candidate)| {
-                    (*overlap, std::cmp::Reverse(candidate.start_ms))
-                })
-                .map(|(_, candidate)| candidate);
+            let speaker = if segment.start_ms < segment.end_ms {
+                intervals
+                    .query(segment.start_ms..segment.end_ms)
+                    .max_by_key(|entry| {
+                        let (index, candidate) = entry.value;
+                        let overlap = segment.end_ms.min(candidate.end_ms)
+                            - segment.start_ms.max(candidate.start_ms);
+                        // Preserve the exhaustive scan's tie rules, independent
+                        // of the interval tree's unspecified iteration order.
+                        (overlap, std::cmp::Reverse(candidate.start_ms), index)
+                    })
+                    .map(|entry| entry.value.1)
+            } else {
+                None
+            };
 
             SpeakerTaggedSegment {
                 transcript_segment_id: segment.id.clone(),
@@ -782,6 +791,138 @@ pub fn align_transcript_and_speakers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alignment_preserves_ties_unsorted_ranges_and_input_order() {
+        let transcript = vec![
+            TranscriptSegment {
+                id: "later".into(),
+                start_ms: 20,
+                end_ms: 30,
+                text: "later".into(),
+            },
+            TranscriptSegment {
+                id: "earlier".into(),
+                start_ms: 10,
+                end_ms: 20,
+                text: "earlier".into(),
+            },
+            TranscriptSegment {
+                id: "empty".into(),
+                start_ms: 20,
+                end_ms: 20,
+                text: "empty".into(),
+            },
+        ];
+        let candidate = |id: &str, start_ms, end_ms| DiarizationSegment {
+            id: id.into(),
+            speaker_id: id.into(),
+            speaker_profile_id: Some(id.into()),
+            speaker_label: Some(id.into()),
+            start_ms,
+            end_ms,
+            confidence: None,
+        };
+        let diarization = vec![
+            candidate("first", 0, 40),
+            candidate("later-start", 10, 40),
+            candidate("last", 0, 40),
+            candidate("touching", 30, 40),
+            candidate("invalid", 30, 10),
+            candidate("zero", 15, 15),
+        ];
+        let result = align_transcript_and_speakers(&transcript, &diarization);
+        assert_eq!(
+            result
+                .iter()
+                .map(|s| s.transcript_segment_id.as_str())
+                .collect::<Vec<_>>(),
+            ["later", "earlier", "empty"]
+        );
+        for segment in &result[..2] {
+            assert_eq!(segment.speaker_id, "last");
+            assert_eq!(segment.speaker_profile_id.as_deref(), Some("last"));
+            assert_eq!(segment.speaker_label.as_deref(), Some("last"));
+        }
+        assert_eq!(result[2].speaker_id, UNASSIGNED_SPEAKER_ID);
+        let extreme = TranscriptSegment {
+            id: "extreme".into(),
+            start_ms: u64::MAX - 1,
+            end_ms: u64::MAX,
+            text: "edge".into(),
+        };
+        assert_eq!(
+            align_transcript_and_speakers(
+                &[extreme],
+                &[candidate("edge", u64::MAX - 1, u64::MAX),]
+            )[0]
+            .speaker_id,
+            "edge"
+        );
+    }
+
+    #[test]
+    fn alignment_matches_exhaustive_reference_for_overlapping_unsorted_inputs() {
+        let mut seed = 17_u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (seed >> 32) % 200
+        };
+        for _ in 0..128 {
+            let diarization: Vec<_> = (0..48)
+                .map(|id| DiarizationSegment {
+                    id: id.to_string(),
+                    speaker_id: format!("speaker-{id}"),
+                    speaker_profile_id: Some(format!("profile-{id}")),
+                    speaker_label: Some(format!("Label {id}")),
+                    start_ms: next(),
+                    end_ms: next(),
+                    confidence: None,
+                })
+                .collect();
+            let transcript: Vec<_> = (0..32)
+                .map(|id| TranscriptSegment {
+                    id: id.to_string(),
+                    start_ms: next(),
+                    end_ms: next(),
+                    text: format!("text-{id}"),
+                })
+                .collect();
+            let expected: Vec<_> = transcript
+                .iter()
+                .map(|segment| {
+                    let speaker = diarization
+                        .iter()
+                        .filter_map(|candidate| {
+                            let overlap = segment
+                                .end_ms
+                                .min(candidate.end_ms)
+                                .saturating_sub(segment.start_ms.max(candidate.start_ms));
+                            (overlap > 0).then_some((overlap, candidate))
+                        })
+                        .max_by_key(|(overlap, candidate)| {
+                            (*overlap, std::cmp::Reverse(candidate.start_ms))
+                        })
+                        .map(|(_, candidate)| candidate);
+                    SpeakerTaggedSegment {
+                        transcript_segment_id: segment.id.clone(),
+                        speaker_id: speaker
+                            .map(|s| s.speaker_id.clone())
+                            .unwrap_or_else(|| UNASSIGNED_SPEAKER_ID.into()),
+                        speaker_profile_id: speaker.and_then(|s| s.speaker_profile_id.clone()),
+                        speaker_label: speaker.and_then(|s| s.speaker_label.clone()),
+                        start_ms: segment.start_ms,
+                        end_ms: segment.end_ms,
+                        text: segment.text.clone(),
+                    }
+                })
+                .collect();
+            assert_eq!(
+                align_transcript_and_speakers(&transcript, &diarization),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn aligns_each_transcript_segment_with_the_largest_overlap() {
