@@ -367,8 +367,26 @@ mod tests {
                     .join("../../resources/models/catalog.json"),
             )
             .unwrap(),
-            "models",
+            temp_directory().join("models"),
         )
+    }
+
+    #[test]
+    fn ui_model_fixtures_do_not_share_installation_paths() {
+        let first = test_model_manager().browse(None, None);
+        let second = test_model_manager().browse(None, None);
+        assert!(!first.is_empty());
+        assert_eq!(first.len(), second.len());
+        for (left, right) in first.iter().zip(&second) {
+            assert!(!left.artifact_paths.is_empty());
+            assert!(left.artifact_paths.iter().all(|path| path.is_absolute()));
+            assert!(left
+                .artifact_paths
+                .iter()
+                .all(|path| !right.artifact_paths.contains(path)));
+            assert_eq!(left.install_state, models::ModelInstallState::Missing);
+            assert_eq!(right.install_state, models::ModelInstallState::Missing);
+        }
     }
 
     pub(crate) fn desktop_services(
