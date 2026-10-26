@@ -204,7 +204,12 @@ reference = {
 }
 result = score_record(reference, prediction)
 assert result['asr']['werOrCer'] == 0, result
-assert result['diarization']['der'] == 0, result
+if result['diarization']['status'] == 'measured':
+    assert result['diarization']['der'] == 0, result
+    assert result['diarization']['method'] == 'pyannote.metrics-4.0.0-hungarian', result
+else:
+    assert result['diarization']['status'] == 'unavailable', result
+    assert result['diarization']['der'] is None, result
 assert result['assistantSemanticQualityStatus'] == 'not_assessed', result
 "#;
         let mut child = Command::new("python3")

@@ -1,0 +1,6 @@
+# Optional offline DER scoring; no desktop inference dependency.
+-r requirements.txt
+pyannote.metrics==4.0.0
+pyannote.core==6.1.0
+# pyannote.metrics 4.0.0 imports this without declaring it.
+typing_extensions==4.15.0
