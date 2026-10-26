@@ -123,9 +123,14 @@ impl AsrWindowSession for WhisperWindowSession {
                 })?
                 .trim()
                 .to_string();
-            let local_start = timestamp_to_sample(segment.start_timestamp()).min(window_len);
-            let local_end = timestamp_to_sample(segment.end_timestamp()).min(window_len);
-            if text.is_empty() || local_end <= local_start {
+            let Some((local_start, local_end)) = bounded_sample_range(
+                segment.start_timestamp(),
+                segment.end_timestamp(),
+                window_len,
+            ) else {
+                continue;
+            };
+            if text.is_empty() {
                 continue;
             }
             let global_start = window.global_start_sample.saturating_add(local_start);
@@ -237,8 +242,15 @@ fn transcribe_sync(
             })?
             .trim()
             .to_string();
-        let start_ms = (segment.start_timestamp().max(0) as u64) * 10;
-        let end_ms = (segment.end_timestamp().max(0) as u64) * 10;
+        let Some((start, end)) = bounded_sample_range(
+            segment.start_timestamp(),
+            segment.end_timestamp(),
+            audio.samples.len() as u64,
+        ) else {
+            continue;
+        };
+        let start_ms = sample_to_ms(start);
+        let end_ms = sample_to_ms(end);
         if text.is_empty() || end_ms <= start_ms {
             continue;
         }
@@ -330,6 +342,14 @@ fn timestamp_to_sample(timestamp_10ms: i64) -> u64 {
     (timestamp_10ms.max(0) as u64).saturating_mul(u64::from(TARGET_SAMPLE_RATE_HZ) / 100)
 }
 
+fn bounded_sample_range(start: i64, end: i64, source_samples: u64) -> Option<(u64, u64)> {
+    // Whisper timestamps include its padded inference context. Both whole-file
+    // and windowed output belong only to the decoded source samples.
+    let start = timestamp_to_sample(start).min(source_samples);
+    let end = timestamp_to_sample(end).min(source_samples);
+    (start < end).then_some((start, end))
+}
+
 fn sample_to_ms(sample: u64) -> u64 {
     sample.saturating_mul(1_000) / u64::from(TARGET_SAMPLE_RATE_HZ)
 }
@@ -370,6 +390,30 @@ fn cancelled_error(message: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamp_ranges_preserve_source_overlap_without_exposing_padding() {
+        let source_samples = 8670 * 16;
+        assert_eq!(
+            bounded_sample_range(0, 900, source_samples),
+            Some((0, source_samples))
+        );
+        assert_eq!(
+            bounded_sample_range(100, 200, source_samples),
+            Some((16000, 32000))
+        );
+        assert_eq!(
+            bounded_sample_range(-10, 10, source_samples),
+            Some((0, 1600))
+        );
+        assert_eq!(bounded_sample_range(900, 1000, source_samples), None);
+        assert_eq!(bounded_sample_range(10, 10, source_samples), None);
+        assert_eq!(bounded_sample_range(20, 10, source_samples), None);
+        assert_eq!(
+            bounded_sample_range(0, i64::MAX, source_samples),
+            Some((0, source_samples))
+        );
+    }
 
     #[test]
     fn an_uncompiled_coreml_backend_cannot_be_labelled_as_metal() {
