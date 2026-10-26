@@ -244,7 +244,7 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 |---|---|
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
-| `cargo test --workspace --locked` | 926 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
+| `cargo test --workspace --locked` | 927 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
 | Python 评分/基线测试 | timing 环境 49 passed；基础环境 41 passed、8 项可选 timing 测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
