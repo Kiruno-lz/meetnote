@@ -175,6 +175,8 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 独立 review 覆盖未轮询/已轮询丢弃、不可取消入口、32 个不同 task waker 的联动取消、运行中丢弃/取消仍持有名额，以及 panic 后下一个任务可执行。原长音频单名额、ASR/DIA 任一阶段排队取消和 panic 分类回归继续验证；worker 异常返回与用户取消仍由调用方检查 token 区分。临时计数 probe 已删除，复现核心保留于附录。
 
+短音频复查发现 Whisper/Sherpa 整文件入口仍使用不可取消准入。两个真实 adapter 的单名额回归先失败：排队取消只能在 blocker 释放后返回。现通过 application `run_backend_worker` 统一复用可取消准入与错误转换，原 backend 仍持有解码/模型执行；6 项回归覆盖两种入口、未轮询取消释放捕获资源、运行中等待退出、错误原样和 panic 分类。显式设置本地模型/音频的 Whisper 与 Paraformer ignored 测试各一次通过，证明准入后的加载/输出链路继续工作，不作为精度或取消延迟的真实模型验收。证据融入[worker 回执](../quality/worker-admission-evaluation.json)。
+
 ### 转写分段与时间定位：Unicode 接入和 VAD 试接
 
 2026-10-26 只收窄到分段/时间定位，不更换 ASR 或分离默认模型。Review 的三个问题均先红后绿：中文被当作词内延续跨句/长停顿合并；CPU 比较失败留下旧通过文件；ASR 前置校验失败留下旧成功回执。CPU 输出同时拒绝覆盖输入回执/预测并原子发布；ASR 在读取输入前失效旧回执，前置失败不再能读取为本次成功。
@@ -275,7 +277,7 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 |---|---|
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
-| `cargo test --workspace --locked` | 927 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
+| `cargo test --workspace --locked` | 933 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
 | Python 评分/基线测试 | timing + DER 环境 65 passed；基础环境 48 passed、17 项可选 timing/DER 测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |

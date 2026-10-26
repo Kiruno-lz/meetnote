@@ -140,5 +140,41 @@
     "allTargetsCheck": "passed",
     "desktopDevelopmentBuild": "passed",
     "review": "separate read-only inspection of dependency edges, cancellation listener ordering, permit ownership, receiver drop and panic; no unresolved findings"
+  },
+  "wholeFileAsrCancellation": {
+    "baseCommit": "0ea1bf7",
+    "previousBehavior": "Cancelled Whisper/Sherpa requests waited for the occupied runtime slot.",
+    "currentBehavior": "Cancel before admission without native setup; wait for the actual worker to exit after admission.",
+    "redRegressions": 2,
+    "regressionsPassed": 6,
+    "workspaceMainPassed": 933,
+    "workspaceChildPassed": 3,
+    "ignoredNotExecuted": 11,
+    "realWhisper": "explicit model/audio test passed once, Auto device",
+    "realParaformer": "explicit model/audio test passed once, CPU",
+    "realTestScope": "loading nonempty output and Whisper source timestamp bounds; not WER/CER or real inference cancellation latency",
+    "artifacts": {
+      "whisperModel": {
+        "filename": "ggml-base.en.bin",
+        "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+      },
+      "whisperAudio": {
+        "filename": "ami-ES2002a-4.wav",
+        "sha256": "5ab60058843644c12f757a0a0d333b7141714efdb89e72bf325b385fdd0f816a"
+      },
+      "paraformerModel": {
+        "filename": "model.int8.onnx",
+        "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+      },
+      "paraformerTokens": {
+        "filename": "tokens.txt",
+        "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+      },
+      "paraformerAudio": {
+        "filename": "zh-1779.wav",
+        "sha256": "2e3e43bee6e9c514e6113455eb70c6655628634422b5c88ab99d8ec9644d8846"
+      }
+    },
+    "review": "Checked result/error preservation, worker panic versus cancellation, admission ownership and cooperative running cancellation; no model/provider/UI contract changes."
   }
 }

@@ -169,7 +169,7 @@ Speaker Library 位于 application，不属于具体 diarization backend。它�
 ASR future -> diarization future -> identity -> alignment -> normalized result
 ```
 
-短音频 ASR 完成后才启动 diarization，包括 ASR future 暂停时；ASR 失败保留错误 code，并取消未启动的 diarization job。JobRuntime 继续负责状态、取消与资源记录。长音频保留 window session 的独立调度，短音频顺序测试不证明进程级 native runtime 的隔离。
+短音频 ASR 完成后才启动 diarization，包括 ASR future 暂停时；ASR 失败保留错误 code，并取消未启动的 diarization job。Whisper 与 Sherpa 的整文件 ASR 通过 application 的 `run_backend_worker` 复用所属 JobRuntime 可取消准入；排队取消无需等待其他录音结束，不加载音频或模型。运行中继续合作取消并等待真实 worker 退出；正常 backend 错误保留 code/message，无取消标记的异常退出报告 `InferenceFailed`。JobRuntime 继续负责状态、取消与资源记录。长音频保留 window session 的独立调度，短音频顺序测试不证明进程级 native runtime 的隔离。
 
 已用独立真实 Whisper 推理与 macOS faulting-thread 栈定位并修复取消回调 userdata 故障。
 

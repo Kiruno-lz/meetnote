@@ -72,7 +72,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --all-targets --locked` | 通过 |
 | `cargo build --locked -p meetnote` | 开发构建通过 |
-| `cargo test --workspace --locked` | 主测试 927 passed、0 failed、11 ignored；另有 3 次锁与读写子进程测试通过；UI 单元/交互 454 passed，route 47 passed |
+| `cargo test --workspace --locked` | 主测试 933 passed、0 failed、11 ignored；另有 3 次锁与读写子进程测试通过；UI 单元/交互 454 passed，route 47 passed |
 | 搜索与读写回归 | 搜索服务 6 项、桌面搜索 13 项回归通过；共享 worker 全占用时，清除、输入变化与重复提交均释放过时的 frozen repository，后续查询仍可完成，原文件字节不变；覆盖真实文件/异步 GPUI、段落定位与失效保护；16 MiB 边界与超限保存、无效现有包保护、多文档暂存失败、原始转写补全通过；route Tab 顺序覆盖搜索和笔记入口 |
 | 笔记复制回归 | 7 项相关回归通过；覆盖中英文、最小窗口、键盘松键激活、草稿与原文件保留、空正文和不可用快照保护、工作区迟到读取 |
 | 全量离屏图像 | 27 个场景 × 深/浅 × 玻璃/不透明共 108 张复比均为 0 像素差异；笔记复制的 4 张原图已逐张查看并更新对应基线，其余 104 张基线字节保持不变；原文命中场景的 4 张原图已核对标记与文字 |
