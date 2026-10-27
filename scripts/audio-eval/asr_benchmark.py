@@ -68,10 +68,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def validate_prediction_coverage(cases: list[dict], rows: list[dict], repeats: int) -> None:
+def validate_prediction_rows(cases: list[dict], rows: list[dict], repeats: int) -> None:
     ids = [case["id"] for case in cases]
     if not ids or len(set(ids)) != len(ids) or type(repeats) is not int or repeats < 1:
         raise ValueError("invalid case inventory or repeat count")
+    for row in rows:
+        if type(row.get("repeat")) is not int:
+            raise ValueError("prediction repeat must be an integer index")
+        elapsed = row.get("wallSeconds")
+        if type(elapsed) not in (int, float) or not 0 < elapsed <= sys.float_info.max:
+            raise ValueError("prediction wallSeconds must be a finite positive measurement")
     expected = {(case_id, repeat) for case_id in ids for repeat in range(repeats)}
     actual = [(row["caseId"], row["repeat"]) for row in rows]
     if len(actual) != len(expected) or set(actual) != expected:
@@ -95,7 +101,7 @@ def load_benchmark_run(path: Path, report: dict | None = None) -> tuple[dict, li
         raise ValueError("prediction checksum mismatch")
     cases = json.loads(case_bytes)
     rows = [json.loads(line) for line in prediction_bytes.splitlines()]
-    validate_prediction_coverage(cases, rows, report["config"].get("repeats", 1))
+    validate_prediction_rows(cases, rows, report["config"].get("repeats", 1))
     return report, cases, rows
 
 
@@ -168,7 +174,7 @@ def validate_cases(cases: list[dict]) -> None:
 
 
 def summarize(cases: list[dict], rows: list[dict], expected_repeats: int = 1) -> list[dict]:
-    validate_prediction_coverage(cases, rows, expected_repeats)
+    validate_prediction_rows(cases, rows, expected_repeats)
     by_id = {case["id"]: case for case in cases}
     groups = defaultdict(list)
     for row in rows:

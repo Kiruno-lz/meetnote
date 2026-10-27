@@ -9,7 +9,7 @@ import time
 import unittest
 from pathlib import Path
 
-from asr_benchmark import load_benchmark_run as load_run
+from asr_benchmark import load_benchmark_run as load_run, summarize
 
 SCRIPTS = Path(__file__).parent.resolve()
 
@@ -141,6 +141,73 @@ class BenchmarkIntegrityTests(unittest.TestCase):
                     )
                     with self.assertRaises(ValueError):
                         load_run(run)
+
+    def test_numeric_lookalikes_cannot_replace_integer_repeat_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.make_run(Path(tmp))
+            first = json.loads((run / "prediction.jsonl").read_text())
+            for repeat, index in ((False, 0), (True, 1), (0.0, 0), (1.0, 1)):
+                with self.subTest(repeat=repeat, kind=type(repeat).__name__):
+                    rows = [dict(first, repeat=0), dict(first, repeat=1)]
+                    rows[index]["repeat"] = repeat
+                    (run / "prediction.jsonl").write_text(
+                        "".join(json.dumps(row) + "\n" for row in rows)
+                    )
+                    with self.assertRaisesRegex(ValueError, "repeat"):
+                        load_run(run)
+
+    def test_invalid_elapsed_time_cannot_make_a_run_rankable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.make_run(Path(tmp), repeats=1)
+            row = json.loads((run / "prediction.jsonl").read_text())
+            cases = json.loads((run / "cases.json").read_text())
+            for elapsed in (False, True, 0, -1, float("nan"), float("inf"), "0.1", None):
+                with self.subTest(elapsed=elapsed):
+                    invalid = dict(row, wallSeconds=elapsed)
+                    (run / "prediction.jsonl").write_text(json.dumps(invalid) + "\n")
+                    with self.assertRaisesRegex(ValueError, "wall|elapsed|measurement"):
+                        load_run(run)
+                    with self.assertRaisesRegex(ValueError, "wall|elapsed|measurement"):
+                        summarize(cases, [invalid])
+
+    def test_cli_records_invalid_measurement_metadata_as_failure(self):
+        for field, value in (("repeat", False), ("wallSeconds", False)):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                run = self.make_run(root, repeats=1)
+                row = {
+                    "caseId": "a",
+                    "repeat": 0,
+                    "status": "ok",
+                    "text": "gold",
+                    "wallSeconds": 0.1,
+                    field: value,
+                }
+                runner = root / "invalid.py"
+                runner.write_text(
+                    "import sys\nfrom pathlib import Path\n"
+                    f"Path(sys.argv[3]).write_text({json.dumps(row) + chr(10)!r})\n"
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPTS / "asr_benchmark.py"),
+                        "--cases",
+                        str(run / "cases.json"),
+                        "--config",
+                        str(run / "config.json"),
+                        "--runner",
+                        str(runner),
+                        "--output",
+                        str(run),
+                    ],
+                    capture_output=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                report = json.loads((run / "report.json").read_text())
+                self.assertTrue(report["failure"])
+                self.assertEqual(report["groups"], [])
+                self.assertEqual(json.loads((run / "prediction.jsonl").read_text()), row)
 
     def test_new_success_receipt_detects_replaced_predictions(self):
         with tempfile.TemporaryDirectory() as tmp:
