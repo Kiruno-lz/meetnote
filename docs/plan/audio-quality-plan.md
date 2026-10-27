@@ -16,7 +16,7 @@ B1 已有固定 FLEURS revision、archive/audio SHA、官方参考文本、句�
 - //TODO - 自动从 AMI、AliMeeting、AISHELL-4、CHiME-6 等已标注数据提取原生片段和构造片段；固定解码/重采样工具版本。拼接、插入静音、叠加与噪声变换同步变换词时间、speaker 身份、重叠区与有效评分区，边界跨词时自动调整到合法标注点，无法可靠投影的样本自动拒绝。
 - //TODO - 原生片段测真实分布；构造片段测精确边界/极端情况，分开统计。语义 gold 来自明确 topic 标注或预先选定的不同主题组合；不能将任意拼接点、静音或 speaker 切换自动当作语义 gold。
 - //TODO - 固定开发与留出集，按原始会议/speaker 隔离，构造变体沿用源 split；禁止同一素材的裁剪/拼接副本泄漏到另一 split。参考标注不足时标记 unsupported，不临时让用户补答案。
-AMI 的 B2 参考复用 [BUT/pyannote 固定 setup](https://github.com/pyannote/AMI-diarization-setup/tree/67c2d539286e89f68952d5dcf83912bd9f01dfae)：`prepare_ami_diarization.py` 校验 only_words RTTM、UEM、训练分区清单与官方源音频，并逐块核对 crop PCM。现有 ES2002a 开头 180 秒得到 23 个参考区间、4 个 speaker，重叠与身份保留，裁剪边界按源偏移恢复；仅允许完整包含于 UEM 的单个评分窗，不能填平未标注空隙。输出带音频/来源 SHA、sample 范围、train 分区与 forced-alignment 时间语义，见[参考回执](../quality/ami-diarization-reference.json)。原始标注和音频不进入仓库。
+AMI 的 B2 参考复用 [BUT/pyannote 固定 setup](https://github.com/pyannote/AMI-diarization-setup/tree/67c2d539286e89f68952d5dcf83912bd9f01dfae)：`prepare_ami_diarization.py` 校验 only_words RTTM、UEM、分区清单与官方源音频，并逐块核对 crop PCM。默认 ES2002a train 开头 180 秒得到 23 个参考区间、4 个 speaker；`--meeting ES2004a` 或 `--meeting IS1009a` 选择已固定音频/RTTM/UEM/test 清单 SHA 的官方 test profile。本地此前未参与调优，不等同于已证明上游训练无重叠。重叠与身份保留，裁剪边界按源偏移恢复；仅允许完整包含于 UEM 的单个评分窗，不能填平未标注空隙。输出带音频/来源 SHA、sample 范围、实际分区与 forced-alignment 时间语义，见[训练参考回执](../quality/ami-diarization-reference.json)与[test 筛选回执](../quality/coreml-heldout-validation.json)。原始标注和音频不进入仓库。
 
 - //TODO - 五个 AMI 非重叠 B1 裁剪已有词时间投影，B2 已有已知训练录音的 speaker/UEM 投影；补自然会议和会议/speaker 隔离的留出参考及独立模型评分，再扩充其他场景。训练裁剪、word-activity 参考和 AMI 手工文本 topic 评测都不能代替留出音频质量验收。
 

@@ -1,0 +1,908 @@
+{
+  "schema": "meetnote.coreml-heldout-validation.v1",
+  "date": "2026-10-27",
+  "sourceCommit": "465a9e14422791e382a8e6bee9df9829e6823498",
+  "scope": "two preselected official test crops excluded from prior local tuning; no production or full benchmark acceptance",
+  "protocol": {
+    "schema": "meetnote.coreml-heldout-protocol.v1",
+    "selection": "first 180 seconds of official test meetings ES2004a and IS1009a, fixed before model execution; no outcome-based selection",
+    "meetings": [
+      "ES2004a",
+      "IS1009a"
+    ],
+    "split": "test",
+    "localTuningOverlap": false,
+    "upstreamModelTrainingOverlap": "not independently established",
+    "setupRevision": "67c2d539286e89f68952d5dcf83912bd9f01dfae",
+    "referenceVariant": "only_words",
+    "durationMsPerMeeting": 180000,
+    "modes": [
+      "cpu",
+      "coreml_all",
+      "coreml_cpu_ne"
+    ],
+    "processOrder": [
+      [
+        "ES2004a",
+        "cpu"
+      ],
+      [
+        "ES2004a",
+        "coreml_all"
+      ],
+      [
+        "ES2004a",
+        "coreml_cpu_ne"
+      ],
+      [
+        "IS1009a",
+        "coreml_cpu_ne"
+      ],
+      [
+        "IS1009a",
+        "coreml_all"
+      ],
+      [
+        "IS1009a",
+        "cpu"
+      ]
+    ],
+    "repeatsPerProcess": 2,
+    "windowed": true,
+    "coreSamples": 960000,
+    "contextSamples": 240000,
+    "collarsMs": [
+      0,
+      500
+    ],
+    "gates": {
+      "quality": "each candidate at each meeting and collar <= CPU DER +0.01 absolute; pooled speaker-time-weighted DER also <= CPU +0.01",
+      "speed": "per-meeting median call seconds <= 0.2 times CPU",
+      "source": "strict positive integer ms <=180000 and complete repeat coverage",
+      "adoption": "quality screen only; resource/profile/cold-start/concurrency and other languages remain separate"
+    },
+    "referenceHashes": {
+      "IS1009a.rttm": "ba38d35ca567f3f1e061d90fdc33579ce60d2060fc8664eaeb77d2e0fcd88b01",
+      "ES2004a.uem": "514373eae2841ddf15fb07938a7d74bbecc2acad8afc2a28a93e0f7b24bfb446",
+      "IS1009a.uem": "afdc9548c0178876108b7ac88b0464ace094fab910c5e8661c135837b81514c6",
+      "test.meetings.txt": "30193ba8eb5c4a08166221d82f6eedddf57222f25d6aa7b2c20b9ef447e071c5",
+      "ES2004a.rttm": "9869c6146c2fd9595403edb36c2caeda65c12ffa2c0af4ce48d6814b673fd5a9"
+    },
+    "downloadControllerSha256": "f8bdb603cabae71e87b9990d4e6ab4f5e3d25a9910cb09c70182da9c76909b59",
+    "runnerSha256": {
+      "cpu": "159e7fe446892b9d1c50010d27c9e84e91448cfdcda593dd15c2f241100878f5",
+      "coreml_all": "955f82e8b13dfdd04791465a72f2d316f1847e8510a838abd1cf0865763a1219",
+      "coreml_cpu_ne": "1f451efdd944807732f9f8a355bb1787ebb4a1928bdf25f1a61145f20b0fd689"
+    },
+    "assetManifestSha256": "af5f2fae3034da586768a5ebddf4c89d8be210be0cce558ccc6302c0818a89d7",
+    "referenceReceiptsSha256": "4de5d0b8321208e06708feb6cd84b7bf17b134d9a6b0b3e0c288bba9d6e222b4",
+    "runControllerSha256": "900a140d102c9eb26f76df67f648551b944bb44038daf011d8f2150f4eb8cf53",
+    "referencePreparationCommit": "465a9e14422791e382a8e6bee9df9829e6823498"
+  },
+  "references": [
+    {
+      "meetingId": "ES2004a",
+      "audioSha256": "587b6f421a267a3ed9411deb8c0c570653041feb9dc895a80748d0a500d60b5b",
+      "referenceSha256": "8dc99f2c9748ef42f6795c46570a30fa9a50be3df9a62ee7cd68f85f14816c6a",
+      "referenceIntervals": 23,
+      "referenceSpeakers": 3,
+      "sourceAudioSha256": "3e2560b19bee6952c7c7ce041b0f1ea8a7ea9468044c4eea79d2a2c67e24ab0f",
+      "sourceRttmSha256": "9869c6146c2fd9595403edb36c2caeda65c12ffa2c0af4ce48d6814b673fd5a9",
+      "sourceUemSha256": "514373eae2841ddf15fb07938a7d74bbecc2acad8afc2a28a93e0f7b24bfb446",
+      "splitSha256": "30193ba8eb5c4a08166221d82f6eedddf57222f25d6aa7b2c20b9ef447e071c5"
+    },
+    {
+      "meetingId": "IS1009a",
+      "audioSha256": "4e79ce62d4a55f91b14b485f44a6db04dabd5472de4ad5261b55cbb1efa8f428",
+      "referenceSha256": "1bfffb10c528359968ef29d4337db6200d7bcdf5f50a2d7d42cb0859f6648c5d",
+      "referenceIntervals": 24,
+      "referenceSpeakers": 4,
+      "sourceAudioSha256": "6eb5a0ede0d9e72794f976ce7bea5b78133eae969f99b4c5418b43c2468d25b1",
+      "sourceRttmSha256": "ba38d35ca567f3f1e061d90fdc33579ce60d2060fc8664eaeb77d2e0fcd88b01",
+      "sourceUemSha256": "afdc9548c0178876108b7ac88b0464ace094fab910c5e8661c135837b81514c6",
+      "splitSha256": "30193ba8eb5c4a08166221d82f6eedddf57222f25d6aa7b2c20b9ef447e071c5"
+    }
+  ],
+  "sourceReview": {
+    "status": "reviewed",
+    "source": "fixed-revision API content independently fetched twice and byte-compared",
+    "cases": [
+      {
+        "meetingId": "ES2004a",
+        "allIntervalsMatchIndependentDecimalOracle": true,
+        "intervals": 23,
+        "cropPcmEqualsSource": true,
+        "sourcePinsVerified": true,
+        "officialTestMembershipVerified": true
+      },
+      {
+        "meetingId": "IS1009a",
+        "allIntervalsMatchIndependentDecimalOracle": true,
+        "intervals": 24,
+        "cropPcmEqualsSource": true,
+        "sourcePinsVerified": true,
+        "officialTestMembershipVerified": true
+      }
+    ],
+    "reviewerSha256": "062add9173ad4b09e74eaeb4b73efb855ca4b56640b7ad1e60a06d43030e74eb",
+    "scope": "source and reference validation, no inference or quality acceptance"
+  },
+  "inferenceReview": {
+    "status": "reviewed",
+    "checks": [
+      {
+        "meetingId": "ES2004a",
+        "mode": "cpu",
+        "repeatSegmentsAndVectorsIdentical": true,
+        "allEmbeddingsFiniteNonzero256": true,
+        "minNorm": 0.6613345572440247,
+        "maxNorm": 4.959107962820396
+      },
+      {
+        "meetingId": "ES2004a",
+        "mode": "coreml_all",
+        "repeatSegmentsAndVectorsIdentical": true,
+        "allEmbeddingsFiniteNonzero256": true,
+        "minNorm": 0.9684302394891736,
+        "maxNorm": 4.662869128576255
+      },
+      {
+        "meetingId": "ES2004a",
+        "mode": "coreml_cpu_ne",
+        "repeatSegmentsAndVectorsIdentical": true,
+        "allEmbeddingsFiniteNonzero256": true,
+        "minNorm": 0.9193374120986754,
+        "maxNorm": 4.391734540535315
+      },
+      {
+        "meetingId": "IS1009a",
+        "mode": "cpu",
+        "repeatSegmentsAndVectorsIdentical": true,
+        "allEmbeddingsFiniteNonzero256": true,
+        "minNorm": 0.5354954949952768,
+        "maxNorm": 6.6240517003851185
+      },
+      {
+        "meetingId": "IS1009a",
+        "mode": "coreml_all",
+        "repeatSegmentsAndVectorsIdentical": true,
+        "allEmbeddingsFiniteNonzero256": true,
+        "minNorm": 1.2915082499620032,
+        "maxNorm": 6.928622542410095
+      },
+      {
+        "meetingId": "IS1009a",
+        "mode": "coreml_cpu_ne",
+        "repeatSegmentsAndVectorsIdentical": true,
+        "allEmbeddingsFiniteNonzero256": true,
+        "minNorm": 1.5150241574867953,
+        "maxNorm": 7.127356567795087
+      }
+    ],
+    "referenceReviewSha256": "70eef6ad209ba241d584577f6f76538223a442a3e40906f2ee40c586a6a4bdda",
+    "scorerReview": "validate each meeting and pooled speaker-time totals independently; do not average DER across unequal scoring durations",
+    "scope": "two fixed 180s official test crops; no participant independence or full-meeting acceptance",
+    "decision": "both paths meet frozen quality/speed screen; no defaults or production readiness changed",
+    "modelTrainingOverlap": "local tuning excluded; upstream full training provenance not established",
+    "knownLimitation": "ES2004a has three reference labels but all paths predict two; passing delta gate does not certify speaker counting",
+    "discardedReviewAssumption": "raw observations are not unit vectors; existing application speaker_identity weighted_centroid and cosine_similarity normalize them for L2 matching; no export change inferred from raw norms"
+  },
+  "result": {
+    "schema": "meetnote.coreml-heldout-result.v1",
+    "protocolSha256": "241ce65017bf8f5de1c28986c716c05b39171c54135c9498d21421071d43ad79",
+    "scorerSha256": "4d1b61121181ae022cb5db2cbf90b4ee0482f653dcecc1f494d1315bec474028",
+    "metricImplementationSha256": "5c9d82d039f1c185920dbec3d6d42f2891099ff986b6bee0225b1128b946385d",
+    "qualityAcceptance": "not_assessed",
+    "scope": "official AMI test crops unseen by local tuning before frozen protocol; upstream model training overlap not independently established",
+    "meetings": {
+      "ES2004a": {
+        "cpu": {
+          "callSeconds": [
+            27.632198209,
+            27.445202875
+          ],
+          "medianCallSeconds": 27.538700542,
+          "peakRssBytes": 313245696,
+          "peakMemoryFootprintBytes": 272319496,
+          "scores": [
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 117.75,
+                "missedSpeakerSeconds": 13.370000000000001,
+                "falseAlarmSpeakerSeconds": 2.8149999999999746,
+                "confusedSpeakerSeconds": 0.2699999999999996,
+                "der": 0.1397452229299361,
+                "missRate": 0.11354564755838642,
+                "falseAlarmRate": 0.02390658174097643,
+                "confusionRate": 0.0022929936305732448
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 103.43999999999997,
+                "missedSpeakerSeconds": 8.502999999999997,
+                "falseAlarmSpeakerSeconds": 0.6060000000000016,
+                "confusedSpeakerSeconds": 0.0,
+                "der": 0.08806071152358856,
+                "missRate": 0.08220224284609434,
+                "falseAlarmRate": 0.005858468677494217,
+                "confusionRate": 0.0
+              }
+            ],
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 117.75,
+                "missedSpeakerSeconds": 13.370000000000001,
+                "falseAlarmSpeakerSeconds": 2.8149999999999746,
+                "confusedSpeakerSeconds": 0.2699999999999996,
+                "der": 0.1397452229299361,
+                "missRate": 0.11354564755838642,
+                "falseAlarmRate": 0.02390658174097643,
+                "confusionRate": 0.0022929936305732448
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 103.43999999999997,
+                "missedSpeakerSeconds": 8.502999999999997,
+                "falseAlarmSpeakerSeconds": 0.6060000000000016,
+                "confusedSpeakerSeconds": 0.0,
+                "der": 0.08806071152358856,
+                "missRate": 0.08220224284609434,
+                "falseAlarmRate": 0.005858468677494217,
+                "confusionRate": 0.0
+              }
+            ]
+          ],
+          "counts": [
+            {
+              "speakerCount": 2,
+              "segments": 18,
+              "observations": 172
+            },
+            {
+              "speakerCount": 2,
+              "segments": 18,
+              "observations": 172
+            }
+          ],
+          "receiptSha256": "fb88e74061f8a31efdfc5fa2928100e24af97a819c89b03fe6e4a7e22b2d8c10",
+          "referenceSha256": "8dc99f2c9748ef42f6795c46570a30fa9a50be3df9a62ee7cd68f85f14816c6a"
+        },
+        "coreml_all": {
+          "callSeconds": [
+            2.734004542,
+            1.487639
+          ],
+          "medianCallSeconds": 2.110821771,
+          "peakRssBytes": 540049408,
+          "peakMemoryFootprintBytes": 3930195768,
+          "scores": [
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 117.75,
+                "missedSpeakerSeconds": 13.070000000000011,
+                "falseAlarmSpeakerSeconds": 2.9869999999999823,
+                "confusedSpeakerSeconds": 0.26599999999999824,
+                "der": 0.138624203821656,
+                "missRate": 0.11099787685774956,
+                "falseAlarmRate": 0.025367303609341675,
+                "confusionRate": 0.002259023354564741
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 103.43999999999997,
+                "missedSpeakerSeconds": 8.253000000000004,
+                "falseAlarmSpeakerSeconds": 0.875999999999987,
+                "confusedSpeakerSeconds": 0.0,
+                "der": 0.08825406032482593,
+                "missRate": 0.07978538283062651,
+                "falseAlarmRate": 0.008468677494199413,
+                "confusionRate": 0.0
+              }
+            ],
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 117.75,
+                "missedSpeakerSeconds": 13.070000000000011,
+                "falseAlarmSpeakerSeconds": 2.9869999999999823,
+                "confusedSpeakerSeconds": 0.26599999999999824,
+                "der": 0.138624203821656,
+                "missRate": 0.11099787685774956,
+                "falseAlarmRate": 0.025367303609341675,
+                "confusionRate": 0.002259023354564741
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 103.43999999999997,
+                "missedSpeakerSeconds": 8.253000000000004,
+                "falseAlarmSpeakerSeconds": 0.875999999999987,
+                "confusedSpeakerSeconds": 0.0,
+                "der": 0.08825406032482593,
+                "missRate": 0.07978538283062651,
+                "falseAlarmRate": 0.008468677494199413,
+                "confusionRate": 0.0
+              }
+            ]
+          ],
+          "counts": [
+            {
+              "speakerCount": 2,
+              "segments": 19,
+              "observations": 174
+            },
+            {
+              "speakerCount": 2,
+              "segments": 19,
+              "observations": 174
+            }
+          ],
+          "receiptSha256": "8f6630d2c02cb2f191ebb987d6c727ae45c018ca050e2e6e827b3b5ab2728149",
+          "referenceSha256": "8dc99f2c9748ef42f6795c46570a30fa9a50be3df9a62ee7cd68f85f14816c6a"
+        },
+        "coreml_cpu_ne": {
+          "callSeconds": [
+            3.052711375,
+            2.83095775
+          ],
+          "medianCallSeconds": 2.9418345625,
+          "peakRssBytes": 2970943488,
+          "peakMemoryFootprintBytes": 1809320984,
+          "scores": [
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 117.75,
+                "missedSpeakerSeconds": 13.070000000000011,
+                "falseAlarmSpeakerSeconds": 2.9869999999999823,
+                "confusedSpeakerSeconds": 0.26599999999999824,
+                "der": 0.138624203821656,
+                "missRate": 0.11099787685774956,
+                "falseAlarmRate": 0.025367303609341675,
+                "confusionRate": 0.002259023354564741
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 103.43999999999997,
+                "missedSpeakerSeconds": 8.253000000000004,
+                "falseAlarmSpeakerSeconds": 0.875999999999987,
+                "confusedSpeakerSeconds": 0.0,
+                "der": 0.08825406032482593,
+                "missRate": 0.07978538283062651,
+                "falseAlarmRate": 0.008468677494199413,
+                "confusionRate": 0.0
+              }
+            ],
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 117.75,
+                "missedSpeakerSeconds": 13.070000000000011,
+                "falseAlarmSpeakerSeconds": 2.9869999999999823,
+                "confusedSpeakerSeconds": 0.26599999999999824,
+                "der": 0.138624203821656,
+                "missRate": 0.11099787685774956,
+                "falseAlarmRate": 0.025367303609341675,
+                "confusionRate": 0.002259023354564741
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 103.43999999999997,
+                "missedSpeakerSeconds": 8.253000000000004,
+                "falseAlarmSpeakerSeconds": 0.875999999999987,
+                "confusedSpeakerSeconds": 0.0,
+                "der": 0.08825406032482593,
+                "missRate": 0.07978538283062651,
+                "falseAlarmRate": 0.008468677494199413,
+                "confusionRate": 0.0
+              }
+            ]
+          ],
+          "counts": [
+            {
+              "speakerCount": 2,
+              "segments": 19,
+              "observations": 174
+            },
+            {
+              "speakerCount": 2,
+              "segments": 19,
+              "observations": 174
+            }
+          ],
+          "receiptSha256": "3cbc6d8cfac7625d18c60372ac3ccc269120f12ccbd2019600b88d3d954dbd05",
+          "referenceSha256": "8dc99f2c9748ef42f6795c46570a30fa9a50be3df9a62ee7cd68f85f14816c6a"
+        }
+      },
+      "IS1009a": {
+        "cpu": {
+          "callSeconds": [
+            35.645781833,
+            35.95756525
+          ],
+          "medianCallSeconds": 35.8016735415,
+          "peakRssBytes": 302579712,
+          "peakMemoryFootprintBytes": 262783984,
+          "scores": [
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 101.17000000000002,
+                "missedSpeakerSeconds": 4.5920000000000485,
+                "falseAlarmSpeakerSeconds": 10.32899999999999,
+                "confusedSpeakerSeconds": 3.535000000000025,
+                "der": 0.18242562024315567,
+                "missRate": 0.045388949293269226,
+                "falseAlarmRate": 0.1020954828506473,
+                "confusionRate": 0.03494118809923915
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 83.62,
+                "missedSpeakerSeconds": 2.0500000000000256,
+                "falseAlarmSpeakerSeconds": 6.282,
+                "confusedSpeakerSeconds": 1.1099999999999994,
+                "der": 0.11291557043769462,
+                "missRate": 0.024515666108586767,
+                "falseAlarmRate": 0.07512556804592202,
+                "confusionRate": 0.013274336283185834
+              }
+            ],
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 101.17000000000002,
+                "missedSpeakerSeconds": 4.5920000000000485,
+                "falseAlarmSpeakerSeconds": 10.32899999999999,
+                "confusedSpeakerSeconds": 3.535000000000025,
+                "der": 0.18242562024315567,
+                "missRate": 0.045388949293269226,
+                "falseAlarmRate": 0.1020954828506473,
+                "confusionRate": 0.03494118809923915
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 83.62,
+                "missedSpeakerSeconds": 2.0500000000000256,
+                "falseAlarmSpeakerSeconds": 6.282,
+                "confusedSpeakerSeconds": 1.1099999999999994,
+                "der": 0.11291557043769462,
+                "missRate": 0.024515666108586767,
+                "falseAlarmRate": 0.07512556804592202,
+                "confusionRate": 0.013274336283185834
+              }
+            ]
+          ],
+          "counts": [
+            {
+              "speakerCount": 4,
+              "segments": 31,
+              "observations": 213
+            },
+            {
+              "speakerCount": 4,
+              "segments": 31,
+              "observations": 213
+            }
+          ],
+          "receiptSha256": "2ea9f43f15a81212ac158fc8871d2e63d2d9613aad4d244c4c90942e8c3e2152",
+          "referenceSha256": "1bfffb10c528359968ef29d4337db6200d7bcdf5f50a2d7d42cb0859f6648c5d"
+        },
+        "coreml_all": {
+          "callSeconds": [
+            1.603078,
+            1.39958025
+          ],
+          "medianCallSeconds": 1.501329125,
+          "peakRssBytes": 549961728,
+          "peakMemoryFootprintBytes": 3914008328,
+          "scores": [
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 101.17000000000002,
+                "missedSpeakerSeconds": 4.55900000000004,
+                "falseAlarmSpeakerSeconds": 10.66700000000003,
+                "confusedSpeakerSeconds": 3.118000000000009,
+                "der": 0.1813185726994176,
+                "missRate": 0.04506276564198912,
+                "falseAlarmRate": 0.10543639418800067,
+                "confusionRate": 0.03081941286942778
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 83.62,
+                "missedSpeakerSeconds": 2.2469999999999857,
+                "falseAlarmSpeakerSeconds": 6.368000000000009,
+                "confusedSpeakerSeconds": 1.0930000000000035,
+                "der": 0.11609662760105235,
+                "missRate": 0.026871561827313865,
+                "falseAlarmRate": 0.07615403013633112,
+                "confusionRate": 0.01307103563740736
+              }
+            ],
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 101.17000000000002,
+                "missedSpeakerSeconds": 4.55900000000004,
+                "falseAlarmSpeakerSeconds": 10.66700000000003,
+                "confusedSpeakerSeconds": 3.118000000000009,
+                "der": 0.1813185726994176,
+                "missRate": 0.04506276564198912,
+                "falseAlarmRate": 0.10543639418800067,
+                "confusionRate": 0.03081941286942778
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 83.62,
+                "missedSpeakerSeconds": 2.2469999999999857,
+                "falseAlarmSpeakerSeconds": 6.368000000000009,
+                "confusedSpeakerSeconds": 1.0930000000000035,
+                "der": 0.11609662760105235,
+                "missRate": 0.026871561827313865,
+                "falseAlarmRate": 0.07615403013633112,
+                "confusionRate": 0.01307103563740736
+              }
+            ]
+          ],
+          "counts": [
+            {
+              "speakerCount": 4,
+              "segments": 35,
+              "observations": 230
+            },
+            {
+              "speakerCount": 4,
+              "segments": 35,
+              "observations": 230
+            }
+          ],
+          "receiptSha256": "63899881ac1043acacfd7fe5415167c61eb1b7cf14c51e7b324e5235b4091919",
+          "referenceSha256": "1bfffb10c528359968ef29d4337db6200d7bcdf5f50a2d7d42cb0859f6648c5d"
+        },
+        "coreml_cpu_ne": {
+          "callSeconds": [
+            2.896954375,
+            2.857676958
+          ],
+          "medianCallSeconds": 2.8773156665,
+          "peakRssBytes": 2963079168,
+          "peakMemoryFootprintBytes": 1805536304,
+          "scores": [
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 101.17000000000002,
+                "missedSpeakerSeconds": 4.55900000000004,
+                "falseAlarmSpeakerSeconds": 10.66700000000003,
+                "confusedSpeakerSeconds": 3.118000000000009,
+                "der": 0.1813185726994176,
+                "missRate": 0.04506276564198912,
+                "falseAlarmRate": 0.10543639418800067,
+                "confusionRate": 0.03081941286942778
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 83.62,
+                "missedSpeakerSeconds": 2.2469999999999857,
+                "falseAlarmSpeakerSeconds": 6.368000000000009,
+                "confusedSpeakerSeconds": 1.0930000000000035,
+                "der": 0.11609662760105235,
+                "missRate": 0.026871561827313865,
+                "falseAlarmRate": 0.07615403013633112,
+                "confusionRate": 0.01307103563740736
+              }
+            ],
+            [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 101.17000000000002,
+                "missedSpeakerSeconds": 4.55900000000004,
+                "falseAlarmSpeakerSeconds": 10.66700000000003,
+                "confusedSpeakerSeconds": 3.118000000000009,
+                "der": 0.1813185726994176,
+                "missRate": 0.04506276564198912,
+                "falseAlarmRate": 0.10543639418800067,
+                "confusionRate": 0.03081941286942778
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 83.62,
+                "missedSpeakerSeconds": 2.2469999999999857,
+                "falseAlarmSpeakerSeconds": 6.368000000000009,
+                "confusedSpeakerSeconds": 1.0930000000000035,
+                "der": 0.11609662760105235,
+                "missRate": 0.026871561827313865,
+                "falseAlarmRate": 0.07615403013633112,
+                "confusionRate": 0.01307103563740736
+              }
+            ]
+          ],
+          "counts": [
+            {
+              "speakerCount": 4,
+              "segments": 35,
+              "observations": 230
+            },
+            {
+              "speakerCount": 4,
+              "segments": 35,
+              "observations": 230
+            }
+          ],
+          "receiptSha256": "756b5fc2c94cdd51ae6048c15aa10d18121cfd474391062e75cbf35bd32dc729",
+          "referenceSha256": "1bfffb10c528359968ef29d4337db6200d7bcdf5f50a2d7d42cb0859f6648c5d"
+        }
+      }
+    },
+    "pooled": {
+      "cpu": [
+        {
+          "collarMs": 0,
+          "scoredSpeakerSeconds": 218.92000000000002,
+          "missedSpeakerSeconds": 17.96200000000005,
+          "falseAlarmSpeakerSeconds": 13.143999999999965,
+          "confusedSpeakerSeconds": 3.8050000000000246,
+          "der": 0.15946921249771626
+        },
+        {
+          "collarMs": 500,
+          "scoredSpeakerSeconds": 187.05999999999997,
+          "missedSpeakerSeconds": 10.553000000000022,
+          "falseAlarmSpeakerSeconds": 6.888000000000002,
+          "confusedSpeakerSeconds": 1.1099999999999994,
+          "der": 0.0991713888591897
+        }
+      ],
+      "coreml_all": [
+        {
+          "collarMs": 0,
+          "scoredSpeakerSeconds": 218.92000000000002,
+          "missedSpeakerSeconds": 17.62900000000005,
+          "falseAlarmSpeakerSeconds": 13.654000000000012,
+          "confusedSpeakerSeconds": 3.3840000000000074,
+          "der": 0.15835465010049365
+        },
+        {
+          "collarMs": 500,
+          "scoredSpeakerSeconds": 187.05999999999997,
+          "missedSpeakerSeconds": 10.49999999999999,
+          "falseAlarmSpeakerSeconds": 7.243999999999996,
+          "confusedSpeakerSeconds": 1.0930000000000035,
+          "der": 0.10070031006094297
+        }
+      ],
+      "coreml_cpu_ne": [
+        {
+          "collarMs": 0,
+          "scoredSpeakerSeconds": 218.92000000000002,
+          "missedSpeakerSeconds": 17.62900000000005,
+          "falseAlarmSpeakerSeconds": 13.654000000000012,
+          "confusedSpeakerSeconds": 3.3840000000000074,
+          "der": 0.15835465010049365
+        },
+        {
+          "collarMs": 500,
+          "scoredSpeakerSeconds": 187.05999999999997,
+          "missedSpeakerSeconds": 10.49999999999999,
+          "falseAlarmSpeakerSeconds": 7.243999999999996,
+          "confusedSpeakerSeconds": 1.0930000000000035,
+          "der": 0.10070031006094297
+        }
+      ]
+    },
+    "gates": {
+      "ES2004a": {
+        "coreml_all": {
+          "deltaByCollar": [
+            -0.001121019108280108,
+            0.0001933488012373641
+          ],
+          "qualityPassed": true,
+          "timeRatio": 0.07664928734675515,
+          "speedPassed": true
+        },
+        "coreml_cpu_ne": {
+          "deltaByCollar": [
+            -0.001121019108280108,
+            0.0001933488012373641
+          ],
+          "qualityPassed": true,
+          "timeRatio": 0.10682546760016255,
+          "speedPassed": true
+        }
+      },
+      "IS1009a": {
+        "coreml_all": {
+          "deltaByCollar": [
+            -0.0011070475437380822,
+            0.003181057163357731
+          ],
+          "qualityPassed": true,
+          "timeRatio": 0.041934607421625525,
+          "speedPassed": true
+        },
+        "coreml_cpu_ne": {
+          "deltaByCollar": [
+            -0.0011070475437380822,
+            0.003181057163357731
+          ],
+          "qualityPassed": true,
+          "timeRatio": 0.08036818902235729,
+          "speedPassed": true
+        }
+      },
+      "pooled": {
+        "coreml_all": {
+          "deltaByCollar": [
+            -0.0011145623972226015,
+            0.0015289212017532694
+          ],
+          "qualityPassed": true
+        },
+        "coreml_cpu_ne": {
+          "deltaByCollar": [
+            -0.0011145623972226015,
+            0.0015289212017532694
+          ],
+          "qualityPassed": true
+        }
+      }
+    },
+    "screenPassedByMode": {
+      "coreml_all": true,
+      "coreml_cpu_ne": true
+    }
+  },
+  "validation": {
+    "newProfileRegression": "red unsupported --meeting; then green with six negative source and identity/partition cases",
+    "pythonTests": 87,
+    "failed": 0,
+    "black": "passed",
+    "rust": "unchanged; prior full check/test/build retained; not rerun for Python evaluation only",
+    "referencePreflightFailure": "controller resolved venv symlink to base interpreter; corrected to absolute lexical executable before references or inference; original log retained"
+  },
+  "rawRoot": "eval-data/optimization-2026-10-27/coreml-heldout",
+  "sourceLicense": "AMI audio/annotations CC-BY-4.0; reference setup repository Apache-2.0",
+  "fingerprints": {
+    "summarySha256": "8aa27644616668dddc05ef3e5a9c569d00db240791d22daa7e45e510557eb607",
+    "redLogSha256": "a6a0a444beb3c0da3e53269c82c92c0da2fc9b9c334725ac4345029be87b9852",
+    "testsLogSha256": "6e358a85c3e16865cfb93060e72b5145042b4b9a7a4df8b9cad76029725ea05c"
+  },
+  "sources": [
+    "https://github.com/pyannote/AMI-diarization-setup/tree/67c2d539286e89f68952d5dcf83912bd9f01dfae",
+    "https://groups.inf.ed.ac.uk/ami/corpus/"
+  ],
+  "limitations": [
+    "two 180s English Mix-Headset crops only; not full meetings or far-field",
+    "upstream model training overlap not independently established",
+    "same dataset speakers/rooms may overlap other sessions; no participant independence claim",
+    "ES2004a undercounts speakers in all three modes",
+    "allowing CPU+NE does not prove actual per-op ANE residency",
+    "model installations, low-memory devices, cold cache, UI and application concurrency not accepted",
+    "new references must be treated as regression data if later used for tuning"
+  ]
+}
