@@ -414,6 +414,22 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 复现核心为在上一节临时 example 的相同 Cargo feature 下，仅将 vendor `CoreMlModel::default_compute_units` 返回值由 `All` 换成 `CPUAndNeuralEngine` 编译候选，再恢复源码；前后 binary 单独保存并核对 SHA。输入、模型、runner、预测与标准 metric 的指纹及逐次结果见[运算单元回执](../quality/coreml-compute-units-validation.json)。临时代码清理，仅保留忽略目录下的模型/预测/资源证据。这里没有新增生产代码，未重复运行已通过的工作区测试；库策略 API、未参与调优录音与低内存设备尚未验收，保留原默认。
 
+### CoreML fast 完整模式筛选
+
+先检查相同 revision 的 FP16 导出：普通 CoreML 15 个图中只有 7 个有 FP16 对应，主要 chunk 图没有，因此未把部分替换当作完整 FP16 方案执行。改用锁定 `speakrs 0.5.0` 已有 `CoreMlFast` 完整模式试接，不另造执行后端；其 2 s step、3-frame min-duration 和 3 次 VBx 迭代作为同一模式的既有默认一起评估，不能将差异仅归因于量化。
+
+固定原 revision 的 96 个必需文件并逐个校验来源；临时 binary 只将 explicit CoreML 请求映射到 `CoreMlFast`，原始行另外记录实际 execution mode，编译后恢复生产源码。三份既有 180 s 录音各两次普通 CoreML/fast 调用；另执行短语音和全零静音各两次，全部成功，静音输出零段、零 observation、零 speaker。普通 CoreML 对照保持相同设置；先固定逐录音/逐 collar DER 相对普通 CoreML 与 CPU 均不得增加超过 1 个百分点，耗时 ≤普通模式 80%、footprint ≤70%。
+
+| 录音 | 普通 / fast 中位数 s | 普通 / fast footprint GiB | 普通 / fast 无 collar DER | 普通 / fast 预测人数 |
+| --- | ---: | ---: | ---: | ---: |
+| ES2002a train | 1.8690 / 1.3732 | 3.646 / 2.242 | 27.2940% / 31.3226% | 3 / 6 |
+| ES2004a test 回归 | 1.5514 / 1.2324 | 3.645 / 2.229 | 13.8624% / 14.4569% | 2 / 2 |
+| IS1009a test 回归 | 1.5476 / 1.1999 | 3.649 / 2.241 | 18.1319% / 18.0894% | 4 / 4 |
+
+速度和 footprint 门槛均通过，但 ES2002a 无 collar DER 增加 4.0285 个百分点，500 ms 完整 collar 也增加 2.4370 个百分点；其四位参考说话人被分成六类。独立 review 判定该模式不通过，不能平均掉单例退步，也不在这些回归音频上反向调阈值来放宽验收。原始重复输出、源范围、固定 CPU 对照与 scorer 分项复核均通过，失败是测得的质量退步。该结论只针对测试的 bounded-window 路径，未评估整文件 fast 模式，保留普通 CoreML 与 CPU 默认。
+
+复现核心为上一节的相同 runner 与 `--windowed`，候选 temporary engine 仅将 `Ok(ExecutionMode::CoreMl)` 改成 `Ok(ExecutionMode::CoreMlFast)`，不混入自定义 clustering 参数；模型文件按 vendor `required_files(CoreMlFast)` 的固定清单准备。协议、模式/runner/artifact 指纹和失败依据见[fast 回执](../quality/coreml-fast-validation.json)。临时代码清理，原始数据保留在忽略目录 `eval-data/optimization-2026-10-27/coreml-fast/`。没有保留 Rust 改动或新依赖，故未重复已通过的工作区测试。
+
 ### Native 分离窗口的整数毫秒范围
 
 2026-10-27 重新审查资源链路，确认 session 已只保留 `WindowTimeline` 和 inference 数组，没有保留输入 `Arc<AudioWindow>` PCM；没有按假设修改所有权。审查导出时发现另一处确定性范围问题：speaker segment 的 15 秒 context 尾窗、embedding observation 的 5 秒 context 尾窗，在有效 core 只剩一个采样时，都可从正 sample 范围变成 `60000..60000 ms`。两个直接生产导出 helper 的回归先红；它们是 typed projection fixture，不作为实际模型输出这种尾段的证据。
