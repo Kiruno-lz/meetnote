@@ -159,6 +159,27 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 结论：拒绝将六线程预算推广为 Whisper 全局默认，保留既有默认与显式覆盖；没有根据单任务最优点增加总资源竞争。48 个 native 进程共完成 403 次调用，另有四个超时配置与缺失调用明确保留。//TODO - 先在现有 JobRuntime 明确多录音的总 CPU/模型 session 预算，再在同进程、不同模型和小时级输入上验证吞吐、取消与 RSS；不能只放大每 session 线程，也不另建一套调度器。其他设备的 P/E 核、当前负载和 NUMA 不能由 `available_parallelism` 的近似值推断。
 
+### Paraformer 的宽区间线程复核
+
+2026-10-27 单独复核 Sherpa ASR 的四线程上限，未把 native embedding 的六线程收益直接推广。复用已有 release runner、Paraformer int8 bundle 和四个已知中文 FLEURS 原生句子，共 51.3 秒；每配置两轮，按 1/2/4/6/8/10/12/16 升序再降序，16 个进程、128 次调用全部完成。官方 [ORT 线程文档](https://onnxruntime.ai/docs/performance/tune-performance/threading.html)将 intra-op 和多 session 竞争分开；这里仅测每次重载模型的单 session，不改全应用调度。
+
+预先冻结六线程候选在两个顺序均比四线程 aggregate call time 至少快 10%、RSS 不超过 1.1 倍、逐 case/repeat 归一化文本一致的门；另按“完整且文本一致的配置中，距最快中位耗时 5% 内取最小线程数”选本机平衡点。
+
+| 线程 | 单次调用中位数 | 整进程峰值 RSS 中位数 | 相对四线程文本 |
+|---|---|---|---|
+| 1 | 0.9940 s | 334.0 MiB | 一致 |
+| 2 | 0.7908 s | 340.1 MiB | 一致 |
+| 4 | 0.6742 s | 371.8 MiB | 一致 |
+| 6 | 0.6972 s | 362.6 MiB | 失败：4 次片段输出改变 |
+| 8 | 0.7657 s | 369.3 MiB | 失败：4 次片段输出改变 |
+| 10 | 0.7460 s | 376.2 MiB | 失败：4 次片段输出改变 |
+| 12 | 0.9934 s | 374.9 MiB | 失败：4 次片段输出改变 |
+| 16 | 1.1829 s | 384.4 MiB | 失败：4 次片段输出改变 |
+
+每行汇总两个进程的 16 次调用，包含各次模型加载；RSS 包含进程启动、模型和推理，未单独测能耗。六线程升/降序 aggregate time 比为 1.103/0.983，两个顺序都未达到 0.9 门；RSS 门通过。6/8/10/12/16 各在同一人名片段的四次输出上改变拼写，总共 20 个不同输出；虽然所有配置 CER 均为 84/376（22.34%），逐文本等价门失败。未据此断言某个浮点算子是唯一原因，也没有用整体 CER 相同掩盖改变。
+
+本小集平衡点仍为四线程。保留现有 `min(available_parallelism, 4)` ASR 默认及显式线程覆盖；它不同于 embedding 的比例预算。候选已在单任务门失败，未继续用长音频、其他模型族或并发补测来宣称全局默认通过。四个既有句子不能代表设备或语言的普遍最优值；其余场景仍未评估。独立 review 校验完整覆盖、全部原始 hash、source time、逐段文本与两种顺序统计，见[Paraformer 线程回执](../quality/paraformer-thread-evaluation.json)。复现命令使用 `asr_benchmark.py --cases <fixed-four-zh> --config <threads.json> --runner <frozen-runner> --output <run> --timeout 120`；临时扫描 controller 已清理，未增加产品开关、依赖或模型缓存。
+
 ### AMI 分离参考投影
 
 在更改 AHC 或身份策略前，需要可追溯的 B2 参考。比较自行从 XML 造规则与复用 [BUT/pyannote AMI setup](https://github.com/pyannote/AMI-diarization-setup/tree/67c2d539286e89f68952d5dcf83912bd9f01dfae)，采用后者固定 commit 的 only_words RTTM、原 UEM 和训练分区清单；其规则保留词活动、合并相邻同 speaker 区间，不把该协议等同于人工声学静音标注。

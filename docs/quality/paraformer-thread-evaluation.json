@@ -1,0 +1,543 @@
+{
+  "schema": "meetnote.paraformer-thread-screen.v1",
+  "date": "2026-10-27",
+  "sourceCommit": "5d2ae67d437f4882a242dc3753c8114ee2088fb5",
+  "runnerSha256": "af47de8266cdae1c5b3323ba6af9d7d077da74e67c5041c4f3c000cb7ebff059",
+  "scope": "four known Chinese FLEURS sentences, 51.3 seconds; per-call model loading, no held-out or long-audio accuracy acceptance",
+  "hardware": {
+    "os": "macOS 27.0.1",
+    "architecture": "arm64",
+    "logicalAndPhysicalCores": 10,
+    "memoryBytes": 34359738368
+  },
+  "model": {
+    "backendId": "sherpa-onnx",
+    "modelId": "paraformer-zh",
+    "revision": null,
+    "artifactPath": "/Users/kiruno/Documents/_code/vibe/meetnote/models/asr/paraformer-zh"
+  },
+  "modelArtifacts": [
+    {
+      "filename": "model.int8.onnx",
+      "bytes": 81828675,
+      "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+    },
+    {
+      "filename": "tokens.txt",
+      "bytes": 75352,
+      "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+    }
+  ],
+  "protocolSha256": "26e2f7b1096277025f3628dd1d871a9897ea036b22f9e8cd38f2e28a11c98d55",
+  "comparisonSha256": "505459e5ef4e151316944cb6f0f8c267ca8899e68200346925b8b71e5f33720d",
+  "controllerSha256": "652db18fbf4f34919a09f93697ff7e7e732474ec336d3a5921e3372e2983979e",
+  "scorerSha256": "1e5ba7b4488b4bc7d404a0cdef3ce4051f153c4fc3d89eb369ed2f866f1f0177",
+  "rawArtifacts": "eval-data/optimization-2026-10-27/paraformer-thread-screen",
+  "cases": [
+    {
+      "id": "fleurs-zh-1779",
+      "audioSha256": "2e3e43bee6e9c514e6113455eb70c6655628634422b5c88ab99d8ec9644d8846",
+      "durationSeconds": 15.16
+    },
+    {
+      "id": "fleurs-zh-1843",
+      "audioSha256": "46ed1353a4aa25de8325c0bac007c7fc6d3bca79bc22afa085ff12653f9e60b4",
+      "durationSeconds": 8.64
+    },
+    {
+      "id": "fleurs-zh-1780",
+      "audioSha256": "bdbb5121caf198c16ffcda88407b8c642562dbb786300bd8fa460b15e1aaee16",
+      "durationSeconds": 15.68
+    },
+    {
+      "id": "fleurs-zh-1847",
+      "audioSha256": "3a7c74721363930f42cb397bfe823ca9cf79f46b7e54f5e9b9f3d7681273488a",
+      "durationSeconds": 11.82
+    }
+  ],
+  "configurationExceptThreads": {
+    "model": {
+      "backendId": "sherpa-onnx",
+      "modelId": "paraformer-zh",
+      "revision": null,
+      "artifactPath": "/Users/kiruno/Documents/_code/vibe/meetnote/models/asr/paraformer-zh"
+    },
+    "device": "Cpu",
+    "repeats": 2,
+    "windowed": false
+  },
+  "threadGrid": [
+    1,
+    2,
+    4,
+    6,
+    8,
+    10,
+    12,
+    16
+  ],
+  "executionOrders": [
+    "ascending",
+    "descending"
+  ],
+  "processes": 16,
+  "successfulBackendCalls": 128,
+  "failedCalls": 0,
+  "timedOutConfigurations": 0,
+  "gates": {
+    "quality": "no failed/missing calls; exact normalized text and source-bounded positive timelines relative to threads=4 in each order",
+    "singleSession": "candidate six-thread budget must improve aggregate call time by at least 10 percent in both orders; RSS ratio no more than 1.1",
+    "balancedPoint": "smallest thread count within five percent of fastest median call time among complete equivalent configurations",
+    "defaultChange": "requires additional long-input family and two-process contention validation; this screen alone does not change defaults"
+  },
+  "candidateSixThreadGates": [
+    {
+      "order": "ascending",
+      "candidateToBaselineTimeRatio": 1.1030115157632796,
+      "rssRatio": 1.0096404816030984,
+      "timeGatePassed": false,
+      "rssGatePassed": true,
+      "textGatePassed": false
+    },
+    {
+      "order": "descending",
+      "candidateToBaselineTimeRatio": 0.9828600311112249,
+      "rssRatio": 0.9409790679139226,
+      "timeGatePassed": false,
+      "rssGatePassed": true,
+      "textGatePassed": false
+    }
+  ],
+  "balancedThreadCountOnThisScreen": 4,
+  "combinedResults": [
+    {
+      "threads": 1,
+      "medianCallSeconds": 0.994045812,
+      "aggregateCallSeconds": 15.582653874,
+      "medianProcessPeakRssBytes": 350191616.0,
+      "textEquivalentToFourThreads": true,
+      "changedRows": 0
+    },
+    {
+      "threads": 2,
+      "medianCallSeconds": 0.790842771,
+      "aggregateCallSeconds": 12.559409499000001,
+      "medianProcessPeakRssBytes": 356646912.0,
+      "textEquivalentToFourThreads": true,
+      "changedRows": 0
+    },
+    {
+      "threads": 4,
+      "medianCallSeconds": 0.674219959,
+      "aggregateCallSeconds": 10.871042293,
+      "medianProcessPeakRssBytes": 389881856.0,
+      "textEquivalentToFourThreads": true,
+      "changedRows": 0
+    },
+    {
+      "threads": 6,
+      "medianCallSeconds": 0.697219729,
+      "aggregateCallSeconds": 11.335957582999999,
+      "medianProcessPeakRssBytes": 380231680.0,
+      "textEquivalentToFourThreads": false,
+      "changedRows": 4
+    },
+    {
+      "threads": 8,
+      "medianCallSeconds": 0.765692875,
+      "aggregateCallSeconds": 11.973890872,
+      "medianProcessPeakRssBytes": 387235840.0,
+      "textEquivalentToFourThreads": false,
+      "changedRows": 4
+    },
+    {
+      "threads": 10,
+      "medianCallSeconds": 0.745983542,
+      "aggregateCallSeconds": 12.350823,
+      "medianProcessPeakRssBytes": 394436608.0,
+      "textEquivalentToFourThreads": false,
+      "changedRows": 4
+    },
+    {
+      "threads": 12,
+      "medianCallSeconds": 0.9934085209999999,
+      "aggregateCallSeconds": 15.94601804,
+      "medianProcessPeakRssBytes": 393158656.0,
+      "textEquivalentToFourThreads": false,
+      "changedRows": 4
+    },
+    {
+      "threads": 16,
+      "medianCallSeconds": 1.182933438,
+      "aggregateCallSeconds": 19.419176541,
+      "medianProcessPeakRssBytes": 403038208.0,
+      "textEquivalentToFourThreads": false,
+      "changedRows": 4
+    }
+  ],
+  "perOrderResults": [
+    {
+      "order": "ascending",
+      "threads": 1,
+      "calls": 8,
+      "medianCallSeconds": 0.971844521,
+      "aggregateCallSeconds": 7.702761541,
+      "peakRssBytes": 331726848,
+      "predictionSha256": "b4062dfb35d7f9f7788c45082b242d910cf0fe02bf2739e3ce330c84528dfb12",
+      "reportSha256": "804e53e9262a3fdba01ddc3c5a344d12438a0ed7b8552ab7aba39ec755900985",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": true,
+      "changedRows": [],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "ascending",
+      "threads": 2,
+      "calls": 8,
+      "medianCallSeconds": 0.7687324579999999,
+      "aggregateCallSeconds": 6.125432582,
+      "peakRssBytes": 344031232,
+      "predictionSha256": "35bfc429f1994e11fd643f3b08f341613f2795af4b4909256da098480152a725",
+      "reportSha256": "ef5fa3e909caa2b72a41e58d673d7547c7e96c2d0002946c66f0d7fe47a03ccd",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": true,
+      "changedRows": [],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "ascending",
+      "threads": 4,
+      "calls": 8,
+      "medianCallSeconds": 0.6718112709999999,
+      "aggregateCallSeconds": 5.420196168,
+      "peakRssBytes": 389185536,
+      "predictionSha256": "15f2cbebca1ff671ed9d32873166dd5a42e528d709749f88fbfc2263899b7765",
+      "reportSha256": "1f436fe56eb5ce784765fdb0c3609dbf05fd36e80429a1f6dcc87ed3d626d108",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": true,
+      "changedRows": [],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "ascending",
+      "threads": 6,
+      "calls": 8,
+      "medianCallSeconds": 0.7603407705,
+      "aggregateCallSeconds": 5.978538791,
+      "peakRssBytes": 392937472,
+      "predictionSha256": "32b8909ef07b97c6f501fb1270b5900068de69907326cba5e308a81f1b33dec6",
+      "reportSha256": "0a696b95539462dfd6bacb4dc6ab1653cf555ee84c1a1d3f6beaf372c84e3be8",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "ascending",
+      "threads": 8,
+      "calls": 8,
+      "medianCallSeconds": 0.787060333,
+      "aggregateCallSeconds": 6.250290874,
+      "peakRssBytes": 381190144,
+      "predictionSha256": "97a4d2c84d07a461e0fb332461751de23f1b5ef66f7c3fbee1a7cec3156ad89e",
+      "reportSha256": "1113b71a2ddc5300a1184bf293331bb80a4c2d0558a1e549b7393277cb9b6dc1",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "ascending",
+      "threads": 10,
+      "calls": 8,
+      "medianCallSeconds": 0.8096749165,
+      "aggregateCallSeconds": 6.505951374,
+      "peakRssBytes": 393412608,
+      "predictionSha256": "fdb19e5bce86ca46b12630c89c859c3c0214548291bbfbae6ed5317071bbf8bd",
+      "reportSha256": "5e3c54847d236e603a713d1ad37a9f730fa284c9d9a8ae96021c9ccd8efc4645",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "ascending",
+      "threads": 12,
+      "calls": 8,
+      "medianCallSeconds": 1.126775833,
+      "aggregateCallSeconds": 8.886511874,
+      "peakRssBytes": 388857856,
+      "predictionSha256": "fb92475a72de4c72cd5bec3a77d65837545e7eb15f5d9751e0b07c2fab86e65f",
+      "reportSha256": "33708db57f150ef0f0ee9d0ddbed541baa4056ad67a0da967cbb6e08615c9504",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "ascending",
+      "threads": 16,
+      "calls": 8,
+      "medianCallSeconds": 1.264695958,
+      "aggregateCallSeconds": 10.286292708,
+      "peakRssBytes": 408633344,
+      "predictionSha256": "b709e7832da8d51c332b3cff921fc07daf62f1454480022ac0d0d03798156dc9",
+      "reportSha256": "b901d47fd50b8abc52b1d9d410d1d683d2ae533b8e25561edd31b26156577212",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "descending",
+      "threads": 1,
+      "calls": 8,
+      "medianCallSeconds": 0.994045812,
+      "aggregateCallSeconds": 7.879892333,
+      "peakRssBytes": 368656384,
+      "predictionSha256": "14878543d0a81e3aa9af2c3ac84725a27858aad95204df27f5b3bcc54860dd78",
+      "reportSha256": "96500f11a49eea9b2a21f84d2f2122a577c3190dcd30b3aedea5ddba5e255ee3",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": true,
+      "changedRows": [],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "descending",
+      "threads": 2,
+      "calls": 8,
+      "medianCallSeconds": 0.8072237915,
+      "aggregateCallSeconds": 6.433976917,
+      "peakRssBytes": 369262592,
+      "predictionSha256": "e5a42ead65df58a3cfa417f716b08ef4f97fd0d8037bdd8d7487bb08ae4d3988",
+      "reportSha256": "eb3b1b3e8245e51722b773139db3566f4ec2f5bbca5396110400c6427d4994c5",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": true,
+      "changedRows": [],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "descending",
+      "threads": 4,
+      "calls": 8,
+      "medianCallSeconds": 0.678371292,
+      "aggregateCallSeconds": 5.450846125,
+      "peakRssBytes": 390578176,
+      "predictionSha256": "7dd6da908ede76e19bd3ba263a7188dbddba2ad313f209b6685966e529d3075e",
+      "reportSha256": "3088dac99c67063102974d2d101e0c4c07ef6c057d60ad1d8f8111262d203c24",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": true,
+      "changedRows": [],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "descending",
+      "threads": 6,
+      "calls": 8,
+      "medianCallSeconds": 0.6693301875,
+      "aggregateCallSeconds": 5.357418792,
+      "peakRssBytes": 367525888,
+      "predictionSha256": "4d41ecfb432242e3f8256cf4883b29c221ccd7650c35b3de751b2ad83649d2a7",
+      "reportSha256": "efeb0976d02f8d9a319026eb8ad18ac2403d76ce2087dcdfe591932d53610518",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "descending",
+      "threads": 8,
+      "calls": 8,
+      "medianCallSeconds": 0.7085088125,
+      "aggregateCallSeconds": 5.723599998,
+      "peakRssBytes": 393281536,
+      "predictionSha256": "66fde94e100ab9a984c0df6d3210ec768573550311db28243a8723c9a6f80e78",
+      "reportSha256": "ac1d61424ccac0b8aba8edfc455f31e473a87dddd2005eb05fc65fb5ebc58891",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "descending",
+      "threads": 10,
+      "calls": 8,
+      "medianCallSeconds": 0.7418115624999999,
+      "aggregateCallSeconds": 5.844871626,
+      "peakRssBytes": 395460608,
+      "predictionSha256": "ab8665cee599135b30863973748d8b425fc626881d068f84c873cbe8cf621889",
+      "reportSha256": "5c834c706a5df5964ca18cb6f118834348240186ec172bb8fccc09d73ae81a1b",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "descending",
+      "threads": 12,
+      "calls": 8,
+      "medianCallSeconds": 0.8683633745,
+      "aggregateCallSeconds": 7.059506166,
+      "peakRssBytes": 397459456,
+      "predictionSha256": "3c5bcd643376a55a79ba7eeefe1ecf9eb65b115a07d6b094fa3134972c3b9add",
+      "reportSha256": "eb4cb26d6386586d358eb38ad18b9bdcb3843363942a8b331d727eed0b949763",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    },
+    {
+      "order": "descending",
+      "threads": 16,
+      "calls": 8,
+      "medianCallSeconds": 1.1051741664999999,
+      "aggregateCallSeconds": 9.132883833,
+      "peakRssBytes": 397443072,
+      "predictionSha256": "ce0d3c72caabcfe5c8b6cb0938f93b70f43afd707db64143779fedce31b58349",
+      "reportSha256": "1d72fb8454f42f1935dcd89244087381c9868e867551c4112ed702c978c1af12",
+      "errors": 84,
+      "referenceUnits": 376,
+      "textEquivalentToFourThreads": false,
+      "changedRows": [
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 0
+        },
+        {
+          "caseId": "fleurs-zh-1843",
+          "repeat": 1
+        }
+      ],
+      "timelinesSourceBoundedAndEquivalent": true
+    }
+  ],
+  "qualityDiagnostic": {
+    "referenceUnitsPerConfiguration": 376,
+    "errorsPerConfiguration": 84,
+    "cer": 0.22340425531914893,
+    "normalizedTextChangesVersusFourThreadRows": 20,
+    "affectedCaseIds": [
+      "fleurs-zh-1843"
+    ],
+    "note": "all configurations share aggregate CER, but threads 6/8/10/12/16 change the same proper-name spelling in both repeats and orders; exact text equivalence fails; no numeric-kernel root cause proven"
+  },
+  "decision": "keep current ASR default; six-thread adaptive proposal fails both speed and text-equivalence screens; do not change unrelated model families",
+  "defaultChanged": false,
+  "qualityAcceptance": "not_assessed",
+  "review": {
+    "phase": "separate read-only review of raw reports after completion",
+    "checks": [
+      "Verify 16 report/prediction hashes, complete repeat coverage and runner/model identities",
+      "Compare normalized full text and complete timeline geometry per case and repeat, not aggregate CER alone",
+      "Verify finite positive source-bounded transcript ranges",
+      "Recompute medians from every call and speed/RSS gates separately for each order",
+      "Restrict balanced selection to completed text-equivalent configurations",
+      "Verify source audio model and frozen runner hashes unchanged"
+    ],
+    "allConfigurationsCompleted": true,
+    "allTimelinesSourceBoundedAndEquivalent": true
+  },
+  "notAssessed": [
+    "cross-device optimal thread count",
+    "SenseVoice and Qwen3-ASR family-wide default changes",
+    "concurrent recordings under total CPU budget",
+    "long audio throughput or held-out quality"
+  ],
+  "reproduction": "Use permanent release asr_benchmark plus asr_benchmark.py with --timeout 120; select four Chinese native cases from fixed cpu-smoke manifest; vary only threads in 1/2/4/6/8/10/12/16, two repeats, ascending then descending; compare full normalized case/repeat text to four-thread control before selecting the smallest equivalent thread count within five percent of fastest median; no production source or dependencies changed"
+}
