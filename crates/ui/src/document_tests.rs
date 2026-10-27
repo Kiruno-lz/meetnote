@@ -2684,6 +2684,60 @@ fn pending_processing(
 }
 
 #[gpui::test]
+fn processing_future_stays_off_the_ui_executor_before_and_after_waiting(cx: &mut TestAppContext) {
+    // The future includes synchronous provenance IO and saving after inference.
+    // Record its actual GPUI dispatcher context across a real pending interval.
+    let documents = DocumentsRoot::new();
+    documents.put(processed("a", "A"), "# A\n");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    select_row(cx, &view, "a");
+    let jobs = runtime::JobRuntime::default();
+    let (asr_context, asr_events) = jobs.create_job();
+    let (diarization_context, diarization_events) = jobs.create_job();
+    let (outcome, result) = futures::channel::oneshot::channel::<()>();
+    let samples = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let observed = samples.clone();
+    let executor = cx.background_executor.clone();
+    let job = application::ProjectProcessingJob {
+        future: Box::pin(async move {
+            observed.lock().unwrap().push(executor.is_main_thread());
+            result.await.unwrap();
+            observed.lock().unwrap().push(executor.is_main_thread());
+            Err(contracts::BackendError {
+                code: contracts::BackendErrorCode::Cancelled,
+                message: "executor regression control".into(),
+            })
+        }),
+        asr_context: asr_context.clone(),
+        diarization_context: diarization_context.clone(),
+        asr_events,
+        diarization_events,
+    };
+    view.update(cx, |root, cx| {
+        root.ui
+            .begin_processing(root.ui.selected_project.clone().unwrap());
+        root.cancel_contexts = Some((asr_context, diarization_context));
+        cx.spawn(async move |this, cx| RootView::follow_processing(this, job, cx).await)
+            .detach();
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        *samples.lock().unwrap(),
+        vec![false],
+        "initial processing poll must run in the background"
+    );
+    assert!(view.read_with(cx, |root, _| root.ui.processing_project.is_some()));
+    outcome.send(()).unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        *samples.lock().unwrap(),
+        vec![false, false],
+        "resumed finalization must stay in the background"
+    );
+    wait_for(cx, &view, |root| root.ui.processing_project.is_none());
+}
+
+#[gpui::test]
 fn processing_completion_keeps_another_documents_draft_focus_and_history(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
     documents.put(processed("a", "A"), "# A\n");

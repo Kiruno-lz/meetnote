@@ -5199,7 +5199,9 @@ impl RootView {
     ) {
         let mut asr_events = job.asr_events.fuse();
         let mut diarization_events = job.diarization_events.fuse();
-        let mut processing_future = job.future.fuse();
+        // Poll orchestration off the UI executor too: after inference the future
+        // hashes model artifacts and saves the document synchronously.
+        let mut processing_future = cx.background_executor().spawn(job.future).fuse();
         loop {
             let mut asr_next = asr_events.next().fuse();
             let mut diarization_next = diarization_events.next().fuse();
