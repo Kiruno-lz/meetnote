@@ -157,7 +157,7 @@ NativeDiarizationBackend
 - 设备：CPU；可选 Cargo `coreml` feature 提供 CoreML 执行路径。
 - stage override：只接受 descriptor 声明且与 `speakrs-community-1-cpu` bundle 兼容的三阶段配置。
 - whole-file：speakrs 完整 inference、聚类和重建。
-- windowed：每个窗口只做 inference 和 observation 提取；全录音聚类一次，再用全局结果重建每个窗口并裁剪 valid core。
+- windowed：每个窗口只做 inference 和 observation 提取；全录音聚类一次，再用全局结果重建每个窗口并裁剪 valid core。 分离段和 embedding observation 在 sample 域裁剪后均要求正整数毫秒时长；不能导出零毫秒范围，也不按采样数小于 1 ms 粗删跨界段。
 
 native engine 返回自己的窗口 session，只有 backend adapter 实现 application 的 `DiarizationWindowSession`，避免 engine 依赖应用层 session 细节。
 

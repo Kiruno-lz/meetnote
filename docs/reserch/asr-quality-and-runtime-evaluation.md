@@ -360,6 +360,16 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 真实调用发现 Whisper 对 `ami-ES2002a-4` 的 8670 ms 源音频返回 9000 ms 结束点，两轮一致。显式设置 base.en 权重和第五裁剪路径的真实 ignored 测试先失败；随后整文件与窗口共用有界 sample 范围转换，裁去 decoder padding 的时间，纯 padding 段不进入结果。修复后真实测试通过，十次配对调用保留全部文本、ID、起点和分段，仅两次 EOF 从 9000 改为 8670 ms。SenseVoice 十次、Whisper 前后各十次，共三十次独立 ASR 调用均成功；没有放宽评分器范围检查。该修复只保证源音频范围，不将 EOF 当作真实发声结束点。
 
+### Native 分离窗口的整数毫秒范围
+
+2026-10-27 重新审查资源链路，确认 session 已只保留 `WindowTimeline` 和 inference 数组，没有保留输入 `Arc<AudioWindow>` PCM；没有按假设修改所有权。审查导出时发现另一处确定性范围问题：speaker segment 的 15 秒 context 尾窗、embedding observation 的 5 秒 context 尾窗，在有效 core 只剩一个采样时，都可从正 sample 范围变成 `60000..60000 ms`。两个直接生产导出 helper 的回归先红；它们是 typed projection fixture，不作为实际模型输出这种尾段的证据。
+
+两条导出路径现共享“sample 裁剪后转换成全局毫秒，再要求正时长”的函数；core 增加 15 个采样时，单采样 `60000..60001 ms` 保留，向量、空间和质量字段不变。三个新增测试和 native crate 全部 13 项通过；聚类输入、归属逻辑和算法没有变更。
+
+为保持独立 B2 对照，正式 benchmark 新增 `--windowed`，复用流式解码器与 60 秒 core / 15 秒 context planner；默认四参数仍走整文件。只增加既有 audio crate 的 dev-dependency edge，没有新增 package 或版本。8.67 秒语音的整文件/窗口各两次 smoke 成功；随后在修复前后各跑两次 180 秒、三个重叠窗口的真实 native 分离。两版本均为 45 段、3 类、303 个 observation；时间线和全部向量相同，最大向量误差为零。零 collar DER 27.9937%、500 ms 完整 collar 26.5862%，所有评分分项逐项不变；已知训练裁剪不作为留出验收。47.09→43.74 秒是两次调用中位观测，未设提速门、不作提速结论。
+
+完整工作区 964 项主 harness 加 3 项已有子 harness 通过，零失败，16 项 registered ignored 不代替模型执行；fmt、check、build 通过。独立 review 核对归属、源边界、全部输入/模型/预测 hash 和重复覆盖，见[分离窗口回执](../quality/diarization-window-range-validation.json)。临时 controller 已清理，核心复现为正式 `diarization_benchmark ... --windowed` 加既有 CPU 等价检查和标准 DER scorer。窗口 inference 数组与 AHC 二次距离仍是长录音内存限制。
+
 ### Whisper 窗口的整数毫秒范围
 
 2026-10-27 复核源边界时发现，windowed 在 sample 域裁剪后只检查正长度，转换成整数毫秒时可生成零长度段；整文件路径已有此检查。用正式 `AudioWindowPlan` 的 60 秒 core / 15 秒 context、总长 960,001 采样生成最后窗口：合法模型时间 15.00–15.01 秒裁剪为全局 `[960000,960001)`，旧映射输出 `60000..60000 ms`，确定性生产映射回归先红。这里复现的是时间归一算法，未宣称真实模型在此采样边界实际输出过该词段。

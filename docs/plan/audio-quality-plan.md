@@ -47,7 +47,7 @@ B1 的 `asr_benchmark` 直接运行生产 adapter；`asr_benchmark.py` 在独立
 
 评测 manifest 与配置各读取一次原始字节，并原子保存为 run 的输入快照；runner、评分和回执使用同一份快照，原输入后续编辑不改变本轮执行。run 快照发生变化时记录失败；新回执携带配置 SHA，读取时同时核对快照字节与回执配置。`test_benchmark_integrity.py` 覆盖加载、汇总与 CLI 的数值类型、运行中编辑及快照变化反例，合法测量的评分规则保持一致。
 
-B2 的 `diarization_benchmark` 保留独立执行/资源及完整 speaker timeline/embedding 输出；`check_diarization_cpu.py` 验证固定输入下的提速、资源与 baseline 一致性，speaker count 和一致性均不替代 DER。
+B2 的 `diarization_benchmark` 保留独立执行/资源及完整 speaker timeline/embedding 输出，四个位置参数运行整文件，追加 `--windowed` 则用流式 decoder、默认窗口计划独立执行分离 session，并在原始行记录模式；`check_diarization_cpu.py` 验证固定输入下的提速、资源与 baseline 一致性，speaker count 和一致性均不替代 DER。
 
 Whisper 的 1–16 线程范围及 large/Turbo 补查见[线程回执](../quality/whisper-thread-evaluation.json)：六线程改善本机单任务 CPU 耗时，但两个独立推理进程的反向批次增加 44.78%，拒绝全局默认提高。JobRuntime worker 名额与各 native pool 的线程预算必须分开验证；后续在同进程和固定总 CPU 预算下补吞吐、取消与小时级资源证据。
 
