@@ -188,6 +188,27 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 复现时为 `prepare_ami_diarization.py` 显式提供 `--source-audio`、`--audio`、`--rttm`、`--uem`、`--split-file`、`--start-ms` 与 `--root`。所有参考来源均验证固定 SHA；真实音频/标注留在忽略目录，失败不替换已有参考。单个 crop 必须被原 UEM 全覆盖；不通过拼接或填补 UEM 伪造有效评分范围。
 
+### 官方 test 分区的 CoreML 留出筛选
+
+为避免一直围绕 ES2002a train 裁片优化，先固定官方 test 分区的 ES2004a、IS1009a 各开头 180 s，共 360 s；模型执行前固定选择、顺序和门槛。新增 `prepare_ami_diarization.py --meeting`，只接受代码内固定来源 SHA 的三个 profile，默认仍是 ES2002a train；不增加任意 hash 放行开关。两份新音频来自官方 Mix-Headset 下载，RTTM/UEM/test 清单来自同一固定 setup revision，API 内容再次逐字节比对；每段 PCM 与原文件逐块匹配，全部投影区间由独立 Decimal 运算核对。它们在本地此前未参与调优，但未独立证明上游模型训练绝无重叠。
+
+先有显式 test profile 回归红线，再保留源音频、RTTM、UEM、split 哈希、分区成员、录音身份、源范围和原子输出保护；新路径六种篡改/身份负例均不替换既有参考。87 项 Python 测试、Black 与 diff 检查通过；未改 Rust，不重复先前已经通过的全量构建。参考控制器一次将 venv symlink 解析成无依赖的基础解释器，已在模型执行前改为保留 venv 路径，失败日志保留。
+
+三个模式在相同窗口规则下各两次真实调用，第二份录音反向排列模式。逐录音、逐 collar 要求候选 DER ≤CPU+1 个百分点，speaker-time 加权汇总也使用同一门槛，耗时 ≤CPU 20%；不以跨录音平均数掩盖单例退步。
+
+| 录音 / 模式 | 调用中位数 s | DER 无 collar | DER 500 ms full collar | 预测 / 参考说话人数 |
+| --- | ---: | ---: | ---: | ---: |
+| ES2004a / CPU | 27.5387 | 13.9745% | 8.8061% | 2 / 3 |
+| ES2004a / CoreML All | 2.1108 | 13.8624% | 8.8254% | 2 / 3 |
+| ES2004a / CoreML CPU+NE | 2.9418 | 13.8624% | 8.8254% | 2 / 3 |
+| IS1009a / CPU | 35.8017 | 18.2426% | 11.2916% | 4 / 4 |
+| IS1009a / CoreML All | 1.5013 | 18.1319% | 11.6097% | 4 / 4 |
+| IS1009a / CoreML CPU+NE | 2.8773 | 18.1319% | 11.6097% | 4 / 4 |
+
+两候选均通过固定筛选。speaker-time 加权无 collar DER 为 CPU 15.9469%、两种 CoreML 15.8355%；500 ms 为 9.9171%→10.0700%，准确记录退步。所有重复时间线和 observation 向量逐项一致、范围合法；raw 向量本身不要求单位范数，现有 Speaker Library 在 centroid/cosine 匹配时做 L2 处理，没有按额外假设修改向量。ES2004a 的少算一人是三模式共有的质量限制，不能用筛选通过掩盖。短裁片也不等于全录音、远场、其他语言、首次冷启动或应用并发验收；若后续用这些数据调优，必须改称回归数据。
+
+完整协议、逐次 DER 分项、来源与资源见[test 筛选回执](../quality/coreml-heldout-validation.json)。复现用 `--meeting ES2004a` / `--meeting IS1009a` 与固定 source/RTTM/UEM/test 清单生成参考，再使用上一节保存的同一 CPU、CoreML All、CPU+NE binary 和 `--windowed`；评分复用 `metrics.diarization`，按 speaker seconds 加权，不重写 DER。临时下载、裁剪、runner controller 与 scorer 清理，原始数据保留于忽略目录 `eval-data/optimization-2026-10-27/coreml-heldout/`；生产默认和模型安装流程未更改。
+
 ### 独立 diarization 基线
 
 在改变聚类前，以固定的 ES2002a 开头 180 秒、CPU native、自动说话人数、无 Speaker Library 运行生产 adapter 两轮；运行前冻结零 collar 主指标、500 ms 完整 collar 敏感性指标和包含重叠，不按结果改参考或阈值。`report_diarization.py` 复用现有 CPU run 的 hash/失败/重复校验和标准 DER，显式空输出作为漏检，不因缺少 embedding 而假称未执行；原 CPU 对照仍要求完整向量。两个入口分别检查，不削弱等价性门。
