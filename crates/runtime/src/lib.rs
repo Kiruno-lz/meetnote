@@ -1,10 +1,11 @@
+use async_lock::Semaphore;
+use event_listener::Event;
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Clone, Debug)]
 pub struct CancellationToken {
@@ -13,7 +14,7 @@ pub struct CancellationToken {
 
 struct CancellationState {
     cancelled: AtomicBool,
-    changed: std::sync::Condvar,
+    changed: Event,
     linked: Mutex<Vec<std::sync::Weak<CancellationState>>>,
     callbacks: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>>,
 }
@@ -39,23 +40,6 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-fn wait_unpoisoned<'a, T>(condition: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
-    condition
-        .wait(guard)
-        .unwrap_or_else(|error| error.into_inner())
-}
-
-fn wait_timeout_unpoisoned<'a, T>(
-    condition: &Condvar,
-    guard: MutexGuard<'a, T>,
-    timeout: Duration,
-) -> MutexGuard<'a, T> {
-    condition
-        .wait_timeout(guard, timeout)
-        .map(|(guard, _)| guard)
-        .unwrap_or_else(|error| error.into_inner().0)
-}
-
 fn invoke_callback(callback: Arc<dyn Fn() + Send + Sync>) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| callback()));
 }
@@ -65,7 +49,7 @@ impl CancellationToken {
         Self {
             state: Arc::new(CancellationState {
                 cancelled: AtomicBool::new(false),
-                changed: std::sync::Condvar::new(),
+                changed: Event::new(),
                 linked: Mutex::new(Vec::new()),
                 callbacks: Mutex::new(Vec::new()),
             }),
@@ -76,7 +60,7 @@ impl CancellationToken {
         if self.state.cancelled.swap(true, Ordering::Release) {
             return;
         }
-        self.state.changed.notify_all();
+        self.state.changed.notify(usize::MAX);
         let callbacks = std::mem::take(&mut *lock_unpoisoned(&self.state.callbacks));
         for callback in callbacks {
             invoke_callback(callback);
@@ -89,6 +73,16 @@ impl CancellationToken {
 
     pub fn is_cancelled(&self) -> bool {
         self.state.cancelled.load(Ordering::Acquire)
+    }
+
+    async fn wait_cancelled(&self) {
+        // Register before checking the flag so cancellation cannot be lost
+        // between the check and awaiting notification. Dropping the future
+        // removes its listener without retaining a callback on the token.
+        let listener = self.state.changed.listen();
+        if !self.is_cancelled() {
+            listener.await;
+        }
     }
 
     pub fn link(&self, other: &Self) {
@@ -125,14 +119,21 @@ impl Default for CancellationToken {
     }
 }
 
+static BLOCKING_RUNTIME: std::sync::OnceLock<JobRuntime> = std::sync::OnceLock::new();
+
 pub fn spawn_blocking<T, F>(work: F) -> impl Future<Output = T> + Send
 where
     T: Send + 'static,
     F: FnOnce() -> T + Send + 'static,
 {
-    static RUNTIME: std::sync::OnceLock<JobRuntime> = std::sync::OnceLock::new();
-    let runtime = RUNTIME.get_or_init(JobRuntime::default).clone();
+    let runtime = BLOCKING_RUNTIME.get_or_init(JobRuntime::default);
     let (context, _) = runtime.create_job();
+    // Anonymous work exposes no job ID or event stream. Its context owns the
+    // record and shared gate; the private registry must not retain UI reads
+    // forever, including futures dropped unpolled or workers that panic.
+    runtime
+        .remove(context.job_id())
+        .expect("anonymous worker context must be registered");
     context.started();
     async move {
         let value = context.spawn_blocking_uncancellable(work).await;
@@ -187,61 +188,7 @@ struct JobRecord {
     snapshot: Mutex<JobSnapshot>,
     cancelled: CancellationToken,
     events: UnboundedSender<JobEvent>,
-    worker_gate: Arc<WorkerGate>,
-}
-
-#[derive(Debug)]
-struct WorkerGate {
-    active: Mutex<usize>,
-    limit: usize,
-    changed: std::sync::Condvar,
-}
-
-struct WorkerPermit {
-    gate: Arc<WorkerGate>,
-}
-
-impl WorkerGate {
-    fn acquire(
-        self: &Arc<Self>,
-        cancellation: &CancellationToken,
-    ) -> Result<WorkerPermit, JobCancelled> {
-        let gate = Arc::downgrade(self);
-        cancellation.on_cancel(move || {
-            if let Some(gate) = gate.upgrade() {
-                gate.changed.notify_all();
-            }
-        });
-        let mut active = lock_unpoisoned(&self.active);
-        while *active >= self.limit {
-            if cancellation.is_cancelled() {
-                return Err(JobCancelled);
-            }
-            active = wait_timeout_unpoisoned(&self.changed, active, Duration::from_millis(10));
-        }
-        if cancellation.is_cancelled() {
-            return Err(JobCancelled);
-        }
-        *active += 1;
-        Ok(WorkerPermit { gate: self.clone() })
-    }
-
-    fn acquire_uncancellable(self: &Arc<Self>) -> WorkerPermit {
-        let mut active = lock_unpoisoned(&self.active);
-        while *active >= self.limit {
-            active = wait_unpoisoned(&self.changed, active);
-        }
-        *active += 1;
-        WorkerPermit { gate: self.clone() }
-    }
-}
-
-impl Drop for WorkerPermit {
-    fn drop(&mut self) {
-        let mut active = lock_unpoisoned(&self.gate.active);
-        *active = active.saturating_sub(1);
-        self.gate.changed.notify_one();
-    }
+    worker_gate: Arc<Semaphore>,
 }
 
 impl JobRecord {
@@ -260,7 +207,6 @@ impl JobRecord {
             }
         };
         if changed {
-            self.worker_gate.changed.notify_all();
             let job_id = lock_unpoisoned(&self.snapshot).job_id;
             let _ = self.events.unbounded_send(JobEvent::Cancelled { job_id });
         }
@@ -270,7 +216,6 @@ impl JobRecord {
     fn cancel(&self) {
         self.mark_cancelled();
         self.cancelled.cancel();
-        self.worker_gate.changed.notify_all();
     }
 }
 
@@ -381,15 +326,19 @@ impl JobContext {
         F: FnOnce() -> T + Send + 'static,
     {
         let record = self.record.clone();
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        std::thread::Builder::new()
-            .name(format!("meetnote-job-{}", self.job_id.0))
-            .spawn(move || {
-                let _permit = record.worker_gate.acquire_uncancellable();
-                let _ = sender.send(work());
-            })
-            .expect("failed to spawn job worker");
+        let job_id = self.job_id;
         async move {
+            let permit = record.worker_gate.acquire_arc().await;
+            let (sender, receiver) = futures::channel::oneshot::channel();
+            std::thread::Builder::new()
+                .name(format!("meetnote-job-{}", job_id.0))
+                .spawn(move || {
+                    // The real worker owns admission even if its awaiting
+                    // future is dropped while non-cooperative work continues.
+                    let _permit = permit;
+                    let _ = sender.send(work());
+                })
+                .expect("failed to spawn job worker");
             receiver
                 .await
                 .expect("job worker dropped before returning a result")
@@ -405,32 +354,40 @@ impl JobContext {
         F: FnOnce() -> T + Send + 'static,
     {
         let record = self.record.clone();
-        let cancellation = record.cancelled.clone();
-        let worker_cancellation = cancellation.clone();
-        let (sender, receiver) = futures::channel::oneshot::channel();
-        std::thread::Builder::new()
-            .name(format!("meetnote-job-{}", self.job_id.0))
-            .spawn(move || {
-                let Ok(_permit) = record.worker_gate.acquire(&worker_cancellation) else {
-                    let _ = sender.send(Err(JobCancelled));
-                    return;
-                };
-                if worker_cancellation.is_cancelled() {
-                    let _ = sender.send(Err(JobCancelled));
-                    return;
-                }
-                let value = work();
-                let _ = sender.send(if worker_cancellation.is_cancelled() {
-                    Err(JobCancelled)
-                } else {
-                    Ok(value)
-                });
-            })
-            .expect("failed to spawn job worker");
-
+        let job_id = self.job_id;
         async move {
+            let permit = {
+                let cancelled = record.cancelled.wait_cancelled();
+                let admission = record.worker_gate.acquire_arc();
+                futures::pin_mut!(cancelled, admission);
+                match futures::future::select(cancelled, admission).await {
+                    futures::future::Either::Left(_) => return Err(JobCancelled),
+                    futures::future::Either::Right((permit, _)) => permit,
+                }
+            };
+            if record.cancelled.is_cancelled() {
+                return Err(JobCancelled);
+            }
+            let worker_cancellation = record.cancelled.clone();
+            let (sender, receiver) = futures::channel::oneshot::channel();
+            std::thread::Builder::new()
+                .name(format!("meetnote-job-{}", job_id.0))
+                .spawn(move || {
+                    let _permit = permit;
+                    if worker_cancellation.is_cancelled() {
+                        let _ = sender.send(Err(JobCancelled));
+                        return;
+                    }
+                    let value = work();
+                    let _ = sender.send(if worker_cancellation.is_cancelled() {
+                        Err(JobCancelled)
+                    } else {
+                        Ok(value)
+                    });
+                })
+                .expect("failed to spawn job worker");
             match receiver.await.unwrap_or(Err(JobCancelled)) {
-                Ok(value) if !cancellation.is_cancelled() => Ok(value),
+                Ok(value) if !record.cancelled.is_cancelled() => Ok(value),
                 _ => Err(JobCancelled),
             }
         }
@@ -453,7 +410,7 @@ pub enum JobRuntimeError {
 pub struct JobRuntime {
     next_id: Arc<AtomicU64>,
     jobs: Arc<Mutex<BTreeMap<JobId, Arc<JobRecord>>>>,
-    worker_gate: Arc<WorkerGate>,
+    worker_gate: Arc<Semaphore>,
 }
 
 impl JobRuntime {
@@ -461,11 +418,7 @@ impl JobRuntime {
         Self {
             next_id: Arc::new(AtomicU64::new(0)),
             jobs: Arc::new(Mutex::new(BTreeMap::new())),
-            worker_gate: Arc::new(WorkerGate {
-                active: Mutex::new(0),
-                limit: max_concurrency.max(1),
-                changed: std::sync::Condvar::new(),
-            }),
+            worker_gate: Arc::new(Semaphore::new(max_concurrency.max(1))),
         }
     }
 
@@ -562,6 +515,228 @@ impl Default for JobRuntime {
 mod tests {
     use super::*;
     use futures::StreamExt;
+
+    /// Hold the only worker permit until the test exits, including on assertion failure.
+    struct OccupiedRuntime {
+        runtime: JobRuntime,
+        release: Option<std::sync::mpsc::Sender<()>>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl OccupiedRuntime {
+        fn new() -> Self {
+            let runtime = JobRuntime::with_max_concurrency(1);
+            let (context, _) = runtime.create_job();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let worker = std::thread::spawn(move || {
+                futures::executor::block_on(context.spawn_blocking(move || {
+                    started_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                }));
+            });
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            Self {
+                runtime,
+                release: Some(release_tx),
+                worker: Some(worker),
+            }
+        }
+    }
+
+    impl Drop for OccupiedRuntime {
+        fn drop(&mut self) {
+            drop(self.release.take());
+            if let Some(worker) = self.worker.take() {
+                worker.join().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn dropping_unpolled_cancellable_work_releases_queued_resources() {
+        assert_dropped_queued_resources(false);
+    }
+
+    #[test]
+    fn dropping_polled_cancellable_work_releases_queued_resources() {
+        assert_dropped_queued_resources(true);
+    }
+
+    fn assert_dropped_queued_resources(poll: bool) {
+        let occupied = OccupiedRuntime::new();
+        let (context, _) = occupied.runtime.create_job();
+        let retained = Arc::new(());
+        let captured = retained.clone();
+        let called = Arc::new(AtomicBool::new(false));
+        let worker_called = called.clone();
+        let mut future = Box::pin(context.spawn_blocking_cancellable(move || {
+            worker_called.store(true, Ordering::Release);
+            drop(captured);
+        }));
+        if poll {
+            let mut task = std::task::Context::from_waker(futures::task::noop_waker_ref());
+            assert!(future.as_mut().poll(&mut task).is_pending());
+        }
+        drop(future);
+        assert!(!called.load(Ordering::Acquire));
+        assert_eq!(Arc::strong_count(&retained), 1,
+            "discarded queued work must release captured audio/models before the occupied worker exits");
+    }
+
+    #[test]
+    fn dropping_queued_uncancellable_work_releases_resources() {
+        let occupied = OccupiedRuntime::new();
+        let (context, _) = occupied.runtime.create_job();
+        let retained = Arc::new(());
+        let captured = retained.clone();
+        let mut future = Box::pin(context.spawn_blocking(move || drop(captured)));
+        let mut task = std::task::Context::from_waker(futures::task::noop_waker_ref());
+        assert!(future.as_mut().poll(&mut task).is_pending());
+        drop(future);
+        assert_eq!(Arc::strong_count(&retained), 1);
+    }
+
+    #[test]
+    fn linked_cancellation_wakes_all_queued_waiters_without_permit_release() {
+        use futures::FutureExt;
+        let occupied = OccupiedRuntime::new();
+        let (context, _) = occupied.runtime.create_job();
+        let linked = CancellationToken::new();
+        context.cancellation_token().link(&linked);
+        let called = Arc::new(AtomicBool::new(false));
+        struct WakeFlag(AtomicBool);
+        impl futures::task::ArcWake for WakeFlag {
+            fn wake_by_ref(wake: &Arc<Self>) {
+                wake.0.store(true, Ordering::Release);
+            }
+        }
+        let mut pending = Vec::new();
+        let mut wakes = Vec::new();
+        for _ in 0..32 {
+            let wake = Arc::new(WakeFlag(AtomicBool::new(false)));
+            let waker = futures::task::waker(wake.clone());
+            let mut task = std::task::Context::from_waker(&waker);
+            let called = called.clone();
+            let mut future = Box::pin(context.spawn_blocking_cancellable(move || {
+                called.store(true, Ordering::Release);
+            }));
+            assert!(future.as_mut().poll(&mut task).is_pending());
+            pending.push(future);
+            wakes.push(wake);
+        }
+        linked.cancel();
+        assert!(
+            wakes.iter().all(|wake| wake.0.load(Ordering::Acquire)),
+            "each queued task must be woken without a worker permit becoming free"
+        );
+        for future in pending {
+            assert_eq!(future.now_or_never(), Some(Err(JobCancelled)));
+        }
+        // Cancellation before the first poll must also skip work.
+        assert_eq!(
+            context.spawn_blocking_cancellable(|| 42).now_or_never(),
+            Some(Err(JobCancelled))
+        );
+        assert!(!called.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn dropping_running_future_keeps_admission_until_the_worker_exits() {
+        use futures::FutureExt;
+        for cancellable in [false, true] {
+            let runtime = JobRuntime::with_max_concurrency(1);
+            let (first, _) = runtime.create_job();
+            let (second, _) = runtime.create_job();
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let work = move || {
+                started_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            };
+            let mut future: futures::future::BoxFuture<'_, Result<(), JobCancelled>> =
+                if cancellable {
+                    Box::pin(first.spawn_blocking_cancellable(work))
+                } else {
+                    Box::pin(first.spawn_blocking(work).map(Ok))
+                };
+            let mut task = std::task::Context::from_waker(futures::task::noop_waker_ref());
+            assert!(future.as_mut().poll(&mut task).is_pending());
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            first.cancel(); // Running native work is cooperative, not forcibly stopped.
+            drop(future);
+            let (second_tx, second_rx) = std::sync::mpsc::channel();
+            let mut second_future = Box::pin(second.spawn_blocking(move || {
+                second_tx.send(()).unwrap();
+                42
+            }));
+            assert!(second_future.as_mut().poll(&mut task).is_pending());
+            let escaped = second_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_ok();
+            drop(release_tx);
+            assert_eq!(futures::executor::block_on(second_future), 42);
+            assert!(
+                !escaped,
+                "a dropped or cancelled receiver released a running worker permit"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_panic_releases_admission_for_the_next_job() {
+        let runtime = JobRuntime::with_max_concurrency(1);
+        let (context, _) = runtime.create_job();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            futures::executor::block_on(context.spawn_blocking(|| panic!("injected")))
+        }));
+        assert!(result.is_err());
+        assert_eq!(
+            futures::executor::block_on(context.spawn_blocking(|| 42)),
+            42
+        );
+        assert_eq!(
+            futures::executor::block_on(context.spawn_blocking_cancellable(|| panic!("injected"))),
+            Err(JobCancelled)
+        );
+        assert!(
+            !context.is_cancelled(),
+            "worker exit must not impersonate a user cancellation token"
+        );
+        assert_eq!(
+            futures::executor::block_on(context.spawn_blocking_cancellable(|| 43)),
+            Ok(43)
+        );
+    }
+
+    #[test]
+    fn anonymous_blocking_work_does_not_accumulate_registered_jobs() {
+        let count = || BLOCKING_RUNTIME.get().unwrap().list().unwrap().len();
+        let unpolled = spawn_blocking(|| 1);
+        drop(unpolled);
+        let after_unpolled = count();
+
+        assert_eq!(futures::executor::block_on(spawn_blocking(|| 42)), 42);
+        let after_completed = count();
+
+        let panic = std::panic::catch_unwind(|| {
+            futures::executor::block_on(spawn_blocking(|| panic!("injected worker panic")));
+        });
+        assert!(
+            panic.is_err(),
+            "anonymous workers must retain panic propagation"
+        );
+        let after_panicked = count();
+        assert_eq!(
+            [after_unpolled, after_completed, after_panicked],
+            [0, 0, 0],
+            "anonymous UI reads have no public job handle or retained job history"
+        );
+    }
 
     #[test]
     fn creates_monotonic_job_ids_and_reports_progress() {

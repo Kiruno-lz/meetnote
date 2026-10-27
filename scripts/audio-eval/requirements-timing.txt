@@ -1,0 +1,3 @@
+# Optional offline temporal diagnostics; not a product runtime dependency.
+-r requirements.txt
+meeteval==0.4.3

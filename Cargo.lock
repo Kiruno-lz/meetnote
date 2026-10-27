@@ -1536,6 +1536,7 @@ name = "diarization"
 version = "0.1.0"
 dependencies = [
  "application",
+ "audio",
  "contracts",
  "diarization-native",
  "diarization-sherpa-onnx",
@@ -1554,7 +1555,9 @@ dependencies = [
  "domain",
  "futures",
  "hound",
+ "kodama",
  "ndarray",
+ "ort",
  "runtime",
  "serde",
  "speakrs",
@@ -1669,6 +1672,7 @@ dependencies = [
 name = "domain"
 version = "0.1.0"
 dependencies = [
+ "intervaltree",
  "serde",
  "serde_json",
  "uuid",
@@ -3242,6 +3246,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "intervaltree"
+version = "0.2.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "270bc34e57047cab801a8c871c124d9dc7132f6473c6401f645524f4e6edd111"
+dependencies = [
+ "smallvec",
 ]
 
 [[package]]
@@ -5724,6 +5737,8 @@ dependencies = [
 name = "runtime"
 version = "0.1.0"
 dependencies = [
+ "async-lock",
+ "event-listener",
  "futures",
  "serde",
  "thiserror 2.0.20",

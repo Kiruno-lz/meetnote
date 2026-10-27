@@ -1,0 +1,54 @@
+{
+  "schema": "meetnote.ami-diarization-reference-receipt.v1",
+  "date": "2026-10-26",
+  "meetingId": "ES2002a",
+  "sourceRepository": "https://github.com/pyannote/AMI-diarization-setup",
+  "sourceRevision": "67c2d539286e89f68952d5dcf83912bd9f01dfae",
+  "split": "train",
+  "referenceVariant": "only_words",
+  "audioVariant": "Mix-Headset",
+  "referenceTiming": "word-activity intervals derived from AMI manual-1.6.2; forced-alignment times, not manually verified acoustic boundaries",
+  "sourceLicense": "AMI annotations/audio CC-BY-4.0; reference setup repository Apache-2.0",
+  "sourceAudioSha256": "9c76866990fcc8b84006dc32d273ad99df439090b748ebe72103bb78c3216ee7",
+  "sourceRttmSha256": "3153efc675b16b7c47c6e49a3b48602613b3dfcf0ca16f590fb7541176c0f0b2",
+  "sourceUemSha256": "684314dfa676ae080a891f75c9f1efaaf7df4905674d29939b758ada92c491f7",
+  "splitSha256": "752c2a2b5af083c3fc468d524269b6481a4610572b81df44026a0a94b05e2f56",
+  "sourceLicenseSha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+  "crop": {
+    "sampleRateHz": 16000,
+    "firstSourceSample": 0,
+    "lastSourceSample": 2880000,
+    "durationMs": 180000,
+    "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+    "pcmMatchesSourceAtDeclaredOffset": true
+  },
+  "projection": {
+    "referenceIntervals": 23,
+    "referenceSpeakers": 4,
+    "scoringRegionsMs": [
+      [
+        0,
+        180000
+      ]
+    ],
+    "decimalOracleMatchesEveryInterval": true,
+    "referenceSha256": "66100d9e2c94bfa068512056a27a3306926544ba38b419ad4fc8d5f09ec8e835",
+    "producerSha256": "46de080638e112cfcb5ca270e709ccff1eb5b1368d518420d34bf958d99ff737"
+  },
+  "validation": {
+    "newReferenceCapabilityRed": "projector and CLI absent before implementation",
+    "referenceTestsPassed": 6,
+    "combinedPythonPassed": 71,
+    "basePythonPassed": 48,
+    "optionalSkippedInBase": 23,
+    "inputsUntouched": true,
+    "noProductionOrModelConfigurationChange": true
+  },
+  "qualityAcceptance": "not_assessed",
+  "limitations": [
+    "This crop is in the training partition and is not a held-out model acceptance set.",
+    "The standard word-activity reference uses forced-alignment times; word gaps are not manually verified acoustic silence.",
+    "Reference generation does not execute a diarization model or measure DER.",
+    "Only a crop fully covered by the pinned UEM is supported; disjoint scoring regions are rejected rather than filled."
+  ]
+}

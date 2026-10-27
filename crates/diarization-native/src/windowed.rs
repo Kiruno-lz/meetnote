@@ -1,4 +1,4 @@
-use crate::engine::{execution_mode, SPEAKRS_MODEL_REVISION};
+use crate::engine::{execution_mode, validate_cluster_layout, SPEAKRS_MODEL_REVISION};
 use crate::model::{prepare_model_bundle, PreparedNativeModelBundle};
 use crate::{
     EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
@@ -136,6 +136,13 @@ impl SpeakrsWindowSession {
                     &self.pipeline_config,
                 )
                 .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
+            if !validate_cluster_layout(
+                result.hard_clusters.shape(),
+                result.embeddings.shape(),
+                !result.segments.is_empty(),
+            )? {
+                continue;
+            }
             let space = embedding_space_for(&self.request, result.embeddings.shape())?;
             if let Some(existing) = &embedding_space {
                 if !existing.compatible_with(&space) {
@@ -286,17 +293,17 @@ fn append_window_observations(
             };
             let start = global_start.max(timeline.valid_core_start_sample);
             let end = global_end.min(timeline.valid_core_end_sample);
-            if end <= start {
+            let Some((start_ms, end_ms)) = positive_millisecond_range(start, end) else {
                 continue;
-            }
+            };
             output.push(SpeakerEmbeddingObservation {
                 id: format!(
                     "native-window-{}-embedding-{}-{}",
                     timeline.sequence, chunk_index, speaker_index
                 ),
                 cluster_id: cluster as u32,
-                start_ms: sample_to_ms(start),
-                end_ms: sample_to_ms(end),
+                start_ms,
+                end_ms,
                 vector,
                 quality: activity.clamp(0.0, 1.0),
                 embedding_space: space.clone(),
@@ -320,8 +327,8 @@ fn append_window_segments(
             .global_start_sample
             .saturating_add(seconds_to_sample(segment.end)?)
             .min(timeline.valid_core_end_sample);
-        if end > start {
-            output.push((cluster, sample_to_ms(start), sample_to_ms(end)));
+        if let Some((start_ms, end_ms)) = positive_millisecond_range(start, end) {
+            output.push((cluster, start_ms, end_ms));
         }
     }
     Ok(())
@@ -360,6 +367,12 @@ fn sample_to_ms(sample: u64) -> u64 {
     sample.saturating_mul(1_000) / u64::from(TARGET_SAMPLE_RATE_HZ)
 }
 
+fn positive_millisecond_range(start: u64, end: u64) -> Option<(u64, u64)> {
+    let start_ms = sample_to_ms(start);
+    let end_ms = sample_to_ms(end);
+    (start_ms < end_ms).then_some((start_ms, end_ms))
+}
+
 fn parse_speaker_label(label: &str) -> Result<u32, NativeDiarizationError> {
     label
         .strip_prefix("SPEAKER_")
@@ -378,6 +391,123 @@ fn parse_domain_speaker_id(label: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ndarray::{Array2, Array3};
+    use speakrs::pipeline::{
+        ChunkEmbeddings, ChunkSpeakerClusters, DecodedSegmentations, DiscreteDiarization,
+        SpeakerCountTrack,
+    };
+
+    fn single_sample_tail(context_seconds: u64, extra_core_samples: u64) -> WindowTimeline {
+        let core = 60 * u64::from(TARGET_SAMPLE_RATE_HZ) + extra_core_samples;
+        let plan =
+            audio::AudioWindowPlan::new(core, context_seconds * u64::from(TARGET_SAMPLE_RATE_HZ))
+                .unwrap();
+        let bounds = plan.bounds_for_total(core + 1).last().unwrap();
+        WindowTimeline {
+            sequence: bounds.sequence,
+            global_start_sample: bounds.global_start_sample,
+            valid_core_start_sample: bounds.valid_core_start_sample,
+            valid_core_end_sample: bounds.valid_core_end_sample,
+            is_final: true,
+        }
+    }
+
+    // A typed export fixture, not a model inference or quality measurement.
+    fn one_speaker_result() -> speakrs::DiarizationResult {
+        let mut embeddings = Array3::zeros((1, 1, 256));
+        embeddings[[0, 0, 0]] = 1.0;
+        speakrs::DiarizationResult {
+            segmentations: DecodedSegmentations(Array3::from_elem((1, 1, 1), 1.0)),
+            embeddings: ChunkEmbeddings(embeddings),
+            speaker_count: SpeakerCountTrack(vec![1]),
+            hard_clusters: ChunkSpeakerClusters(Array2::zeros((1, 1))),
+            discrete_diarization: DiscreteDiarization(Array2::from_elem((1, 1), 1.0)),
+            segments: vec![speakrs::Segment::new(0.0, 10.0, "SPEAKER_00")],
+        }
+    }
+
+    fn fixture_space() -> EmbeddingSpace {
+        embedding_space_for(
+            &DiarizationRequest {
+                audio_path: "unused.wav".into(),
+                model: contracts::ModelRef {
+                    backend_id: "diarization-native".into(),
+                    model_id: "fixture".into(),
+                    revision: None,
+                    artifact_path: "unused".into(),
+                    artifacts: Vec::new(),
+                },
+                expected_speakers: None,
+                device: contracts::ComputeDevice::Cpu,
+                speaker_library_path: None,
+                stage_configuration: Default::default(),
+            },
+            &[1, 1, 256],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn sample_clipped_speaker_segments_cannot_collapse_to_zero_milliseconds() {
+        let mut output = Vec::new();
+        append_window_segments(
+            &mut output,
+            vec![speakrs::Segment::new(0.0, 16.0, "SPEAKER_00")],
+            single_sample_tail(15, 0),
+        )
+        .unwrap();
+        assert!(output.is_empty(), "zero-ms speaker segment: {output:?}");
+    }
+
+    #[test]
+    fn sample_clipped_observations_cannot_collapse_to_zero_milliseconds() {
+        let mut output = Vec::new();
+        append_window_observations(
+            &mut output,
+            &one_speaker_result(),
+            single_sample_tail(5, 0),
+            16_000,
+            160_000,
+            &fixture_space(),
+        );
+        assert!(
+            output.is_empty(),
+            "zero-ms embedding observation: {output:?}"
+        );
+    }
+
+    #[test]
+    fn source_sample_tail_crossing_a_millisecond_keeps_segments_and_observations() {
+        let mut segments = Vec::new();
+        append_window_segments(
+            &mut segments,
+            vec![speakrs::Segment::new(0.0, 16.0, "SPEAKER_00")],
+            single_sample_tail(15, 15),
+        )
+        .unwrap();
+        assert_eq!(segments, [(0, 60_000, 60_001)]);
+        let mut observations = Vec::new();
+        let result = one_speaker_result();
+        let space = fixture_space();
+        append_window_observations(
+            &mut observations,
+            &result,
+            single_sample_tail(5, 15),
+            16_000,
+            160_000,
+            &space,
+        );
+        assert_eq!(observations.len(), 1);
+        let observation = &observations[0];
+        assert_eq!((observation.start_ms, observation.end_ms), (60_000, 60_001));
+        assert_eq!(observation.cluster_id, 0);
+        assert_eq!(
+            observation.vector,
+            result.embeddings.iter().copied().collect::<Vec<_>>()
+        );
+        assert_eq!(observation.quality, 1.0);
+        assert!(observation.embedding_space.compatible_with(&space));
+    }
 
     #[test]
     fn seam_reconciliation_preserves_overlap_between_different_speakers() {

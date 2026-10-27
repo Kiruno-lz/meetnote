@@ -5,7 +5,7 @@ use crate::{
 };
 use contracts::{ComputeDevice, DiarizationStageConfiguration, ModelRef};
 use speakrs::{ExecutionMode, OwnedDiarizationPipeline};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const SPEAKRS_MODEL_ID: &str = "speakrs-community-1-cpu";
 pub const SPEAKRS_MODEL_REVISION: &str = "5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f";
@@ -334,6 +334,13 @@ impl NativeDiarizationEngine for SpeakrsEngine {
         let result = pipeline
             .run(samples)
             .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
+        if !validate_cluster_layout(
+            result.hard_clusters.shape(),
+            result.embeddings.shape(),
+            !result.segments.is_empty(),
+        )? {
+            return Ok(EngineOutput::default());
+        }
         let embedding_space = EmbeddingSpace {
             backend_id: "diarization-native".into(),
             model_id: "wespeaker-voxceleb-resnet34".into(),
@@ -397,7 +404,7 @@ impl NativeDiarizationEngine for SpeakrsEngine {
                 }
             }
         }
-        let segments = result
+        let mut segments = result
             .segments
             .into_iter()
             .map(|segment| {
@@ -417,12 +424,7 @@ impl NativeDiarizationEngine for SpeakrsEngine {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let speaker_count = segments
-            .iter()
-            .map(|segment| segment.cluster_id)
-            .max()
-            .map(|value| value + 1)
-            .unwrap_or(0);
+        let speaker_count = bound_segments_to_audio(&mut segments, audio_end_ms);
         Ok(EngineOutput {
             segments,
             observations,
@@ -476,6 +478,40 @@ fn parse_speaker_label(label: &str) -> Result<u32, NativeDiarizationError> {
         })
 }
 
+/// `false` is speakrs' explicit no-speaker sentinel, not a missing inference.
+pub(crate) fn validate_cluster_layout(
+    cluster_shape: &[usize],
+    embedding_shape: &[usize],
+    has_segments: bool,
+) -> Result<bool, NativeDiarizationError> {
+    if cluster_shape == [0, 0] && !has_segments {
+        return Ok(false);
+    }
+    if embedding_shape.len() != 3
+        || cluster_shape != &embedding_shape[..2]
+        || (has_segments && cluster_shape.contains(&0))
+    {
+        return Err(NativeDiarizationError::InvalidOutput(format!(
+            "speaker cluster shape {cluster_shape:?} does not match embeddings {embedding_shape:?}"
+        )));
+    }
+    Ok(true)
+}
+
+/// Padding is inference context, never additional source-audio time.
+fn bound_segments_to_audio(segments: &mut Vec<EngineSegment>, audio_end_ms: u64) -> u32 {
+    segments.retain_mut(|segment| {
+        segment.start_ms = segment.start_ms.min(audio_end_ms);
+        segment.end_ms = segment.end_ms.min(audio_end_ms);
+        segment.end_ms > segment.start_ms
+    });
+    segments
+        .iter()
+        .map(|segment| segment.cluster_id)
+        .collect::<BTreeSet<_>>()
+        .len() as u32
+}
+
 fn seconds_to_ms(seconds: f64) -> Result<u64, NativeDiarizationError> {
     if !seconds.is_finite() || seconds < 0.0 {
         return Err(NativeDiarizationError::InvalidOutput(format!(
@@ -487,6 +523,47 @@ fn seconds_to_ms(seconds: f64) -> Result<u64, NativeDiarizationError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn empty_speaker_sentinel_is_valid_but_inconsistent_clusters_are_errors() {
+        assert!(!super::validate_cluster_layout(&[0, 0], &[1, 3, 256], false).unwrap());
+        assert!(super::validate_cluster_layout(&[1, 3], &[1, 3, 256], true).unwrap());
+        assert!(super::validate_cluster_layout(&[0, 0], &[1, 3, 256], true).is_err());
+        assert!(super::validate_cluster_layout(&[1, 2], &[1, 3, 256], true).is_err());
+        assert!(super::validate_cluster_layout(&[1, 3], &[], true).is_err());
+    }
+
+    #[test]
+    fn padding_segments_are_clipped_or_removed_without_renumbering_speakers() {
+        let segment = |cluster_id, start_ms, end_ms| super::EngineSegment {
+            cluster_id,
+            start_ms,
+            end_ms,
+            confidence: Some(0.75),
+        };
+        let mut segments = vec![
+            segment(7, 0, 200),
+            segment(9, 600, 1_100),
+            segment(2, 1_000, 1_200),
+        ];
+        assert_eq!(super::bound_segments_to_audio(&mut segments, 867), 2);
+        assert_eq!(segments, vec![segment(7, 0, 200), segment(9, 600, 867)]);
+    }
+
+    #[test]
+    fn source_bounds_preserve_valid_segments_and_empty_sources_have_no_speakers() {
+        let mut segments = vec![super::EngineSegment {
+            cluster_id: 4,
+            start_ms: 10,
+            end_ms: 500,
+            confidence: None,
+        }];
+        let original = segments.clone();
+        assert_eq!(super::bound_segments_to_audio(&mut segments, 867), 1);
+        assert_eq!(segments, original);
+        assert_eq!(super::bound_segments_to_audio(&mut segments, 0), 0);
+        assert!(segments.is_empty());
+    }
+
     use super::*;
     use crate::REQUIRED_CPU_ARTIFACTS;
 

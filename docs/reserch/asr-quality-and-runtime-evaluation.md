@@ -22,7 +22,7 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 
 - [FLEURS](https://huggingface.co/datasets/google/fleurs/tree/70bb2e84b976b7e960aa89f1c648e09c59f894dd)：中文与英文 test 各取官方 TSV 顺序中的前 24 个不同句子 ID，保留官方参考文本；另取后续 24 个中文句子检查窗口改进。句子 ID 分离不证明 speaker 分离。
 - 构造输入按固定顺序拼接原音频，每段后插入 400 ms 静音；噪声使用 seed `20261025`，按整段 RMS 加入全局 20 dB 高斯噪声。不同原片段音量不同，不能称为每句话都具有 20 dB SNR。这些输入检查边界与鲁棒性，不能代表自然长会议。
-- [AMI](https://groups.inf.ed.ac.uk/ami/corpus/)：ES2002a Mix-Headset 与官方 manual 1.6.2 词标注；每位说话人最多两个原始片段，3–20 秒、至少六个词、前后各 100 ms、无其他说话人的词级重叠，共五个片段、37.29 秒。它是使用官方边界裁剪的 B1 会话样本，不测试自动 VAD 或重叠识别。
+- [AMI](https://groups.inf.ed.ac.uk/ami/corpus/)：ES2002a Mix-Headset 与官方 manual 1.6.2 词标注；每位说话人最多两个原始片段，3–20 秒、至少六个词、前后各 100 ms、无其他说话人的词级重叠，共五个片段、37.29 秒。它是使用官方边界裁剪的 B1 会话样本，不测试自动 VAD 或重叠识别。[官方说明](https://groups.inf.ed.ac.uk/ami/corpus/transcription.shtml)区分人工校对文本与自动 forced-alignment 词时间；当前 manifest 的 `wordTiming` 保留 95 个词的 ID、原文与相对 sample 时间，明确不标成人工精确边界。投影使用十进制源时间与 sample 取整，另用有理数计算核对；原五个音频 hash、参考文本、词 ID 和裁剪偏移完全一致，见[参考回执](../quality/ami-word-reference.json)。现有 CER/WER 不使用这些词时间，不能据此宣称定位已达标。
 - 中文按 NFKC/casefold 后的非空白文字计算 CER；英文标点分词、去除撇号后计算原样 WER，并单独给出固定 `whisper-normalizer 0.1.15` 的 normalized WER。两者均使用 RapidFuzz 精确 Levenshtein，不使用近似距离。原样错误率保留在报告中。
 
 结果见[本机模型比较](../quality/model-comparison.md)与同目录机器 receipt。原生片段、构造片段、AMI 和第二组中文分别展示，不把重复或构造数据当作独立会议样本。
@@ -136,11 +136,294 @@ embedding 是固定 bundle 的主要耗时点。先前一/四线程的 180 秒�
 
 同时核对的 [speakrs 开发主线](https://github.com/avencera/speakrs/tree/beb30734c9067c1ed59af3eb8ec8baa8fb17f94a)引入 safetensors 原生 CPU 资产，manifest 标为 0.7.0、当时最新可见 tag 为 v0.5.0；它不属于本轮固定 ONNX bundle，未运行新引擎，不用其其他硬件成绩替代本机验证。当前更改保留 inter-op、图、权重、分窗与聚类参数。
 
+### Whisper 线程范围与并发复核
+
+Whisper 默认固定四线程与 native diarization 的预算是独立路径。上游 [whisper-bench](https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/examples/bench/README.md) 只测随机输入的 encoder，不能代替真实解码。此轮用生产 adapter、固定 base.en、六个已知 FLEURS 英语输入共 65.68 秒，CPU/Metal 各测 1/2/4/6/8/10/12/16 线程，每个输入两轮，再反转设备和线程顺序；模型逐次加载，保留首轮异常，不剔除慢调用。
+
+下表中位数汇总两个执行顺序；CPU 12/16 行均触发每配置 120 秒预算，部分预测不能算完整精度通过，RSS 缺失不记零。其余完成调用的归一化文本均与四线程控制一致，见[线程评测回执](../quality/whisper-thread-evaluation.json)。
+
+| 每 session 线程 | CPU 中位 ms | Metal 中位 ms |
+|---:|---:|---:|
+| 1 | 796.40 | 247.15 |
+| 2 | 535.69 | 243.19 |
+| 4 | 399.23 | 238.19 |
+| 6 | 347.79 | 239.46 |
+| 8 | 389.30 | 243.23 |
+| 10 | 452.17 | 237.16 |
+| 12 | 两次超时 | 236.52 |
+| 16 | 两次超时 | 235.07 |
+
+运行前固定的候选为 `N <= 2` 使用 N，其余 `N - ceil(N/3)`，查询失败一线程；本机 N=10，对应六线程。它通过单任务门：CPU 中位耗时下降 12.89%，Metal 增加 0.54%，两设备比值几何平均 0.936，RSS 在 1.2 倍内。独立 review 要求补测 large-v3 与 Turbo Q5 的中英各一句、两轮，CPU/Metal 四组均保留文本、耗时与资源门通过。
+
+但 per-session 默认影响同时运行的任务。进一步用两个独立 native 进程、每个两句英语两轮，按四→六、六→四顺序对照。反向批次总耗时为 3.330/2.300 秒，六线程比四线程增加 44.78%，超过预先定义的 1.1 倍上限；逐调用中位数也退化。正向四线程进程保留一次原因未明的 7.672 秒首调用，不能把两批平均后掩盖反向失败。该诊断共享主机 CPU，但不是同进程 JobRuntime 或长音频并发验收。
+
+结论：拒绝将六线程预算推广为 Whisper 全局默认，保留既有默认与显式覆盖；没有根据单任务最优点增加总资源竞争。48 个 native 进程共完成 403 次调用，另有四个超时配置与缺失调用明确保留。//TODO - 先在现有 JobRuntime 明确多录音的总 CPU/模型 session 预算，再在同进程、不同模型和小时级输入上验证吞吐、取消与 RSS；不能只放大每 session 线程，也不另建一套调度器。其他设备的 P/E 核、当前负载和 NUMA 不能由 `available_parallelism` 的近似值推断。
+
+### Paraformer 的宽区间线程复核
+
+2026-10-27 单独复核 Sherpa ASR 的四线程上限，未把 native embedding 的六线程收益直接推广。复用已有 release runner、Paraformer int8 bundle 和四个已知中文 FLEURS 原生句子，共 51.3 秒；每配置两轮，按 1/2/4/6/8/10/12/16 升序再降序，16 个进程、128 次调用全部完成。官方 [ORT 线程文档](https://onnxruntime.ai/docs/performance/tune-performance/threading.html)将 intra-op 和多 session 竞争分开；这里仅测每次重载模型的单 session，不改全应用调度。
+
+预先冻结六线程候选在两个顺序均比四线程 aggregate call time 至少快 10%、RSS 不超过 1.1 倍、逐 case/repeat 归一化文本一致的门；另按“完整且文本一致的配置中，距最快中位耗时 5% 内取最小线程数”选本机平衡点。
+
+| 线程 | 单次调用中位数 | 整进程峰值 RSS 中位数 | 相对四线程文本 |
+|---|---|---|---|
+| 1 | 0.9940 s | 334.0 MiB | 一致 |
+| 2 | 0.7908 s | 340.1 MiB | 一致 |
+| 4 | 0.6742 s | 371.8 MiB | 一致 |
+| 6 | 0.6972 s | 362.6 MiB | 失败：4 次片段输出改变 |
+| 8 | 0.7657 s | 369.3 MiB | 失败：4 次片段输出改变 |
+| 10 | 0.7460 s | 376.2 MiB | 失败：4 次片段输出改变 |
+| 12 | 0.9934 s | 374.9 MiB | 失败：4 次片段输出改变 |
+| 16 | 1.1829 s | 384.4 MiB | 失败：4 次片段输出改变 |
+
+每行汇总两个进程的 16 次调用，包含各次模型加载；RSS 包含进程启动、模型和推理，未单独测能耗。六线程升/降序 aggregate time 比为 1.103/0.983，两个顺序都未达到 0.9 门；RSS 门通过。6/8/10/12/16 各在同一人名片段的四次输出上改变拼写，总共 20 个不同输出；虽然所有配置 CER 均为 84/376（22.34%），逐文本等价门失败。未据此断言某个浮点算子是唯一原因，也没有用整体 CER 相同掩盖改变。
+
+本小集平衡点仍为四线程。保留现有 `min(available_parallelism, 4)` ASR 默认及显式线程覆盖；它不同于 embedding 的比例预算。候选已在单任务门失败，未继续用长音频、其他模型族或并发补测来宣称全局默认通过。四个既有句子不能代表设备或语言的普遍最优值；其余场景仍未评估。独立 review 校验完整覆盖、全部原始 hash、source time、逐段文本与两种顺序统计，见[Paraformer 线程回执](../quality/paraformer-thread-evaluation.json)。复现命令使用 `asr_benchmark.py --cases <fixed-four-zh> --config <threads.json> --runner <frozen-runner> --output <run> --timeout 120`；临时扫描 controller 已清理，未增加产品开关、依赖或模型缓存。
+
+### AMI 分离参考投影
+
+在更改 AHC 或身份策略前，需要可追溯的 B2 参考。比较自行从 XML 造规则与复用 [BUT/pyannote AMI setup](https://github.com/pyannote/AMI-diarization-setup/tree/67c2d539286e89f68952d5dcf83912bd9f01dfae)，采用后者固定 commit 的 only_words RTTM、原 UEM 和训练分区清单；其规则保留词活动、合并相邻同 speaker 区间，不把该协议等同于人工声学静音标注。
+
+`prepare_ami_diarization.py` 使用已有 pyannote.database loader，输出单个有 hash/sample 来源的参考文件；波形分块比较证明 `ami-first180.wav` 是官方 Mix-Headset 的精确开头，23 个投影区间、4 个参考 speaker 与独立 Decimal 运算逐项一致。测试覆盖重叠/身份、裁剪偏移、PCM 格式与内容、UEM 空隙、来源 pin、输入别名保护及完整 fixture 发布，全部 6 项通过。这个 ES2002a 裁剪明确属于 train，不能称为留出集；参考生成本身不执行模型；独立模型评分见后续基线。完整来源及范围见[参考回执](../quality/ami-diarization-reference.json)。
+
+复现时为 `prepare_ami_diarization.py` 显式提供 `--source-audio`、`--audio`、`--rttm`、`--uem`、`--split-file`、`--start-ms` 与 `--root`。所有参考来源均验证固定 SHA；真实音频/标注留在忽略目录，失败不替换已有参考。单个 crop 必须被原 UEM 全覆盖；不通过拼接或填补 UEM 伪造有效评分范围。
+
+### 独立 diarization 基线
+
+在改变聚类前，以固定的 ES2002a 开头 180 秒、CPU native、自动说话人数、无 Speaker Library 运行生产 adapter 两轮；运行前冻结零 collar 主指标、500 ms 完整 collar 敏感性指标和包含重叠，不按结果改参考或阈值。`report_diarization.py` 复用现有 CPU run 的 hash/失败/重复校验和标准 DER，显式空输出作为漏检，不因缺少 embedding 而假称未执行；原 CPU 对照仍要求完整向量。两个入口分别检查，不削弱等价性门。
+
+| 完整 collar | DER | 漏检率 | 误检率 | 混淆率 | 有效 speaker 时间 |
+|---:|---:|---:|---:|---:|---:|
+| 0 ms，主指标 | 27.98% | 4.90% | 19.41% | 3.67% | 113.49 秒 |
+| 500 ms，仅敏感性 | 26.61% | 2.94% | 21.36% | 2.31% | 94.91 秒 |
+
+两轮分项一致；全部四次评分与直接对原 RTTM/UEM 调用 pyannote 的结果一致。每轮 45 个时间段、3 个匿名 speaker、303 个 observation，中位执行 36.63 秒，进程峰值 RSS 约 305 MiB。与前次六线程输出逐段/向量等价；计时约慢 3.95%，本轮没有速度改动或提速声明。完整 hash、配置、原始秒数与方法见[分离基线回执](../quality/diarization-baseline-evaluation.json)。
+
+这是真实模型在已知训练裁剪上的 word-activity 诊断，不是留出 DER。参考只含词活动，误检秒数可能包含协议未计的发声，不能全部叫作已知静音中的虚构语音；也不能仅按参考 4 人与预测 3 类强制聚类数。下一次参数/算法改变先检查参考语义，再用固定基线和隔离留出参考测误差，不能用更好看的 speaker count 代替 DER。
+
+独立 review 先复现并修复合法 1001 ms 被浮点乘法误拒、backend/设备来源错配仍能评分，以及 bool wallSeconds 被当成一秒从而伪造提速。评分报告保留输入快照 hash，拒绝缺失/失败执行、错误音频与评分空隙，原子发布并保护原始音频、参考和 native 产物；无 ASR/Assistant 质量声明。
+
+
+### AHC 深树遍历
+
+固定 kodama 0.3.0 的公开 API 仅提供 linkage/dendrogram，没有平面切树接口；保留现有依赖，将私有切树独立为可直接测试的模块。旧实现的展开和整树归类都递归访问左右子树，10 万叶子的合法左深树在 2 MiB 线程栈中分别溢出，普通与优化构建均复现。新实现以显式 `(node, inherited_label)` 栈遍历，右后左先入栈，保持原标签次序；没有扩大线程栈。
+
+独立 review 补测混合子树、阈值包含相等边界和子进程完成标记，4 项通过。旧/新源码对 0 至 128 叶、每种尺寸 8 棵树、9 个阈值共 9,288 次逐标签比较完全一致。生产 adapter 在固定 180 秒训练裁剪运行两轮，时间段/向量逐项等价，四个 DER 分项记录完全一致；中位 35.77 秒，不作提速声明。它只修复切树栈风险，不解决二次距离内存；非单调合并高度的距离语义见下一节，行为等价不能替代算法正确性。见[切树回执](../quality/ahc-tree-validation.json)。
+
+
+### AHC 非单调高度的距离切分
+
+原 centroid 树只比较当前根的合并距离；子节点高于阈值而父节点较低时，会将本不满足距离上限的 observation 合并。三个单位向量两两距离 `sqrt(3)`，最后一次 centroid 合并降为 1.5；阈值 1.6 时旧实现得到一类，标准 distance cut 得到三类。直接 kodama linkage 和多层反例先红后绿，修复对每个节点计算后代最大高度，再复用既有显式栈切树，不改归一化、linkage、0.6 默认阈值或 VBx。
+
+核对 [SciPy distance 定义](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.fcluster.html)和 [pyannote 当前 VBx 初始化](https://github.com/pyannote/pyannote-audio/blob/623ab14d69a039b474fc1fb2551b657aa00c0ce4/src/pyannote/audio/pipelines/clustering.py#L596)：后者同样是归一化 embedding、centroid/euclidean 和 `fcluster(..., criterion="distance")`。复用标准语义比引入新模型/阈值或 Python 运行时更符合当前原生链路；并未据此改变二次距离算法或压缩 observation。
+
+以相同 f32 距离树输入 Rust 与 SciPy 1.18.1，504 棵树、9 个阈值的 4,536 次分组比较中，旧实现 1,701 次不一致，其中归一化向量实际 centroid 树 104 次；修复后为零。比较允许标签置换，不把分组一致冒称 linkage 浮点完全一致。独立 review 检查子节点先于父节点、有效兄弟簇、包含相等边界，以及普通/优化构建的深树路径。完整工作区 941 项主 harness 与 3 项已有子 harness 通过，11 项 ignored 不作真实执行证据。
+
+固定 180 秒训练裁剪的两轮 native 输出与基线逐段/向量等价，DER 全部分项不变；零 collar 27.98%，500 ms 完整 collar 26.61%。中位 37.83 秒，相对 36.63 秒基线约慢 3.28%，RSS 约 291 MiB；均通过运行前冻结的 1.1 倍耗时、1.2 倍 RSS 和 DER 不退化门，没有提速或留出验收声明。完整来源和门槛见[距离切分回执](../quality/ahc-distance-validation.json)。
+
+验证时另修复 UI 模型夹具的相对共享 `models` 路径：从仓库根启动会读取真实安装，使四项引导测试失败。每个夹具改用独立绝对临时路径，路径/缺失状态回归先红后绿，四项原失败测试通过。首次完整并发回归另外出现两项 UI 失败及占满共享 worker 的测试停滞；两项各按 0–31 种子重跑及最终完整回归通过，未将停滞归因于 AHC，也不声称路径隔离已经修复它。共享资源干扰已按下节受控验证；历史失败的唯一根因没有据此全部闭合。
+
+
+
+### vector centroid 的内存候选试接
+
+当前 AHC 的距离数组仍为二次规模。核对 [fastcluster 固定源码](https://github.com/fastcluster/fastcluster/blob/efc82a184125494cbd639803b64a5c9a4e45c1b0/fastcluster.py)，`linkage_vector(method="centroid", metric="euclidean")` 直接处理完整向量，官方存储复杂度为 O(ND)；这与压缩 observation 或改成 single linkage 是不同方案。
+
+仅在 uv 隔离评测环境固定 fastcluster 1.3.0、SciPy 1.18.1、NumPy 2.5.4，未改产品依赖。seed 86739 生成 N=3/8/32/64、D=2/8/32 的归一化向量，转为 f32 再回到相同 f64 输入；每组四棵树，在 0.2/0.6/1.0/1.6 上按 distance 规则和标签置换比较，共 48 棵树、192 次分组零差异，最大合并高度差约 8.88e-16。此试接只核对 API 与标准语义，没有测内存/耗时，也不证明 native f32 或模型 DER 一致，见[候选回执](../quality/centroid-vector-trial.json)。
+
+2026-10-27 补测资源，先冻结 N=1,000/10,000、D=256、分散/32 中心聚集两类构造输入、每组 `native → SciPy → vector → vector → SciPy → native` 顺序，以及一万条时候选相对 SciPy 中位耗时不超过 2 倍、进程 RSS 不超过一半的筛选门。24 个独立进程全部完成。native probe 逐字节复用当前 AHC、flat cut 和归一化源码，使用既有锁定依赖；Python 两路接收同一份 native 归一化 f32 再展开为 f64 的输入，没有改产品依赖。
+
+| 输入 | 当前 Rust 耗时 / 峰值 RSS | SciPy 耗时 / 峰值 RSS | vector 候选耗时 / 峰值 RSS |
+|---|---|---|---|
+| 分散 1,000 × 256 | 0.0765 s / 11.46 MiB | 0.0375 s / 74.52 MiB | 0.2336 s / 67.61 MiB |
+| 聚集 1,000 × 256 | 0.0671 s / 11.48 MiB | 0.0337 s / 74.62 MiB | 0.2341 s / 66.36 MiB |
+| 分散 10,000 × 256 | 7.459 s / 227.79 MiB | 4.464 s / 921.32 MiB | 23.973 s / 111.32 MiB |
+| 聚集 10,000 × 256 | 7.394 s / 228.09 MiB | 4.101 s / 921.65 MiB | 24.624 s / 111.26 MiB |
+
+每项为两个进程的中位数；RSS 是 macOS `/usr/bin/time -l` 的整进程峰值，包含启动、导入和输入，不能当作聚类新增分配。native 计时包含 f32 归一化、距离、linkage 和平面切分，Python 计时只含 f64 linkage；该表不是完整 backend 的替换性能。候选在两个一万条场景通过 RSS 门，但耗时分别为 SciPy 的 5.37/6.00 倍、当前 Rust 的约 3.21/3.33 倍，速度门均失败，拒绝默认替换。低内存候选仍有价值，不能把内存下降同时表述成提速。
+
+四组输入在七个阈值的 28 次标准 distance 分组比较零差异；SciPy 与 vector 的合并节点/大小完全一致，最大高度差约 1.69e-14；四组默认 0.6 的候选分组与当前 native 也一致。这些构造分组不覆盖 f32 临界值、相等距离、实际模型 DER 或留出质量。独立 review 重新核对 24 份输出 hash、stdout 耗时和中位数，校验输入/源码未变，完整版本、原始路径和门槛见[资源回执](../quality/centroid-resource-evaluation.json)。
+
+//TODO - 在原生试接前核对 Rust/C++ 所有权、异常和取消边界，并补 f32 临界/相等距离与真实保留集 DER。当前 wheel 的高维耗时门失败，先定位距离计算与构建选项是否能达到固定速度门，再评估原生接入；不能通过放宽门槛改称通过。省去距离数组仍不解决 session 保留全部 window artifact 的内存，小时级资源尚未验收，产品继续使用当前 native 链路。
+
+复现核心：seed 86740 加四组 case index 生成 f32 输入；分散场景为标准正态，聚集场景为 32 个单位中心循环分配、叠加 sigma=0.025 正态噪声。独立 probe 对原生产归一化生成固定 f32 文件；Python 读取为相同 f64 输入，在 1 线程 BLAS 环境分别调用 `linkage(X, method="centroid", metric="euclidean")` 与 `linkage_vector`，完整保存合并树，另保存 native 默认标签。进程外采 RSS，进程内仅计聚类调用；用 `fcluster(..., criterion="distance")` 在 0.2/0.4/0.6/1.0/1.2/1.4/1.6 比较首次出现重编号后的完整标签。每次输入与重复输出均校验，临时 probe/controller 已删除，源码指纹和原始日志保留于忽略评测目录及回执。
+
+### UI 回归的共享 worker 隔离
+
+全并行用例共用进程级 IO pool。队列搜索回归为验证取消后释放捕获引用，会占满所有 slot；只让“主动阻塞”的用例持有互斥锁，不能保护未拿锁的普通 UI IO。受控复现先确认全部 slot 已启动，再提交独立 heartbeat：200 ms 内不能完成，释放 slot 后完成并 join，隔离要求显式失败。这个机制能够造成跨测试干扰，不将它当作每一次历史超时的唯一根因。
+
+对照[标准 Rust 测试组织](https://doc.rust-lang.org/book/ch11-03-test-organization.html)和当前私有 API 边界，保留原 GPUI 断言，在独立进程运行此资源耗尽场景，避免为 integration test 暴露 RootView。普通父测试显式用 `--exact --ignored` 运行私有 child；子进程占满自身 pool 后，握手暂停，父进程的真实 IO heartbeat 仍通过，随后释放 child。成功退出与唯一完成标记共同防止零匹配测试假绿；40 秒截止后 kill/wait，日志清理，未增产品配置或调度器。
+
+独立 review 确认 clear/edit/resubmit、owner 数、文件字节和重新搜索断言均保留；父测试不是 GPUI 多种子循环，`ITERATIONS=32` 仅交给 child，避免平方重复。显式运行的 child 日志核对 32 个完成标记；连续三轮完整 UI 各 455 通过，随后完整工作区 941 项主 harness 与 3 项已有子 harness 通过。统计中的 12 项 ignored 包含由父测试显式执行的 1 项 UI child，其他 11 项不能据此声称执行。见[隔离回执](../quality/ui-worker-isolation-validation.json)。
+
+另一次失败发生在编辑器草稿就绪等待，尚未进入详情开关断言；32 个单例种子及后续三轮完整并行均未复现。缩放点击受控场景在旧实现也通过，未按猜测修改点击 helper。等待截止仍为 20 秒，失败仅补充 route/mode/selection、shown/loading/read-error ID 等状态，不记录文档内容或凭据。//TODO - 若再次复现，按模式未切换、读取仍在队列和已产生错误三类状态捕获线程栈与 read 命令握手，先建立确定性红线再修复；当前通过次数不能替代根因证据。
+
+### DER 评分器的正确性
+
+评测代码 review 发现原 DER 同时把说话人替换计作 miss 与 false alarm、只把排序靠前的预测标签纳入候选映射，且同 speaker 重叠段结束时过早清除活动状态。三个手算反例先分别得到错误的 100%/198%/50%，正确答案应为 50%/1%/0%。这些数字是评分器反例，不是模型质量。
+
+先核对已有 MeetEval：其 DER wrapper 需要额外 Perl scorer，缺少时会从未固定 master URL 下载，不适合当前离线、可追溯入口。改用独立环境中锁定的 [pyannote.metrics 4.0.0](https://github.com/pyannote/pyannote-metrics/tree/4.0.0) / core 6.1.0，复用 Hungarian mapping 与标准时域评分，不实现另一套匹配算法。它的 full-duration collar 在参考边界两侧各排除一半，不能与原来的语音膨胀混称；同 speaker 重叠段先合并，其他 speaker 重叠保留。该版本遗漏声明 `typing_extensions` 导致首次真实导入失败，已在可选 requirements 中显式锁定，完整重测通过。
+
+独立 review 增补了参考/预测标签数量不同、重命名不变性、空预测、无参考语音、collar 排除全部参考、20 speaker、非法时间/精度范围，以及无依赖/无分离输出的未评分语义。评分命令另先复现并修复覆盖输入、重复/空/多余会议、旧成功报告残留和输入外部编辑时 hash 不对应；现按原始字节快照评分并原子发布，失败不保留旧成功回执。函数入口对显式携带的 meetingId 同样核对，先复现跨会议预测被接受后再拒绝混配。完整记录见[评分器回执](../quality/der-scorer-validation.json)。Rust export 在有/无可选依赖两种环境均明确验证，不将 unavailable 当作零。真实会议的 UEM、speaker gold、模型 DER 和 AHC 取舍仍未验收；旧手写 DER 不能作为模型质量证据。
+
+### 共享 worker 的排队资源
+
+复查 JobRuntime 发现，旧 gate 在新建 OS 线程后才等待名额；可取消入口的 future 即使未轮询或排队中被丢弃，该线程仍保留捕获的请求和资源。两个红线测试先复现 Arc owner 未释放，再复用已有依赖图中锁定的 [async-lock 3.4.2 semaphore](https://docs.rs/async-lock/3.4.2/async_lock/struct.Semaphore.html) 和 event-listener 5.4.2：先异步准入，再创建线程；取消监听先注册再检查标记，避免丢通知。实际 worker 持有 owned permit 到退出，运行中丢弃 receiver/取消 token 不能绕开并发预算。没有新增执行器、线程池或 native 线程默认值。
+
+独立资源实验占住唯一名额后轮询 64 个排队 future，以 `ps -M -p <pid>` 读取进程线程数；两个执行顺序一致，见[回执](../quality/worker-admission-evaluation.json)。旧/新线程数分别从 3 增至 67/维持 3；丢弃队列后，捕获资源 owner 从 65 保持 65/降至唯一测试 owner。释放 blocker 后两者均回到唯一 owner。本构造只验证排队资源，不证明推理、RSS 或长音频提速。
+
+独立 review 覆盖未轮询/已轮询丢弃、不可取消入口、32 个不同 task waker 的联动取消、运行中丢弃/取消仍持有名额，以及 panic 后下一个任务可执行。原长音频单名额、ASR/DIA 任一阶段排队取消和 panic 分类回归继续验证；worker 异常返回与用户取消仍由调用方检查 token 区分。临时计数 probe 已删除，复现核心保留于附录。
+
+短音频复查发现 Whisper/Sherpa 整文件入口仍使用不可取消准入。两个真实 adapter 的单名额回归先失败：排队取消只能在 blocker 释放后返回。现通过 application `run_backend_worker` 统一复用可取消准入与错误转换，原 backend 仍持有解码/模型执行；6 项回归覆盖两种入口、未轮询取消释放捕获资源、运行中等待退出、错误原样和 panic 分类。显式设置本地模型/音频的 Whisper 与 Paraformer ignored 测试各一次通过，证明准入后的加载/输出链路继续工作，不作为精度或取消延迟的真实模型验收。证据融入[worker 回执](../quality/worker-admission-evaluation.json)。
+
+
+整文件 native/Sherpa diarization 同样存在不可取消的准入，两个 adapter 各由真实 executor 首次轮询至 Pending 后取消，旧实现均等到 blocker 释放才返回，红线成立。现共用同一 helper，取消直接唤醒 executor，不依赖手动重轮询；window session 路径保持独立，不嵌套申请。完整工作区 943 项主 harness 与 3 项已有子 harness 通过，另有父测试显式执行的 UI child；原生 180 秒加载 smoke 与 Sherpa 8.67 秒共享身份 smoke 分别通过，后者两次真实分离，只证明加载/非空输出及该样本身份关联。
+
+本轮首次尝试 native 8.67 秒已知语音样本时，实际返回零 segment/observation，非空输出断言失败；没有删除这条失败，也不把较长样本通过当作短音频通过。固定旧 executable 对照和补窗修复见下节。两者的输入/model hash、执行范围和回归结果纳入同一[worker 回执](../quality/worker-admission-evaluation.json)。
+
+
+### native 短录音覆盖与源边界
+
+固定旧 runner 对五段 AMI 语音各执行两轮，4.63/5.14/6.19/8.67 秒样本均没有 segment/observation。根因是 segmentation 收集器只对长于模型窗口的音频补尾窗，小于 10 秒的非空输入得到零窗口。对照 [pyannote 的短输入规则](https://github.com/pyannote/pyannote-audio/blob/623ab14d69a039b474fc1fb2551b657aa00c0ce4/src/pyannote/audio/core/inference.py)，复用已有零填充路径，使这种输入恰有一个窗口；空输入仍无窗口，较长输入调度不变，未新增 provider、模型或阈值。实际私有 planner 的短/空/完整/长尾 4 项和原 tensor 2 项测试通过；锁定的 ort 仅新增 test 依赖边，无新增 package。
+
+12.66 秒对照还暴露旧终点 12.974 秒。真实源范围断言先红后绿，按源长度裁剪时间段、移除纯填充区间，保留 ID/置信度并按实际标签计数。原始“较长对照逐段完全相同”门因此明确未通过并被替换：保留原始无效输出，不为它评分；候选须与显式源范围投影等价，embedding 不变。修订发生在候选比较前，初始/修订协议 SHA 均保留，没有按候选 DER 调整参考或阈值。
+
+第一版补窗后，预先冻结的静音门发现两次 panic：speakrs 合法无语音结果有 embedding tensor，但簇矩阵为 0×0，adapter 仍按 tensor 索引。独立 review 将同一红线扩到 window session，再复用显式空状态/形状校验；两入口实际静音测试通过，异常非空形状报告错误。未添加音量门绕过模型。失败 runner、原始预测及 SHA 保留，最终 release 重新跑完整矩阵。
+
+| 训练裁剪时长 | 旧零 collar DER | 修复后 DER | 修复后单次中位耗时 |
+|---:|---:|---:|---:|
+| 6.19 秒 | 100%（空输出） | 9.05% | 366.41 ms |
+| 4.63 秒 | 100%（空输出） | 2.84% | 362.94 ms |
+| 5.14 秒 | 100%（空输出） | 14.31% | 367.86 ms |
+| 8.67 秒 | 100%（空输出） | 1.81% | 369.84 ms |
+
+每项两轮相同；原生语音段和 embedding 均非空且在源范围内。12.66 秒候选为有效输出，DER 1.36%，时间段等于旧结果的显式源范围投影，向量逐值相同。8 秒已知全零音频两轮均成功返回零段/零 observation；180 秒对照时间段与向量等价，四项 DER 分量完全相同，主 DER 仍为 27.98%。这些是单一训练会议的 word-activity 诊断，单人裁剪不证明重叠分离、跨录音身份或中文会议质量。计时含 backend 加载/解码/推理，不含外层 probe 或 ASR；旧短路径漏执行，不将其更短耗时作为提速目标。
+
+完整工作区 952 项主 harness 与 3 项已有子 harness 通过，另显式执行 UI child 与两个真实 native 测试入口。模型矩阵共 40 次 backend 调用，首版 2 次失败没有抹去；最终矩阵 14 次全部成功。小时级资源与二次 AHC 内存不在本门范围。完整配置、模型/输入/runner/参考 SHA、协议修订与执行范围见[短录音回执](../quality/short-diarization-validation.json)。
+
+### Sherpa 分离输出的源边界
+
+2026-10-27 对现有 Sherpa 后端运行五段已知 AMI 训练语音和 8 秒精确零 PCM，各两次。12.66 秒语音两轮的时间线和 embedding observation 都结束于 12.687 秒；原有 waveform 提取已在 sample 域裁至源末尾，但元数据仍越界 27 ms。新增显式模型/音频的 integration 回归先失败，两个范围单测也先红；现复用同一源范围转换，clip 后非正区间不进入结果，说话人数按保留标签计数，不改模型或 clustering 阈值。
+
+独立 review 检查样本域与毫秒域：中间实现直接拿裁剪后的整数毫秒提取 embedding，会丢掉末尾不足 1 ms 的真实采样。16,001 个采样的确定性用例先红后绿，最终保留旧 raw endpoint 到源 sample 末尾的提取行为。原五段、零 PCM，再加“12.66 秒语音末尾复制一个采样”的变体，两版本各 14 次模型调用；所有候选元数据等于原始输出的明确源边界投影，全部向量、ID、空间和其他字段逐项不变；变体没有官方质量参考，不计 DER。
+
+原 12.66 秒越界基线保留 `invalid_timing` / DER null，未伪造有效基线或宣称 DER 改善。修复后五段零 collar DER 分别为 1.36%、9.08%、2.87%、11.64%、1.82%，其余四段两轮的全部评分分项与基线相同；仅为 only_words 训练裁剪诊断，不是自然会议、重叠或留出验收。纯静音继续零时间段、零 observation。
+
+第一轮 8.67 秒候选中位比基线慢约 29.7%，没有按两次调用就断言性能退化或通过；保留原数据，在运行前冻结八进程 `A B B A A B B A`、耗时/RSS 比不超过 1.1 的复核门。复测每版本八次调用，耗时中位 0.6285→0.6423 秒，比值 1.022；整进程 RSS 中位比 1.012，输出逐项相同，两门通过。此复核只排查固定短样本的明显退化，不作提速、吞吐或小时级资源声明。
+
+完整工作区 956 项主 harness、3 项已有子 harness 通过，零失败；14 项 registered ignored 中包含由 parent 显式运行的 UI child，另显式运行新源边界与已有共享身份两种模型测试，其他 ignored 不作为本轮执行证据。fmt、check、build 全部通过；共享身份测试用同一 12.66 秒音频两次真实分离后匹配通过。固定 runner、输入/模型 hash、红绿和交错复测门见[源边界回执](../quality/sherpa-source-bounds-validation.json)。临时 controller 已删除；复现核心为正式 `diarization_benchmark` 加 sample 域源长度检查、原始预测的明确元数据投影与向量逐值对照，正式评分只使用五份原有固定参考。
+
+### 转写分段与时间定位：Unicode 接入和 VAD 试接
+
+2026-10-26 只收窄到分段/时间定位，不更换 ASR 或分离默认模型。Review 的三个问题均先红后绿：中文被当作词内延续跨句/长停顿合并；CPU 比较失败留下旧通过文件；ASR 前置校验失败留下旧成功回执。CPU 输出同时拒绝覆盖输入回执/预测并原子发布；ASR 在读取输入前失效旧回执，前置失败不再能读取为本次成功。
+
+[SentencePiece 官方说明](https://github.com/google/sentencepiece/blob/master/README.md)把 `▁` 定义为空白转义；没有 `▁` 不能证明仍在同一个自然语言词内。采用已锁定的 [unicode-segmentation 1.13.3](https://docs.rs/unicode-segmentation/1.13.3/unicode_segmentation/trait.UnicodeSegmentation.html)，按 [UAX #29](https://unicode.org/reports/tr29/) 的词起点，在完整还原文本上单次前向遍历 UTF-8 偏移；`@@` 明确连续性保留优先级。没有自行维护汉字范围、词典或语言分支。中文句末/长停顿回归恢复分段，英文子词、独立空白、缩写回归保持通过；UAX 词边界不是语义断句或所有语言的词典分词。
+
+固定 FLEURS 中英各前 6 句、两轮，对 Paraformer/SenseVoice 的旧/新 executable 对照；另用前两句中文原音频插入 20 秒数字静音，形成 43.8 秒构造输入。SenseVoice 再反转 runner 顺序复测以检查进程 RSS 波动，共 76 对调用的完整 transcript 均一致。原生调用中位耗时为 SenseVoice 0.776→0.770 秒、Paraformer 0.614→0.617 秒；这组真实样本未触发 Unicode 修复，不据此宣称 CER/WER 或定位改善。SenseVoice 的 baseline 峰值 RSS 为 865–1044 MiB、candidate 为 1039–1043 MiB；不得把初次进程高水位差异直接归因为分词开销。完整输入、模型、预测和 runner hash 见[分段评测回执](../quality/asr-boundary-evaluation.json)。
+
+时间定位仍有独立缺口：SenseVoice 在静音构造输入中保留的“明”覆盖 11.10–24.96 秒，其中 9.8 秒落入已知静音 `[15160, 35160]` ms。Unicode 调整不改变这组结果。没有可靠 duration/词对齐时，token 的 next timestamp 或离线窗口范围不能等同于真实发声边界。
+
+#### Silero VAD 隔离试接
+
+选择现有 sherpa-onnx 1.13.6 的原生 [Silero VAD 接口](https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.6/rust-api-examples/examples/silero_vad_remove_silence.rs)，不引入 Python 推理 runtime。模型来自 [sherpa 官方列表](https://k2-fsa.github.io/sherpa/onnx/vad/silero-vad.html)，MIT license；本次下载 643854 字节，观测 SHA-256 为 `9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6`，不是发布者签名声明。模型仅放在忽略目录，已真实加载；未加入桌面 catalog 或处理路径。
+
+试验固定 CPU 一线程、threshold 0.5、min silence/speech 各 0.25 秒、max speech 30 秒、512 sample 窗、每侧 padding 200 ms；相邻 padding 重叠时合并，保持原时间偏移。每个语音片段复用当前生产 ASR adapter，按原文件重新汇总文本与时间，VAD 不决定 speaker 或语义。原生 12 句、静音构造 1 个、中英各 1 个降低 30 dB 的变体、纯静音分别记录；低音量变体不等于真实噪声场景。VAD 共 31 次执行，裁剪后的 ASR 共 50 次，两轮重复，保留每次重新加载模型的成本。
+
+运行前冻结门槛：原生/低音量错误率不得增加超过 1 个百分点，不新增空预测；构造静音内覆盖最多 0.5 秒；中位耗时最多增加 10%；ASR 子进程 RSS 最多 1.2 倍。时间含各原文件的 VAD 加载/检测与全部 crop ASR 调用，不是常驻模型成绩。ASR RSS 单独记录，不代表 Audio Host 总内存。
+
+| 场景 / 指标 | 当前原路径 | VAD 裁剪路径 | 判断 |
+|---|---:|---:|---|
+| 英文原生 WER，6 句 × 2 | 7.21% | 10.81% | 超出质量门 |
+| 中文原生 CER，6 句 × 2 | 17.58% | 17.19% | 仅本小集改善 |
+| 中文降低 30 dB CER，1 句 × 2 | 40.00% | 66.67% | 超出质量门 |
+| 中文降低 30 dB 中位耗时 | 1.022 秒 | 1.510 秒 | 增加约 47.8%，超出延迟门 |
+| 20 秒已知静音内覆盖，两轮一致 | 9.8 秒 | 0 秒 | 边界改善不能抵消识别退化 |
+
+结论：拒绝把该裁剪方案作为默认集成；没有调阈值追逐本小集，也没有修改生产路由。VAD 的语音活动证据和 ASR 文本/词时间必须分别验收，不能用更整齐的时间段掩盖遗漏或识别退化。//TODO - 先从 AMI 的官方词时间建立配对参考，再验证自然会议、长静音、低音量、重叠与噪声；对任何可选活动检测方案同时检查文本、覆盖、词时间、取消和资源，保留原音频与可恢复的原路径。
+
+现有 `asr_benchmark.py` 增加可选 `knownSilenceRangesMs` 与分组 `knownSilence`：参考区间与预测区间各自合并取并集后计算交集，重叠段不重复计量；失败标为未测，不能记作零覆盖。范围与有限数值先校验，不影响未提供标注的旧病例。它仅测已知静音覆盖，不是词对齐分数；真实插入静音已逐字节核对为零。临时 VAD probe/裁剪编排源码已删除，保留回执与附录核心方法。
+
+### 粗时间诊断接入与 Whisper EOF 边界
+
+为区分文本识别与粗时间合理性，隔离接入 [MeetEval 0.4.3 的 SISO 时间约束 WER](https://raw.githubusercontent.com/fgnt/meeteval/badcd3c7cf82f98d2ac1f292801fbe6e9093ee2f/meeteval/wer/wer/time_constrained.py)。`requirements-timing.txt` 仅属于离线评测，不进入桌面推理。`report_asr_timing.py` 复用生产 benchmark 的 hash/完整覆盖校验和原样 WER 归一口径；按语言、场景、repeat、collar 输出原样 WER 与 tcWER，同时保留逐 case 统计。旧 run 缺少 `wordTiming` 时需用新病例重跑，不修改旧快照。
+
+[固定版本的官方说明](https://raw.githubusercontent.com/fgnt/meeteval/badcd3c7cf82f98d2ac1f292801fbe6e9093ee2f/doc/tcpwer.md)明确指出：hypothesis 的 `full_segment` 可用超长段绕过约束。试接采用其推荐的 `character_based_points`，参考使用既有官方词区间，不重新估计参考时间。运行前冻结 0.5/2 秒两个 collar；0.5 秒为敏感性探测，官方在 LibriCSS 推荐的 2–5 秒范围不能直接变成当前短 AMI 的精度门。近似点不能证明模型提供了词时间；本工具只做单人英语粗时间诊断，不评 DER、中文时间或词级精度，也不修改默认模型。
+
+同一组五个 AMI 裁剪、95 个参考词，SenseVoice/Whisper 各两轮。下表为两轮一致的结果；Whisper 为修复源音频越界后的输出，原配置在诊断阶段被明确拒绝，见[完整回执](../quality/asr-temporal-evaluation.json)。
+
+| 模型 / 配置 | 原样 WER | tcWER，0.5 秒 | tcWER，2 秒 |
+|---|---:|---:|---:|
+| SenseVoice small int8，CPU 四线程 | 26.32% | 71.58% | 29.47% |
+| Whisper base.en，Metal 配置、四线程 | 29.47% | 64.21% | 32.63% |
+
+collar 敏感性很大，差值同时包含粗段内近似与参考误差，不是“词时间错误率”，不得用于默认模型排名或质量通过声明。纯文本正确但整体平移、超长整段的正反例均经工具验证；未评估项与失败保持可见。报告原子发布，失败重跑清除旧报告、拒绝覆盖输入；EOF 比较回到 sample 域，已先复现并修复 `1.001 * 1000` 浮点误差导致合法 1001 ms 被拒绝的问题。
+
+真实调用发现 Whisper 对 `ami-ES2002a-4` 的 8670 ms 源音频返回 9000 ms 结束点，两轮一致。显式设置 base.en 权重和第五裁剪路径的真实 ignored 测试先失败；随后整文件与窗口共用有界 sample 范围转换，裁去 decoder padding 的时间，纯 padding 段不进入结果。修复后真实测试通过，十次配对调用保留全部文本、ID、起点和分段，仅两次 EOF 从 9000 改为 8670 ms。SenseVoice 十次、Whisper 前后各十次，共三十次独立 ASR 调用均成功；没有放宽评分器范围检查。该修复只保证源音频范围，不将 EOF 当作真实发声结束点。
+
+### Native CoreML 试接与资源边界
+
+固定模型 revision `5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f`，复用现有 `speakrs 0.5.0` native CoreML feature；不新增执行载体、不启用 backend 下载。官方 [模型仓库](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) 提供 ONNX 与转换后的 CoreML bundle；库与模型条款分别处理，不将 Rust 库许可证当作权重许可证。试验目录共 76 个文件、419,482,724 bytes，其中新下载 359,730,925 bytes；逐个校验上游 LFS SHA256 或 Git blob 与文件大小，并保存本地 SHA256。未修改原 CPU 安装目录、模型目录清单或默认设备。
+
+8.67 s 的真实短音频先在 concurrent multi-mask 路径触发 `ndarray index < dim`。分割 producer 已生成补零窗口，但 concurrent consumer 仍为短音频分配零行；恰好完整一窗也被额外计数。回归直接比较实际 vendor planner 与计数器，红线后修正，1,536 个长度/窗口/步长组合全部通过；同一真实 CoreML 音频连续两次通过。修复不改变 segmentation step、精度、聚类或长音频窗口数量。
+
+180 s AMI ES2002a `train / only_words` 录音分别使用原 CPU 文件、同一扩展文件的 CPU、native CoreML，按 A/B/C/C/B/A 顺序各两个进程、每进程两次调用；固定 60 s core、15 s context，先做短音频 smoke。以下时间均含每次 pipeline 初始化，不代表清空 CoreML 系统缓存后的首次安装体验。
+
+| 路径 | 调用中位数 s | 最大进程 RSS MiB | 最大 macOS footprint GiB | DER 无 collar / 500 ms full collar |
+| --- | ---: | ---: | ---: | --- |
+| CPU 原包 | 45.6289 | 305.06 | 0.2565 | 27.9937% / 26.5862% |
+| CPU 扩展包 | 120.4635 | 1213.89 | 1.1392 | 27.9937% / 26.5862% |
+| CoreML 扩展包 | 1.5900 | 523.83 | 3.6724 | 27.2940% / 26.2301% |
+
+预先固定的 DER 增加 ≤1 个百分点、耗时 ≤CPU 80%、进程 RSS ≤CPU 两倍门槛通过；这些门槛仅覆盖该训练裁片与 RSS。独立资源复核发现 CoreML 的 macOS footprint 显著高于 RSS，因此保留 CPU 默认，不将筛选通过扩展为整体内存或生产验收。CoreML `All` 由框架安排各运算设备，允许 GPU 低精度累加；CoreML segmentation step 为 0.96 s，CPU 为 1 s。不同 observation 数与边界不能声称向量等价；同文件 CPU 对照也证实收益并非简单来自添加文件。所有 12 次长音频输出均为合法源内正时长，DER 使用现有固定 pyannote.metrics 评分器；未评估 ASR/Assistant 质量。
+
+复现与核心方法：从永久 `diarization_benchmark.rs` 生成临时 example，仅把请求 `ComputeDevice::Cpu` 改为 `CoreMl` 并在原始行记录设备；用 `cargo build --release --locked -p diarization --features diarization-native/coreml --example coreml_trial` 编译，原运行器作 CPU 对照。模型准备使用现有 `huggingface_hub.hf_hub_download` 的固定 revision、明确文件列表和 `token=False`，不调用库的在线 model manager。每进程用 macOS `/usr/bin/time -l` 保存 RSS 与 footprint，评分前校验音频、参考、模型文件、runner 与 prediction 指纹，直接调用 `metrics.diarization(..., collar, 180000)`；CoreML receipt 不冒用 CPU-only 评分 schema。临时 example 与控制器清理，协议、模型与原始失败/成功数据留在忽略目录 `eval-data/optimization-2026-10-27/coreml-feasibility/`，精简可追溯结果见 [CoreML 验证](../quality/coreml-feasibility-validation.json)。
+
+全量验证首次遇到 UI 语言 notice 等待超时；单独执行该测试通过，未改 UI 的全量重跑为 968 次通过（含三次隔离子进程）、16 ignored，fmt/check/build 通过。保留首次失败，不能声称消除了这一 UI 时序失败。`//TODO - ` 比较 CoreML 运算单元策略的 macOS footprint，并在未参与调优的录音上评分；测试门槛须先固定，只有资源、质量和模型管理同时验收后才评估默认策略。
+
+### Native 分离窗口的整数毫秒范围
+
+2026-10-27 重新审查资源链路，确认 session 已只保留 `WindowTimeline` 和 inference 数组，没有保留输入 `Arc<AudioWindow>` PCM；没有按假设修改所有权。审查导出时发现另一处确定性范围问题：speaker segment 的 15 秒 context 尾窗、embedding observation 的 5 秒 context 尾窗，在有效 core 只剩一个采样时，都可从正 sample 范围变成 `60000..60000 ms`。两个直接生产导出 helper 的回归先红；它们是 typed projection fixture，不作为实际模型输出这种尾段的证据。
+
+两条导出路径现共享“sample 裁剪后转换成全局毫秒，再要求正时长”的函数；core 增加 15 个采样时，单采样 `60000..60001 ms` 保留，向量、空间和质量字段不变。三个新增测试和 native crate 全部 13 项通过；聚类输入、归属逻辑和算法没有变更。
+
+为保持独立 B2 对照，正式 benchmark 新增 `--windowed`，复用流式解码器与 60 秒 core / 15 秒 context planner；默认四参数仍走整文件。只增加既有 audio crate 的 dev-dependency edge，没有新增 package 或版本。8.67 秒语音的整文件/窗口各两次 smoke 成功；随后在修复前后各跑两次 180 秒、三个重叠窗口的真实 native 分离。两版本均为 45 段、3 类、303 个 observation；时间线和全部向量相同，最大向量误差为零。零 collar DER 27.9937%、500 ms 完整 collar 26.5862%，所有评分分项逐项不变；已知训练裁剪不作为留出验收。47.09→43.74 秒是两次调用中位观测，未设提速门、不作提速结论。
+
+完整工作区 964 项主 harness 加 3 项已有子 harness 通过，零失败，16 项 registered ignored 不代替模型执行；fmt、check、build 通过。独立 review 核对归属、源边界、全部输入/模型/预测 hash 和重复覆盖，见[分离窗口回执](../quality/diarization-window-range-validation.json)。临时 controller 已清理，核心复现为正式 `diarization_benchmark ... --windowed` 加既有 CPU 等价检查和标准 DER scorer。窗口 inference 数组与 AHC 二次距离仍是长录音内存限制。
+
+### Whisper 窗口的整数毫秒范围
+
+2026-10-27 复核源边界时发现，windowed 在 sample 域裁剪后只检查正长度，转换成整数毫秒时可生成零长度段；整文件路径已有此检查。用正式 `AudioWindowPlan` 的 60 秒 core / 15 秒 context、总长 960,001 采样生成最后窗口：合法模型时间 15.00–15.01 秒裁剪为全局 `[960000,960001)`，旧映射输出 `60000..60000 ms`，确定性生产映射回归先红。这里复现的是时间归一算法，未宣称真实模型在此采样边界实际输出过该词段。
+
+现将原有归属/时间映射抽成私有纯函数，保留 sample 域 midpoint 归属，转换后要求正毫秒范围。另将 core 增加 15 个采样，同样只有一个采样的尾段跨过全局毫秒边界，`60000..60001 ms` 仍保留；不按“少于一个毫秒的采样数”粗删。三个范围/归属单测通过，完整工作区 961 项主 harness 加 3 项已有子 harness 通过，零失败；fmt、check、build 通过。CPU/Metal 两组各重跑六段固定语音两轮，共 24 次真实窗口推理，文本、时间和评分分项与上轮原始基线逐项一致；这不是新的质量样本或精度提升声明，见[窗口范围回执](../quality/whisper-window-range-validation.json)。
+
+### Whisper 的精确数字静音
+
+2026-10-27 使用已验证的 8 秒、16 kHz mono、128,000 个全零 PCM 采样，固定 base.en、四线程、CPU/Metal 和整文件/windowed 四组，各两次；八次全部生成了 0–2.06 秒的 `you`。新增两个显式模型/音频测试分别复现红线。[官方模型卡](https://github.com/openai/whisper/blob/main/model-card.md#performance-and-limitations)也记录此类幻觉风险，但本修复依据本地全零输入与模型输出，不用上游描述代替复现。
+
+选择可确定的最小信号事实：非空输入全部 f32 采样严格为零时，保留正常模型 context 加载与错误，然后跳过 decoder state/full；窗口也只判断整个输入 waveform。零参考不计算 CER/WER，验证目标是空时间线。任意非零采样，包括最小正/负 subnormal，仍进入模型；空输入、NaN/无穷不归类为数字静音。它没有引入能量阈值、VAD、词语黑名单或新模型默认值，不处理一般噪声/弱声的幻觉问题。
+
+修复后四组八次 backend 调用均成功返回空输出，context 仍加载、decoder 有意不执行，不能将这八次描述为模型推理通过。六段既有 FLEURS 语音共 56.54 秒，含两个实际发音 `you` 的片段；两版本各四组、各 12 次，共 96 次真实语音推理，文本和时间逐项一致，均为非空且落在源范围内，各组四次正常 `you` 输出保留。原 CPU 静音首调用 8.286 秒异常值与后续 0.433 秒原样保留，计时只作诊断，没有提速门或提速验收声明。
+
+独立 review 先检查取消与模型生命周期，再补负例：已取消的全零 window 返回 `Cancelled`；将现存 WAV 作为损坏模型，两条路径均返回 `ModelLoadFailed`，不能由静音分支绕过；同一显式真实语音的正例通过。完整工作区在生产修复提交上 958 项主 harness、3 项已有子 harness 通过，零失败；16 项 registered ignored 不作为全部模型执行证据，另显式执行两种全零入口与原有正语音测试。fmt、check、build 全部通过；新增模型负例属于随后独立 review 的测试提交并已显式运行。来源、raw 指纹、调用/推理次数和边界见[数字静音回执](../quality/whisper-digital-silence-validation.json)。
+
+复现核心为正式 `asr_benchmark` 的四种配置与相同模型/音频 SHA；全零输入只检查可见段数，正常语音使用 `asr_benchmark.py` 保留输入快照与独立评分，再逐 case/repeat 比较完整时间线。临时 controller 已删除，样本、权重和原始预测仍留在忽略目录。
+
+### 原生 Whisper 词级分段试接
+
+在现有锁定的 whisper-rs 0.16.0 / whisper-rs-sys 0.15.0 上，隔离验证上游标为 experimental 的[词级时间戳](https://github.com/ggml-org/whisper.cpp#word-level-timestamp-experimental)。沿用同一解码参数、base.en 权重、Metal 配置、四线程和 sample 范围过滤，仅设置 `token_timestamps=true`、`max_len=1`、`split_on_word=true`。没有启用 DTW；binding 的 DTW token point 与普通 segment 起止时间是不同字段，不能混称。
+
+先冻结文本原样/归一化均须保留、时间范围有效、tcWER 改善、耗时和 RSS 门槛，再按 coarse→words、words→coarse 两种顺序各执行两轮。五个 AMI 病例每种配置共二十次调用，控制组 transcript 与上一轮生产输出完全一致。两种顺序下 WER 均为 29.47%；词级分段的 tcWER 0.5 秒从 64.21% 降至 35.79%，2 秒从 32.63% 降至 29.47%。两次中位耗时分别为 215.2→226.0 ms、207.1→218.6 ms，过程 RSS 比值 0.991/0.983。首个 coarse 调用实际耗时 7.896 秒，原因未定位，原值保留，不把它解释成已证实的冷启动收益。每两轮输出段数从 14 增为 176。
+
+独立 review 后补入六个固定 FLEURS 英语输入、42.94 秒的两句加二十秒全零间隔，以及原句缩小 30 dB 的输入，每种配置各两轮、共三十二次调用。词级模式在 `fleurs-en-1935` 两轮均被现有时间范围过滤丢弃 `there`，尽管原始 decoder 文本包含该词；六句 WER 从 17/136 增为 18/136。构造静音覆盖从 3340 降至 3160 ms，低音量文本一致，均不能抵消文本保留门失败。没有依据短样本调整过滤规则以迁就候选。
+
+结论：拒绝默认接入，见[完整回执](../quality/whisper-word-timing-evaluation.json)。即使消除这次丢词，直接将 canonical segment 改成逐词仍会改变转录阅读的段落密度、逐段字面搜索以及持久化容量；需要独立的产品 contract 和跨段用例验证。此次七十二次调用仅验证局部候选，不代表词级精度、中文、小时级资源或生产验收。临时 probe、dev dependency 和 shim 已清理，生产默认参数不变。
+
 ## 复现说明
 
 1. `uv venv --python 3.12 eval-data/asr-eval/venv`，在该环境安装 `scripts/audio-eval/requirements.txt`。MLX 实验安装 `scripts/audio-eval/requirements-mlx.txt` 的固定依赖，桌面不依赖这些包。
 2. 从上述固定 FLEURS revision 下载 `data/cmn_hans_cn/audio/test.tar.gz`、`data/en_us/audio/test.tar.gz`，分别放入 `<root>/downloads/zh-test.tar.gz`、`en-test.tar.gz`。`prepare_fleurs.py --root <root>` 校验 archive SHA、读取官方 TSV 并产生病例；`--offset 24 --language zh` 构建第二组句子。
-3. `prepare_ami_asr.py --audio <ES2002a.Mix-Headset.wav> --annotations <ami_public_manual_1.6.2.zip> --root <root>` 同时校验官方素材与标注 SHA，产生独立 AMI 病例。
+3. `prepare_ami_asr.py --audio <ES2002a.Mix-Headset.wav> --annotations <ami_public_manual_1.6.2.zip> --root <root>` 同时校验官方素材与标注 SHA，产生独立 AMI 病例与 `wordTiming`。词时间先校验有效性、顺序与完整包含关系，再以最近 sample、half-even 取整；保留词重叠，不裁短跨边界词，也不从间隙推导静音。
+   可选时间诊断在独立 Python 3.12 环境安装 `scripts/audio-eval/requirements-timing.txt`；先以含 `wordTiming` 的病例执行原 ASR benchmark，再运行 `report_asr_timing.py --run <run-dir> --output <temporal.json> --collar 0.5 2`。保存环境版本、原始预测与 scorer/normalizer SHA；`status: complete` 仅表示诊断完成，`qualityAcceptance` 固定为 `not_assessed`。
 4. `cargo build --release --locked -p asr --example asr_benchmark`；使用配置文件指定 `model`、`device`、`threads`、`repeats`、`windowed`。模型路径必须是已安装本地资产，backend 不下载。
 5. `asr_benchmark.py --cases <cases.json> --config <configuration.json> --runner <asr_benchmark> --output <run-directory>` 执行与评分。模型加载、崩溃、超时、取消与缺失结果均保留；成功回执必须覆盖配置中的每个 case 与 repeat，读取时同时校验 manifest 和新回执中的预测 SHA-256；模型输出不掺入 gold。MLX runner 换为 `scripts/audio-eval/mlx_qwen_probe.py`。
 6. `cargo build --release --locked -p diarization --example diarization_benchmark`；`diarization_benchmark <backend> <model-directory> <audio> <output.jsonl>` 独立运行两次，配合 `/usr/bin/time -l` 记录进程 RSS；未提供 speaker gold 时明确记为未评估精度。
@@ -178,9 +461,9 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 |---|---|
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
 | `cargo check --workspace --locked --all-targets` | 通过，包含独立 benchmark example |
-| `cargo test --workspace --locked` | 904 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过 |
+| `cargo test --workspace --locked` | 933 个主测试通过、0 failed、11 ignored；另有三次锁/读写子进程测试通过；Whisper EOF 的真实 ignored 回归另行显式通过 |
 | `cargo build --locked -p meetnote` | 桌面开发构建通过 |
-| Python 评分/基线测试 | 33 passed；DIA 覆盖/数值/时间线/资源正反例、精确距离、归一口径、整轮缺失/重复/越界、预测 hash、旧回执失效、取消/超时与进程组回收 |
+| Python 评分/基线测试 | timing + DER 环境 80 passed；基础环境 50 passed、30 项可选 timing/DER/参考投影测试跳过；涵盖 DIA 正反例、精确距离、覆盖、预测 hash、旧回执失效、取消/超时、AMI 词时间与粗时间诊断的正反例、输入保护和 sample 边界 |
 | 窗口真实回归 | 旧整文件超过冻结门槛；新开发/第二组的 whole/application-window 四组均通过 clean ≤20%、noise ≤25% 与时间范围检查；两组短路径共 96 次调用逐段保持一致 |
 | review 真实回归 | 当前 release 完成 12 组、128 次调用；五种 Whisper 配置各两次成功，四组 Paraformer 质量门与 96 次短路径逐段一致通过，SenseVoice 英文长输入两次成功；31 秒全零 ignored 回归已单独显式执行通过 |
 | CPU 分离对照 | 180 秒同一自然录音，baseline/candidate 各两次；35.233 秒中位耗时；宽区间与三种空转实验均保留，通过设备预算的性能/输出一致性门；不作为 DER |
@@ -210,3 +493,74 @@ for _ in 0..3 {
 ```
 
 完整对照用相同 `diarization_benchmark` example，冻结基线后仅更改 vendor session 的线程数；两版分别运行 `/usr/bin/time -l <runner> diarization-native <model-dir> <audio> <prediction.jsonl>`。每个 run directory 的 `report.json` 使用 `meetnote.diarization-cpu-run.v1`，记录音频/全部模型文件/runner/预测 SHA、音频秒数、配置中的 repeats、embeddingThreads 及试验中的空转参数、user+sys CPU 时间、进程峰值 RSS 和 failure；结构示例与真实 hash 见 CPU 对照回执。按此 manifest 运行 `check_diarization_cpu.py --baseline <before-dir> --candidate <after-dir>`，检查完成覆盖、逐段时间线、每个 observation 的来源/向量以及资源门槛；`--criterion quality` 只测输出等价，`--criterion idle-cpu` 独立检查 CPU 效率门，默认 `speed` 保持至少 15% 提速和 1.2 倍 RSS 的原门槛。原始预测、向量与音频继续留在忽略目录。
+
+#### Whisper 线程试验核心
+
+冻结同一个 release `asr_benchmark` executable，输入和模型 checksum 预热后按固定配置运行 `asr_benchmark.py --cases <cases.json> --config <device-thread.json> --runner <frozen-runner> --output <run> --timeout 120`，配置只改 `device`/`threads`，保持 whole-file 与每句两轮。按升序 Cpu→Metal、降序 Metal→Cpu 执行，不并行构建。补充 large/Turbo 使用原生中英各一句；竞争诊断同时启动两个原 benchmark 子进程，并分别保留其报告、预测与整批 wall。两种顺序都检查质量与资源门；所有文本对照按原病例 language 归一，时间范围按源 sample 检查。源码无需新增实验开关，使用已有永久 benchmark；原始结果和冻结协议位于忽略目录，汇总回执记录 runner、输入、模型和预测 SHA。
+
+#### 排队资源实验核心
+
+固定 `with_max_concurrency(1)`，在独立 driver 中运行持有 release channel 的 blocker，并等待其 started 信号。为同一 runtime 创建 64 个 `spawn_blocking_cancellable` future，每个捕获同一个 `Arc<()>` 的副本，逐个用 noop waker 轮询至 Pending。由外部进程分别在 blocker 已开始、排队完成、丢弃所有 future 三个握手点执行 `ps -M -p <pid>`，记录线程数及 `Arc::strong_count`；最后关闭 release channel、等待 blocker 和捕获 owner 释放。旧源码以独立 module 加入同一个临时 release probe，运行 baseline→candidate、candidate→baseline，不并行编译/采样，不使用模型或用户数据。保存源码、二进制与协议 SHA，实验后删除 example。
+
+#### 原生词级分段试接核心
+
+临时 ignored probe 复用 backend 私有的 `whisper_params` 和 `bounded_sample_range`，每次重新加载同一模型；控制组逐段核对生产 runner 后，只对候选应用：
+
+```rust
+prepared.params.set_token_timestamps(true);
+prepared.params.set_max_len(1);
+prepared.params.set_split_on_word(true);
+```
+
+同时保存原始 decoder 字符流、过滤前的非空文本、过滤后 transcript 与耗时，按 case/repeat 比较归一化文本和去空白字符流；检查输出时间在源 sample 范围内。两组反转顺序，不并行编译或计时。使用同一 AMI `wordTiming` 与 MeetEval 0.4.3 评分；补充 FLEURS 六句和构造静音/音量病例只测文本与已知静音，不伪造词时间。回执保留临时源码、native executable、模型、输入、预测和冻结协议 SHA；失败后删除临时代码，不将试验开关加入产品配置。
+
+#### 分段评测的复现核心
+
+1. 从固定 FLEURS manifest 取每种语言前 6 个原生病例，原 ASR 配置四线程、每个病例两轮；冻结旧/新 runner SHA 后顺序执行。SenseVoice 再反转顺序复核；不得并行构建和计时。
+2. 将首两句中文的 16 kHz mono PCM 按原采样拼接，中间插入 `20 * 16000` 个零；manifest 增加 `knownSilenceRangesMs: [[15160, 35160]]`。中英首句分别以 `10 ** (-30 / 20)` 缩放 PCM 并重新固定 hash，参考文本不变。只把构造变换本身标为 gold。
+3. 用官方 VAD 模型和以下核心代码建立临时 example；执行后删除该源码。对 ranges 两侧加各 3200 sample padding、夹在源文件范围内并合并重叠区间；逐段通过相同 `asr_benchmark` executable 识别，恢复原 sample offset，再按原文件和 repeat 汇总评分。不能将各 crop 都赋予完整原文作为独立 gold。
+
+```rust
+use sherpa_onnx::{SileroVadModelConfig, VadModelConfig, VoiceActivityDetector};
+let config = VadModelConfig {
+    silero_vad: SileroVadModelConfig {
+        model: Some(model_path.into()), threshold: 0.5,
+        min_silence_duration: 0.25, min_speech_duration: 0.25,
+        max_speech_duration: 30.0, window_size: 512,
+    },
+    ten_vad: Default::default(), sample_rate: 16000, num_threads: 1,
+    provider: Some("cpu".into()), debug: false,
+};
+let vad = VoiceActivityDetector::create(&config, 60.0).expect("load VAD");
+let mut ranges = Vec::new();
+for chunk in samples.chunks(512) {
+    vad.accept_waveform(chunk);
+    while let Some(segment) = vad.front() {
+        ranges.push((segment.start(), segment.start() + segment.n()));
+        vad.pop();
+    }
+}
+vad.flush();
+while let Some(segment) = vad.front() {
+    ranges.push((segment.start(), segment.start() + segment.n()));
+    vad.pop();
+}
+```
+
+4. 用当前 `asr_benchmark.py` 对带静音标注的 manifest 运行，`report.json.groups[].knownSilence` 应能复现原路径每轮 9800 ms 的交集；裁剪路径以相同 `summarize` 方法对恢复时间后的输出计算为 0。回执保存源音频、权重、runner、输入/预测 hash 与预先冻结的门槛，原始音频、裁剪和输出不提交。
+
+#### 深树与切分等价性实验核心
+
+从固定旧 commit 抽取原切树函数，与生产私有模块分别编译进临时纯 Rust driver，复用锁定 kodama；小树以固定种子 `0x86739` 从当前可用节点中逐次抽取两节点合并，逐阈值比较完整标签数组。深树先合并叶对，再将已有根作为左孩子与下一叶对合并，避免右尾调用优化；子进程在线程 `.stack_size(2 * 1024 * 1024)` 中核对 100,000 个标签并输出唯一完成标记。优化诊断使用 `rustc --test -O` 编译同一生产模块与测试；完整 cargo workspace 测试另行运行。实验后移除临时 driver，保留永久回归和来源 SHA。
+
+#### AHC 距离规则交叉验证核心
+
+用 NumPy seed 86739 对 2 至 64 个叶子分别构造四组归一化向量（2/3/8/32 维）的 SciPy centroid 树和四组合法随机合并树，将距离统一转为 f32 后同时送给两个 Rust 私有切树实现与 SciPy `fcluster(criterion="distance")`。阈值为 0/0.2/0.4/0.6/0.8/1/1.2/1.6/2；按每个标签首次出现的次序重编号，比较完整分组。临时 driver 从 stdin 读取 Step，避免另造 inference provider；实验后删除。native 复核另用已有永久 benchmark，固定六线程、相同模型/音频 hash、自动人数和无 Library 两次调用，标准 DER 与向量等价性分别核对；先等待原始回执完整写入，再评分。
+
+#### 共享 worker 干扰的受控复现核心
+
+旧布局中，`OccupiedUiWorkers::new()` 逐 slot 等待 started 信号，直到当前进程全部 IO slot 被占用；另起 driver 提交普通 `runtime::spawn_blocking` heartbeat，等待 200 ms，先释放占用并 join driver，再断言 heartbeat 必须提前完成，得到红线。永久隔离测试在 child 执行同一占用和完整搜索断言，stdout 发布 `UI_WORKERS_HELD`，stdin 等待父进程释放；父进程实际执行独立 IO，校验 5 秒内完成，再关闭 stdin。child 正常退出和完成标记均必须存在。临时同进程探针已删除，保留探针 SHA 和永久父/子实现。
+
+#### 短录音覆盖实验核心
+
+用已有 `diarization_benchmark` 永久入口、CPU 六线程、自动人数、无 Library，每文件两轮；固定旧 executable 和模型 artifact hash，先记录五段原 AMI WAV 与全零 8 秒 WAV，再测试候选。以既有 `prepare_ami_diarization.py` 按 `ami-cases.json.startSample / 16` 投影固定 RTTM/UEM，逐块验证 crop 是原 Mix-Headset 的精确 PCM。零/500 ms 完整 collar 均由既有独立评分器处理；无效旧时间段明确无分数，未清洗后冒充基线。12.66 秒仅另做源范围投影等价性，180 秒直接使用原冻结对照。按报告 sourceCommit 区分初版/修复版 executable，先等待全部原始回执写完再评分。静音测试另以显式路径读取并验证所有样本为零，分别经过整文件与真实 window session。临时执行/汇总脚本删除，保留核心方法、源码 SHA 和忽略目录中的原始回执。

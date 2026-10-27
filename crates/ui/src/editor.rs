@@ -16,6 +16,8 @@ use crate::{
     controller::RootView,
     controls::{Dropdown, SelectOption, TextArea, TextField},
     i18n::{self, Locale},
+    route::Route,
+    state::{ContentMode, NoticeTone},
 };
 use contracts::{DocumentPatch, DocumentRecord};
 use domain::{DocumentState, ProjectId};
@@ -157,6 +159,39 @@ struct Draft {
 pub(crate) struct SavedDocument {
     pub(crate) document_id: ProjectId,
     pub(crate) outcome: Option<Result<DocumentRecord, String>>,
+}
+
+impl RootView {
+    /// Copy exactly the saved snapshot being read, keeping editing drafts separate.
+    pub(crate) fn copy_saved_markdown(&mut self, cx: &mut Context<Self>) {
+        if self.ui.route != Route::Meetings
+            || self.ui.content_mode != ContentMode::Markdown
+            || self.documents_root_switch.switching
+        {
+            return;
+        }
+        let Some(saved) = self.saved_document.as_ref().filter(|saved| {
+            self.ui.selected_project.as_ref() == Some(&saved.document_id)
+                && self
+                    .projects
+                    .iter()
+                    .any(|project| project.id() == &saved.document_id)
+        }) else {
+            return;
+        };
+        let Some(Ok(record)) = saved.outcome.as_ref() else {
+            return;
+        };
+        if record.markdown.is_empty() || record.state.id() != &saved.document_id {
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(record.markdown.clone()));
+        self.ui.set_notice(
+            NoticeTone::Success,
+            i18n::text(self.ui.locale, "saved_markdown_copied").into(),
+        );
+        cx.notify();
+    }
 }
 
 /// The shown draft, as Save reads it.

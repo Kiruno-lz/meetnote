@@ -1,0 +1,220 @@
+{
+  "schema": "meetnote.alignment-comparison.v1",
+  "date": "2026-10-26",
+  "scope": "pure alignment of synthetic intervals; not ASR quality, DER, total pipeline speed or real 20-hour resource acceptance",
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "logicalCores": 10,
+    "memoryBytes": 34359738368
+  },
+  "software": {
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+    "profile": "release",
+    "baselineSource": "56b971c (unchanged alignment; benchmark fixture added separately)",
+    "candidateSource": "3de979b",
+    "benchmarkSourceSha256": "73cac2b67097e5d1cd2ac480c236945836a75dc248948086f8a7caaf1a5bfc30",
+    "library": {
+      "crate": "intervaltree",
+      "version": "0.2.7",
+      "license": "MIT",
+      "registryChecksum": "270bc34e57047cab801a8c871c124d9dc7132f6473c6401f645524f4e6edd111",
+      "newTransitivePackages": 0
+    }
+  },
+  "runnerSha256": {
+    "baseline": "8470af17ec87c284c888232826077969b681dc5ee3a8c17cb13c4a4f8c9370e1",
+    "candidate": "c29ed9067ae33dc2216f9a06540a45b8bd3c9b06dbfe31ad1b1ae9ec2248d239"
+  },
+  "timingIncludes": "index build and output allocation per call; fixture generation, gold comparison and output drop excluded",
+  "gates": {
+    "longMedianMs": 100,
+    "nestedMedianMs": 100,
+    "shortMedianMs": 1,
+    "exactGoldMatch": true,
+    "scope": "local hardware resource gate only; long gate frozen before original 786.6 ms failing baseline"
+  },
+  "scenarios": {
+    "short": {
+      "transcriptSegments": 96,
+      "diarizationSegments": 32,
+      "syntheticTimelineMs": 144000,
+      "repeatsPerOrder": 101,
+      "pooledMedianMs": {
+        "baseline": 0.008917,
+        "candidate": 0.0115
+      },
+      "baselineOverCandidateRatio": 0.7753913043478261,
+      "runs": {
+        "baseline": [
+          {
+            "order": "forward",
+            "medianMs": 0.008875000000000001,
+            "status": "passed",
+            "processExitCode": 0,
+            "reportSha256": "62291320aa043b86e19176af30760cc0219750e9c3e076d3a95f7bed6cffb306",
+            "minimumMs": 0.008749999999999999,
+            "maximumMs": 0.009917
+          },
+          {
+            "order": "reverse",
+            "medianMs": 0.009000000000000001,
+            "status": "passed",
+            "processExitCode": 0,
+            "reportSha256": "1b0e76b372ec71b4b50944e04eacf81d133f94736c6c21d5543202513071eaa9",
+            "minimumMs": 0.008791,
+            "maximumMs": 0.010332999999999998
+          }
+        ],
+        "candidate": [
+          {
+            "order": "forward",
+            "medianMs": 0.011459,
+            "status": "passed",
+            "processExitCode": 0,
+            "reportSha256": "7f8e0d54c26dd513c7aa6d18ea3f7e893cf4a6610a97f7a50853a10d5ad966d3",
+            "minimumMs": 0.011250000000000001,
+            "maximumMs": 0.014791
+          },
+          {
+            "order": "reverse",
+            "medianMs": 0.011541000000000001,
+            "status": "passed",
+            "processExitCode": 0,
+            "reportSha256": "127367d01d5a9932b30bd846c9caea38b513c4f450e16c9ca1d30c0526d77735",
+            "minimumMs": 0.011250000000000001,
+            "maximumMs": 0.025042
+          }
+        ]
+      }
+    },
+    "long": {
+      "transcriptSegments": 48000,
+      "diarizationSegments": 16000,
+      "syntheticTimelineMs": 72000000,
+      "repeatsPerOrder": 5,
+      "pooledMedianMs": {
+        "baseline": 788.7719165000001,
+        "candidate": 10.278146
+      },
+      "baselineOverCandidateRatio": 76.7426261993165,
+      "runs": {
+        "baseline": [
+          {
+            "order": "forward",
+            "medianMs": 788.368208,
+            "status": "failed",
+            "processExitCode": 1,
+            "reportSha256": "3c0d7c7fee0541f0ac9c51ebd4b02580264f8422d6a129f4f5a658fd351599c3",
+            "minimumMs": 786.162667,
+            "maximumMs": 795.582583
+          },
+          {
+            "order": "reverse",
+            "medianMs": 789.1756250000001,
+            "status": "failed",
+            "processExitCode": 1,
+            "reportSha256": "f2e0d988a97227ff2f86e464115de233c258dcf5fc503e475394f5f8f561101d",
+            "minimumMs": 786.848375,
+            "maximumMs": 794.921917
+          }
+        ],
+        "candidate": [
+          {
+            "order": "forward",
+            "medianMs": 11.668625,
+            "status": "passed",
+            "processExitCode": 0,
+            "reportSha256": "1aac2379a5b8c1b21575a5908b6c1a8257cee667eb0905950910e4cad9a0b616",
+            "minimumMs": 10.319875,
+            "maximumMs": 14.756209
+          },
+          {
+            "order": "reverse",
+            "medianMs": 9.040208,
+            "status": "passed",
+            "processExitCode": 0,
+            "reportSha256": "57072c4fb6a47210471e86d98e3900989f910ed0f2fb08a7b14458ae6ad878c4",
+            "minimumMs": 8.969792,
+            "maximumMs": 10.236417
+          }
+        ]
+      }
+    },
+    "nested": {
+      "transcriptSegments": 48000,
+      "diarizationSegments": 16001,
+      "syntheticTimelineMs": 72000000,
+      "repeatsPerOrder": 5,
+      "pooledMedianMs": {
+        "baseline": 790.9390209999999,
+        "candidate": 14.0975
+      },
+      "baselineOverCandidateRatio": 56.10491370810427,
+      "runs": {
+        "baseline": [
+          {
+            "order": "forward",
+            "medianMs": 797.005041,
+            "status": "failed",
+            "processExitCode": 1,
+            "reportSha256": "56f06cf125ffeb06f909b6640a638c339bb03ee219ce70ad188cea406af50a5c",
+            "minimumMs": 795.415542,
+            "maximumMs": 804.2178749999999
+          },
+          {
+            "order": "reverse",
+            "medianMs": 785.21675,
+            "status": "failed",
+            "processExitCode": 1,
+            "reportSha256": "3aa6cad57d4981187ef54989ed1557e785a6674f4e92d8b5445958b8de3e4e36",
+            "minimumMs": 785.0543749999999,
+            "maximumMs": 786.4625
+          }
+        ],
+        "candidate": [
+          {
+            "order": "forward",
+            "medianMs": 14.4585,
+            "status": "passed",
+            "processExitCode": 0,
+            "reportSha256": "c00b85e7d8dcaf7cc7e30e019c83a83601c6cce7c95b29beaf24386a84919f1d",
+            "minimumMs": 14.055250000000001,
+            "maximumMs": 15.831833
+          },
+          {
+            "order": "reverse",
+            "medianMs": 14.017083,
+            "status": "passed",
+            "processExitCode": 0,
+            "reportSha256": "ff568128956a985a7e19f3adb7f44876ffcee75200adb5ea697523b757577e92",
+            "minimumMs": 13.968917000000001,
+            "maximumMs": 14.678292
+          }
+        ]
+      }
+    }
+  },
+  "peakRssProbe": {
+    "baseline": {
+      "bytes": 37126144,
+      "reportSha256": "bace1ce0a9d59638f6ce727314120ddacbc6c8d8ffe56479ffc1376d35b2f531"
+    },
+    "candidate": {
+      "bytes": 37109760,
+      "reportSha256": "154c7118e58fbd5c9df13b03c734144375d7a9b2e30e53ae2e17cf0623666e3d"
+    },
+    "scope": "one standalone process per role including fixture/gold storage; observed, not a frozen RSS gate or total Audio Host budget"
+  },
+  "correctnessChecks": [
+    "full gold equality for every measured call",
+    "128 generated datasets compared to exhaustive reference",
+    "unsorted input and containing intervals",
+    "tie order, touching endpoints, invalid/zero ranges and u64::MAX",
+    "unchanged text, timestamps, speaker identity and transcript order"
+  ],
+  "limitations": [
+    "dense overlapping input still requires comparing all matching candidates",
+    "short case is about 0.0026 ms slower; no universal speedup claim",
+    "synthetic timeline length is not an actual long-audio model run"
+  ]
+}

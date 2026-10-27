@@ -1,0 +1,109 @@
+{
+  "schema": "meetnote.whisper-window-range-validation.v1",
+  "date": "2026-10-27",
+  "sourceCommit": "68b9beac8b3f505ad2c21de29b9947c9a57ca9ff",
+  "scope": "deterministic sample-to-millisecond window mapping and known speech compatibility; not model accuracy improvement or a real-model reproduction of the tiny tail",
+  "sourceSha256": "7395514b953baee14d60164120081c5c0c42472800669b11697d98558b83dc4b",
+  "runnerSha256": "b27c08d09939b6a38a5e320ef53a5c6feff65205caf8574108594ea750e75955",
+  "protocolSha256": "cf49d7f798dbe88725b05d3b3b5b64cb6a58aa8412e22421809aea3bc6c69a36",
+  "casesSha256": "ba0ddcd25d0fbb71c70d0fed4155c6aaaf67e5e0d7046e81d61bbae7da409955",
+  "rawArtifacts": "eval-data/optimization-2026-10-27/whisper-window-ms",
+  "comparisonSha256": "4cbad213dfb73dce8ef0dfb5da6c1b5b568bd89285e9c096836f57b271bacc3b",
+  "regression": {
+    "windowPlan": {
+      "coreSamples": 960000,
+      "contextSamples": 240000,
+      "sourceTotalSamples": 960001
+    },
+    "modelTicks10ms": [
+      1500,
+      1501
+    ],
+    "boundedLocalSamples": [
+      240000,
+      240001
+    ],
+    "globalSamples": [
+      960000,
+      960001
+    ],
+    "beforeMilliseconds": [
+      60000,
+      60000
+    ],
+    "after": "omit nonpositive integer millisecond range",
+    "redLogSha256": "2e5d0ffc6bcd24832d5854eaf2cdc598f6d77260c50b1f7d9aa6885c5d0fede5"
+  },
+  "crossingControl": {
+    "coreSamples": 960015,
+    "contextSamples": 240000,
+    "sourceTotalSamples": 960016,
+    "globalSamples": [
+      960015,
+      960016
+    ],
+    "milliseconds": [
+      60000,
+      60001
+    ],
+    "result": "preserved despite only one source sample"
+  },
+  "ownershipControl": "midpoint is still evaluated in source samples; context-only ranges remain unowned",
+  "speechControls": {
+    "baselineSourceCommit": "e489595",
+    "reference": "reuse fixed six FLEURS raw predictions from whisper-digital-silence validation",
+    "newBackendCalls": 24,
+    "devices": [
+      "Cpu",
+      "Metal"
+    ],
+    "windowed": true,
+    "repeats": 2,
+    "cases": 6,
+    "results": [
+      {
+        "device": "Cpu",
+        "calls": 12,
+        "textAndTimeExactlyEqual": true,
+        "positiveSourceBounded": true,
+        "baselineReportSha256": "70735706793fcc0a349708dc404b09e0c5b24947c56ff3fca9e97b67c7dbe7ad",
+        "candidateReportSha256": "cd9b74bb40f19a95ff02cf753d62271487ffb03376031c9a3dc94f351b322228",
+        "candidatePredictionSha256": "ea0dc7b65d644f9624375e71f37bbc978a8a0de4860e5a2103849f4e0b36fde6"
+      },
+      {
+        "device": "Metal",
+        "calls": 12,
+        "textAndTimeExactlyEqual": true,
+        "positiveSourceBounded": true,
+        "baselineReportSha256": "0f319d2c38b8e3c9d34a03289a63acf45d27a151b9094c274490b9738692e4b7",
+        "candidateReportSha256": "ecc42e74c3cb4888499bd76901e8534721823736b8bd7260f77e9ca454d4c255",
+        "candidatePredictionSha256": "e72e61919b8e177a623f4642b1a17c9cb438f9d78437188027d95f7a0fe5544a"
+      }
+    ]
+  },
+  "verification": {
+    "crateUnitTestsPassed": 10,
+    "fmtAllCheck": "passed",
+    "cargoCheckWorkspaceLocked": "passed",
+    "cargoBuildWorkspaceLocked": "passed",
+    "cargoTestWorkspaceLocked": {
+      "rawHarnessPassed": 964,
+      "mainHarnessPassed": 961,
+      "existingNestedHarnessPassed": 3,
+      "failed": 0,
+      "registeredIgnored": 16,
+      "ignoredNote": "UI child is explicitly executed by its parent; this change uses the 24 explicit runner calls for real window compatibility; ignored tests alone are not execution evidence"
+    },
+    "independentReview": "review exact sample ownership before integer conversion, retain boundary-crossing one-sample intervals, and verify every case/repeat text and timestamp plus quality group"
+  },
+  "validationLogs": {
+    "green": "7863f49ade87f85e38b34ee4eae346a70371b8a02c8fd4b68e7b19d0b0588745",
+    "fmt": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "check": "11948da1abf80efe94a0d879ae312e4e42c63b8a1bf0dc43dc763939c09548df",
+    "workspace": "3e8d5ba104fa44bf6c4eab11fcdc342aa6ac460452db4c44185c24c6ec5c8193",
+    "build-workspace": "19abb907a59dc250aefe77f8a689b180d7ab136e46493edca5945c6d3e311c7d"
+  },
+  "qualityAcceptance": "not_assessed",
+  "speedAcceptance": "not_assessed",
+  "reproduction": "Construct the final window from AudioWindowPlan::new(60*16000,15*16000).bounds_for_total(60*16000+1); map model ticks 1500..1501 through the production owned_window_range; require None after integer conversion. Add 15 to core samples to verify the same one-sample extent crossing a global millisecond is retained. Use the permanent asr_benchmark for unchanged CPU/Metal windowed speech controls."
+}

@@ -1,5 +1,6 @@
 use application::{
-    diarization_descriptor, BackendFuture, DiarizationBackend, DiarizationStageProvenance,
+    diarization_descriptor, run_backend_worker, BackendFuture, DiarizationBackend,
+    DiarizationStageProvenance,
 };
 use audio::read_audio_mono_16k;
 use contracts::{
@@ -111,7 +112,9 @@ impl DiarizationBackend for SherpaOnnxDiarizationBackend {
     ) -> BackendFuture<DiarizationResult> {
         let backend = self.clone();
         let worker_context = context.clone();
-        Box::pin(context.spawn_blocking(move || diarize_sync(backend, request, worker_context)))
+        run_backend_worker(context, move || {
+            diarize_sync(backend, request, worker_context)
+        })
     }
 }
 
@@ -190,6 +193,7 @@ fn diarize_sync(
     }
 
     let raw_segments = result.sort_by_start_time();
+    let audio_end_ms = audio.samples.len() as u64 / 16;
     let embedding_space = EmbeddingSpace {
         backend_id: "sherpa-onnx".into(),
         model_id: backend.embedding_model_id.clone(),
@@ -228,10 +232,9 @@ fn diarize_sync(
         .iter()
         .enumerate()
         .filter_map(|(index, segment)| {
-            let start_ms = (segment.start.max(0.0) * 1_000.0) as u64;
-            let end_ms = (segment.end.max(0.0) * 1_000.0) as u64;
+            let (start_ms, end_ms) = source_time_range(segment.start, segment.end, audio_end_ms)?;
             let start = (start_ms.saturating_mul(16) as usize).min(audio.samples.len());
-            let end = (end_ms.saturating_mul(16) as usize).min(audio.samples.len());
+            let end = embedding_end_sample(segment.end, audio.samples.len());
             if end <= start {
                 return None;
             }
@@ -261,17 +264,26 @@ fn diarize_sync(
     let segments = raw_segments
         .into_iter()
         .enumerate()
-        .map(|(index, segment)| domain::DiarizationSegment {
-            id: format!("sherpa-diarization-segment-{index}"),
-            speaker_id: format!("speaker-{}", segment.speaker),
-            speaker_profile_id: None,
-            speaker_label: None,
-            start_ms: (segment.start.max(0.0) * 1_000.0) as u64,
-            end_ms: (segment.end.max(0.0) * 1_000.0) as u64,
-            confidence: None,
+        .filter_map(|(index, segment)| {
+            let (start_ms, end_ms) = source_time_range(segment.start, segment.end, audio_end_ms)?;
+            Some(domain::DiarizationSegment {
+                id: format!("sherpa-diarization-segment-{index}"),
+                speaker_id: format!("speaker-{}", segment.speaker),
+                speaker_profile_id: None,
+                speaker_label: None,
+                start_ms,
+                end_ms,
+                confidence: None,
+            })
         })
-        .collect();
-    let speaker_count = Some(result.num_speakers().max(0) as u32);
+        .collect::<Vec<_>>();
+    let speaker_count = Some(
+        segments
+            .iter()
+            .map(|segment| &segment.speaker_id)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len() as u32,
+    );
     context.report(runtime::Progress {
         completed: 2,
         total: Some(2),
@@ -285,6 +297,19 @@ fn diarize_sync(
         embedding_observations,
         speaker_profile_candidates: Vec::new(),
     })
+}
+
+fn source_time_range(start: f32, end: f32, audio_end_ms: u64) -> Option<(u64, u64)> {
+    let start = ((start.max(0.0) * 1_000.0) as u64).min(audio_end_ms);
+    let end = ((end.max(0.0) * 1_000.0) as u64).min(audio_end_ms);
+    (start < end).then_some((start, end))
+}
+
+fn embedding_end_sample(end: f32, sample_count: usize) -> usize {
+    // Clip metadata separately: preserve the original source-bounded extraction
+    // when the waveform contains a final fraction of an integer millisecond.
+    let end_ms = (end.max(0.0) * 1_000.0) as u64;
+    (end_ms.saturating_mul(16) as usize).min(sample_count)
 }
 
 fn provider_for(device: ComputeDevice) -> Result<&'static str, BackendError> {
@@ -306,6 +331,34 @@ fn path_string(path: impl AsRef<Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounds_tail_ranges_and_drops_padding_only_segments() {
+        assert_eq!(source_time_range(0.125, 1.5, 1_250), Some((125, 1_250)));
+        assert_eq!(source_time_range(1.5, 2.0, 1_250), None);
+        assert_eq!(source_time_range(0.0, 0.25, 0), None);
+    }
+
+    #[test]
+    fn drops_ranges_that_collapse_in_integer_milliseconds() {
+        assert_eq!(source_time_range(1.0, 1.0001, 2_000), None);
+        assert_eq!(source_time_range(1.25, 1.0, 2_000), None);
+    }
+
+    #[test]
+    fn preserves_source_ranges_and_existing_negative_start_clamp() {
+        assert_eq!(source_time_range(0.125, 1.25, 1_250), Some((125, 1_250)));
+        assert_eq!(source_time_range(-0.25, 0.5, 1_250), Some((0, 500)));
+    }
+
+    #[test]
+    fn preserves_submillisecond_source_tail_for_embedding_extraction() {
+        // The timeline cannot represent the final sample, but extraction still can.
+        assert_eq!(source_time_range(0.0, 1.5, 1_000), Some((0, 1_000)));
+        assert_eq!(embedding_end_sample(1.5, 16_001), 16_001);
+        // An in-source model boundary keeps its original extraction endpoint.
+        assert_eq!(embedding_end_sample(1.0, 16_001), 16_000);
+    }
 
     #[test]
     fn rejects_unverified_accelerators_before_loading_assets() {

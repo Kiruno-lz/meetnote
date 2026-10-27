@@ -4,6 +4,8 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+async-lock = "=3.4.2"
+event-listener = "=5.4.2"
 futures.workspace = true
 serde.workspace = true
 thiserror.workspace = true

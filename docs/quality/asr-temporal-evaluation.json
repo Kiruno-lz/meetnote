@@ -1,0 +1,240 @@
+{
+  "schema": "meetnote.asr-temporal-evaluation.v1",
+  "date": "2026-10-26",
+  "scope": "five English AMI non-overlap crops, two repeats; rough SISO time-constrained WER, not word alignment or DER",
+  "baselineNativeSource": "a31d2c6",
+  "boundedWhisperSource": "5d4ce72",
+  "scorerSource": "86b7d9d",
+  "protocol": {
+    "tool": "meeteval-0.4.3",
+    "referenceTiming": "none (official word intervals)",
+    "hypothesisTiming": "character_based_points (approximate)",
+    "collarsSeconds": [
+      0.5,
+      2.0
+    ],
+    "qualityAcceptance": "not_assessed",
+    "referenceCasesSha256": "209cc9e51913e150d5bd574fee62991b155db837c5c106861d1e4e5a17eeccf9",
+    "normalizationSourceSha256": "1e5ba7b4488b4bc7d404a0cdef3ce4051f153c4fc3d89eb369ed2f866f1f0177"
+  },
+  "protocolSha256": "2210c43fe6ed56c8d55749faba3326eeccfaef552fe9b1e537cbcfed97e8d203",
+  "environment": {
+    "meeteval": "0.4.3",
+    "rapidfuzz": "3.14.3",
+    "whisper-normalizer": "0.1.15",
+    "numpy": "2.5.4",
+    "scipy": "1.18.1",
+    "Cython": "3.3.0",
+    "kaldialign": "0.12.0"
+  },
+  "benchmarkAsrCalls": 30,
+  "referenceCases": 5,
+  "distinctReferenceWords": 95,
+  "referenceSeconds": 37.29,
+  "runs": {
+    "sensevoice": {
+      "runnerSha256": "aa9b646dbe678a7e2b32afdc71b22fcd4ad2aa534f621dfc22011d8a0e35dbf2",
+      "casesSha256": "209cc9e51913e150d5bd574fee62991b155db837c5c106861d1e4e5a17eeccf9",
+      "predictionSha256": "6b9ce8d027f53d131fd38489b0f8d5e42b02abbf148ec944da36e685026af1f5",
+      "configuration": {
+        "model": {
+          "backendId": "sherpa-onnx",
+          "modelId": "sensevoice-small-int8",
+          "revision": "2365baeacb507f821a0c8120fcee3d484dba7a07",
+          "artifactPath": "/Users/kiruno/.codex/worktrees/03ba/meetnote/models/asr/sensevoice-small-int8"
+        },
+        "device": "Cpu",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "modelArtifacts": [
+        {
+          "filename": "LICENSE",
+          "bytes": 71,
+          "sha256": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"
+        },
+        {
+          "filename": "model.int8.onnx",
+          "bytes": 239233841,
+          "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+        },
+        {
+          "filename": "tokens.txt",
+          "bytes": 315894,
+          "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+        }
+      ]
+    },
+    "whisper-base-en-metal": {
+      "runnerSha256": "aa9b646dbe678a7e2b32afdc71b22fcd4ad2aa534f621dfc22011d8a0e35dbf2",
+      "casesSha256": "209cc9e51913e150d5bd574fee62991b155db837c5c106861d1e4e5a17eeccf9",
+      "predictionSha256": "b74ed98b33888f0eb3b4da01a73659e788c32de838e1becd89f10579211d7a23",
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-base-en-ggml",
+          "revision": null,
+          "artifactPath": "/Users/kiruno/Documents/_code/vibe/meetnote/models/asr/whisper-base-en-ggml/ggml-base.en.bin"
+        },
+        "device": "Metal",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "modelArtifacts": [
+        {
+          "filename": "ggml-base.en.bin",
+          "bytes": 147964211,
+          "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+        }
+      ]
+    },
+    "whisper-base-en-bounded": {
+      "runnerSha256": "5978e6f11a7f9f7a551f568399c71ed26c032f91d2c7c80baf327b7215ba6e25",
+      "casesSha256": "209cc9e51913e150d5bd574fee62991b155db837c5c106861d1e4e5a17eeccf9",
+      "predictionSha256": "ad911b379c4e65c9736d35348f2f64ec9517aebed04530a675bd68afb49ac1ef",
+      "configuration": {
+        "model": {
+          "backendId": "whisper-rs",
+          "modelId": "whisper-base-en-ggml",
+          "revision": null,
+          "artifactPath": "/Users/kiruno/Documents/_code/vibe/meetnote/models/asr/whisper-base-en-ggml/ggml-base.en.bin"
+        },
+        "device": "Metal",
+        "threads": 4,
+        "repeats": 2,
+        "windowed": false
+      },
+      "modelArtifacts": [
+        {
+          "filename": "ggml-base.en.bin",
+          "bytes": 147964211,
+          "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+        }
+      ]
+    }
+  },
+  "diagnostics": {
+    "sensevoice-temporal": {
+      "reportSha256": "1c3e3da1c3673ef0959203d6f3f59ca13ba26b657fa47765a90cee7e443aed27",
+      "scorerSha256": "8a7a7927102ec527d49928793afebc065f73c1542ca099e6851c83cffad01da7",
+      "normalizerSha256": "1e5ba7b4488b4bc7d404a0cdef3ce4051f153c4fc3d89eb369ed2f866f1f0177",
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "repeat": 0,
+          "collarSeconds": 0.5,
+          "cases": 5,
+          "failures": 0,
+          "referenceUnits": 95,
+          "literalErrorRate": 0.2631578947368421,
+          "timeConstrainedErrorRate": 0.7157894736842105
+        },
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "repeat": 0,
+          "collarSeconds": 2.0,
+          "cases": 5,
+          "failures": 0,
+          "referenceUnits": 95,
+          "literalErrorRate": 0.2631578947368421,
+          "timeConstrainedErrorRate": 0.29473684210526313
+        },
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "repeat": 1,
+          "collarSeconds": 0.5,
+          "cases": 5,
+          "failures": 0,
+          "referenceUnits": 95,
+          "literalErrorRate": 0.2631578947368421,
+          "timeConstrainedErrorRate": 0.7157894736842105
+        },
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "repeat": 1,
+          "collarSeconds": 2.0,
+          "cases": 5,
+          "failures": 0,
+          "referenceUnits": 95,
+          "literalErrorRate": 0.2631578947368421,
+          "timeConstrainedErrorRate": 0.29473684210526313
+        }
+      ]
+    },
+    "whisper-bounded-temporal": {
+      "reportSha256": "60d1e27283e01abd1872d12722bcc4596e2980f931ff984b01f78028fa4158b5",
+      "scorerSha256": "8a7a7927102ec527d49928793afebc065f73c1542ca099e6851c83cffad01da7",
+      "normalizerSha256": "1e5ba7b4488b4bc7d404a0cdef3ce4051f153c4fc3d89eb369ed2f866f1f0177",
+      "groups": [
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "repeat": 0,
+          "collarSeconds": 0.5,
+          "cases": 5,
+          "failures": 0,
+          "referenceUnits": 95,
+          "literalErrorRate": 0.29473684210526313,
+          "timeConstrainedErrorRate": 0.6421052631578947
+        },
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "repeat": 0,
+          "collarSeconds": 2.0,
+          "cases": 5,
+          "failures": 0,
+          "referenceUnits": 95,
+          "literalErrorRate": 0.29473684210526313,
+          "timeConstrainedErrorRate": 0.3263157894736842
+        },
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "repeat": 1,
+          "collarSeconds": 0.5,
+          "cases": 5,
+          "failures": 0,
+          "referenceUnits": 95,
+          "literalErrorRate": 0.29473684210526313,
+          "timeConstrainedErrorRate": 0.6421052631578947
+        },
+        {
+          "language": "en",
+          "scenario": "ami-oracle-nonoverlap",
+          "repeat": 1,
+          "collarSeconds": 2.0,
+          "cases": 5,
+          "failures": 0,
+          "referenceUnits": 95,
+          "literalErrorRate": 0.29473684210526313,
+          "timeConstrainedErrorRate": 0.3263157894736842
+        }
+      ]
+    }
+  },
+  "endpointRegression": {
+    "case": "ami-ES2002a-4",
+    "sourceMs": 8670,
+    "beforeEndMs": 9000,
+    "afterEndMs": 8670,
+    "affectedRepeats": 2,
+    "comparedWhisperCalls": 10,
+    "allTextIdsStartsAndSegmentCountsPreserved": true,
+    "oldTemporalReport": "rejected out-of-source endpoint; no report published",
+    "realModelIgnoredTest": "failed before fix; explicitly passed after fix with base.en path and exact audio path"
+  },
+  "limitations": [
+    "AMI word boundaries are official forced alignment, not manually verified exact timing",
+    "hypothesis character_based_points are approximations; the 0.5-second collar is sensitivity analysis",
+    "collar changes strongly affect scores; do not use these values as a word-accuracy gate or change defaults",
+    "English single-speaker oracle crops do not establish Chinese, overlapping meeting or diarization quality",
+    "no new ASR speed comparison was made in this diagnostic experiment"
+  ]
+}

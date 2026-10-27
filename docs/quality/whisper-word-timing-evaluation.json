@@ -1,0 +1,282 @@
+{
+  "schema": "meetnote.whisper-word-segmentation-evaluation.v1",
+  "date": "2026-10-26",
+  "sourceCommit": "407022613830712e3989c7b46bf6779d4bd5aa4c",
+  "scope": "Isolated experimental Whisper segment timing screen; not model-word accuracy or production acceptance",
+  "decision": "reject_default_integration",
+  "reason": [
+    "Frozen text-preservation gate fails: two repeats discard there in fleurs-en-1935 despite unchanged raw decoder text.",
+    "Word segments change transcript-reader paragraphs and per-segment literal search semantics; these contracts require separate validation.",
+    "Five known English AMI crops do not validate Chinese, held-out meetings or long-audio resource budgets."
+  ],
+  "model": {
+    "id": "whisper-base-en-ggml",
+    "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+    "device": "Metal",
+    "threads": 4,
+    "whisperRs": "0.16.0",
+    "whisperRsSys": "0.15.0"
+  },
+  "nativeBuild": {
+    "nativeExecutable": "/Users/kiruno/Documents/_code/vibe/meetnote/target/release/deps/asr_whisper_rs-2bad2bb04ce3e5b1",
+    "nativeSha256": "db69e51b977ba88b971f9ba68a2bded23610af90fee7d8f0695169481afa1196",
+    "temporaryProbeSha256": "bfc35e68268938d76a40eb10e66c0bad88c8af39d02c7769aec0f43aecd9a8a3",
+    "temporaryLockSha256": "4684ccc9d16e550f69bb3dd5a6f380e8c1f6ac895623c464e45b0316410cd355"
+  },
+  "protocolSha256": "5deb8b89aeaa7ebbf75072ca87cf3e3bad615bb0e8e59ea7fe7b6defe1b89cbb",
+  "supplementProtocolSha256": "d13f2b4ca34a9f44d31a436670e9d0cd26fe5f35f954d16a26fabc2e9930ef78",
+  "protocol": {
+    "scope": "screen native Whisper word segmentation only; not word accuracy or production acceptance",
+    "model": "whisper-base-en-ggml",
+    "whisperRs": "0.16.0",
+    "device": "Metal",
+    "threads": 4,
+    "repeats": 2,
+    "variants": [
+      "coarse",
+      "words"
+    ],
+    "wordParameters": {
+      "tokenTimestamps": true,
+      "maxLen": 1,
+      "splitOnWord": true
+    },
+    "noDtw": true,
+    "maximumMedianWallRatio": 1.25,
+    "maximumProcessPeakRssRatio": 1.2,
+    "normalizedTextMustMatchEveryCall": true,
+    "nonWhitespaceTextMustMatchEveryCall": true,
+    "maximumCollar05TemporalErrorRatio": 0.85,
+    "collar2TemporalErrorMustNotIncrease": true,
+    "allOutputRangesWithinSource": true,
+    "newEmptyPredictions": 0,
+    "qualityGateScope": "screening on five known AMI crops; not held-out acceptance"
+  },
+  "runs": {
+    "coarse-first": {
+      "calls": 10,
+      "manifestSha256": "209cc9e51913e150d5bd574fee62991b155db837c5c106861d1e4e5a17eeccf9",
+      "predictionSha256": "3f5a2267c8b29aba171c6ec0c09d91fcd23a08f622f648acea5d85a5b148e04d",
+      "reportSha256": "98bccef9e596d7a6db11539e902fa07c91a3f8cabe0cefabea0964780dd6217a",
+      "medianCallSeconds": 0.2152136875,
+      "maximumCallSeconds": 7.895726375,
+      "peakRssBytes": 335052800,
+      "outputSegments": 14,
+      "discardedNonemptyTextSegments": 0
+    },
+    "words-first": {
+      "calls": 10,
+      "manifestSha256": "209cc9e51913e150d5bd574fee62991b155db837c5c106861d1e4e5a17eeccf9",
+      "predictionSha256": "638145e24c0c781d24432de7ffaba3cde8a156318de653bdc224ca9d34f49cda",
+      "reportSha256": "94df595d567c3b028df0945d62bfb1c4b74cda195e23ba4f00befcdeb21321ef",
+      "medianCallSeconds": 0.2260112495,
+      "maximumCallSeconds": 0.329793125,
+      "peakRssBytes": 332021760,
+      "outputSegments": 176,
+      "discardedNonemptyTextSegments": 0
+    },
+    "coarse-reverse": {
+      "calls": 10,
+      "manifestSha256": "209cc9e51913e150d5bd574fee62991b155db837c5c106861d1e4e5a17eeccf9",
+      "predictionSha256": "86c20e35fae339a74c7cec75e67ef948659c861b11c00924ed49a8745b524094",
+      "reportSha256": "2046e9415e640e9773de3b1b259c6f212d16bcee4040991c23a850f106295a4f",
+      "medianCallSeconds": 0.2070777915,
+      "maximumCallSeconds": 0.31121125,
+      "peakRssBytes": 330956800,
+      "outputSegments": 14,
+      "discardedNonemptyTextSegments": 0
+    },
+    "words-reverse": {
+      "calls": 10,
+      "manifestSha256": "209cc9e51913e150d5bd574fee62991b155db837c5c106861d1e4e5a17eeccf9",
+      "predictionSha256": "4fd3c079db1587aafff5dd5cca785ff9e7a70018b9a7f828503f348f26a30d94",
+      "reportSha256": "f4c090d1f400af6d6967d9b4f1d4cce15dcf9cfcc9d2aaa78712f910a188a78c",
+      "medianCallSeconds": 0.2185592295,
+      "maximumCallSeconds": 0.334536875,
+      "peakRssBytes": 325189632,
+      "outputSegments": 176,
+      "discardedNonemptyTextSegments": 0
+    },
+    "coarse-supplement": {
+      "calls": 16,
+      "manifestSha256": "4bb66eaa4d0392de0f45dda89e38a393f60a5ad0d6e2a9c13daeca4f73f8465d",
+      "predictionSha256": "24b463185d025ba9e5a4720fe8d1b380e3b0d84b660f44b774940642e8a060fe",
+      "reportSha256": "22b2d41877b5046090f8c0f6340b223f636aa32553898a7bf13d3a018d260460",
+      "medianCallSeconds": 0.242984333,
+      "maximumCallSeconds": 0.435328625,
+      "peakRssBytes": 362446848,
+      "outputSegments": 40,
+      "discardedNonemptyTextSegments": 0
+    },
+    "words-supplement": {
+      "calls": 16,
+      "manifestSha256": "4bb66eaa4d0392de0f45dda89e38a393f60a5ad0d6e2a9c13daeca4f73f8465d",
+      "predictionSha256": "de986756c846bd36be51bece4ed9eb2801fc1d25051f2bc910e1c14f65ce34f4",
+      "reportSha256": "2aa4be2e7034ede2f6c3e286943d0d5476813720ca75f93fe9bc64c328a7ebbc",
+      "medianCallSeconds": 0.24439875,
+      "maximumCallSeconds": 0.442673459,
+      "peakRssBytes": 347635712,
+      "outputSegments": 436,
+      "discardedNonemptyTextSegments": 2
+    }
+  },
+  "pairedComparisons": [
+    {
+      "order": "first",
+      "normalizedAndNonWhitespaceTextMatches": true,
+      "mismatches": [],
+      "rawDecoderNonWhitespaceTextMatches": true,
+      "wallMedianRatio": 1.0501713535297332,
+      "processPeakRssRatio": 0.9909535452322739
+    },
+    {
+      "order": "reverse",
+      "normalizedAndNonWhitespaceTextMatches": true,
+      "mismatches": [],
+      "rawDecoderNonWhitespaceTextMatches": true,
+      "wallMedianRatio": 1.0554450475680295,
+      "processPeakRssRatio": 0.9825742574257426
+    },
+    {
+      "order": "supplement",
+      "normalizedAndNonWhitespaceTextMatches": false,
+      "mismatches": [
+        {
+          "caseId": "fleurs-en-1935",
+          "repeat": 0,
+          "discardedText": [
+            "there"
+          ]
+        },
+        {
+          "caseId": "fleurs-en-1935",
+          "repeat": 1,
+          "discardedText": [
+            "there"
+          ]
+        }
+      ],
+      "rawDecoderNonWhitespaceTextMatches": true,
+      "wallMedianRatio": 1.0058210213907084,
+      "processPeakRssRatio": 0.9591357020160926
+    }
+  ],
+  "amiTimingPerRepeat": {
+    "referenceWords": 95,
+    "coarse": {
+      "wer": 0.29473684210526313,
+      "tcWer05": 0.6421052631578947,
+      "tcWer2": 0.3263157894736842
+    },
+    "words": {
+      "wer": 0.29473684210526313,
+      "tcWer05": 0.35789473684210527,
+      "tcWer2": 0.29473684210526313
+    },
+    "bothExecutionOrdersAgree": true,
+    "source": "AMI manual text with automatic forced-alignment word intervals; not manually verified word boundaries",
+    "hypothesis": "MeetEval character_based_points; heuristic native word segmentation, no DTW"
+  },
+  "supplement": {
+    "coarse": [
+      {
+        "scenario": "fleurs-native-word-screen",
+        "repeat": 0,
+        "errors": 17,
+        "referenceUnits": 136,
+        "errorRate": 0.125
+      },
+      {
+        "scenario": "fleurs-native-word-screen",
+        "repeat": 1,
+        "errors": 17,
+        "referenceUnits": 136,
+        "errorRate": 0.125
+      },
+      {
+        "scenario": "inserted-silence-word-screen",
+        "repeat": 0,
+        "errors": 11,
+        "referenceUnits": 49,
+        "errorRate": 0.22448979591836735,
+        "knownSilenceOverlapMs": 3340.0
+      },
+      {
+        "scenario": "inserted-silence-word-screen",
+        "repeat": 1,
+        "errors": 11,
+        "referenceUnits": 49,
+        "errorRate": 0.22448979591836735,
+        "knownSilenceOverlapMs": 3340.0
+      },
+      {
+        "scenario": "quiet-minus30db-word-screen",
+        "repeat": 0,
+        "errors": 9,
+        "referenceUnits": 23,
+        "errorRate": 0.391304347826087
+      },
+      {
+        "scenario": "quiet-minus30db-word-screen",
+        "repeat": 1,
+        "errors": 9,
+        "referenceUnits": 23,
+        "errorRate": 0.391304347826087
+      }
+    ],
+    "words": [
+      {
+        "scenario": "fleurs-native-word-screen",
+        "repeat": 0,
+        "errors": 18,
+        "referenceUnits": 136,
+        "errorRate": 0.1323529411764706
+      },
+      {
+        "scenario": "fleurs-native-word-screen",
+        "repeat": 1,
+        "errors": 18,
+        "referenceUnits": 136,
+        "errorRate": 0.1323529411764706
+      },
+      {
+        "scenario": "inserted-silence-word-screen",
+        "repeat": 0,
+        "errors": 11,
+        "referenceUnits": 49,
+        "errorRate": 0.22448979591836735,
+        "knownSilenceOverlapMs": 3160.0
+      },
+      {
+        "scenario": "inserted-silence-word-screen",
+        "repeat": 1,
+        "errors": 11,
+        "referenceUnits": 49,
+        "errorRate": 0.22448979591836735,
+        "knownSilenceOverlapMs": 3160.0
+      },
+      {
+        "scenario": "quiet-minus30db-word-screen",
+        "repeat": 0,
+        "errors": 9,
+        "referenceUnits": 23,
+        "errorRate": 0.391304347826087
+      },
+      {
+        "scenario": "quiet-minus30db-word-screen",
+        "repeat": 1,
+        "errors": 9,
+        "referenceUnits": 23,
+        "errorRate": 0.391304347826087
+      }
+    ]
+  },
+  "controlTranscriptMatchesProduction": true,
+  "measurementLimits": [
+    "Each call loads the model; measured call includes audio decode, context load and inference.",
+    "First coarse call was 7.895726375 seconds; cause was not identified. Preserve it and report both execution orders, without attributing cold-start behavior.",
+    "Process peak RSS is not isolated GPU memory and is not evidence of long-audio memory savings.",
+    "Six additional frozen FLEURS inputs plus 42.94-second constructed pause and -30 dB input are a diagnostic screen, not speaker-disjoint held-out acceptance."
+  ],
+  "cleanup": "Remove temporary Rust probe, dev dependency, lock edge and Python shim; retain core experiment method in research appendix. No product timing flag is enabled."
+}

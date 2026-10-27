@@ -101,8 +101,9 @@ pub trait DiarizationBackend: Send + Sync {
 
 - 模型：单文件 GGML/GGUF。
 - 设备：`Cpu` 强制 CPU，`Auto`/`Metal` 使用 Metal；当前构建不启用 Core ML，显式请求返回 `DeviceUnavailable`。
-- whole-file：读取完整 16 kHz mono 音频，输出 Whisper 时间戳段。
-- windowed：复用一个 `WhisperContext`，每个窗口创建 state；用全局 sample offset 恢复时间，以 valid-core midpoint 归属并去除重复段。
+- whole-file：读取完整 16 kHz mono 音频，输出 Whisper 时间戳段；与 windowed 共用 sample 范围标准化，将模型 padding 内的结束时间裁到实际解码边界，纯 padding 段不进入结果。该约束保证时间属于源音频，不等于词级对齐。
+- windowed：复用一个 `WhisperContext`，需要解码的窗口创建 state；用全局 sample offset 恢复时间，以 valid-core midpoint 归属并去除重复段。 在源 sample 域确定归属后转换成全局整数毫秒，时长必须为正；不将零毫秒段写入结果。
+- 数字静音：非空输入的全部 f32 采样严格为零时，在正常模型 context 加载之后跳过 decoder state/full，整文件和窗口均不生成文字；任意非零采样继续推理，不使用能量阈值。取消先于空结果返回，损坏模型仍报告加载错误。
 - probe：检查模型 artifact 是现存文件；真实 context 加载在推理 session 创建时完成。
 - 取消：参数对象持有稳定的 `Box<JobContext>`，类型明确的 C 回调只在同步 `full` 调用内读取，返回后释放；避免固定 binding safe wrapper 的 userdata 类型不一致。
 
@@ -131,6 +132,7 @@ pub trait DiarizationBackend: Send + Sync {
 - 模型：包含 `segmentation.onnx` 与 `embedding.onnx` 的目录。
 - 设备：CPU；固定 sherpa runtime 不提供有效 provider 的验证回执，Core ML/Metal 请求返回 `DeviceUnavailable`，不静默回退。
 - pipeline：Pyannote segmentation、speaker embedding、sherpa fast clustering。
+- 输出范围：时间线与 embedding observation 共用实际解码源边界，按整数毫秒裁剪；纯越界或裁剪为空的区间移除，说话人数按保留标签计数。embedding 仍沿用原始时间转换后的 sample 裁剪，保留末尾不足 1 ms 的真实音频，不让元数据裁剪改变向量输入。
 - stage：不支持用户覆盖 segmentation、embedding 或 clustering。
 - provenance：分别记录 segmentation、embedding 与 `sherpa-fast-clustering`。
 - 长音频：尚未暴露未聚类的窗口中间结果，因此 `supports_windowed_audio == false`；application 对长音频明确拒绝该组合。
@@ -154,8 +156,8 @@ NativeDiarizationBackend
 - clustering：`speakrs-ahc-plda-vbx` 与配套参数。
 - 设备：CPU；可选 Cargo `coreml` feature 提供 CoreML 执行路径。
 - stage override：只接受 descriptor 声明且与 `speakrs-community-1-cpu` bundle 兼容的三阶段配置。
-- whole-file：speakrs 完整 inference、聚类和重建。
-- windowed：每个窗口只做 inference 和 observation 提取；全录音聚类一次，再用全局结果重建每个窗口并裁剪 valid core。
+- whole-file：speakrs 完整 inference、聚类和重建。 分割 producer 与并发 embedding consumer 的窗口数必须一致：空音频为零，非空且不超过一个完整窗口为一，长音频保留原有重叠尾窗。
+- windowed：每个窗口只做 inference 和 observation 提取；全录音聚类一次，再用全局结果重建每个窗口并裁剪 valid core。 分离段和 embedding observation 在 sample 域裁剪后均要求正整数毫秒时长；不能导出零毫秒范围，也不按采样数小于 1 ms 粗删跨界段。
 
 native engine 返回自己的窗口 session，只有 backend adapter 实现 application 的 `DiarizationWindowSession`，避免 engine 依赖应用层 session 细节。
 
@@ -169,7 +171,7 @@ Speaker Library 位于 application，不属于具体 diarization backend。它�
 ASR future -> diarization future -> identity -> alignment -> normalized result
 ```
 
-短音频 ASR 完成后才启动 diarization，包括 ASR future 暂停时；ASR 失败保留错误 code，并取消未启动的 diarization job。JobRuntime 继续负责状态、取消与资源记录。长音频保留 window session 的独立调度，短音频顺序测试不证明进程级 native runtime 的隔离。
+短音频 ASR 完成后才启动 diarization，包括 ASR future 暂停时；ASR 失败保留错误 code，并取消未启动的 diarization job。Whisper/Sherpa 的整文件 ASR 与 native/Sherpa 的整文件 diarization 通过 application 的 `run_backend_worker` 复用所属 JobRuntime 可取消准入；排队取消无需等待其他录音结束，不加载音频或模型。运行中继续合作取消并等待真实 worker 退出；正常 backend 错误保留 code/message，无取消标记的异常退出报告 `InferenceFailed`。JobRuntime 继续负责状态、取消与资源记录。长音频保留 window session 的独立调度，短音频顺序测试不证明进程级 native runtime 的隔离。
 
 已用独立真实 Whisper 推理与 macOS faulting-thread 栈定位并修复取消回调 userdata 故障。
 
@@ -190,7 +192,17 @@ AudioChunkReader
 
 默认窗口阈值为 30 分钟，core 为 60 秒，前后 context 各 15 秒，采样率为 16 kHz。后端必须同时声明并实现窗口 session；不允许静默退回整文件或拼接窗口局部 speaker label。
 
-当前 native session 保留全部窗口 artifact 与 observation，AHC 使用二次规模的 pairwise distance；20 小时资源上限和受控并发属于生产化阻塞项，见[工程实施计划](../plan/implementation-plan.md)。
+整条录音通过所属 ASR `JobContext` 的共享 worker gate 异步取得一个名额后，才创建阻塞 worker、两种模型 session 和解码器；排队不占等待线程，丢弃未获准的 future 会释放捕获资源。ASR/diarization 取消 token 互联，任一阶段取消都能终止排队且不加载模型；运行中仍由 decoder/backend 合作取消，并等待 scoped worker 退出。录音内两条 worker 不重复申请名额，单名额 runtime 不会因嵌套申请死锁。该限制控制录音任务数，不等于 native 推理库的线程总数；worker 异常退出报告推理失败，不能伪装成用户取消。
+
+非空音频短于 native segmentation 的 10 秒模型窗口时，仍补零形成一个推理窗口；补零不是源音频事实，时间段必须截于实际源长度，裁剪为空的段移除，说话人数按保留标签计数。推理返回无说话人的空簇矩阵是合法空结果；整文件与 window session 共用形状校验，其他不一致输出报告错误。
+
+AHC 平面切树使用堆上的显式栈，按既有左优先次序编号，避免深树耗尽线程栈。距离阈值作用于整棵子树的最大合并距离，centroid 的非单调高度不能跳过超阈值的后代；它不改变 pairwise distance 的规模。当前 native session 保留全部窗口 artifact 与 observation，AHC 使用二次规模的 pairwise distance；20 小时资源上限和多录音真实模型资源验收仍属于生产化阻塞项，见[工程实施计划](../plan/implementation-plan.md)。
+
+### 转写与说话人归属
+
+`domain::align_transcript_and_speakers` 按单个说话人段的最大时间交集确定归属；交集相同时选择开始更早的段，仍相同时保留输入中最后一个段的规则，无交集标为 unknown。不拆分转写段，不改变文本、时间、顺序或匹配身份，也不将多个片段的交集累加为新的归属策略。
+
+每次调用使用锁定的 [intervaltree 0.2.7](https://docs.rs/intervaltree/0.2.7/intervaltree/struct.IntervalTree.html) 构建只读区间索引，仅查询重叠候选；索引携带原始位置以固定同分规则，支持乱序和嵌套区间。空转写直接返回；零长/反向区间不能产生归属。索引是本次调用的派生状态，不缓存到文档或引入 IO；密集重叠仍需比较全部命中候选，不保证任意输入都提速。资源对照与复现入口见[音频质量计划](../plan/audio-quality-plan.md)。
 
 ## Probe 与错误
 

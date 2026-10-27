@@ -1,0 +1,263 @@
+{
+  "schema": "meetnote.asr-boundary-evaluation.v1",
+  "date": "2026-10-26",
+  "scope": "Unicode token reconstruction and experimental VAD cropping; not word alignment, DER or production VAD acceptance",
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "logicalCores": 10,
+    "memoryBytes": 34359738368
+  },
+  "unicode": {
+    "version": "1.13.3",
+    "algorithm": "UAX #29 Unicode word start offsets with explicit tokenizer continuation; one forward pass",
+    "baselineSource": "7e396eb (runtime code; added cfg(test) regression excluded)",
+    "candidateSource": "242b9e8",
+    "runnerSha256": {
+      "baseline": "8123b25efc1945fbbcef6dd55be847cab9bbeb98269e3845e53ca7ac6e8d793a",
+      "candidate": "89254f4346bd6ad8aba749ec346015f72a82f3c940b4ef477f6daec6cc0edbb6"
+    },
+    "nativeComparison": {
+      "sensevoice": {
+        "nativeCases": 12,
+        "nativeComparedCalls": 48,
+        "nativeIdenticalTranscripts": 48,
+        "baselineMedianCallSeconds": 0.776405062,
+        "candidateMedianCallSeconds": 0.7702800624999999,
+        "baselinePeakRssBytesRange": [
+          907198464,
+          1094844416
+        ],
+        "candidatePeakRssBytesRange": [
+          1089159168,
+          1093419008
+        ],
+        "pauseComparedCalls": 2,
+        "pauseIdenticalTranscripts": 2
+      },
+      "paraformer": {
+        "nativeCases": 12,
+        "nativeComparedCalls": 24,
+        "nativeIdenticalTranscripts": 24,
+        "baselineMedianCallSeconds": 0.6144131665,
+        "candidateMedianCallSeconds": 0.617398937,
+        "baselinePeakRssBytesRange": [
+          395313152,
+          395313152
+        ],
+        "candidatePeakRssBytesRange": [
+          325763072,
+          325763072
+        ],
+        "pauseComparedCalls": 2,
+        "pauseIdenticalTranscripts": 2
+      }
+    }
+  },
+  "modelArtifacts": {
+    "sensevoice": [
+      {
+        "filename": "LICENSE",
+        "bytes": 71,
+        "sha256": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"
+      },
+      {
+        "filename": "model.int8.onnx",
+        "bytes": 239233841,
+        "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+      },
+      {
+        "filename": "tokens.txt",
+        "bytes": 315894,
+        "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+      }
+    ],
+    "paraformer": [
+      {
+        "filename": "model.int8.onnx",
+        "bytes": 81828675,
+        "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+      },
+      {
+        "filename": "tokens.txt",
+        "bytes": 75352,
+        "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+      }
+    ]
+  },
+  "predictionReceipts": {
+    "sensevoice-baseline-native": {
+      "casesSha256": "3ac534b612c8c14dfb680a868159a3e8fbe630841c3928dcfa3fdeaf58c965a8",
+      "predictionSha256": "1c5622bfdde4b4641547c57ec1887bd718906c5659734ee789b6c3a51bfb6dcd"
+    },
+    "sensevoice-candidate-native": {
+      "casesSha256": "3ac534b612c8c14dfb680a868159a3e8fbe630841c3928dcfa3fdeaf58c965a8",
+      "predictionSha256": "9140b6e8aa00325523c2c44d67c2e7842616604dd023f20929f582d88b1ba27a"
+    },
+    "sensevoice-baseline-pause": {
+      "casesSha256": "35a36508e6725402277507e6d0ff4d7b966e83efeea5258385f4e9881c813c3b",
+      "predictionSha256": "9980e2a44ec8e8b47075e48787042cbd215f5ab2b662c39b0709d04f0be2601e"
+    },
+    "sensevoice-candidate-pause": {
+      "casesSha256": "35a36508e6725402277507e6d0ff4d7b966e83efeea5258385f4e9881c813c3b",
+      "predictionSha256": "28b89ebaf939ee2b6aba7800d7e23e44887716139e15bd4370e3ab0156060178"
+    },
+    "sensevoice-baseline-native-reverse": {
+      "casesSha256": "3ac534b612c8c14dfb680a868159a3e8fbe630841c3928dcfa3fdeaf58c965a8",
+      "predictionSha256": "ca65427aebe8306af2af0f7bd90bc894d6565cbe20bff6277082239c1f26f638"
+    },
+    "sensevoice-candidate-native-reverse": {
+      "casesSha256": "3ac534b612c8c14dfb680a868159a3e8fbe630841c3928dcfa3fdeaf58c965a8",
+      "predictionSha256": "0b9bbb59b604a64b82d335d08315d98c9f986adf2eb837c7de9a8d532954b6b6"
+    },
+    "paraformer-baseline-native": {
+      "casesSha256": "3ac534b612c8c14dfb680a868159a3e8fbe630841c3928dcfa3fdeaf58c965a8",
+      "predictionSha256": "7f1923ae14c3ffd93114289c463d693bb1829eaf316f967cdd29bde9474fd09c"
+    },
+    "paraformer-candidate-native": {
+      "casesSha256": "3ac534b612c8c14dfb680a868159a3e8fbe630841c3928dcfa3fdeaf58c965a8",
+      "predictionSha256": "be36cac917c78a0dd5cab56a32092495c6fe51e2af31a75a57aae16fbc38f5fc"
+    },
+    "paraformer-baseline-pause": {
+      "casesSha256": "35a36508e6725402277507e6d0ff4d7b966e83efeea5258385f4e9881c813c3b",
+      "predictionSha256": "d77cfd286439d2eae16ff9fdda3b2816323cd02deb960e88ce1f30980be1ad42"
+    },
+    "paraformer-candidate-pause": {
+      "casesSha256": "35a36508e6725402277507e6d0ff4d7b966e83efeea5258385f4e9881c813c3b",
+      "predictionSha256": "a9cb7435556e439f984f9658d91d87c804201ba3f02ac985920ce71cad21fc3a"
+    }
+  },
+  "boundaryProbe": {
+    "audioSha256": "59d77a3755e3639dc5cc00d4045e0a66751790c80d8dfe141e9db992d60b6351",
+    "audioSeconds": 43.8,
+    "components": "first two pinned FLEURS zh native cases",
+    "knownSilenceRangesMs": [
+      [
+        15160,
+        35160
+      ]
+    ],
+    "annotatedPredictionSha256": "5df238732c978edfacfb5d035632061a9226bf02a81d52e8a7fb8d574a9ee452",
+    "currentProductOverlapMsPerRepeat": [
+      9800,
+      9800
+    ],
+    "scope": "exact inserted digital silence; not manual speech or word timing gold"
+  },
+  "vadTrial": {
+    "model": {
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+      "downloadDate": "2026-10-26",
+      "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+      "bytes": 643854,
+      "license": "MIT per official Silero/sherpa documentation",
+      "runtime": "sherpa-onnx 1.13.6",
+      "installation": "experimental local asset; not catalog-installed"
+    },
+    "configuration": {
+      "threshold": 0.5,
+      "minSilenceSeconds": 0.25,
+      "minSpeechSeconds": 0.25,
+      "maxSpeechSeconds": 30,
+      "windowSamples": 512,
+      "sampleRate": 16000,
+      "threads": 1,
+      "provider": "cpu",
+      "paddingMs": 200
+    },
+    "gates": {
+      "decisionScope": "experimental VAD cropping only; not production acceptance",
+      "maximumNativeErrorRateIncrease": 0.01,
+      "maximumQuietErrorRateIncrease": 0.01,
+      "noNewEmptyPredictions": true,
+      "maximumInsertedSilenceOverlapSeconds": 0.5,
+      "maximumMedianWallRatio": 1.1,
+      "maximumAsrPeakRssRatio": 1.2,
+      "fixedThreshold": 0.5,
+      "minSilenceSeconds": 0.25,
+      "minSpeechSeconds": 0.25,
+      "maxSpeechSeconds": 30,
+      "padSeconds": 0.2,
+      "repeats": 2
+    },
+    "gatesSha256": "95579755133d7492b986f1625cee44031584404399d998dbf7b98be330291272",
+    "vadExecutions": 31,
+    "croppedAsrCalls": 50,
+    "predictionSha256": "f0a99c23461456fbe45f26b534166922c9949b6e7c03779ef6cd0f2fe9c44866",
+    "asrProcessPeakRssBytes": 1105772544,
+    "rssScope": "ASR process only; no total Audio Host attribution",
+    "pureSilenceDetectedSegments": 0,
+    "pauseOverlapMsPerRepeat": [
+      0,
+      0
+    ],
+    "groups": {
+      "en/native": {
+        "calls": 12,
+        "errorRates": {
+          "baseline": 0.07207207207207207,
+          "candidate": 0.10810810810810811
+        },
+        "medianWallSeconds": [
+          0.7410172085,
+          0.7253294164999999
+        ],
+        "newEmptyPredictions": 0
+      },
+      "zh/native": {
+        "calls": 12,
+        "errorRates": {
+          "baseline": 0.17578125,
+          "candidate": 0.171875
+        },
+        "medianWallSeconds": [
+          0.8834866875,
+          0.84564017675
+        ],
+        "newEmptyPredictions": 0
+      },
+      "zh/pause-probe": {
+        "calls": 2,
+        "errorRates": {
+          "baseline": 0.3392857142857143,
+          "candidate": 0.33035714285714285
+        },
+        "medianWallSeconds": [
+          2.818979417,
+          2.363120166
+        ],
+        "newEmptyPredictions": 0
+      },
+      "en/quiet-minus30db": {
+        "calls": 2,
+        "errorRates": {
+          "baseline": 0.23529411764705882,
+          "candidate": 0.23529411764705882
+        },
+        "medianWallSeconds": [
+          0.885351833,
+          0.8514046449999999
+        ],
+        "newEmptyPredictions": 0
+      },
+      "zh/quiet-minus30db": {
+        "calls": 2,
+        "errorRates": {
+          "baseline": 0.4,
+          "candidate": 0.6666666666666666
+        },
+        "medianWallSeconds": [
+          1.0220552915,
+          1.5102636870000001
+        ],
+        "newEmptyPredictions": 0
+      }
+    },
+    "decision": "reject_default_integration",
+    "reasons": [
+      "native English WER increases by 3.60 percentage points, exceeding 1 point",
+      "minus-30-dB Chinese CER increases by 26.67 percentage points, exceeding 1 point",
+      "minus-30-dB Chinese median latency increases about 47.8%, exceeding 10%"
+    ],
+    "productionState": "no VAD dependency, catalog entry, routing or model installed in the desktop product"
+  }
+}

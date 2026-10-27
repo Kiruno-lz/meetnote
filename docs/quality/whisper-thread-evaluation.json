@@ -1,0 +1,447 @@
+{
+  "schema": "meetnote.whisper-thread-screen.v1",
+  "date": "2026-10-26",
+  "source": {
+    "sourceCommit": "ed3da99d54ee03b7e36afc2e2eec0a524c44d1b5",
+    "casesSha256": "64316365529f230483d1d164f320e55a9d1bf92c14a22209387cb812d06b80b6",
+    "protocolSha256": "10221fd7a60fcfe080a66e6b8c46d5c889aa26799577511963aff9f80dfb2530",
+    "sourceManifestSha256": "4bb66eaa4d0392de0f45dda89e38a393f60a5ad0d6e2a9c13daeca4f73f8465d",
+    "nativeSha256": "23a1ca5183563bdcb791f9c41d77f1aa26968e29a2a39293e5bbe32c49bfa985"
+  },
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "availableParallelism": 10,
+    "physicalCpus": 10
+  },
+  "protocol": {
+    "model": "whisper-base-en-ggml",
+    "devices": [
+      "Cpu",
+      "Metal"
+    ],
+    "threadGrid": [
+      1,
+      2,
+      4,
+      6,
+      8,
+      10,
+      12,
+      16
+    ],
+    "repeats": 2,
+    "executionOrders": [
+      "ascending",
+      "descending"
+    ],
+    "scope": "six known English FLEURS inputs, 65.68 seconds; diagnostic thread screen, not held-out model selection or long-audio acceptance",
+    "baselineThreads": 4,
+    "candidatePolicy": "available N <= 2 uses N; otherwise N - ceil(N/3); failed parallelism query uses 1",
+    "measuredHardwareAvailableCpus": 10,
+    "measuredCandidateThreads": 6,
+    "gates": {
+      "normalizedTextMatchesBaselineEveryCall": true,
+      "newEmptyPredictions": 0,
+      "candidateEachDeviceMedianRatioMaximum": 1.1,
+      "candidateGeometricMeanOfDeviceMedianRatiosMaximum": 0.95,
+      "eachDeviceProcessPeakRssRatioMaximum": 1.2,
+      "allOutputRangesWithinSource": true
+    },
+    "selection": "Keep the existing default unless the frozen adaptive candidate passes every gate; other grid rows are diagnostic, not post-hoc policy fitting."
+  },
+  "supplementProtocolSha256": "dd789d5a1b969be936d9d5eaa5ed0e52efb0503161c208a0946bea9f164bde48",
+  "supplementProtocol": {
+    "scope": "supplement to review the proposed family-wide thread default; strengthens screening without changing the original single-session gate",
+    "multimodel": {
+      "models": [
+        "large",
+        "turbo"
+      ],
+      "devices": [
+        "Cpu",
+        "Metal"
+      ],
+      "threads": [
+        4,
+        6
+      ],
+      "repeats": 2,
+      "cases": [
+        "one frozen native Chinese input",
+        "one frozen native English input"
+      ],
+      "maximumEachGroupMedianRatio": 1.1,
+      "normalizedTextMustMatchBaselineEveryCall": true,
+      "maximumPeakRssRatio": 1.2
+    },
+    "contention": {
+      "scope": "two independent native benchmark processes on the same CPU, not in-process JobRuntime acceptance",
+      "parallelProcesses": 2,
+      "threadsPerProcess": [
+        4,
+        6
+      ],
+      "repeats": 2,
+      "cases": "two frozen short English inputs",
+      "timeoutSeconds": 120,
+      "maximumBatchWallRatio": 1.1,
+      "normalizedTextMustMatchBaselineEveryCall": true
+    },
+    "decision": "Reject the family-wide default change if any additional quality or resource check fails; do not tune another policy on this screen."
+  },
+  "decision": "reject_family_wide_default_increase",
+  "defaultChanged": false,
+  "reason": "Six threads passes the single-session screen but exceeds the 1.1 concurrent-batch ratio in the reverse execution order. A per-session increase cannot substitute for a total CPU budget.",
+  "grid": {
+    "Cpu": [
+      {
+        "threads": 1,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.802792958,"maximumObservedCallSeconds":8.178775917,"peakRssBytes":399441920,"reportSha256":"06897a9aaa2060312b7c90a46e5dceaf9641f3d00e95daaceed6d3ca8de689c7","predictionSha256":"96a4b49e4e845a9f1ad65c8bd892c784175ec8bca1f91520c6894445b1ec7919"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.7963959380000001,"maximumObservedCallSeconds":0.874616291,"peakRssBytes":387792896,"reportSha256":"01083b619bf803acbd50ec97f6a105db7f1edb8c7bd331f5bdcc8b49a85ebf1a","predictionSha256":"c1aca927b5d6bf74584b6b5c9cf7d802f8a9ca9a8739c4f3596464bf7d823ce4"}
+        },
+        "pooledMedianMs": 796.3959380000001,
+        "maximumPeakRssMiB": 380.9375,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 2,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.5356064375,"maximumObservedCallSeconds":0.601304,"peakRssBytes":384057344,"reportSha256":"a3060f28c5eb6ef02f404016db5cdf20c55f2d46d3d63cabfe0696ab719848d4","predictionSha256":"6099f9f7f61095f9975991029747259e3c3c980c9cbbbf17801cdd0d02006f54"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.539357125,"maximumObservedCallSeconds":0.610034917,"peakRssBytes":388775936,"reportSha256":"78b8aef35ee09ad54fb979f5b3c0193fb4ddf59ad79875c006c5057a3c39bf91","predictionSha256":"155f6ab6f4d9edaefa0e2423472890f2bc63d64781a2cbac7ffe978ca3b27acb"}
+        },
+        "pooledMedianMs": 535.6930625,
+        "maximumPeakRssMiB": 370.765625,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 4,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.39761533299999996,"maximumObservedCallSeconds":0.454926125,"peakRssBytes":383565824,"reportSha256":"857fe71330576be01824063a969a5219625885ebb663105565b23d5c86dbb02e","predictionSha256":"2428149ba1e475744cdfccf32d23e619839f561fcef9b46656a39232b06eefff"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.4005856875,"maximumObservedCallSeconds":0.462061333,"peakRssBytes":391856128,"reportSha256":"baea9092516aaeedb8d78ccab23979af5b8003a9d273a58d353dead281d05f20","predictionSha256":"95c77655e820c75b6302e71418355ac32c3789906a145a818ef7a20ae385eed1"}
+        },
+        "pooledMedianMs": 399.2326665,
+        "maximumPeakRssMiB": 373.703125,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 6,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.348675,"maximumObservedCallSeconds":0.404007833,"peakRssBytes":394723328,"reportSha256":"86eebba6109a8a5b2aa745d5f40ce64e59db7ce16ba166e44873666c5246dae6","predictionSha256":"992823c1c403a26d5bbbbd63ab292b67e171f8373c7b97a2a48ec8b0d55f3f30"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.3465694795,"maximumObservedCallSeconds":0.406178292,"peakRssBytes":395034624,"reportSha256":"4d8cb48495d7cbbfb7e67f78b7cdfa349eebaaf867fb3cec1590799f772b9848","predictionSha256":"06167fb42e2bdb01a30d157ba4ca7973dbef4e4727fdcf3b01f4b3f82e96a08c"}
+        },
+        "pooledMedianMs": 347.78625,
+        "maximumPeakRssMiB": 376.734375,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 8,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.389298771,"maximumObservedCallSeconds":0.445877792,"peakRssBytes":397410304,"reportSha256":"31eb5314e3ec116b3150e1d3043ddca52041e2cbc6d26b62d09081ff4af0cb9c","predictionSha256":"b713e8d20099cf9590dad95ebf667bf1ab837b60d1557c23fd4e49427fc6a8e2"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.392851771,"maximumObservedCallSeconds":0.463760542,"peakRssBytes":385630208,"reportSha256":"a62050585fb0c06a2a8dc11cbb94a46a6cf126c734ce47c501af66d98995e18c","predictionSha256":"2c21acb54cbc19c2890b0d49486298391b7e0e06b91edbfc226ef031763f1f54"}
+        },
+        "pooledMedianMs": 389.298771,
+        "maximumPeakRssMiB": 379.0,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 10,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.452165146,"maximumObservedCallSeconds":0.972227333,"peakRssBytes":373981184,"reportSha256":"c172069513c00665c2e4dd8d792ecb85de18a80d52049adfeb41c2a7c3321c18","predictionSha256":"1172c4461b37062f826e940fb54cea4e52c247fbe290538536f6be672e133885"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.4482966665,"maximumObservedCallSeconds":0.603638209,"peakRssBytes":391888896,"reportSha256":"1a54fede892d7f205bebc389135f8cfa0fe62bcffd881dfeed03c4a47586bfe1","predictionSha256":"cb204553acdeee20ec4204202af9752b67c99befba0c9d4de0a3dbecfcca8782"}
+        },
+        "pooledMedianMs": 452.165146,
+        "maximumPeakRssMiB": 373.734375,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 12,
+        "executionOrders": {
+          "ascending": {"failure":"timeout","completedCalls":2,"expectedCalls":12,"medianCallSeconds":null,"maximumObservedCallSeconds":63.827767958,"peakRssBytes":null,"reportSha256":"7e629567b9e995f70e7e81a9833b5421fc529e360e3a64ff8ff2d2272a6a3571","predictionSha256":"746a8ae1dbb07dc7e38274bcdcd83dc388e5eb2a8d8dcea1168572d197e19e38"},
+          "descending": {"failure":"timeout","completedCalls":1,"expectedCalls":12,"medianCallSeconds":null,"maximumObservedCallSeconds":65.508804708,"peakRssBytes":null,"reportSha256":"3ca59ab3edb6d55fcef03c4c7b38a28a8dc0692a34c1bb8b736dff4a944e5368","predictionSha256":"77dafa4c685b8b0f6b810feb4df8134bfa5a5aad7953041c13f16222f791abf5"}
+        },
+        "pooledMedianMs": null,
+        "maximumPeakRssMiB": null,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 16,
+        "executionOrders": {
+          "ascending": {"failure":"timeout","completedCalls":0,"expectedCalls":12,"medianCallSeconds":null,"maximumObservedCallSeconds":null,"peakRssBytes":null,"reportSha256":"e13b6bfed599da85b583646664fa7f56b1b5855365ade1bf46e66855d04e3852","predictionSha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+          "descending": {"failure":"timeout","completedCalls":0,"expectedCalls":12,"medianCallSeconds":null,"maximumObservedCallSeconds":null,"peakRssBytes":null,"reportSha256":"8ef78b47943b7c09b41d2de53884fbab223545982d42695ae815d50e3bdc4dc3","predictionSha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+        },
+        "pooledMedianMs": null,
+        "maximumPeakRssMiB": null,
+        "observedNormalizedTextMatchesFourThreads": null,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      }
+    ],
+    "Metal": [
+      {
+        "threads": 1,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.2504105625,"maximumObservedCallSeconds":0.353889458,"peakRssBytes":324681728,"reportSha256":"e37d84b11fb3d6124395d16a701a227b939c8c4a805add8d8b931dd595489ab2","predictionSha256":"fd1057d1216b3ed02c8bcf6177d521a7c841223b31a1635de44e15d47ba17630"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.24455516649999998,"maximumObservedCallSeconds":0.338726167,"peakRssBytes":337412096,"reportSha256":"b3f1236998950932f7a346bbc53e4f82bae93baf148b70fbcb175695b593ee7d","predictionSha256":"f36d81d7b38ca058f6d3129571194c25c34b06c556169ad1a3382d6568855afa"}
+        },
+        "pooledMedianMs": 247.152229,
+        "maximumPeakRssMiB": 321.78125,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 2,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.2408355625,"maximumObservedCallSeconds":0.31582,"peakRssBytes":332595200,"reportSha256":"d002d5d3b0e41c7517fd87440ba5ed105c261f95b47065ba2fdc30a368b0f389","predictionSha256":"4bd5f9a5841c01688c14cfd0e7242b8ebb5a46e109234db263ee91ae3943c67a"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.244803229,"maximumObservedCallSeconds":0.336772125,"peakRssBytes":331317248,"reportSha256":"4d4cf421e33ea3f3da45a57ede241598a5da0a770d31bf87befeb3809c83cc24","predictionSha256":"9db4e5cf09fbe80dffdf29f29129e1115e608a61f47f86fd83d9b340b4b25f58"}
+        },
+        "pooledMedianMs": 243.1924585,
+        "maximumPeakRssMiB": 317.1875,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 4,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.23775416700000002,"maximumObservedCallSeconds":0.32116275,"peakRssBytes":328515584,"reportSha256":"141ead645dbc8a8a5db4302fd44b045d2172c083304361804a817ee8d4b63309","predictionSha256":"1895941e07386e2adfb75c5b4d1b786314938ed01f4a7358295777d69cb78c99"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.241397458,"maximumObservedCallSeconds":0.338279208,"peakRssBytes":341245952,"reportSha256":"43a21f0feefb30418ba8b52ec890df80ffc6a5ae9e5ee7dfff26a3ccfe85f8e7","predictionSha256":"e81f4fb1b5e89eef48e9110a53bab053ed507f757cac7949e149ec80731583f8"}
+        },
+        "pooledMedianMs": 238.186,
+        "maximumPeakRssMiB": 325.4375,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 6,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.236073521,"maximumObservedCallSeconds":0.320564625,"peakRssBytes":331005952,"reportSha256":"c3147805cd861e1740e23315fb22a0bf1180f312c2c4049f0239015c277ec944","predictionSha256":"e11da497a31f554ec0e014a830f953d06c4c4c053ffad977fd95b5a04241a998"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.245229437,"maximumObservedCallSeconds":0.328803417,"peakRssBytes":339312640,"reportSha256":"7ef2d2d87ae7a2c28c2784e80b63577e518c4f1c827d3f32f6d398dc90d6f6b6","predictionSha256":"d4984e2dce4deed9c7d16ac4009d50f1561d273066c55f8d5ef44b835f3306d3"}
+        },
+        "pooledMedianMs": 239.46464600000002,
+        "maximumPeakRssMiB": 323.59375,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 8,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.2403061045,"maximumObservedCallSeconds":0.328971167,"peakRssBytes":334282752,"reportSha256":"2a88ace089c503bd0e958699e1db78519e71ce42de8787593e71190daa42ec1d","predictionSha256":"73f7408a183868d7190a2125aa471f27841fabdf40f8c7ccbe5110439e9895a5"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.24353375,"maximumObservedCallSeconds":0.324937583,"peakRssBytes":338755584,"reportSha256":"c88e75cf6264f25e99b269960a642b2d6c237832abc78b77cf8b4a2436e478ed","predictionSha256":"7e4da41fd116a0e0e117ef288ebd8e67d35657d06baeea2b24d9602d1e167f4d"}
+        },
+        "pooledMedianMs": 243.225896,
+        "maximumPeakRssMiB": 323.0625,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 10,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.237157875,"maximumObservedCallSeconds":0.322682208,"peakRssBytes":327483392,"reportSha256":"b0ce404e77e68e958634541065c64eacb2478ed77b913bbf9ec62afd6c1b1884","predictionSha256":"9ef673366adbcef56182cb67fb01b716d1c9d6935108aa805527dd3f81f5fc18"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.237082604,"maximumObservedCallSeconds":0.32343475,"peakRssBytes":336838656,"reportSha256":"d84a5efcda17e47c74aa49e0b0294ea1d4bf8d423c374246e2fb52e19b33a760","predictionSha256":"bb30449e0a72413e4185429569be994dbb8500025820615c099bca60a001db6e"}
+        },
+        "pooledMedianMs": 237.157875,
+        "maximumPeakRssMiB": 321.234375,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 12,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.237247021,"maximumObservedCallSeconds":0.323862792,"peakRssBytes":338837504,"reportSha256":"31c0f05e91118811f392ef6a416240677091db9d95e7ec6bd4a324b4ce26e4b3","predictionSha256":"3bf673da6e070209f0895f1334b8789348a1a6f3c54e92f8b2aac7fcae59dc61"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.23652225,"maximumObservedCallSeconds":0.324644667,"peakRssBytes":339214336,"reportSha256":"041c89604d4c815285a7870baf162a88def5a55142e9b528fa3b66e1e04f2e01","predictionSha256":"e45abd3560f4742fc70d2d2d0063cb778a4072ad337f7624acc2ee708b31f89f"}
+        },
+        "pooledMedianMs": 236.52224999999999,
+        "maximumPeakRssMiB": 323.5,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      },
+      {
+        "threads": 16,
+        "executionOrders": {
+          "ascending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.234768354,"maximumObservedCallSeconds":0.324191,"peakRssBytes":333840384,"reportSha256":"1ea39f4b5da0d720489cba2a07cdb768e1bbee498938de43a701125c094b5580","predictionSha256":"dfad626657945f21bd10989a1e8258f4a0ead68b6ae94bafd5f46f1b74f7cb81"},
+          "descending": {"failure":null,"completedCalls":12,"expectedCalls":12,"medianCallSeconds":0.235963166,"maximumObservedCallSeconds":0.320659584,"peakRssBytes":339820544,"reportSha256":"380855d55c0e2c830dc17f1b815e006980c04a4fbbcc3f6739b592f85eaddcb0","predictionSha256":"a64f76fe37af9c56d5d61a3839a06f140f1b40e837156b0a040f616a34e53a70"}
+        },
+        "pooledMedianMs": 235.07431200000002,
+        "maximumPeakRssMiB": 324.078125,
+        "observedNormalizedTextMatchesFourThreads": true,
+        "qualityScope": "completed calls only; timeouts do not pass quality coverage"
+      }
+    ]
+  },
+  "singleSessionCandidate": {
+    "comparisons": [
+      {
+        "device": "Cpu",
+        "medianCallRatio": 0.871136756039977,
+        "processPeakRssRatio": 1.0081113852071748
+      },
+      {
+        "device": "Metal",
+        "medianCallRatio": 1.0053682668166894,
+        "processPeakRssRatio": 0.994334549644709
+      }
+    ],
+    "geometricMeanRatio": 0.9358489464546215,
+    "passesFrozenSingleSessionGates": true
+  },
+  "multimodel": {
+    "large-Cpu": {
+      "fourThreads": {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":5.296180271,"maximumObservedCallSeconds":6.889174209,"peakRssBytes":3840229376,"reportSha256":"646acb895eda66e83cf62e3000581de6c8906575a4d3a588b2493052701afd5d","predictionSha256":"2fe86a02472136d95d2a64003db9100bc0814412ebe16e1674dc3454efcbd1d5"},
+      "sixThreads": {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":4.6497184585,"maximumObservedCallSeconds":4.9479521250000005,"peakRssBytes":3839410176,"reportSha256":"7dfa629bd25d04acca82a38d3a2674be058e8f1c0a28aba1ac67991b8ba63d79","predictionSha256":"02d9be3d7b28f6b1b9b7c36866169a3d632bcb829ff40191a1f5f7e021ff27c3"},
+      "normalizedTextMatches": true,
+      "medianCallRatio": 0.8779381026662186,
+      "processPeakRssRatio": 0.9997866794090167
+    },
+    "large-Metal": {
+      "fourThreads": {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":2.776464,"maximumObservedCallSeconds":2.987196834,"peakRssBytes":3674636288,"reportSha256":"668d8d434f7800686b7f967cd7c14eda913dbe4c79f51ea7897ea21327186b26","predictionSha256":"3ecbfa92090d558ac817a8ce4c79fcd93f1fbd0b289b8b8c02227c9f38293bd8"},
+      "sixThreads": {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":2.7684202705,"maximumObservedCallSeconds":2.95490575,"peakRssBytes":3679961088,"reportSha256":"48d58fcf8a9557f0095b5dfec3117f950c20432c8c6e78dd3e573b7a0e2ca713","predictionSha256":"88b4389385a4a36f221d54628a1b250c88f8381d2376a6538dce5fb3263ad4da"},
+      "normalizedTextMatches": true,
+      "medianCallRatio": 0.997102887161512,
+      "processPeakRssRatio": 1.0014490685833013
+    },
+    "turbo-Cpu": {
+      "fourThreads": {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":3.692625146,"maximumObservedCallSeconds":3.7829235409999997,"peakRssBytes":1025228800,"reportSha256":"ddfa1a6789606dd896b36afba8cd0fee5d792fef92367ccc1d387d8f4d5d69a7","predictionSha256":"d8b13bde894271d8c1fe5de46a3bcdd5c65e899b4541f4b7f8c0cc3e716dd597"},
+      "sixThreads": {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":3.079058937,"maximumObservedCallSeconds":3.179868958,"peakRssBytes":1030815744,"reportSha256":"757d30b29d5af4443da2ff30a6b2e882a1e3f9d6d8b1c81fa75873b491994e8a","predictionSha256":"da62b853cb3b7e1b7ddd5aa801aab5a35e1bd8d8622a5735b49404435846f90e"},
+      "normalizedTextMatches": true,
+      "medianCallRatio": 0.8338401043321065,
+      "processPeakRssRatio": 1.0054494606472233
+    },
+    "turbo-Metal": {
+      "fourThreads": {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":1.3222803955,"maximumObservedCallSeconds":1.412397292,"peakRssBytes":776192000,"reportSha256":"c4ae11baa886999da5def70e19b4733f2731232b06be4b2fe7a0b2bd39235242","predictionSha256":"6113c679e84b0a1aa89462e56fd6e809f521cceafd916ef6721dc045ed13c5cb"},
+      "sixThreads": {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":1.3190957920000002,"maximumObservedCallSeconds":1.420947792,"peakRssBytes":777486336,"reportSha256":"8f6679f853a18446c68598eb2b13c70f1b6250f5cb42a1d29af45430ca263724","predictionSha256":"aa7d9a45f68f39cde5b14ce0f07d8471605ffc79f0dd42c84f433bdecfdd2f6a"},
+      "normalizedTextMatches": true,
+      "medianCallRatio": 0.9975915823067197,
+      "processPeakRssRatio": 1.0016675461741424
+    }
+  },
+  "contention": {
+    "batches": [
+      {
+        "index": 0,
+        "threadsPerProcess": 4,
+        "parallelProcesses": 2,
+        "batchWallSeconds": 9.103153625037521,
+        "exitCodes": [
+          0,
+          0
+        ],
+        "failures": [
+          null,
+          null
+        ],
+        "processes": [
+          {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":0.3825739585,"maximumObservedCallSeconds":7.672456084,"peakRssBytes":376209408,"reportSha256":"055754fc3d64430808880a99a1f511bd3c399395a756ce26f27c57f044f6f819","predictionSha256":"98609ec22219beae33d6b4257f7c01de9c0aee6479b2e716e14e14525d0cac0c"},
+          {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":0.38358416650000005,"maximumObservedCallSeconds":0.404043791,"peakRssBytes":372293632,"reportSha256":"9ccb16f506ff5c1acadfe3a7c54faf667ad6e3d93e7aa777bc92503ade03d8ef","predictionSha256":"01898697098b55ae9a4fb1d1b207bb0b6e094ebab55c64163e7a80aff7e586ba"}
+        ],
+        "medianCallSeconds": 0.3832213955,
+        "normalizedTextMatches": true
+      },
+      {
+        "index": 1,
+        "threadsPerProcess": 6,
+        "parallelProcesses": 2,
+        "batchWallSeconds": 2.7922294999007136,
+        "exitCodes": [
+          0,
+          0
+        ],
+        "failures": [
+          null,
+          null
+        ],
+        "processes": [
+          {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":0.6301821670000001,"maximumObservedCallSeconds":0.655427083,"peakRssBytes":387301376,"reportSha256":"36b611a0faba3df2f2a6755a59aa8caa594bbaf5f3ea4b052cc81eb5cb55f667","predictionSha256":"9c5d428a1e8b4eb0724b1824651d43c7e90b533ea0583feaf71afbd6ee1179f1"},
+          {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":0.638981771,"maximumObservedCallSeconds":0.683457542,"peakRssBytes":389758976,"reportSha256":"ea1cb5deb3cca4ea002f7d0d8cc794d52848793d4da0c24c8e4f7d218f268587","predictionSha256":"0cba1dcce89a82fb1ec621da4959b84a51ad7cb45b3dff96e34c18c15b18829f"}
+        ],
+        "medianCallSeconds": 0.6301821670000001,
+        "normalizedTextMatches": true
+      },
+      {
+        "index": 2,
+        "threadsPerProcess": 6,
+        "parallelProcesses": 2,
+        "batchWallSeconds": 3.3296891669742763,
+        "exitCodes": [
+          0,
+          0
+        ],
+        "failures": [
+          null,
+          null
+        ],
+        "processes": [
+          {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":0.6847386045,"maximumObservedCallSeconds":0.753771209,"peakRssBytes":369836032,"reportSha256":"76da9c692aac111da8fa602e85425ac0a37302c7b63a067d08532590d923ff27","predictionSha256":"12903be0f220d97b001619617c6e514d2e7be796fb8085816aae8cd8c9dd4617"},
+          {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":0.6786285624999999,"maximumObservedCallSeconds":0.750902417,"peakRssBytes":369360896,"reportSha256":"1ec800f697ffc90446de6c6b5b5d7e2a5d9990d1908a3f679fcb9791ab7a69c9","predictionSha256":"19c3dcb86bb3291a3e2311842c9ee59ec8b03ade2ecb31e6fd54245d3c287b49"}
+        ],
+        "medianCallSeconds": 0.681333042,
+        "normalizedTextMatches": true
+      },
+      {
+        "index": 3,
+        "threadsPerProcess": 4,
+        "parallelProcesses": 2,
+        "batchWallSeconds": 2.299816875020042,
+        "exitCodes": [
+          0,
+          0
+        ],
+        "failures": [
+          null,
+          null
+        ],
+        "processes": [
+          {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":0.5004235625,"maximumObservedCallSeconds":0.537560125,"peakRssBytes":376979456,"reportSha256":"016ee503a93cf38337aba9d71d64f0a0436c5843a56f346a67aa51d7a0878507","predictionSha256":"d6f270bb4c72a12891a9f0d6ed432705b9b2b04a0a58d95e515bce690c7bc5aa"},
+          {"failure":null,"completedCalls":4,"expectedCalls":4,"medianCallSeconds":0.49724487500000003,"maximumObservedCallSeconds":0.519910667,"peakRssBytes":379846656,"reportSha256":"4450c3c5e836c438fd019f5109462bbe0ab77ee1e11f01aa7844403b6620fb68","predictionSha256":"82816a194b98d21c78cec2558eae6bac47001361ee971fec1b5b93104ab6ed7f"}
+        ],
+        "medianCallSeconds": 0.498269792,
+        "normalizedTextMatches": true
+      }
+    ],
+    "forwardBatchRatio": 0.30673210789510374,
+    "reverseBatchRatio": 1.447806215851538,
+    "maximumAllowedBatchRatio": 1.1,
+    "scope": "Two independent native processes share the host CPU; not in-process JobRuntime or concurrent long-audio acceptance.",
+    "initialOutlier": "First four-thread process includes a 7.672456084-second call; cause unidentified. Retain it and both run orders; a pooled batch average would mask the reverse-order failure."
+  },
+  "coverage": {
+    "nativeProcesses": 48,
+    "completedNativeCalls": 403,
+    "timedOutConfigurations": 4,
+    "missingCallsAreNotQualityPasses": true
+  },
+  "limitations": [
+    "Known short inputs and one host do not prove held-out quality, other hardware or long-audio resource limits.",
+    "Only large and Turbo use a Chinese/English pair; base.en is English only.",
+    "Whisper upstream encoder-only random-input benchmark is not end-to-end decoder evidence; this trial uses the production adapter with per-call model loading.",
+    "CPU 12/16-thread rows time out in both execution orders; do not report partial medians or zero RSS.",
+    "No vendor scheduling change or new automatic tuner was added."
+  ],
+  "modelArtifacts": [
+    {
+      "filename": "ggml-base.en.bin",
+      "bytes": 147964211,
+      "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+    },
+    {
+      "filename": "ggml-large-v3.bin",
+      "bytes": 3095033483,
+      "sha256": "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2"
+    },
+    {
+      "filename": "ggml-large-v3-turbo-q5_0.bin",
+      "bytes": 574041195,
+      "sha256": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
+    }
+  ],
+  "manifestSha256": {
+    "cases.json": "64316365529f230483d1d164f320e55a9d1bf92c14a22209387cb812d06b80b6",
+    "multimodel-cases.json": "7bf8fc88e786ff7519c1e6ca154516ca935836a13d021360a81625a3c133a58b",
+    "supplement-cases.json": "f692f41951e5c838cfd068319efa9d70a99d710e5b2056db10d31e4b36fc9931"
+  }
+}

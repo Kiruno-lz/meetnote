@@ -1,0 +1,134 @@
+{
+  "schema": "meetnote.ahc-distance-validation.v1",
+  "date": "2026-10-26",
+  "scope": "flat distance-cut semantics for non-monotonic centroid dendrograms; not a new clustering model or memory algorithm",
+  "sourceCommit": "ca2577de8bf9202d303d27abccb06e2399c60cbb",
+  "productionSourceSha256": "a90e5e0242f643a12c63d5d236076338dd581fa8e52b170b3da3f027c9e4b388",
+  "testSourceSha256": "a0d1a21be8ce63cbe78e844dbf55cb8de7810f6c2a671a5eec756d3932d1c8be",
+  "regression": {
+    "baseline": "three regressions fail; low parent incorrectly absorbs above-threshold descendant merges",
+    "candidate": "all seven tree tests pass in debug and optimized builds",
+    "cases": [
+      "low parent with high child",
+      "valid sibling alongside multi-level inversion",
+      "real kodama centroid linkage from equal sqrt(3) pair distances"
+    ],
+    "threshold": "unchanged inclusive threshold; maximum over all descendant merges"
+  },
+  "crossLibrary": {
+    "scipy": "1.18.1",
+    "numpy": "2.5.4",
+    "seed": 86739,
+    "trees": 504,
+    "treesWithNonmonotonicHeights": 436,
+    "thresholds": [
+      0,
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      1,
+      1.2,
+      1.6,
+      2
+    ],
+    "caseSource": "same f32 Step distances supplied to Rust and SciPy; canonical partitions, not numeric speaker IDs",
+    "results": {
+      "baseline": {
+        "comparisons": 4536,
+        "partitionMismatches": 1701,
+        "normalizedVectorMismatches": 104
+      },
+      "candidate": {
+        "comparisons": 4536,
+        "partitionMismatches": 0,
+        "normalizedVectorMismatches": 0
+      }
+    },
+    "probeSha256": "37d86e02ba0e33000878df17443cef9a091f824c73d66b63f8432667ed7d019c",
+    "upstreamReference": {
+      "repository": "pyannote/pyannote-audio",
+      "revision": "623ab14d69a039b474fc1fb2551b657aa00c0ce4",
+      "path": "src/pyannote/audio/pipelines/clustering.py",
+      "blobSha1": "f17e37d121870e3aacc0a1f6744e1a88027520cf",
+      "method": "VBxClustering: normalized embeddings, centroid euclidean linkage, fcluster distance"
+    }
+  },
+  "nativeDiagnostic": {
+    "completedCalls": 2,
+    "nativeSourceCommit": "ca2577de8bf9202d303d27abccb06e2399c60cbb",
+    "configuration": {
+      "backend": "diarization-native",
+      "device": "Cpu",
+      "repeats": 2,
+      "embeddingThreads": 6,
+      "embeddingSpinning": true,
+      "segmentationSpinning": true,
+      "segmentationStepSeconds": 1
+    },
+    "referenceSha256": "66100d9e2c94bfa068512056a27a3306926544ba38b419ad4fc8d5f09ec8e835",
+    "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+    "runnerSha256": "107ac841601bfc8574eda9e9a1b76bffb3b57b312df977b794239acbb8e24751",
+    "predictionSha256": "e7dd6cf28d51fc28414a58f151b70be70f185ec970d6226645498fdcca64bb04",
+    "medianCallSeconds": 37.8269234795,
+    "peakRssBytes": 304988160,
+    "equivalence": {
+      "qualityStatus": "baseline_equivalent",
+      "baselineMedianSeconds": 36.6261996455,
+      "candidateMedianSeconds": 37.8269234795,
+      "speedup": -0.03278319469728341,
+      "peakRssRatio": 0.9537838807193728,
+      "minimumEmbeddingCosine": 1.0,
+      "maximumEmbeddingAbsoluteError": 0.0,
+      "repeats": 2,
+      "speakerTimeline": "identical after canonical identity mapping",
+      "qualityScope": "baseline equivalence; not DER"
+    },
+    "primaryDer": 0.27978676535377556,
+    "sensitivityFullCollar500msDer": 0.2660731219049623,
+    "allDerComponents": "identical across both repetitions and frozen baseline",
+    "protocolSha256": "6c46f5f08369edcd855b05500057ab9dc40805d1978809ba87517881d732563c",
+    "frozenGatesSha256": "daf9f20dff14570e5d45bf2fbf6a05470cc26712306201223415c182affd53a3",
+    "frozenGates": {
+      "primaryDerMaximum": 0.2797867663537756,
+      "medianSecondsMaximum": 40.288819610050005,
+      "peakRssBytesMaximum": 383719833.59999996,
+      "embeddingObservations": "identical",
+      "speakerCount": "no forced count or reference-driven tuning"
+    },
+    "qualityAcceptance": "not_assessed"
+  },
+  "verification": {
+    "cargoFmt": "passed",
+    "vendorRustfmt": "passed",
+    "cargoCheckWorkspace": "passed",
+    "workspacePrimaryHarnessPassed": 941,
+    "existingNestedHarnessPassed": 3,
+    "workspaceHarnessFailed": 0,
+    "workspaceIgnored": 11,
+    "treeTests": 7,
+    "review": [
+      "checked chronological child references before parent maxima",
+      "preserved valid sibling partitions and inclusive boundary",
+      "rechecked expanded and collapsed 100000-leaf trees with optimized code",
+      "compared canonical partitions rather than numeric speaker IDs",
+      "kept normalization centroid method threshold and VBx parameters unchanged"
+    ]
+  },
+  "uiValidation": {
+    "isolationFixCommit": "6ce36ea",
+    "fixtureBug": "relative shared models directory let root-launched tests read real local installations",
+    "regression": "absolute independent fixture paths red then green",
+    "rootLaunchedPreviouslyFailingCases": 4,
+    "rootLaunchedCasesPassedAfterFix": 4,
+    "initialParallelRun": "two UI tests failed and a held shared-worker test stalled; aborted that run",
+    "followup": "both original cases passed individually and each across scheduler seeds 0 through 31; final full workspace passed",
+    "limitation": "initial shared-worker parallel stall was not reproduced or attributed to the AHC patch; no claim that fixture isolation fixes that separate stall"
+  },
+  "limitations": [
+    "The train-partition only_words crop is diagnostic, not held-out or production quality acceptance.",
+    "No improvement in native DER or end-to-end speed is claimed from this fix.",
+    "The condensed pairwise distance matrix remains quadratic in observations.",
+    "SciPy verifies partitions of identical f32 trees; this does not prove every Rust linkage floating-point merge matches SciPy from raw vectors."
+  ]
+}

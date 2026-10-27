@@ -20,6 +20,8 @@ pub(crate) struct WorkspaceSearch {
     query: String,
     generation: u64,
     cancellation: CancellationToken,
+    // Dropping an obsolete task releases work still waiting for admission.
+    task: Option<gpui::Task<()>>,
     scroll: ScrollHandle,
     pub(crate) opened_transcript: Option<OpenedTranscript>,
 }
@@ -61,6 +63,7 @@ impl WorkspaceSearch {
             query: String::new(),
             generation: 0,
             cancellation: CancellationToken::new(),
+            task: None,
             scroll: ScrollHandle::new(),
             opened_transcript: None,
         }
@@ -68,6 +71,7 @@ impl WorkspaceSearch {
 
     pub(crate) fn invalidate(&mut self) {
         self.cancellation.cancel();
+        self.task.take();
         self.generation += 1;
         self.pending = false;
         self.result = None;
@@ -104,7 +108,7 @@ impl RootView {
         let cancellation = self.search.cancellation.clone();
         let generation = self.search.generation;
         let documents = self.services.workspace.documents().frozen();
-        cx.spawn(async move |this, cx| {
+        self.search.task = Some(cx.spawn(async move |this, cx| {
             let result =
                 runtime::spawn_blocking(move || documents.search(&query, 50, &cancellation)).await;
             this.update(cx, |this, cx| {
@@ -115,8 +119,7 @@ impl RootView {
                 }
             })
             .ok();
-        })
-        .detach();
+        }));
         cx.notify();
     }
 

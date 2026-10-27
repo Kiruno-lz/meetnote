@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_diarization_cpu import compare_runs, measure_runs, compare_idle_cpu
+from check_diarization_cpu import compare_runs, measure_runs, compare_idle_cpu, load_run
 
 
 class DiarizationCpuTests(unittest.TestCase):
@@ -151,6 +151,34 @@ class DiarizationCpuTests(unittest.TestCase):
                 )
             with self.assertRaisesRegex(ValueError, "embedding"):
                 compare_runs(before, after)
+
+    def test_boolean_wall_times_cannot_pass_as_a_speed_improvement(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            before, after = self.pair(Path(tmp))
+            self.edit(after, lambda _, rows: [row.update(wallSeconds=True) for row in rows])
+            with self.assertRaisesRegex(ValueError, "measurement"):
+                compare_runs(before, after)
+
+    def test_quality_only_loading_preserves_the_strict_embedding_comparison_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.write_run(Path(tmp), "empty")
+            self.edit(
+                run,
+                lambda _, rows: [
+                    row.update(
+                        speakerSegments=[],
+                        segments=0,
+                        speakerCount=0,
+                        embeddingObservations=[],
+                        observations=0,
+                    )
+                    for row in rows
+                ],
+            )
+            with self.assertRaisesRegex(ValueError, "missing"):
+                load_run(run)
+            _, rows = load_run(run, require_embeddings=False)
+            self.assertEqual([row["speakerSegments"] for row in rows], [[], []])
 
     def test_measurement_does_not_confuse_equivalence_with_a_speed_gate(self):
         with tempfile.TemporaryDirectory() as tmp:

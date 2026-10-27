@@ -1,0 +1,166 @@
+{
+  "schema": "meetnote.der-scorer-validation.v1",
+  "date": "2026-10-26",
+  "scope": "hand-calculable scorer regressions and Rust export protocol; no model DER or production acceptance",
+  "method": "pyannote.metrics-4.0.0-hungarian",
+  "source": "https://github.com/pyannote/pyannote-metrics/tree/4.0.0",
+  "license": "MIT",
+  "sourceDistributionSha256": "aec037eb7ca4c0ad5c5bbcc19bc04e9acf24ba42c95f025497378e31db6a0ff4",
+  "scorerSha256": "5c9d82d039f1c185920dbec3d6d42f2891099ff986b6bee0225b1128b946385d",
+  "requirementsSha256": "8b282ed7f5af5b826c7fa35bab0170e883b6d29cc21f71cb9b77423486184cad",
+  "environment": {
+    "pyannote.metrics": "4.0.0",
+    "pyannote.core": "6.1.0",
+    "pyannote.database": "6.1.1",
+    "numpy": "2.5.4",
+    "scipy": "1.18.1",
+    "scikit-learn": "1.9.1",
+    "typing_extensions": "4.15.0"
+  },
+  "regressions": [
+    {
+      "case": "substitution",
+      "reference": [
+        {
+          "startMs": 0,
+          "endMs": 1000,
+          "speaker": "A"
+        },
+        {
+          "startMs": 1000,
+          "endMs": 2000,
+          "speaker": "B"
+        }
+      ],
+      "hypothesis": [
+        {
+          "startMs": 0,
+          "endMs": 2000,
+          "speaker": "X"
+        }
+      ],
+      "handCalculatedExpectedDer": 0.5,
+      "previousIncorrectDer": 1,
+      "standardResult": {
+        "status": "measured",
+        "method": "pyannote.metrics-4.0.0-hungarian",
+        "collarMs": 0,
+        "collarConvention": "full_duration_centered_on_reference_boundaries",
+        "overlap": "included",
+        "scoringRegion": "observed_extent",
+        "scoredSpeakerSeconds": 2.0,
+        "missedSpeakerSeconds": 0.0,
+        "falseAlarmSpeakerSeconds": 0.0,
+        "confusedSpeakerSeconds": 1.0,
+        "der": 0.5,
+        "missRate": 0.0,
+        "falseAlarmRate": 0.0,
+        "confusionRate": 0.5
+      }
+    },
+    {
+      "case": "extra-label-mapping",
+      "reference": [
+        {
+          "startMs": 0,
+          "endMs": 1000,
+          "speaker": "A"
+        }
+      ],
+      "hypothesis": [
+        {
+          "startMs": 0,
+          "endMs": 10,
+          "speaker": "X"
+        },
+        {
+          "startMs": 10,
+          "endMs": 1000,
+          "speaker": "Y"
+        }
+      ],
+      "handCalculatedExpectedDer": 0.01,
+      "previousIncorrectDer": 1.98,
+      "standardResult": {
+        "status": "measured",
+        "method": "pyannote.metrics-4.0.0-hungarian",
+        "collarMs": 0,
+        "collarConvention": "full_duration_centered_on_reference_boundaries",
+        "overlap": "included",
+        "scoringRegion": "observed_extent",
+        "scoredSpeakerSeconds": 1.0,
+        "missedSpeakerSeconds": 0.0,
+        "falseAlarmSpeakerSeconds": 0.0,
+        "confusedSpeakerSeconds": 0.01,
+        "der": 0.01,
+        "missRate": 0.0,
+        "falseAlarmRate": 0.0,
+        "confusionRate": 0.01
+      }
+    },
+    {
+      "case": "same-speaker-overlap",
+      "reference": [
+        {
+          "startMs": 0,
+          "endMs": 1000,
+          "speaker": "A"
+        },
+        {
+          "startMs": 500,
+          "endMs": 1500,
+          "speaker": "A"
+        }
+      ],
+      "hypothesis": [
+        {
+          "startMs": 0,
+          "endMs": 1500,
+          "speaker": "X"
+        }
+      ],
+      "handCalculatedExpectedDer": 0,
+      "previousIncorrectDer": 0.5,
+      "standardResult": {
+        "status": "measured",
+        "method": "pyannote.metrics-4.0.0-hungarian",
+        "collarMs": 0,
+        "collarConvention": "full_duration_centered_on_reference_boundaries",
+        "overlap": "included",
+        "scoringRegion": "observed_extent",
+        "scoredSpeakerSeconds": 1.5,
+        "missedSpeakerSeconds": 0.0,
+        "falseAlarmSpeakerSeconds": 0.0,
+        "confusedSpeakerSeconds": 0.0,
+        "der": 0.0,
+        "missRate": 0.0,
+        "falseAlarmRate": 0.0,
+        "confusionRate": 0.0
+      }
+    }
+  ],
+  "protocol": {
+    "collar": "full duration centered on reference boundaries; exclude from both timelines",
+    "overlap": "included; repeated intervals of the same speaker coalesced",
+    "region": "durationMs when supplied; otherwise observed extent explicitly labeled",
+    "noReferenceSpeech": "unscored with null rates; retain duration counters",
+    "missingDependencyOrDiarization": "unavailable with null DER; no fallback to old approximation",
+    "publication": "input snapshots with matching hashes, strict meeting coverage, protected inputs, atomic output and no stale success after failure"
+  },
+  "verification": {
+    "arithmeticRedFailures": 3,
+    "cliRedFailures": 5,
+    "snapshotHashRegression": "red then green",
+    "missingInputRegression": "red then green",
+    "combinedPythonPassed": 65,
+    "basePythonPassed": 48,
+    "basePythonSkipped": 17,
+    "workspaceMainPassed": 927,
+    "workspaceChildPassed": 3,
+    "workspaceIgnoredNotRun": 11,
+    "exportProtocolWithoutOptionalDer": "passed",
+    "exportProtocolWithOptionalDer": "passed",
+    "directMeetingIdentityRegression": "red then green; reject a supplied prediction meetingId that differs from reference"
+  },
+  "acceptance": "scorer implementation verified; actual diarization model quality remains not assessed"
+}

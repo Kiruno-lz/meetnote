@@ -410,6 +410,14 @@ fn saved_markdown_discards_an_old_workspace_read_with_the_same_document_id(
             .clone()),
         "New workspace notes"
     );
+    click_selector(cx, "copy-saved-markdown");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("New workspace notes"),
+        "a late read from the old root cannot become the copied note"
+    );
 }
 
 /// Same IDs and revisions in both roots, with b sharing a's recording.

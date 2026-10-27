@@ -1,12 +1,15 @@
-use kodama::{Method, Step, linkage};
+use kodama::{Method, linkage};
 use ndarray::{Array2, ArrayView2};
 
 use crate::utils::l2_normalize_rows;
 
+mod flat;
+use flat::flat_clusters;
+
 /// Agglomerative hierarchical clustering settings for speaker embeddings.
 #[derive(Debug, Clone, Copy)]
 pub struct AhcConfig {
-    /// Maximum dendrogram merge distance to keep observations in one flat cluster.
+    /// Maximum merge distance anywhere within a flat cluster subtree.
     pub threshold: f32,
 }
 
@@ -53,108 +56,9 @@ fn condensed_euclidean(embeddings: &Array2<f32>) -> Vec<f32> {
     condensed
 }
 
-fn flat_clusters(observations: usize, steps: &[Step<f32>], threshold: f32) -> Vec<usize> {
-    if observations == 0 {
-        return Vec::new();
-    }
-    if observations == 1 {
-        return vec![0];
-    }
-
-    let total_nodes = observations + steps.len();
-    let mut children = Vec::with_capacity(steps.len());
-    let mut heights = vec![f32::INFINITY; total_nodes];
-
-    for (step_idx, step) in steps.iter().enumerate() {
-        let node_idx = observations + step_idx;
-        children.push((step.cluster1, step.cluster2));
-        heights[node_idx] = step.dissimilarity;
-    }
-
-    let root = total_nodes - 1;
-    let mut labels = vec![usize::MAX; observations];
-    let mut next_label = 0usize;
-    assign_flat_labels(
-        root,
-        observations,
-        threshold,
-        &children,
-        &heights,
-        &mut labels,
-        &mut next_label,
-    );
-    labels
-}
-
-fn assign_flat_labels(
-    node_idx: usize,
-    observations: usize,
-    threshold: f32,
-    children: &[(usize, usize)],
-    heights: &[f32],
-    labels: &mut [usize],
-    next_label: &mut usize,
-) {
-    if node_idx < observations {
-        labels[node_idx] = *next_label;
-        *next_label += 1;
-        return;
-    }
-
-    if heights[node_idx] <= threshold {
-        label_subtree(node_idx, observations, children, labels, *next_label);
-        *next_label += 1;
-        return;
-    }
-
-    let (left, right) = child_pair(children, observations, node_idx);
-    assign_flat_labels(
-        left,
-        observations,
-        threshold,
-        children,
-        heights,
-        labels,
-        next_label,
-    );
-    assign_flat_labels(
-        right,
-        observations,
-        threshold,
-        children,
-        heights,
-        labels,
-        next_label,
-    );
-}
-
-fn label_subtree(
-    node_idx: usize,
-    observations: usize,
-    children: &[(usize, usize)],
-    labels: &mut [usize],
-    label: usize,
-) {
-    if node_idx < observations {
-        labels[node_idx] = label;
-        return;
-    }
-
-    let (left, right) = child_pair(children, observations, node_idx);
-    label_subtree(left, observations, children, labels, label);
-    label_subtree(right, observations, children, labels, label);
-}
-
-fn child_pair(children: &[(usize, usize)], observations: usize, node_idx: usize) -> (usize, usize) {
-    debug_assert!(
-        node_idx >= observations,
-        "child_pair should only be called for merge nodes"
-    );
-    children[node_idx - observations]
-}
-
 #[cfg(test)]
 mod tests {
+    use kodama::Step;
     use ndarray::{Array1, Array2, array};
     use ndarray_npy::ReadNpyExt;
     use std::fs::File;

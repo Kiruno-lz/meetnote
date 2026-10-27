@@ -9,6 +9,7 @@ contracts = { path = "../contracts" }
 runtime = { path = "../runtime" }
 
 [dev-dependencies]
+audio = { path = "../audio" }
 diarization-native = { path = "../diarization-native" }
 diarization-sherpa-onnx = { path = "../diarization-sherpa-onnx" }
 futures.workspace = true

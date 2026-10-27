@@ -22,3 +22,5 @@ uuid.workspace = true
 [dev-dependencies]
 futures.workspace = true
 hound.workspace = true
+kodama = "=0.3.0"
+ort = { version = "=2.0.0-rc.13", default-features = false }

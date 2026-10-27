@@ -828,9 +828,25 @@ fn saved_markdown(
             .gap(tokens.spacing.md)
             .child(
                 div()
-                    .text_xs()
-                    .text_color(tokens.text_muted)
-                    .child(tr(locale, "saved_markdown_hint")),
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(tokens.spacing.sm)
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(tokens.text_muted)
+                            .child(tr(locale, "saved_markdown_hint")),
+                    )
+                    .child(
+                        Button::new("copy-saved-markdown", tr(locale, "copy_saved_markdown"))
+                            .debug_selector(|| "copy-saved-markdown".into())
+                            .compact()
+                            .disabled(
+                                record.markdown.is_empty() || root.documents_root_switch.switching,
+                            )
+                            .on_click(cx.listener(|root, _, _, cx| root.copy_saved_markdown(cx))),
+                    ),
             )
             .child(
                 reading(record.markdown.clone()).debug_selector(|| "saved-markdown-content".into()),

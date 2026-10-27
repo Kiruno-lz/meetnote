@@ -9,7 +9,7 @@ import time
 import unittest
 from pathlib import Path
 
-from asr_benchmark import load_benchmark_run as load_run
+from asr_benchmark import load_benchmark_run as load_run, summarize
 
 SCRIPTS = Path(__file__).parent.resolve()
 
@@ -140,6 +140,204 @@ class BenchmarkIntegrityTests(unittest.TestCase):
                         "".join(json.dumps(row) + "\n" for row in rows)
                     )
                     with self.assertRaises(ValueError):
+                        load_run(run)
+
+    def test_numeric_lookalikes_cannot_replace_integer_repeat_coverage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.make_run(Path(tmp))
+            first = json.loads((run / "prediction.jsonl").read_text())
+            for repeat, index in ((False, 0), (True, 1), (0.0, 0), (1.0, 1)):
+                with self.subTest(repeat=repeat, kind=type(repeat).__name__):
+                    rows = [dict(first, repeat=0), dict(first, repeat=1)]
+                    rows[index]["repeat"] = repeat
+                    (run / "prediction.jsonl").write_text(
+                        "".join(json.dumps(row) + "\n" for row in rows)
+                    )
+                    with self.assertRaisesRegex(ValueError, "repeat"):
+                        load_run(run)
+
+    def test_invalid_elapsed_time_cannot_make_a_run_rankable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.make_run(Path(tmp), repeats=1)
+            row = json.loads((run / "prediction.jsonl").read_text())
+            cases = json.loads((run / "cases.json").read_text())
+            for elapsed in (False, True, 0, -1, float("nan"), float("inf"), "0.1", None):
+                with self.subTest(elapsed=elapsed):
+                    invalid = dict(row, wallSeconds=elapsed)
+                    (run / "prediction.jsonl").write_text(json.dumps(invalid) + "\n")
+                    with self.assertRaisesRegex(ValueError, "wall|elapsed|measurement"):
+                        load_run(run)
+                    with self.assertRaisesRegex(ValueError, "wall|elapsed|measurement"):
+                        summarize(cases, [invalid])
+
+    def test_cli_records_invalid_measurement_metadata_as_failure(self):
+        for field, value in (("repeat", False), ("wallSeconds", False)):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                run = self.make_run(root, repeats=1)
+                row = {
+                    "caseId": "a",
+                    "repeat": 0,
+                    "status": "ok",
+                    "text": "gold",
+                    "wallSeconds": 0.1,
+                    field: value,
+                }
+                runner = root / "invalid.py"
+                runner.write_text(
+                    "import sys\nfrom pathlib import Path\n"
+                    f"Path(sys.argv[3]).write_text({json.dumps(row) + chr(10)!r})\n"
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPTS / "asr_benchmark.py"),
+                        "--cases",
+                        str(run / "cases.json"),
+                        "--config",
+                        str(run / "config.json"),
+                        "--runner",
+                        str(runner),
+                        "--output",
+                        str(run),
+                    ],
+                    capture_output=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                report = json.loads((run / "report.json").read_text())
+                self.assertTrue(report["failure"])
+                self.assertEqual(report["groups"], [])
+                self.assertEqual(json.loads((run / "prediction.jsonl").read_text()), row)
+
+    def test_running_benchmark_uses_one_manifest_and_configuration_snapshot(self):
+        for edited in ("cases", "config"):
+            with self.subTest(edited=edited), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                run = self.make_run(root, repeats=1)
+                inputs = root / "inputs"
+                inputs.mkdir()
+                for name in ("cases", "config"):
+                    (inputs / f"{name}.json").write_bytes((run / f"{name}.json").read_bytes())
+                source = inputs / f"{edited}.json"
+                original = source.read_bytes()
+                updated = json.loads(original)
+                if edited == "cases":
+                    updated[0]["reference"] = "edited reference"
+                else:
+                    updated["repeats"] = 2
+                runner = root / "editing.py"
+                runner.write_text(
+                    "import json,sys\nfrom pathlib import Path\n"
+                    f"Path({str(source)!r}).write_text({json.dumps(updated)!r})\n"
+                    "config=json.loads(Path(sys.argv[1]).read_text())\n"
+                    "cases=json.loads(Path(sys.argv[2]).read_text())\n"
+                    "rows=[dict(caseId=c['id'],repeat=r,status='ok',text=c['reference'],wallSeconds=.1) "
+                    "for r in range(config['repeats']) for c in cases]\n"
+                    "Path(sys.argv[3]).write_text(''.join(json.dumps(r)+'\\n' for r in rows))\n"
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPTS / "asr_benchmark.py"),
+                        "--cases",
+                        str(inputs / "cases.json"),
+                        "--config",
+                        str(inputs / "config.json"),
+                        "--runner",
+                        str(runner),
+                        "--output",
+                        str(run),
+                    ],
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                rows = [
+                    json.loads(line) for line in (run / "prediction.jsonl").read_text().splitlines()
+                ]
+                self.assertEqual(len(rows), 1)
+                self.assertEqual(rows[0]["text"], "gold")
+                report, cases, _ = load_run(run)
+                self.assertEqual(cases[0]["reference"], "gold")
+                self.assertEqual(report["config"]["repeats"], 1)
+                self.assertEqual(report["groups"][0]["errorRate"], 0)
+                self.assertEqual(json.loads(source.read_text()), updated)
+
+    def test_changed_owned_input_snapshot_fails_before_scoring(self):
+        for name, argument in (("cases", 2), ("config", 1)):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                run = self.make_run(root, repeats=1)
+                changed = json.loads((run / f"{name}.json").read_text())
+                if name == "cases":
+                    changed[0]["reference"] = "edited reference"
+                else:
+                    changed["threads"] = 2
+                runner = root / "changing_snapshot.py"
+                runner.write_text(
+                    "import json,sys\nfrom pathlib import Path\n"
+                    f"Path(sys.argv[{argument}]).write_text({json.dumps(changed)!r})\n"
+                    "row=dict(caseId='a',repeat=0,status='ok',text='gold',wallSeconds=.1)\n"
+                    "Path(sys.argv[3]).write_text(json.dumps(row)+'\\n')\n"
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(SCRIPTS / "asr_benchmark.py"),
+                        "--cases",
+                        str(run / "cases.json"),
+                        "--config",
+                        str(run / "config.json"),
+                        "--runner",
+                        str(runner),
+                        "--output",
+                        str(run),
+                    ],
+                    capture_output=True,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                report = json.loads((run / "report.json").read_text())
+                self.assertIn("snapshot", report["failure"])
+                self.assertEqual(report["groups"], [])
+                self.assertTrue((run / "prediction.jsonl").is_file())
+
+    def test_new_configuration_fingerprint_binds_snapshot_and_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run = self.make_run(root, repeats=1)
+            runner = root / "success.py"
+            runner.write_text(
+                "import json,sys\nfrom pathlib import Path\n"
+                "row=dict(caseId='a',repeat=0,status='ok',text='gold',wallSeconds=.1)\n"
+                "Path(sys.argv[3]).write_text(json.dumps(row)+'\\n')\n"
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPTS / "asr_benchmark.py"),
+                    "--cases",
+                    str(run / "cases.json"),
+                    "--config",
+                    str(run / "config.json"),
+                    "--runner",
+                    str(runner),
+                    "--output",
+                    str(run),
+                ],
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            load_run(run)
+            configuration = (run / "config.json").read_bytes()
+            receipt = (run / "report.json").read_bytes()
+            for changed in ("snapshot", "receipt"):
+                with self.subTest(changed=changed):
+                    (run / "config.json").write_bytes(configuration)
+                    (run / "report.json").write_bytes(receipt)
+                    path = run / ("config.json" if changed == "snapshot" else "report.json")
+                    value = json.loads(path.read_text())
+                    (value if changed == "snapshot" else value["config"])["threads"] = 2
+                    path.write_text(json.dumps(value))
+                    with self.assertRaisesRegex(ValueError, "config|configuration"):
                         load_run(run)
 
     def test_new_success_receipt_detects_replaced_predictions(self):

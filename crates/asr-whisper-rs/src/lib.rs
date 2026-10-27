@@ -1,4 +1,6 @@
-use application::{asr_descriptor, AsrBackend, AsrWindowSession, BackendFuture};
+use application::{
+    asr_descriptor, run_backend_worker, AsrBackend, AsrWindowSession, BackendFuture,
+};
 use audio::{read_audio_mono_16k, AudioWindow, TARGET_SAMPLE_RATE_HZ};
 use contracts::{
     AsrRequest, AsrResult, BackendDescriptor, BackendError, BackendErrorCode, ComputeDevice,
@@ -48,7 +50,9 @@ impl AsrBackend for WhisperRsBackend {
     fn transcribe(&self, request: AsrRequest, context: JobContext) -> BackendFuture<AsrResult> {
         let threads = self.threads.max(1);
         let worker_context = context.clone();
-        Box::pin(context.spawn_blocking(move || transcribe_sync(request, worker_context, threads)))
+        run_backend_worker(context, move || {
+            transcribe_sync(request, worker_context, threads)
+        })
     }
 
     fn supports_windowed_audio(&self) -> bool {
@@ -94,6 +98,12 @@ impl AsrWindowSession for WhisperWindowSession {
         window: Arc<AudioWindow>,
         context: &JobContext,
     ) -> Result<(), BackendError> {
+        if context.is_cancelled() {
+            return Err(cancelled_error("Whisper transcription was cancelled"));
+        }
+        if is_digital_silence(&window.samples) {
+            return Ok(());
+        }
         let mut state = self.whisper.create_state().map_err(|error| BackendError {
             code: BackendErrorCode::ModelLoadFailed,
             message: error.to_string(),
@@ -113,7 +123,6 @@ impl AsrWindowSession for WhisperWindowSession {
                 }
             }
         })?;
-        let window_len = window.samples.len() as u64;
         for segment in state.as_iter() {
             let text = segment
                 .to_str_lossy()
@@ -123,21 +132,18 @@ impl AsrWindowSession for WhisperWindowSession {
                 })?
                 .trim()
                 .to_string();
-            let local_start = timestamp_to_sample(segment.start_timestamp()).min(window_len);
-            let local_end = timestamp_to_sample(segment.end_timestamp()).min(window_len);
-            if text.is_empty() || local_end <= local_start {
+            let Some((start_ms, end_ms)) =
+                owned_window_range(&window, segment.start_timestamp(), segment.end_timestamp())
+            else {
                 continue;
-            }
-            let global_start = window.global_start_sample.saturating_add(local_start);
-            let global_end = window.global_start_sample.saturating_add(local_end);
-            let midpoint = global_start.saturating_add((global_end - global_start) / 2);
-            if !core_owns(&window, midpoint) {
+            };
+            if text.is_empty() {
                 continue;
             }
             self.segments.push(domain::TranscriptSegment {
                 id: String::new(),
-                start_ms: sample_to_ms(global_start),
-                end_ms: sample_to_ms(global_end),
+                start_ms,
+                end_ms,
                 text,
             });
         }
@@ -201,6 +207,17 @@ fn transcribe_sync(
                 message: error.to_string(),
             },
         )?;
+    if context.is_cancelled() {
+        return Err(cancelled_error("Whisper transcription was cancelled"));
+    }
+    if is_digital_silence(&audio.samples) {
+        return Ok(AsrResult {
+            backend: WhisperRsBackend::default().descriptor(),
+            model: request.model,
+            language: request.language,
+            segments: Vec::new(),
+        });
+    }
     let mut state = whisper_context
         .create_state()
         .map_err(|error| BackendError {
@@ -237,8 +254,15 @@ fn transcribe_sync(
             })?
             .trim()
             .to_string();
-        let start_ms = (segment.start_timestamp().max(0) as u64) * 10;
-        let end_ms = (segment.end_timestamp().max(0) as u64) * 10;
+        let Some((start, end)) = bounded_sample_range(
+            segment.start_timestamp(),
+            segment.end_timestamp(),
+            audio.samples.len() as u64,
+        ) else {
+            continue;
+        };
+        let start_ms = sample_to_ms(start);
+        let end_ms = sample_to_ms(end);
         if text.is_empty() || end_ms <= start_ms {
             continue;
         }
@@ -256,6 +280,10 @@ fn transcribe_sync(
         language: request.language,
         segments,
     })
+}
+
+fn is_digital_silence(samples: &[f32]) -> bool {
+    !samples.is_empty() && samples.iter().all(|sample| *sample == 0.0)
 }
 
 fn validate_device(device: ComputeDevice) -> Result<(), BackendError> {
@@ -330,8 +358,29 @@ fn timestamp_to_sample(timestamp_10ms: i64) -> u64 {
     (timestamp_10ms.max(0) as u64).saturating_mul(u64::from(TARGET_SAMPLE_RATE_HZ) / 100)
 }
 
+fn bounded_sample_range(start: i64, end: i64, source_samples: u64) -> Option<(u64, u64)> {
+    // Whisper timestamps include its padded inference context. Both whole-file
+    // and windowed output belong only to the decoded source samples.
+    let start = timestamp_to_sample(start).min(source_samples);
+    let end = timestamp_to_sample(end).min(source_samples);
+    (start < end).then_some((start, end))
+}
+
 fn sample_to_ms(sample: u64) -> u64 {
     sample.saturating_mul(1_000) / u64::from(TARGET_SAMPLE_RATE_HZ)
+}
+
+fn owned_window_range(window: &AudioWindow, start: i64, end: i64) -> Option<(u64, u64)> {
+    let (local_start, local_end) = bounded_sample_range(start, end, window.samples.len() as u64)?;
+    let global_start = window.global_start_sample.saturating_add(local_start);
+    let global_end = window.global_start_sample.saturating_add(local_end);
+    let midpoint = global_start.saturating_add((global_end - global_start) / 2);
+    if !core_owns(window, midpoint) {
+        return None;
+    }
+    let start_ms = sample_to_ms(global_start);
+    let end_ms = sample_to_ms(global_end);
+    (start_ms < end_ms).then_some((start_ms, end_ms))
 }
 
 fn core_owns(window: &AudioWindow, sample: u64) -> bool {
@@ -370,6 +419,105 @@ fn cancelled_error(message: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn final_single_sample_core(core_extra_samples: u64) -> AudioWindow {
+        let core_samples = 60 * u64::from(TARGET_SAMPLE_RATE_HZ) + core_extra_samples;
+        let plan = audio::AudioWindowPlan::new(core_samples, 15 * u64::from(TARGET_SAMPLE_RATE_HZ))
+            .unwrap();
+        let end = core_samples + 1;
+        let bounds = plan.bounds_for_total(end).last().unwrap();
+        AudioWindow {
+            sequence: bounds.sequence,
+            sample_rate: TARGET_SAMPLE_RATE_HZ,
+            samples: vec![0.5; (bounds.global_end_sample - bounds.global_start_sample) as usize]
+                .into(),
+            global_start_sample: bounds.global_start_sample,
+            global_end_sample: bounds.global_end_sample,
+            valid_core_start_sample: bounds.valid_core_start_sample,
+            valid_core_end_sample: bounds.valid_core_end_sample,
+            source_total_samples: Some(end),
+            is_final: true,
+        }
+    }
+
+    #[test]
+    fn window_sample_clipping_does_not_create_zero_millisecond_segments() {
+        let window = final_single_sample_core(0);
+        assert_eq!(
+            bounded_sample_range(1_500, 1_501, window.samples.len() as u64),
+            Some((240_000, 240_001))
+        );
+        assert_eq!(owned_window_range(&window, 1_500, 1_501), None);
+    }
+
+    #[test]
+    fn keeps_a_short_tail_that_crosses_a_global_millisecond_boundary() {
+        let window = final_single_sample_core(15);
+        assert_eq!(
+            owned_window_range(&window, 1_500, 1_501),
+            Some((60_000, 60_001))
+        );
+    }
+
+    #[test]
+    fn window_time_mapping_preserves_midpoint_ownership_and_source_bounds() {
+        let window = AudioWindow {
+            sequence: 2,
+            sample_rate: TARGET_SAMPLE_RATE_HZ,
+            samples: vec![0.5; 48_000].into(),
+            global_start_sample: 16_000,
+            global_end_sample: 64_000,
+            valid_core_start_sample: 32_000,
+            valid_core_end_sample: 48_000,
+            source_total_samples: Some(80_000),
+            is_final: false,
+        };
+        assert_eq!(owned_window_range(&window, 0, 100), None);
+        assert_eq!(owned_window_range(&window, 100, 200), Some((2_000, 3_000)));
+        assert_eq!(owned_window_range(&window, 200, 400), None);
+    }
+
+    #[test]
+    fn digital_silence_requires_a_nonempty_exact_zero_waveform() {
+        assert!(is_digital_silence(&[0.0, -0.0, 0.0]));
+        assert!(!is_digital_silence(&[]));
+    }
+
+    #[test]
+    fn weak_or_nonfinite_samples_are_never_classified_as_digital_silence() {
+        for sample in [
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            f32::NAN,
+            f32::INFINITY,
+        ] {
+            assert!(!is_digital_silence(&[0.0, sample, 0.0]));
+        }
+    }
+
+    #[test]
+    fn timestamp_ranges_preserve_source_overlap_without_exposing_padding() {
+        let source_samples = 8670 * 16;
+        assert_eq!(
+            bounded_sample_range(0, 900, source_samples),
+            Some((0, source_samples))
+        );
+        assert_eq!(
+            bounded_sample_range(100, 200, source_samples),
+            Some((16000, 32000))
+        );
+        assert_eq!(
+            bounded_sample_range(-10, 10, source_samples),
+            Some((0, 1600))
+        );
+        assert_eq!(bounded_sample_range(900, 1000, source_samples), None);
+        assert_eq!(bounded_sample_range(10, 10, source_samples), None);
+        assert_eq!(bounded_sample_range(20, 10, source_samples), None);
+        assert_eq!(
+            bounded_sample_range(0, i64::MAX, source_samples),
+            Some((0, source_samples))
+        );
+    }
 
     #[test]
     fn an_uncompiled_coreml_backend_cannot_be_labelled_as_metal() {

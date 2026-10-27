@@ -1,0 +1,267 @@
+{
+  "schema": "meetnote.whisper-digital-silence-validation.v1",
+  "date": "2026-10-27",
+  "scope": "verified nonempty all-zero PCM only, with known FLEURS speech controls; not generic silence noise weak-speech detection or model quality acceptance",
+  "productionSourceCommit": "e489595e286591c45940d261de6f5a431f6f8f77",
+  "modelControlTestCommit": "0cd3a6365a6b1c92b5ce581c28a0fbc877849dfa",
+  "baselineProductionSourceCommit": "5d2ae67",
+  "baselinePreparationCommit": "8a93f201abea773efc4deaeb287fe7911e5d77e7",
+  "sourceHashes": {
+    "crates/asr-whisper-rs/src/lib.rs": "8a895a8d65db69828e6affd9fb7048f2a76211cd242c3a90792b36ed7b923f31",
+    "crates/asr-whisper-rs/tests/real_audio.rs": "6bb79b57f2e4f5ce49c95a4964c57ee4f2dfff595daf7dfbfafa82d8a4cc5d60"
+  },
+  "baselineRunnerSha256": "af47de8266cdae1c5b3323ba6af9d7d077da74e67c5041c4f3c000cb7ebff059",
+  "candidateRunnerSha256": "8f1a16f4879a3c149486b802110c97e6422f8bd204ef746d877176ab276288a7",
+  "modelSha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+  "zeroAudioSha256": "190415015d40eef0cd797e1b59ffe00846b01873050b12d44b3a216de3faa2a9",
+  "zeroAudio": {
+    "samples": 128000,
+    "sampleRate": 16000,
+    "seconds": 8,
+    "channels": 1,
+    "bitsPerSample": 16,
+    "allPcmSamplesZero": true
+  },
+  "officialModelCard": {
+    "url": "https://github.com/openai/whisper/blob/main/model-card.md#performance-and-limitations",
+    "observedFileBlobSha": "291bc4bb1f484e6553a5f87faee5568809b0b9ff",
+    "observation": "upstream documents hallucinated text; local exact-zero reproduction remains the evidence for this change"
+  },
+  "rawArtifacts": "eval-data/optimization-2026-10-27/whisper-digital-silence",
+  "initialProtocolSha256": "d41a729630e4b8b7cd2de316b7f6ad858b00f5fef0c58b2022ffd634dc5a21b9",
+  "validationProtocolSha256": "3a3828628e1e8e0d3d85ff0eed25c7fb46e810e6a90208250569328ad3647978",
+  "resultSha256": "420b2984e9e62bd79423b368933403bceb30f2fec03b9d32b3d9d411f4a78a4b",
+  "controllerSha256": "110458a8275539a1c41270ed4d6b46a0cab998fe83df9223e323c149acfa5503",
+  "scorerSha256": "20b0d559af0d534e8d39f400e8d59d00388435ed3183d821b9ba8b4eef78f5f3",
+  "contract": {
+    "zeroRule": "nonempty input with every f32 sample exactly equal to zero, including signed zero",
+    "nonzeroRule": "all nonzero values, including the smallest positive/negative subnormal, continue to inference; nonfinite values are not classified as silence",
+    "modelLoading": "preserve context loading and errors before the whole-file zero exit; window session context still loads at creation",
+    "decoder": "create no inference state and do not call full for a verified zero input",
+    "cancellation": "check before window short-circuit and after whole-file context loading; cancelled zero input must not return success",
+    "emptyInput": "not classified as digital silence"
+  },
+  "redGreen": {
+    "realWholeFileBefore": "nonempty invented transcript; ignored test fails on explicit model/audio",
+    "realWindowedBefore": "nonempty invented transcript; ignored test fails on explicit model/audio",
+    "after": "both explicit tests pass; all eight native adapter zero calls return empty output",
+    "negativeControls": "window cancellation returns Cancelled; a WAV file used as invalid model returns ModelLoadFailed on both paths; normal explicit speech smoke passes"
+  },
+  "matrix": {
+    "baselineZeroBackendCalls": 8,
+    "baselineZeroNativeInferenceCalls": 8,
+    "baselineZeroCallsWithInventedSegments": 8,
+    "candidateZeroBackendCalls": 8,
+    "candidateZeroNativeInferenceCalls": 0,
+    "candidateZeroCallsWithInventedSegments": 0,
+    "speechBackendAndInferenceCalls": 96,
+    "speechCases": [
+      {
+        "id": "fleurs-en-1980",
+        "sha256": "0480cbedfa16aa146b79851f1577e58628c9242144b5eba1b7d00e5ca4b24220"
+      },
+      {
+        "id": "fleurs-en-1914",
+        "sha256": "4eb113c1577c5648ab04ce452e9769ba35f32715b9bf0cb540a28e1709696c93"
+      },
+      {
+        "id": "fleurs-en-1771",
+        "sha256": "cfe36516121c0f76cf15f654bc8d02622fdc25980797defd0a4ce7fbc0ab6d29"
+      },
+      {
+        "id": "fleurs-en-1669",
+        "sha256": "175e5bae9572309c94d2d26db2a3ef22177498f51a483d75f4d0721bb79797c9"
+      },
+      {
+        "id": "fleurs-en-1915",
+        "sha256": "5f7a8d81ee3e0da74f5454f2c50ba070224e2f8e7b68cae00b6f8f49a9697c97"
+      },
+      {
+        "id": "fleurs-en-1675",
+        "sha256": "56a6bb1e0189d01dcbbbdd3a1f16117cf41bbc9f5ab97d9bb2571f57c87ce8ba"
+      }
+    ],
+    "speechAudioSeconds": 56.54,
+    "zero": [
+      {
+        "device": "Cpu",
+        "windowed": false,
+        "beforeSegmentCounts": [
+          1,
+          1
+        ],
+        "afterSegmentCounts": [
+          0,
+          0
+        ],
+        "beforeCallSeconds": [
+          8.286081083,
+          0.433340708
+        ],
+        "afterCallSeconds": [
+          0.136842292,
+          0.070344042
+        ],
+        "beforePredictionSha256": "767b260e8cf44223095094b0a3ae4b9edbcba061b65b2302db64bfbcbe4b859e",
+        "afterPredictionSha256": "aaa000aad9cbffaf2045fcffa0b0127ca810489c194626e9aa286b00f059c210",
+        "afterPeakRssBytes": 195428352
+      },
+      {
+        "device": "Cpu",
+        "windowed": true,
+        "beforeSegmentCounts": [
+          1,
+          1
+        ],
+        "afterSegmentCounts": [
+          0,
+          0
+        ],
+        "beforeCallSeconds": [
+          0.486257917,
+          0.422755875
+        ],
+        "afterCallSeconds": [
+          0.107387083,
+          0.066935708
+        ],
+        "beforePredictionSha256": "6d7b9527d3c12163a7d768b6937291f8e1d48ff88cef80c8d3804f7f72305efd",
+        "afterPredictionSha256": "31401c81a7169523c5d9d8213854309e64cedf43b39c608c276aa0175236431a",
+        "afterPeakRssBytes": 196640768
+      },
+      {
+        "device": "Metal",
+        "windowed": false,
+        "beforeSegmentCounts": [
+          1,
+          1
+        ],
+        "afterSegmentCounts": [
+          0,
+          0
+        ],
+        "beforeCallSeconds": [
+          0.230063084,
+          0.159346292
+        ],
+        "afterCallSeconds": [
+          0.116799041,
+          0.083422
+        ],
+        "beforePredictionSha256": "1e9f80d853acf6c3524659bde69caeab0a3f0227ca429174854d408d16338173",
+        "afterPredictionSha256": "f368e2bb0500f6a57ed12aeae0039e562e7985681a6f765d57374bed0ca0f476",
+        "afterPeakRssBytes": 250036224
+      },
+      {
+        "device": "Metal",
+        "windowed": true,
+        "beforeSegmentCounts": [
+          1,
+          1
+        ],
+        "afterSegmentCounts": [
+          0,
+          0
+        ],
+        "beforeCallSeconds": [
+          0.217610166,
+          0.157352625
+        ],
+        "afterCallSeconds": [
+          0.11612675,
+          0.076416458
+        ],
+        "beforePredictionSha256": "43419c21e06730a02a28f14a116a5090645a526e2556f5040e1f4268e248d1e6",
+        "afterPredictionSha256": "1bc8e621cfc092ac8a88c7c2322c3e1a578705d9e6e61050febb08b153392767",
+        "afterPeakRssBytes": 252870656
+      }
+    ],
+    "speech": [
+      {
+        "device": "Cpu",
+        "windowed": false,
+        "callsPerVersion": 12,
+        "outputsTextAndTimeExactlyEqual": true,
+        "nonemptySourceBounded": true,
+        "callsWithRealYouWord": 4,
+        "baselineMedianSeconds": 0.5159676875,
+        "candidateMedianSeconds": 0.556489396,
+        "baselineReportSha256": "a99c028f204176d5159b0f56f9fc3fb4c00e52307303426e3e49225086a2ced3",
+        "candidateReportSha256": "376cc58214d7ee9ffa4cc845b4cdf145876f9cba6e08d6ce221c65bcf6fcc600"
+      },
+      {
+        "device": "Cpu",
+        "windowed": true,
+        "callsPerVersion": 12,
+        "outputsTextAndTimeExactlyEqual": true,
+        "nonemptySourceBounded": true,
+        "callsWithRealYouWord": 4,
+        "baselineMedianSeconds": 0.491827667,
+        "candidateMedianSeconds": 0.5292347079999999,
+        "baselineReportSha256": "bcd42742ec0d6367f013a88ced97cac8b1dab07582c21661fdddd88f7199db23",
+        "candidateReportSha256": "70735706793fcc0a349708dc404b09e0c5b24947c56ff3fca9e97b67c7dbe7ad"
+      },
+      {
+        "device": "Metal",
+        "windowed": false,
+        "callsPerVersion": 12,
+        "outputsTextAndTimeExactlyEqual": true,
+        "nonemptySourceBounded": true,
+        "callsWithRealYouWord": 4,
+        "baselineMedianSeconds": 0.218217021,
+        "candidateMedianSeconds": 0.221049417,
+        "baselineReportSha256": "221550ad954415a8440765a52679a58f7d9baf9450b2b4cdbc064b9b9c010608",
+        "candidateReportSha256": "ebc5cc5ad1f4a24ab299f787a48872218842e3b1717ed61085778e3d22bf9362"
+      },
+      {
+        "device": "Metal",
+        "windowed": true,
+        "callsPerVersion": 12,
+        "outputsTextAndTimeExactlyEqual": true,
+        "nonemptySourceBounded": true,
+        "callsWithRealYouWord": 4,
+        "baselineMedianSeconds": 0.216520188,
+        "candidateMedianSeconds": 0.216446125,
+        "baselineReportSha256": "328419b7e3fa12bc4f845acd98f5919ca8f4c1468099274801a3808c6fbcca2a",
+        "candidateReportSha256": "0f319d2c38b8e3c9d34a03289a63acf45d27a151b9094c274490b9738692e4b7"
+      }
+    ],
+    "allSourceModelHashesUnchanged": true
+  },
+  "timingAcceptance": "not_assessed; no speedup claim; original CPU first-call 8.286s outlier retained",
+  "verification": {
+    "productionChecksAt": "e489595e286591c45940d261de6f5a431f6f8f77",
+    "fmtAllCheck": "passed",
+    "cargoCheckWorkspaceLocked": "passed",
+    "cargoBuildWorkspaceLocked": "passed",
+    "cargoTestWorkspaceLocked": {
+      "rawHarnessPassed": 961,
+      "mainHarnessPassed": 958,
+      "existingNestedHarnessPassed": 3,
+      "failed": 0,
+      "registeredIgnored": 16,
+      "ignoredNote": "UI child is explicitly executed by its parent; separately execute both new Whisper zero tests and existing positive speech test; registered ignored counts do not prove execution"
+    },
+    "predicateUnitTests": "nonempty exact/signed zero, empty input, smallest nonzero values, NaN and infinity covered",
+    "independentReview": "separate read-only diff and sample-boundary/cancellation/lifecycle review; add explicit invalid-model negative controls; verify all predictions source/model fingerprints and text/time equality"
+  },
+  "validationLogs": {
+    "/tmp/meetnote-loop27-red.log": "57d8b149ba3c4a46fcc3ebd04643c03804cc0605024a3f212ceceeb0c401313a",
+    "/tmp/meetnote-loop27-green.log": "3789154fb5dfcb53c4e85a41a2f8dec00f4d2e53c30c3016cb7f80630a0a0952",
+    "/tmp/meetnote-loop27-unit.log": "7ac2273bb7e7d36db415e3e8083bc27ecfbcdd3f18853c0e13dff3c22da7ded3",
+    "/tmp/meetnote-loop27-fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/tmp/meetnote-loop27-check.log": "b0aa83e806042fa0c032d6681b7694d983e8e07742c5fd2be5b45d28c7e6aa95",
+    "/tmp/meetnote-loop27-workspace.log": "3be3ec7f3bc87599084f3b55b6d49499205f32c1e4324a36b862964810df5387",
+    "/tmp/meetnote-loop27-build-workspace.log": "a7ca8a7275a17a3b94060222f2ddaade06a4a3480bf982123b46df3daacb2202",
+    "/tmp/meetnote-loop27-model-error-control.log": "ee2ff997d3305630cc860c71e30d2696be7ab94194529ad7aa515ca4599d1f2d",
+    "/tmp/meetnote-loop27-real-speech.log": "c2d02a2bf01aa561b8958b923f97a6b16b88d92b07bf8e884511ec0c768dddbe"
+  },
+  "qualityAcceptance": "not_assessed",
+  "notAssessed": [
+    "generic speech activity detection or noise hallucinations",
+    "low-volume speech accuracy beyond unchanged bypass decision",
+    "hour-scale concurrency and total resource use",
+    "full document export or GUI behavior"
+  ],
+  "reproduction": "Use explicit MEETNOTE_WHISPER_MODEL and MEETNOTE_WHISPER_SILENCE_AUDIO with both digital_silence ignored tests; freeze permanent asr_benchmark binaries; run 2 repeats on 8s zero PCM for CPU/Metal and whole/windowed, then compare six fixed FLEURS speech cases (including two real you utterances) per case/repeat in both binaries; record no CER for zero-reference silence; preserve original logs and clean temporary controller"
+}

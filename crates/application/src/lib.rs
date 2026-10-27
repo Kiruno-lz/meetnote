@@ -17,6 +17,7 @@ mod agent_host;
 mod assistant_runtime;
 mod assistant_skills;
 mod audio_source;
+mod backend_worker;
 mod capabilities;
 mod document_commands;
 mod document_issues;
@@ -40,6 +41,7 @@ pub use assistant_runtime::{
 };
 pub use assistant_skills::BundledAgentSkill;
 pub use audio_source::{AudioSourceError, AudioStatus};
+pub use backend_worker::run_backend_worker;
 pub use capabilities::{
     AudioCapabilityPort, CapabilityDescriptor, CapabilityOperation, SettingsCapabilityPort,
     SettingsPatchArguments, SettingsReadArguments, SettingsSection,

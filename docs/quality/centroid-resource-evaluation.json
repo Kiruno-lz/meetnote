@@ -1,0 +1,304 @@
+{
+  "schema": "meetnote.centroid-resource-evaluation.v1",
+  "date": "2026-10-27",
+  "scope": "isolated synthetic clustering resource screen; no product dependency, implementation, model DER or default change",
+  "sourceCommit": "f4d29921f49c058c7df02a1f983d8ad3188bb255",
+  "environment": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit",
+    "python": "3.12.9 (main, Feb 12 2025, 15:09:19) [Clang 19.1.6 ]",
+    "cpuThreads": 10
+  },
+  "memoryBytes": 34359738368,
+  "versions": {
+    "fastcluster": "1.3.0",
+    "scipy": "1.18.1",
+    "numpy": "2.5.4"
+  },
+  "sourceHashes": {
+    "third_party/speakrs/src/clustering/ahc.rs": "067f4159194649f1afced40d1d98ddfc8bf159f96a9414186521f72fff0c59db",
+    "third_party/speakrs/src/clustering/ahc/flat.rs": "a90e5e0242f643a12c63d5d236076338dd581fa8e52b170b3da3f027c9e4b388",
+    "third_party/speakrs/src/utils.rs": "0585f26a0398811c46134087a2ba6118c2b3de23e4d4561c6aa4adb8944a3443",
+    "crates/diarization-native/examples/centroid_resource_trial.rs": "6e5eb333fd792ff00783dca8c156e48323ea8404b37c877b23829b93bb1c16d0"
+  },
+  "runnerSha256": "6bb4115f61c1347401d22ad5c37fd26e2e042bf63231ec1925d8d25ba5346238",
+  "controllerSha256": "431f8e32da4e12aa263abc0959e18f1588ae6c29f70cb8ea2d745bf41f37956e",
+  "pythonModuleSha256": "70c681533d70806f6309ca7d01220a8f5cc918ec63f063a29f265fd176c43747",
+  "extensionSha256": "5e207ff68ba56f6f1b478a84f7fd90c7f05a859e193eb133063076f729a19d8e",
+  "reference": "https://github.com/fastcluster/fastcluster/blob/efc82a184125494cbd639803b64a5c9a4e45c1b0/fastcluster.py",
+  "protocolSha256": "a5e4b7a11b7e1fc5058300e8c89554e9e353a17e884b6a529f5a6a756c65cfcb",
+  "runsSha256": "f728f211d0314b2dfa97e8e8cca9073dcb2edbca2f37f43d8afc16e4d47acc40",
+  "resultSha256": "447077e3582a9a46e5e0c43fb0ac32441861cfa526664ee23d5fe194938b8584",
+  "rawArtifacts": "eval-data/optimization-2026-10-27/centroid-resource",
+  "seed": 86740,
+  "orderPerCase": [
+    "native",
+    "scipy",
+    "vector",
+    "vector",
+    "scipy",
+    "native"
+  ],
+  "processes": 24,
+  "repeatsPerMethodPerCase": 2,
+  "dtype": "native f32 raw input and normalization; identical native-normalized f32 expanded to f64 for both Python methods",
+  "inputConstruction": {
+    "dispersed": "default_rng(seed + case_index).normal((N,256)).astype(<f4)",
+    "clustered": "default_rng(seed + case_index) generates 32 standard-normal f64 centers, normalize each; cyclic center assignments plus normal noise sigma 0.025, then cast <f4"
+  },
+  "rssSemantics": "macOS /usr/bin/time -l maximum resident set size bytes, includes process startup/imports/input; not incremental clustering allocation",
+  "timerSemantics": "in-process clustering call only; native includes production normalization and distance cut, Python returns linkage only; do not interpret as drop-in backend speedup",
+  "threadEnvironment": {
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "thresholds": [
+    0.2,
+    0.4,
+    0.6,
+    1.0,
+    1.2,
+    1.4,
+    1.6
+  ],
+  "standardPartitionComparisons": 28,
+  "standardPartitionMismatches": 0,
+  "nativeDefaultThreshold": 0.6,
+  "nativeDefaultPartitionComparisons": 4,
+  "nativeDefaultPartitionMismatches": 0,
+  "allInputAndSourceHashesUnchanged": true,
+  "frozenScreen": {
+    "vectorToScipyMaxMedianSecondsRatioAt10000": 2,
+    "vectorToScipyMaxMedianPeakRssRatioAt10000": 0.5,
+    "partitionMismatchesAllowed": 0,
+    "productionAcceptance": "not_assessed"
+  },
+  "screenResults": [
+    {
+      "distribution": "dispersed",
+      "timeRatio": 5.370884707658478,
+      "rssRatio": 0.12082693824250185,
+      "timeScreenPassed": false,
+      "rssScreenPassed": true
+    },
+    {
+      "distribution": "clustered",
+      "timeRatio": 6.004983085788176,
+      "rssRatio": 0.12071610819608208,
+      "timeScreenPassed": false,
+      "rssScreenPassed": true
+    }
+  ],
+  "cases": [
+    {
+      "rows": 1000,
+      "columns": 256,
+      "distribution": "dispersed",
+      "mergeChildrenAndSizesEqual": true,
+      "maximumMergeHeightDifference": 5.329070518200751e-15,
+      "nativeDefaultPartitionMismatch": false,
+      "nativeClusters": 1000,
+      "methods": {
+        "native": {
+          "medianSeconds": 0.07652887550000001,
+          "medianPeakRssBytes": 12017664.0,
+          "seconds": [
+            0.083017792,
+            0.070039959
+          ],
+          "peakRssBytes": [
+            12025856,
+            12009472
+          ]
+        },
+        "scipy": {
+          "medianSeconds": 0.03752129152417183,
+          "medianPeakRssBytes": 78143488.0,
+          "seconds": [
+            0.03771116700954735,
+            0.037331416038796306
+          ],
+          "peakRssBytes": [
+            76890112,
+            79396864
+          ]
+        },
+        "vector": {
+          "medianSeconds": 0.23357204149942845,
+          "medianPeakRssBytes": 70893568.0,
+          "seconds": [
+            0.23569300002418458,
+            0.23145108297467232
+          ],
+          "peakRssBytes": [
+            71385088,
+            70402048
+          ]
+        }
+      }
+    },
+    {
+      "rows": 1000,
+      "columns": 256,
+      "distribution": "clustered",
+      "mergeChildrenAndSizesEqual": true,
+      "maximumMergeHeightDifference": 6.661338147750939e-16,
+      "nativeDefaultPartitionMismatch": false,
+      "nativeClusters": 32,
+      "methods": {
+        "native": {
+          "medianSeconds": 0.06707175000000001,
+          "medianPeakRssBytes": 12042240.0,
+          "seconds": [
+            0.067344833,
+            0.066798667
+          ],
+          "peakRssBytes": [
+            12042240,
+            12042240
+          ]
+        },
+        "scipy": {
+          "medianSeconds": 0.03369212546385825,
+          "medianPeakRssBytes": 78241792.0,
+          "seconds": [
+            0.033999166917055845,
+            0.03338508401066065
+          ],
+          "peakRssBytes": [
+            77053952,
+            79429632
+          ]
+        },
+        "vector": {
+          "medianSeconds": 0.23412812501192093,
+          "medianPeakRssBytes": 69582848.0,
+          "seconds": [
+            0.23400225001387298,
+            0.23425400000996888
+          ],
+          "peakRssBytes": [
+            70500352,
+            68665344
+          ]
+        }
+      }
+    },
+    {
+      "rows": 10000,
+      "columns": 256,
+      "distribution": "dispersed",
+      "mergeChildrenAndSizesEqual": true,
+      "maximumMergeHeightDifference": 1.687538997430238e-14,
+      "nativeDefaultPartitionMismatch": false,
+      "nativeClusters": 10000,
+      "methods": {
+        "native": {
+          "medianSeconds": 7.458783875,
+          "medianPeakRssBytes": 238854144.0,
+          "seconds": [
+            7.290568917,
+            7.626998833
+          ],
+          "peakRssBytes": [
+            238862336,
+            238845952
+          ]
+        },
+        "scipy": {
+          "medianSeconds": 4.463531292043626,
+          "medianPeakRssBytes": 966074368.0,
+          "seconds": [
+            4.457109417067841,
+            4.469953167019412
+          ],
+          "peakRssBytes": [
+            966230016,
+            965918720
+          ]
+        },
+        "vector": {
+          "medianSeconds": 23.9731119585922,
+          "medianPeakRssBytes": 116727808.0,
+          "seconds": [
+            23.83376166713424,
+            24.112462250050157
+          ],
+          "peakRssBytes": [
+            116654080,
+            116801536
+          ]
+        }
+      }
+    },
+    {
+      "rows": 10000,
+      "columns": 256,
+      "distribution": "clustered",
+      "mergeChildrenAndSizesEqual": true,
+      "maximumMergeHeightDifference": 1.3322676295501878e-15,
+      "nativeDefaultPartitionMismatch": false,
+      "nativeClusters": 32,
+      "methods": {
+        "native": {
+          "medianSeconds": 7.393579958,
+          "medianPeakRssBytes": 239165440.0,
+          "seconds": [
+            7.528590208,
+            7.258569708
+          ],
+          "peakRssBytes": [
+            239042560,
+            239288320
+          ]
+        },
+        "scipy": {
+          "medianSeconds": 4.100554708507843,
+          "medianPeakRssBytes": 966418432.0,
+          "seconds": [
+            4.165444124955684,
+            4.035665292060003
+          ],
+          "peakRssBytes": [
+            966361088,
+            966475776
+          ]
+        },
+        "vector": {
+          "medianSeconds": 24.623761666938663,
+          "medianPeakRssBytes": 116662272.0,
+          "seconds": [
+            24.935020916862413,
+            24.31250241701491
+          ],
+          "peakRssBytes": [
+            116523008,
+            116801536
+          ]
+        }
+      }
+    }
+  ],
+  "review": {
+    "phase": "separate read-only review after measurement",
+    "checks": [
+      "Verify all 24 raw output hashes and stdout timings against runs.json",
+      "Recompute each median from the two independent processes",
+      "Verify three temporary native module copies byte-for-byte against production source",
+      "Verify original input hashes after each method sequence",
+      "Require complete linkage shape and finite values, identical repeats, canonical full partitions and unchanged Python input",
+      "Distinguish process RSS from incremental allocation and Python f64 linkage timer from native f32 normalization and cut"
+    ],
+    "preflightFailures": "Temporary example initially failed private module path resolution, then BLAS linkage; corrected layout and existing speakrs linkage before every measured run; no production source change"
+  },
+  "decision": "reject current wheel as default replacement: both N=10000 time screens fail despite RSS screens passing; retain native production chain and low-memory candidate evidence",
+  "notAssessed": [
+    "native Rust/C++ binding ownership exceptions and cancellation",
+    "numeric equivalence near f32 distance boundaries or tied merges",
+    "real model DER and held-out meetings",
+    "long audio session artifact retention and hour-scale total resources",
+    "packaged application overhead and production backend throughput"
+  ],
+  "reproduction": "Compile the temporary probe against byte-identical ahc.rs, ahc/flat.rs and utils.rs with the existing locked kodama/ndarray/speakrs link; normalize input using native utils; run each method in /usr/bin/time -l in the frozen order; preserve full linkage/labels and compare canonical fcluster(distance) partitions; core protocol documented in the linked research section; remove temporary code afterward"
+}

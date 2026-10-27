@@ -1,0 +1,246 @@
+{
+  "schema": "meetnote.worker-admission-resource-screen.v1",
+  "protocol": {
+    "queuedJobs": 64,
+    "maxConcurrency": 1,
+    "executionOrders": [
+      [
+        "baseline",
+        "candidate"
+      ],
+      [
+        "candidate",
+        "baseline"
+      ]
+    ],
+    "measurement": "macOS ps -M live thread count while the one running blocker is held; Arc captured resource owners before and after dropping queued futures",
+    "gates": {
+      "candidateQueuedThreadDeltaMaximum": 0,
+      "candidateRetainedOwnersAfterDrop": 1,
+      "allCapturedOwnersAfterRelease": 1
+    },
+    "scope": "synthetic admission resource screen, no model or latency claim"
+  },
+  "sourceHashes": {
+    "baselineSha256": "9a3b72274fe596682354da56057474297d24edc7170822a8b3a331de9cadd591",
+    "candidateSha256": "0197ee2beaa727ea040f72a689f0b3dbf79d15d54abb905adb570576a860aa9b",
+    "probeSha256": "da7bdb5bcd505fa16a4e5baf7892bc3d873f14ddda75d76bb1beb58e1d0bfced"
+  },
+  "executableSha256": "c4990686f95616b23d08964d8e2d6c7542cdf6096ae919c1e8a9ccfeb06590a4",
+  "runs": [
+    {
+      "mode": "baseline",
+      "phases": [
+        {
+          "phase": "occupied",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "queued",
+          "owners": 65,
+          "liveThreads": 67
+        },
+        {
+          "phase": "dropped",
+          "owners": 65,
+          "liveThreads": 67
+        },
+        {
+          "phase": "released",
+          "owners": 1
+        }
+      ]
+    },
+    {
+      "mode": "candidate",
+      "phases": [
+        {
+          "phase": "occupied",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "queued",
+          "owners": 65,
+          "liveThreads": 3
+        },
+        {
+          "phase": "dropped",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "released",
+          "owners": 1
+        }
+      ]
+    },
+    {
+      "mode": "candidate",
+      "phases": [
+        {
+          "phase": "occupied",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "queued",
+          "owners": 65,
+          "liveThreads": 3
+        },
+        {
+          "phase": "dropped",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "released",
+          "owners": 1
+        }
+      ]
+    },
+    {
+      "mode": "baseline",
+      "phases": [
+        {
+          "phase": "occupied",
+          "owners": 1,
+          "liveThreads": 3
+        },
+        {
+          "phase": "queued",
+          "owners": 65,
+          "liveThreads": 67
+        },
+        {
+          "phase": "dropped",
+          "owners": 65,
+          "liveThreads": 67
+        },
+        {
+          "phase": "released",
+          "owners": 1
+        }
+      ]
+    }
+  ],
+  "decision": "accept_async_admission",
+  "limitations": [
+    "Synthetic queue test; not ASR speed, model memory or production long-audio acceptance.",
+    "Thread count sampled while one blocker held; process peak memory not assessed."
+  ],
+  "validation": {
+    "redRegressions": 2,
+    "runtimeUnitTestsPassed": 12,
+    "workspaceMainTestsPassed": 926,
+    "workspaceChildTestsPassed": 3,
+    "workspaceFailed": 0,
+    "ignoredNotExecuted": 11,
+    "allTargetsCheck": "passed",
+    "desktopDevelopmentBuild": "passed",
+    "review": "separate read-only inspection of dependency edges, cancellation listener ordering, permit ownership, receiver drop and panic; no unresolved findings"
+  },
+  "wholeFileAsrCancellation": {
+    "baseCommit": "0ea1bf7",
+    "previousBehavior": "Cancelled Whisper/Sherpa requests waited for the occupied runtime slot.",
+    "currentBehavior": "Cancel before admission without native setup; wait for the actual worker to exit after admission.",
+    "redRegressions": 2,
+    "regressionsPassed": 6,
+    "workspaceMainPassed": 933,
+    "workspaceChildPassed": 3,
+    "ignoredNotExecuted": 11,
+    "realWhisper": "explicit model/audio test passed once, Auto device",
+    "realParaformer": "explicit model/audio test passed once, CPU",
+    "realTestScope": "loading nonempty output and Whisper source timestamp bounds; not WER/CER or real inference cancellation latency",
+    "artifacts": {
+      "whisperModel": {
+        "filename": "ggml-base.en.bin",
+        "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+      },
+      "whisperAudio": {
+        "filename": "ami-ES2002a-4.wav",
+        "sha256": "5ab60058843644c12f757a0a0d333b7141714efdb89e72bf325b385fdd0f816a"
+      },
+      "paraformerModel": {
+        "filename": "model.int8.onnx",
+        "sha256": "3ef6c19369b912f7caf3cef8e545c5ccd1a33d9d7ec792a46668dc41c4b229ec"
+      },
+      "paraformerTokens": {
+        "filename": "tokens.txt",
+        "sha256": "4b2d964e18b9cf139b473003b6698fb2ed9a2a5ec55b93daa677b28f578897aa"
+      },
+      "paraformerAudio": {
+        "filename": "zh-1779.wav",
+        "sha256": "2e3e43bee6e9c514e6113455eb70c6655628634422b5c88ab99d8ec9644d8846"
+      }
+    },
+    "review": "Checked result/error preservation, worker panic versus cancellation, admission ownership and cooperative running cancellation; no model/provider/UI contract changes."
+  },
+  "wholeFileDiarizationCancellation": {
+    "sourceCommit": "6bb5746280662c54540ddeba0ae133570b616795",
+    "baselineCommit": "3ff5690",
+    "redRegressions": 2,
+    "greenRegressions": 2,
+    "executor": "real block_on driver; cancel only after first Pending poll; require completion before blocker releases",
+    "manualRepoll": "not used after cancellation",
+    "cleanup": "release occupied slot and join both real drivers before assertions",
+    "productionSourceSha256": {
+      "crates/diarization-native/src/backend.rs": "8fafd460e70bdb32e4b3a97b747dcc0c14473066e6d09e57fc6c5371c73621b8",
+      "crates/diarization-sherpa-onnx/src/lib.rs": "704304caa3abd881c38d3bdf5180b995a46a9a50146a1d38b69aa7702711a0e3"
+    },
+    "testSourceSha256": "4d8c6c5c5a342f1baf1ae9c166348a089e2c6c5e70caa624c1e3099a74da27b4",
+    "helperSourceSha256": "b44623e9abc9e256d9b476eb87cbc9a5bdae8dc939fa22cc52cec6076abad5ef",
+    "workspaceMainPassed": 943,
+    "workspaceExistingChildPassed": 3,
+    "reportedIgnored": 12,
+    "uiIgnoredChildExecutedByParent": true,
+    "independentReview": [
+      "Native analyze and trait diarize use the same admission path",
+      "window sessions do not acquire nested worker permits",
+      "normal backend errors retain code/message",
+      "existing helper tests cover unexpected worker exit and running cancellation ownership"
+    ],
+    "realNative": {
+      "audio": "ami-first180.wav",
+      "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+      "modelArtifacts": {
+        "plda_lda.npy": "e20c9b012bebd1aabda5a38a127e63a43cf35debdc502715fc143e2fb6bc3c4b",
+        "plda_mean1.npy": "e424c0c352182aa8e0f555dec1f3b30e29a20b9ed6b25d339f112af92e51e36f",
+        "plda_mean2.npy": "6f6fb708a2037197b5b84ffeaa8f140cb878088fbecd6ab042ad26a7691bd2cf",
+        "plda_mu.npy": "d286d48acf99bbc1ed1502fed0a3e361ae5626ce1870c8be9f7397c5e47886c6",
+        "plda_psi.npy": "d7128c9ed2f28a9781971805131129f077c04f948e2df12e52dcdb99f2b4e5f5",
+        "plda_tr.npy": "e700b68cb319de3fafb5fa093eb9222c23c447084741f8d3a533640d425510ee",
+        "segmentation-3.0.onnx": "038b971741ed623af9773ecafdefa4b7bc523520099c2a68f8568b24189e8ad9",
+        "wespeaker-voxceleb-resnet34.min_num_samples.txt": "e4df891c484d7abb985dadf539fa1883a646dab6337af5cae4159c587b7050cc",
+        "wespeaker-voxceleb-resnet34.onnx": "203a4c67112167580ab1fcb62f4568c633499fb283805890aebe1c48564fcc0f",
+        "wespeaker-voxceleb-resnet34.onnx.data": "dc105e7857156611381b95cc961b277d8e1e098e7af1c919a77c68c7257ce956"
+      },
+      "test": "real_model_produces_valid_segments_and_observations",
+      "passed": 1,
+      "segments": 45,
+      "speakers": 3,
+      "observations": 303
+    },
+    "realSherpa": {
+      "audio": "ami-ES2002a-4.wav",
+      "audioSha256": "5ab60058843644c12f757a0a0d333b7141714efdb89e72bf325b385fdd0f816a",
+      "modelArtifacts": {
+        "segmentation.onnx": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079",
+        "embedding.onnx": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+      },
+      "test": "sherpa_embeddings_are_matched_by_the_shared_identity_service",
+      "passed": 1,
+      "nativeCalls": 2,
+      "library": "unique temporary path, removed after test"
+    },
+    "newFinding": {
+      "nativeShortAudioSeconds": 8.67,
+      "nativeTestResult": "failed: zero segments and observations on known speech",
+      "nativeShortLogSha256": "760993c3c6651546fd4e5bbcd73da798390f2e825e0470c2a75caa4170a83c97",
+      "status": "resolved: short-input window omission and no-speaker handling validated separately",
+      "resolutionReceipt": "short-diarization-validation.json"
+    },
+    "scope": "queued cancellation and admitted real loading only; not DER, cancellation latency during native inference, long-audio resources or speaker-count hint acceptance"
+  }
+}

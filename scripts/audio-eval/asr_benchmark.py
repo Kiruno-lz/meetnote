@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import platform
 import re
 import os
@@ -67,10 +68,16 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def validate_prediction_coverage(cases: list[dict], rows: list[dict], repeats: int) -> None:
+def validate_prediction_rows(cases: list[dict], rows: list[dict], repeats: int) -> None:
     ids = [case["id"] for case in cases]
     if not ids or len(set(ids)) != len(ids) or type(repeats) is not int or repeats < 1:
         raise ValueError("invalid case inventory or repeat count")
+    for row in rows:
+        if type(row.get("repeat")) is not int:
+            raise ValueError("prediction repeat must be an integer index")
+        elapsed = row.get("wallSeconds")
+        if type(elapsed) not in (int, float) or not 0 < elapsed <= sys.float_info.max:
+            raise ValueError("prediction wallSeconds must be a finite positive measurement")
     expected = {(case_id, repeat) for case_id in ids for repeat in range(repeats)}
     actual = [(row["caseId"], row["repeat"]) for row in rows]
     if len(actual) != len(expected) or set(actual) != expected:
@@ -85,6 +92,13 @@ def load_benchmark_run(path: Path, report: dict | None = None) -> tuple[dict, li
     case_bytes = (path / "cases.json").read_bytes()
     if hashlib.sha256(case_bytes).hexdigest() != report["casesSha256"]:
         raise ValueError("case manifest mismatch")
+    if "configSha256" in report:
+        config_bytes = (path / "config.json").read_bytes()
+        if (
+            hashlib.sha256(config_bytes).hexdigest() != report["configSha256"]
+            or json.loads(config_bytes) != report["config"]
+        ):
+            raise ValueError("configuration snapshot checksum or receipt mismatch")
     prediction = path / "prediction.jsonl"
     prediction_bytes = prediction.read_bytes()
     if (
@@ -94,7 +108,7 @@ def load_benchmark_run(path: Path, report: dict | None = None) -> tuple[dict, li
         raise ValueError("prediction checksum mismatch")
     cases = json.loads(case_bytes)
     rows = [json.loads(line) for line in prediction_bytes.splitlines()]
-    validate_prediction_coverage(cases, rows, report["config"].get("repeats", 1))
+    validate_prediction_rows(cases, rows, report["config"].get("repeats", 1))
     return report, cases, rows
 
 
@@ -113,6 +127,45 @@ def interrupted(_signum, _frame):
     raise KeyboardInterrupt
 
 
+def merged_intervals(ranges: list, limit_ms: float) -> list[tuple[float, float]]:
+    if not isinstance(ranges, list) or not math.isfinite(limit_ms) or limit_ms <= 0:
+        raise ValueError("invalid timing intervals or duration")
+    spans = []
+    for span in ranges:
+        if (
+            not isinstance(span, (list, tuple))
+            or len(span) != 2
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in span)
+        ):
+            raise ValueError("invalid timing interval")
+        start, end = span
+        if not 0 <= start < end <= limit_ms:
+            raise ValueError("timing interval outside audio")
+        spans.append((start, end))
+    merged = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def silence_overlap_ms(silence: list, speech: list) -> float:
+    # Both inputs are sorted interval unions; never double-count overlapping
+    # reference labels or overlapping ASR segments.
+    i = j = 0
+    overlap = 0
+    while i < len(silence) and j < len(speech):
+        a, b = silence[i], speech[j]
+        overlap += max(0, min(a[1], b[1]) - max(a[0], b[0]))
+        if a[1] <= b[1]:
+            i += 1
+        else:
+            j += 1
+    return overlap
+
+
 def validate_cases(cases: list[dict]) -> None:
     seen = set()
     for case in cases:
@@ -123,10 +176,12 @@ def validate_cases(cases: list[dict]) -> None:
             raise ValueError("case needs positive duration and nonempty gold")
         if sha256(Path(case["audioPath"])) != case["sha256"]:
             raise ValueError(f"audio checksum mismatch: {case['id']}")
+        if "knownSilenceRangesMs" in case:
+            merged_intervals(case["knownSilenceRangesMs"], case["durationSeconds"] * 1000)
 
 
 def summarize(cases: list[dict], rows: list[dict], expected_repeats: int = 1) -> list[dict]:
-    validate_prediction_coverage(cases, rows, expected_repeats)
+    validate_prediction_rows(cases, rows, expected_repeats)
     by_id = {case["id"]: case for case in cases}
     groups = defaultdict(list)
     for row in rows:
@@ -138,9 +193,27 @@ def summarize(cases: list[dict], rows: list[dict], expected_repeats: int = 1) ->
         errors = units = failures = 0
         walls = []
         duration = 0
+        annotated = measured = 0
+        silence_duration = silence_overlap = 0
         for case, row in items:
             walls.append(row["wallSeconds"])
             duration += case["durationSeconds"]
+            if "knownSilenceRangesMs" in case:
+                annotated += 1
+                limit = case["durationSeconds"] * 1000
+                silence = merged_intervals(case["knownSilenceRangesMs"], limit)
+                silence_duration += sum(end - start for start, end in silence)
+                if row["status"] == "ok":
+                    if "transcript" not in row:
+                        raise ValueError(
+                            "annotated timing measurement requires transcript segments"
+                        )
+                    speech = merged_intervals(
+                        [(segment["startMs"], segment["endMs"]) for segment in row["transcript"]],
+                        limit,
+                    )
+                    silence_overlap += silence_overlap_ms(silence, speech)
+                    measured += 1
             if row["status"] != "ok":
                 failures += 1
                 continue
@@ -174,6 +247,14 @@ def summarize(cases: list[dict], rows: list[dict], expected_repeats: int = 1) ->
                 "maxCaseSeconds": max(walls),
             }
         )
+        if annotated:
+            result[-1]["knownSilence"] = {
+                "scope": "known_silence_only_not_word_alignment",
+                "annotatedCases": annotated,
+                "measuredCases": measured,
+                "referenceMs": silence_duration,
+                "overlapMs": silence_overlap if measured == annotated else None,
+            }
     return result
 
 
@@ -188,9 +269,11 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     report_path = args.output / "report.json"
     report_path.unlink(missing_ok=True)
-    cases = json.loads(args.cases.read_text())
+    case_bytes = args.cases.read_bytes()
+    cases = json.loads(case_bytes)
     validate_cases(cases)
-    config = json.loads(args.config.read_text())
+    config_bytes = args.config.read_bytes()
+    config = json.loads(config_bytes)
     model_path = Path(config["model"]["artifactPath"])
     artifact_paths = (
         sorted(p for p in model_path.rglob("*") if p.is_file())
@@ -205,15 +288,17 @@ def main() -> None:
         }
         for p in artifact_paths
     ]
-    (args.output / "cases.json").write_bytes(args.cases.read_bytes())
-    (args.output / "config.json").write_bytes(args.config.read_bytes())
+    for name, payload in (("cases", case_bytes), ("config", config_bytes)):
+        partial = args.output / f".{name}.json.part"
+        partial.write_bytes(payload)
+        partial.replace(args.output / f"{name}.json")
     prediction = args.output / "prediction.jsonl"
     prediction.unlink(missing_ok=True)
     runner_sha = sha256(args.runner)
     command = [
         str(args.runner.resolve()),
-        str(args.config.resolve()),
-        str(args.cases.resolve()),
+        str((args.output / "config.json").resolve()),
+        str((args.output / "cases.json").resolve()),
         str(prediction.resolve()),
     ]
     if args.runner.suffix == ".py":
@@ -249,6 +334,12 @@ def main() -> None:
             signal.signal(signal.SIGINT, previous_int)
             signal.signal(signal.SIGTERM, previous_term)
     try:
+        for name, payload in (("cases", case_bytes), ("config", config_bytes)):
+            if (args.output / f"{name}.json").read_bytes() != payload:
+                failure = failure or f"input snapshot changed: {name}.json"
+    except OSError as error:
+        failure = failure or f"input snapshot unavailable: {error}"
+    try:
         rows = (
             [json.loads(line) for line in prediction.read_text().splitlines()]
             if prediction.exists()
@@ -271,7 +362,8 @@ def main() -> None:
     report = {
         "schema": "meetnote.asr-benchmark.v1",
         "config": config,
-        "casesSha256": sha256(args.cases),
+        "casesSha256": hashlib.sha256(case_bytes).hexdigest(),
+        "configSha256": hashlib.sha256(config_bytes).hexdigest(),
         "runnerSha256": runner_sha,
         "predictionSha256": sha256(prediction) if prediction.exists() else None,
         "scoringVersion": "meetnote.asr-scoring.v2",

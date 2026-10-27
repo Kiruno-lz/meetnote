@@ -71,6 +71,10 @@ Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事
 | `crates/runtime` | JobRuntime、任务状态、进度、取消和 worker gate |
 | `crates/settings` | 设置、选择和本地配置持久化 |
 
+全局 `runtime::spawn_blocking` 承载匿名后台读取，复用共享 worker gate；其 context 由 future/worker 持有，不向私有 registry 累积任务历史，未轮询即丢弃、正常完成和 worker panic 都不会留下注册记录。显式 `JobRuntime::create_job` 仍保留可查询的任务状态，按调用方生命周期移除。
+
+共享 gate 复用锁定的 `async-lock` semaphore，先异步取得名额，再创建阻塞 worker；排队不创建等待线程。未取得名额就丢弃 future 时，释放其捕获资源；可取消入口用 `event-listener` 等待 token，不进行定时轮询。名额移交真实 worker 持有直至退出，不能因调用方 future 被丢弃或 token 已取消而提前释放仍在执行的工作预算。该限制是 worker 数量，不能替代各 native session 的线程预算或运行中合作取消。
+
 ## 数据与依赖
 
 ```text

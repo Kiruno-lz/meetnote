@@ -1,0 +1,427 @@
+{
+  "cases": [
+    {
+      "id": "ami-ES2002a-0",
+      "seconds": 12.66,
+      "audioSha256": "9ac2cae979b74b296f9d8d4d0b0e12e2111f9b54ed555c7ce8eb1a22ad627bab",
+      "baseline": {
+        "status": "invalid_timing",
+        "error": "invalid speaker timeline",
+        "der": null
+      },
+      "candidate": {
+        "status": "measured",
+        "zeroCollarDer": [
+          0.013563402889245556,
+          0.013563402889245556
+        ],
+        "fullCollar500msDer": [
+          0.0,
+          0.0
+        ],
+        "medianCallSeconds": 0.766471354,
+        "peakRssBytes": 296353792,
+        "predictionSha256": "18c3cec871e986c2e0b23b5da891e40f2e8a54833c3ae5cdfcc289f87df0a556",
+        "referenceSha256": "52f3d9c6ad68a805dc681d89e9ebb9de9de5f9e002f451c7b259c64128909597",
+        "segments": [
+          1,
+          1
+        ],
+        "observations": [
+          4,
+          4
+        ]
+      }
+    },
+    {
+      "id": "ami-ES2002a-1",
+      "seconds": 6.19,
+      "audioSha256": "42e7f1e398c332f0570f27fd79a376827cacf68adb9b00b12e19c8d35976fd4a",
+      "baseline": {
+        "status": "measured",
+        "zeroCollarDer": [
+          1.0,
+          1.0
+        ],
+        "fullCollar500msDer": [
+          1.0,
+          1.0
+        ],
+        "medianCallSeconds": 0.06846875,
+        "peakRssBytes": 236077056,
+        "predictionSha256": "12d3b091465dfc7c08f3213ba4b73c5745789df203f9cd9e446f0c9d457f5345",
+        "referenceSha256": "8962a366884ef3b8c1198892415c8cc7fc2a4b040bcc025a52ec9ac16232981b",
+        "segments": [
+          0,
+          0
+        ],
+        "observations": [
+          0,
+          0
+        ]
+      },
+      "candidate": {
+        "status": "measured",
+        "zeroCollarDer": [
+          0.09048414023372284,
+          0.09048414023372284
+        ],
+        "fullCollar500msDer": [
+          0.04061930783242256,
+          0.04061930783242256
+        ],
+        "medianCallSeconds": 0.36640887499999997,
+        "peakRssBytes": 266895360,
+        "predictionSha256": "3c61f033bd894d7925d884855f2f47cd078fca52d183e8e31612f7f8ea12c1d0",
+        "referenceSha256": "8962a366884ef3b8c1198892415c8cc7fc2a4b040bcc025a52ec9ac16232981b",
+        "segments": [
+          1,
+          1
+        ],
+        "observations": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "ami-ES2002a-2",
+      "seconds": 4.63,
+      "audioSha256": "7e3a8f07ba2a075e074eb09987181fc66c473b818e81eb1a86ba0b1b03d36eb0",
+      "baseline": {
+        "status": "measured",
+        "zeroCollarDer": [
+          1.0,
+          1.0
+        ],
+        "fullCollar500msDer": [
+          1.0,
+          1.0
+        ],
+        "medianCallSeconds": 0.056306458,
+        "peakRssBytes": 220069888,
+        "predictionSha256": "570e5d0f1e44b5046de8784f7933b9019c13f21f5e709407e40a6ccfa44632c3",
+        "referenceSha256": "ddfbf63ba1e199a4c5a603c8a4577c9f45662b139971171d478f0a2ee4a38f6d",
+        "segments": [
+          0,
+          0
+        ],
+        "observations": [
+          0,
+          0
+        ]
+      },
+      "candidate": {
+        "status": "measured",
+        "zeroCollarDer": [
+          0.02844243792325045,
+          0.02844243792325045
+        ],
+        "fullCollar500msDer": [
+          0.0,
+          0.0
+        ],
+        "medianCallSeconds": 0.362935083,
+        "peakRssBytes": 261423104,
+        "predictionSha256": "38d4dcba72f2af34d2de1a505a3b6507cbacf99a137609aeb3ce4345f07d2857",
+        "referenceSha256": "ddfbf63ba1e199a4c5a603c8a4577c9f45662b139971171d478f0a2ee4a38f6d",
+        "segments": [
+          1,
+          1
+        ],
+        "observations": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "ami-ES2002a-3",
+      "seconds": 5.14,
+      "audioSha256": "46c5981f66ad62e7e66dc5da0e7f438e957c6e603a71f24a822c87ec8e270348",
+      "baseline": {
+        "status": "measured",
+        "zeroCollarDer": [
+          1.0,
+          1.0
+        ],
+        "fullCollar500msDer": [
+          1.0,
+          1.0
+        ],
+        "medianCallSeconds": 0.063715834,
+        "peakRssBytes": 226213888,
+        "predictionSha256": "eb028e8dfc9609c907c38eceba2265850c5fe88cc9f913bb0a60420ead8853d7",
+        "referenceSha256": "43abb91e626ab5bc94f2f2770b3d4f496170979e0305989741575d28b100db75",
+        "segments": [
+          0,
+          0
+        ],
+        "observations": [
+          0,
+          0
+        ]
+      },
+      "candidate": {
+        "status": "measured",
+        "zeroCollarDer": [
+          0.14311740890688263,
+          0.14311740890688263
+        ],
+        "fullCollar500msDer": [
+          0.1443693693693694,
+          0.1443693693693694
+        ],
+        "medianCallSeconds": 0.3678598125,
+        "peakRssBytes": 259915776,
+        "predictionSha256": "b2cc3f95ce480ea2269473a403426aa82bbff39e9c5769eae73afb88975ab557",
+        "referenceSha256": "43abb91e626ab5bc94f2f2770b3d4f496170979e0305989741575d28b100db75",
+        "segments": [
+          3,
+          3
+        ],
+        "observations": [
+          1,
+          1
+        ]
+      }
+    },
+    {
+      "id": "ami-ES2002a-4",
+      "seconds": 8.67,
+      "audioSha256": "5ab60058843644c12f757a0a0d333b7141714efdb89e72bf325b385fdd0f816a",
+      "baseline": {
+        "status": "measured",
+        "zeroCollarDer": [
+          1.0,
+          1.0
+        ],
+        "fullCollar500msDer": [
+          1.0,
+          1.0
+        ],
+        "medianCallSeconds": 0.0634743955,
+        "peakRssBytes": 229490688,
+        "predictionSha256": "a89124a502789a9d5ab31f381e9958889c57278c7cfa307fddda7aa2492daa9f",
+        "referenceSha256": "0e6d07fd779ddc56bfd7ec3f11dee6df9270b8377aa64835f612ed7eb0072ad7",
+        "segments": [
+          0,
+          0
+        ],
+        "observations": [
+          0,
+          0
+        ]
+      },
+      "candidate": {
+        "status": "measured",
+        "zeroCollarDer": [
+          0.018063754427390746,
+          0.018063754427390746
+        ],
+        "fullCollar500msDer": [
+          0.0,
+          0.0
+        ],
+        "medianCallSeconds": 0.369835625,
+        "peakRssBytes": 273219584,
+        "predictionSha256": "4fe1a263d1dcacf7cf436c350b9a69c4f1bbffb720404ad7fdef54ca4f92a85d",
+        "referenceSha256": "0e6d07fd779ddc56bfd7ec3f11dee6df9270b8377aa64835f612ed7eb0072ad7",
+        "segments": [
+          1,
+          1
+        ],
+        "observations": [
+          1,
+          1
+        ]
+      }
+    }
+  ],
+  "allShortGatesPassed": true,
+  "nonshortSourceProjection": "exact speaker intervals and embedding observations match the explicitly bounded raw baseline; original baseline remains invalid and unscored",
+  "rawBaselineControlEndMs": 12974,
+  "sourceEndMs": 12660,
+  "silence8s": "both calls return zero segments and observations",
+  "whole180Equivalence": {
+    "qualityStatus": "baseline_equivalent",
+    "baselineMedianSeconds": 37.8269234795,
+    "candidateMedianSeconds": 36.625843853999996,
+    "speedup": 0.031751977560398825,
+    "peakRssRatio": 1.0579640075208165,
+    "minimumEmbeddingCosine": 1.0,
+    "maximumEmbeddingAbsoluteError": 0.0,
+    "repeats": 2,
+    "speakerTimeline": "identical after canonical identity mapping",
+    "qualityScope": "baseline equivalence; not DER"
+  },
+  "qualityAcceptance": "not_assessed; train only, nonoverlap utterance diagnostic",
+  "protocolSha256": "31feaba5a6cdc3c7b2c69db7cf9d6cd0047cd3fdfe454c5e3452f3b9e105839c",
+  "schema": "meetnote.short-diarization-validation.v1",
+  "date": "2026-10-26",
+  "finalSourceCommit": "00fc5f704950b24e6243e03a12fd59f89a6a3523",
+  "wholeFileBenchmarkBuild": {
+    "sourceCommit": "e6399e424f5730f371e498be4300656fe020d611",
+    "runnerSha256": "975cb39436495c5e398c257e23727e2465a6c175e04099f4a2d4541bb152b896",
+    "protocolSha256": "31feaba5a6cdc3c7b2c69db7cf9d6cd0047cd3fdfe454c5e3452f3b9e105839c",
+    "profileScriptSha256": "2791adf5d77a415968a4eafc91d6eb76b6245aa02c57378db595ab85f5579da5"
+  },
+  "firstCandidate": {
+    "build": {
+      "sourceCommit": "c4543aa2ebdc2154c906d13715c2618b5ef453a8",
+      "runnerSha256": "95ed208ec97a0e0a103aa736ef29e78d2bc888c05d32789800216f327e492363",
+      "protocolSha256": "31feaba5a6cdc3c7b2c69db7cf9d6cd0047cd3fdfe454c5e3452f3b9e105839c",
+      "profileScriptSha256": "9b42934fb5c34d08da9db5eec07f5492abc6f0aede6de6f99ad4b3fcece4b6d1"
+    },
+    "status": "rejected: silence gate returned two worker failures from an out-of-bounds empty cluster index",
+    "failedPredictionSha256": "95a3a98ceab2fae1cbf61bd82a788f4de25f8e61695997826c8f5dc5e296c1e6"
+  },
+  "modelArtifacts": {
+    "plda_lda.npy": "e20c9b012bebd1aabda5a38a127e63a43cf35debdc502715fc143e2fb6bc3c4b",
+    "plda_mean1.npy": "e424c0c352182aa8e0f555dec1f3b30e29a20b9ed6b25d339f112af92e51e36f",
+    "plda_mean2.npy": "6f6fb708a2037197b5b84ffeaa8f140cb878088fbecd6ab042ad26a7691bd2cf",
+    "plda_mu.npy": "d286d48acf99bbc1ed1502fed0a3e361ae5626ce1870c8be9f7397c5e47886c6",
+    "plda_psi.npy": "d7128c9ed2f28a9781971805131129f077c04f948e2df12e52dcdb99f2b4e5f5",
+    "plda_tr.npy": "e700b68cb319de3fafb5fa093eb9222c23c447084741f8d3a533640d425510ee",
+    "segmentation-3.0.onnx": "038b971741ed623af9773ecafdefa4b7bc523520099c2a68f8568b24189e8ad9",
+    "wespeaker-voxceleb-resnet34.min_num_samples.txt": "e4df891c484d7abb985dadf539fa1883a646dab6337af5cae4159c587b7050cc",
+    "wespeaker-voxceleb-resnet34.onnx": "203a4c67112167580ab1fcb62f4568c633499fb283805890aebe1c48564fcc0f",
+    "wespeaker-voxceleb-resnet34.onnx.data": "dc105e7857156611381b95cc961b277d8e1e098e7af1c919a77c68c7257ce956"
+  },
+  "upstreamReference": {
+    "repository": "pyannote/pyannote-audio",
+    "revision": "623ab14d69a039b474fc1fb2551b657aa00c0ce4",
+    "path": "src/pyannote/audio/core/inference.py",
+    "blobSha1": "9e9250ccbc73e2e5e5c663bee31e25b9f03de4ac",
+    "usedRule": "include a zero-padded last chunk for input shorter than the model window",
+    "scope": "only the short-input coverage rule is adopted; existing longer-input scheduling is preserved"
+  },
+  "protocol": {
+    "initialSha256": "ad686cdb036da2b8ba8d3790fedf0f3874fc3700b184917ffbfa7dd506f20152",
+    "revisedSha256": "31feaba5a6cdc3c7b2c69db7cf9d6cd0047cd3fdfe454c5e3452f3b9e105839c",
+    "initialRawNonshortEqualityGate": "superseded, not passed: preserving a 12974 ms endpoint for 12660 ms source would preserve invalid timing",
+    "revisionReason": "Baseline 12.66-second audio ends at 12.974 seconds; preserve raw evidence, require only source-bounded projection equivalence rather than retaining invalid padding time.",
+    "allRevisedGatesPassed": true
+  },
+  "whole180Der": [
+    {
+      "repeat": 0,
+      "collarMs": 0,
+      "status": "measured",
+      "method": "pyannote.metrics-4.0.0-hungarian",
+      "collarConvention": "full_duration_centered_on_reference_boundaries",
+      "overlap": "included",
+      "scoringRegion": "source_duration",
+      "scoredSpeakerSeconds": 113.49000000000001,
+      "missedSpeakerSeconds": 5.560999999999993,
+      "falseAlarmSpeakerSeconds": 22.02399999999999,
+      "confusedSpeakerSeconds": 4.168000000000006,
+      "der": 0.27978676535377556,
+      "missRate": 0.048999911886509755,
+      "falseAlarmRate": 0.19406115076218158,
+      "confusionRate": 0.0367257027050842
+    },
+    {
+      "repeat": 0,
+      "collarMs": 500,
+      "status": "measured",
+      "method": "pyannote.metrics-4.0.0-hungarian",
+      "collarConvention": "full_duration_centered_on_reference_boundaries",
+      "overlap": "included",
+      "scoringRegion": "source_duration",
+      "scoredSpeakerSeconds": 94.91000000000007,
+      "missedSpeakerSeconds": 2.787000000000006,
+      "falseAlarmSpeakerSeconds": 20.27,
+      "confusedSpeakerSeconds": 2.1959999999999837,
+      "der": 0.2660731219049623,
+      "missRate": 0.02936466125803397,
+      "falseAlarmRate": 0.2135707512380148,
+      "confusionRate": 0.02313770940891352
+    },
+    {
+      "repeat": 1,
+      "collarMs": 0,
+      "status": "measured",
+      "method": "pyannote.metrics-4.0.0-hungarian",
+      "collarConvention": "full_duration_centered_on_reference_boundaries",
+      "overlap": "included",
+      "scoringRegion": "source_duration",
+      "scoredSpeakerSeconds": 113.49000000000001,
+      "missedSpeakerSeconds": 5.560999999999993,
+      "falseAlarmSpeakerSeconds": 22.02399999999999,
+      "confusedSpeakerSeconds": 4.168000000000006,
+      "der": 0.27978676535377556,
+      "missRate": 0.048999911886509755,
+      "falseAlarmRate": 0.19406115076218158,
+      "confusionRate": 0.0367257027050842
+    },
+    {
+      "repeat": 1,
+      "collarMs": 500,
+      "status": "measured",
+      "method": "pyannote.metrics-4.0.0-hungarian",
+      "collarConvention": "full_duration_centered_on_reference_boundaries",
+      "overlap": "included",
+      "scoringRegion": "source_duration",
+      "scoredSpeakerSeconds": 94.91000000000007,
+      "missedSpeakerSeconds": 2.787000000000006,
+      "falseAlarmSpeakerSeconds": 20.27,
+      "confusedSpeakerSeconds": 2.1959999999999837,
+      "der": 0.2660731219049623,
+      "missRate": 0.02936466125803397,
+      "falseAlarmRate": 0.2135707512380148,
+      "confusionRate": 0.02313770940891352
+    }
+  ],
+  "verification": {
+    "workspacePrimaryHarnessPassed": 952,
+    "existingNestedHarnessPassed": 3,
+    "workspaceFailed": 0,
+    "workspaceRegisteredIgnored": 13,
+    "uiChildExplicitlyExecutedByParent": true,
+    "nativeIgnoredTestFunctionsExplicitlyExecuted": 2,
+    "modelEvidence": "real speech output bounds; real silence through whole-file and a window session",
+    "purePlannerTests": 4,
+    "existingVendorTensorTests": 2,
+    "boundaryAndLayoutUnitTests": 3,
+    "cargoFmt": "passed",
+    "vendorRustfmt": "passed",
+    "cargoCheckWorkspace": "passed",
+    "finalWorkspaceLogSha256": "2324f331171b34820b7be2dca14405de3289713be1fd03d79413ed77c2d00281",
+    "speechRedLogSha256": "760993c3c6651546fd4e5bbcd73da798390f2e825e0470c2a75caa4170a83c97",
+    "boundsRedLogSha256": "a1247a8f8926576f021b36c8620ba50f1ece2aa6b058721db6e1622091d425ab",
+    "windowSilenceRedLogSha256": "0ee255b3bce2f083766cdb1496554889890024ee8ba16379dc71117cfa4f3460",
+    "windowSilenceGreenLogSha256": "2b5f3e86dd4380131612d45286af0534c380f6b39dff8c9fb6f7ecdee50e8cda"
+  },
+  "benchmarkAccounting": {
+    "baselineBackendCalls": 12,
+    "firstCandidateBackendCalls": 14,
+    "firstCandidateSuccessful": 12,
+    "firstCandidateFailed": 2,
+    "finalCandidateBackendCalls": 14,
+    "finalCandidateSuccessful": 14,
+    "note": "backend calls are not all model-inference calls: baseline short and silence inputs skipped segmentation windows"
+  },
+  "sourceSha256": {
+    "third_party/speakrs/src/inference/segmentation/tensor.rs": "c60fa69d0600ff364b9c41178eb32a4c5485d74652414f4abe4a28b84086500e",
+    "crates/diarization-native/src/engine.rs": "1354f932626cc05ba699492391b9e7a98a4017a5da4c3b6f853d62c1cefb67d0",
+    "crates/diarization-native/src/windowed.rs": "24910483c1a52fceb32b6d1343b5a1fdfb36ca98981b6a2e7547c980a3fdc3e9",
+    "crates/diarization-native/tests/segmentation_windows.rs": "04342dae4291d4b7aa88351c18231fdd65851646f2121529cbec84c11c019da9",
+    "crates/diarization-native/tests/native_pipeline.rs": "26704448232d7fc4fb83ce0c79d7f448f4abaeefb5c0d30cf4264b159b327fdd"
+  },
+  "limitations": [
+    "Known AMI training crops and forced-alignment word-activity reference; not held-out or production acceptance.",
+    "Four short single-speaker crops do not validate overlap, cross-recording identity, Chinese meetings or all short inputs.",
+    "Geometry includes a window for every nonempty short input; a segment or speaker is not guaranteed for every nonempty waveform.",
+    "Short timing includes backend loading decode and inference, excludes the outer probe and the full app/ASR pipeline; two repetitions are diagnostic.",
+    "The baseline short path omitted inference, so its lower elapsed time is not a valid speed target.",
+    "Whole-file benchmarks use e6399e4; the subsequent window-session fix changes only the windowed guard and internal validator visibility and is verified by an explicit real window test.",
+    "Quadratic AHC memory, hour-scale concurrency and the earlier unconfirmed UI readiness timeout remain outside this acceptance."
+  ],
+  "summaryScriptSha256": "b7aa379798ed1aa981e758bf5e1fb877dd6fb663a4a306a9c31a13118c85658f",
+  "scorerSourceSha256": {
+    "scripts/audio-eval/metrics.py": "5c9d82d039f1c185920dbec3d6d42f2891099ff986b6bee0225b1128b946385d",
+    "scripts/audio-eval/report_diarization.py": "2197d6af3e0bdd913bc1d9fc2983bc8f635c70352d6014ac716e4a059a3b0724",
+    "scripts/audio-eval/requirements-diarization.txt": "8b282ed7f5af5b826c7fa35bab0170e883b6d29cc21f71cb9b77423486184cad"
+  }
+}

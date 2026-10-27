@@ -35,6 +35,197 @@ use std::sync::Arc;
 pub(crate) type View = gpui::Entity<RootView>;
 type Area = gpui::Entity<controls::TextArea>;
 
+/// Hold every shared blocking slot while UI events continue to run. Release
+/// even on assertion failure so other tests cannot inherit a stranded queue.
+#[derive(Default)]
+struct OccupiedUiWorkers {
+    workers: Vec<(std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>)>,
+}
+
+impl OccupiedUiWorkers {
+    fn new() -> Self {
+        let count = std::thread::available_parallelism()
+            .map(|n| n.get().min(4))
+            .unwrap_or(2);
+        let mut occupied = Self::default();
+        for _ in 0..count {
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let worker = std::thread::spawn(move || {
+                futures::executor::block_on(runtime::spawn_blocking(move || {
+                    started_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                }));
+            });
+            occupied.workers.push((release_tx, worker));
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        occupied
+    }
+}
+
+impl Drop for OccupiedUiWorkers {
+    fn drop(&mut self) {
+        // Release all slots before waiting for any driver to finish.
+        let workers: Vec<_> = self
+            .workers
+            .drain(..)
+            .map(|(release, worker)| {
+                drop(release);
+                worker
+            })
+            .collect();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+    }
+}
+
+#[test]
+fn workspace_search_releases_obsolete_queued_repository_handles() {
+    // Protect the heartbeat from other intentionally blocked cases. Ordinary
+    // tests remain free to use this process's IO pool while the child fills its own.
+    let _alone = crate::tests::hold_a_worker_alone();
+    let log_path = temp_directory().with_extension("log");
+    let log = std::fs::File::create(&log_path).unwrap();
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "document_tests::queued_search_worker_exhaustion_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("MEETNOTE_UI_EXHAUSTION_HOLD", "1")
+        .stdin(std::process::Stdio::piped())
+        .stdout(log.try_clone().unwrap())
+        .stderr(log)
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40);
+    let mut heartbeat = None;
+    let (status, timed_out) = loop {
+        let output = std::fs::read_to_string(&log_path).unwrap();
+        if heartbeat.is_none() && output.contains("UI_WORKERS_HELD") {
+            let (sent, received) = std::sync::mpsc::channel();
+            let driver = std::thread::spawn(move || {
+                futures::executor::block_on(runtime::spawn_blocking(move || {
+                    let _ = sent.send(());
+                }));
+            });
+            heartbeat = Some(
+                received
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .is_ok(),
+            );
+            // EOF releases the child even if the heartbeat failed.
+            drop(child.stdin.take());
+            if heartbeat == Some(true) {
+                driver.join().unwrap();
+            }
+        }
+        if let Some(status) = child.try_wait().unwrap() {
+            break (status, false);
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            break (child.wait().unwrap(), true);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    let output = std::fs::read_to_string(&log_path).unwrap();
+    std::fs::remove_file(log_path).unwrap();
+    assert!(!timed_out, "isolated worker test timed out: {output}");
+    assert!(status.success(), "isolated worker test failed: {output}");
+    assert_eq!(
+        heartbeat,
+        Some(true),
+        "child interfered with the parent IO pool: {output}"
+    );
+    assert!(
+        output.contains("UI_EXHAUSTION_VERIFIED"),
+        "child did not finish its assertions: {output}"
+    );
+}
+
+#[gpui::test]
+#[ignore = "executed by the process-isolated queued-search regression"]
+fn queued_search_worker_exhaustion_child(cx: &mut TestAppContext) {
+    let _alone = crate::tests::hold_a_worker_alone();
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "预算");
+    let bytes = documents.package_bytes("meeting");
+    let repository = Arc::new(documents.repository());
+    let mut services =
+        desktop_services(Arc::new(FakeAssistantUiService::default()), test_settings());
+    services.workspace = WorkspaceService::new(
+        ProcessingService::new(
+            Arc::new(WhisperRsBackend::default()),
+            Arc::new(SherpaOnnxDiarizationBackend::default()),
+        ),
+        DocumentService::new(repository.clone()),
+    );
+    let (view, cx) = open_desktop_on(cx, services);
+    view.update(cx, |root, cx| root.navigate(Route::Meetings, cx));
+    wait_for(cx, &view, |root| !root.audio.pending());
+    let occupied = OccupiedUiWorkers::new();
+    if std::env::var_os("MEETNOTE_UI_EXHAUSTION_HOLD").is_some() {
+        println!("UI_WORKERS_HELD");
+        std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0]);
+    }
+    cx.run_until_parked();
+    let owners = Arc::strong_count(&repository);
+    let input = view.read_with(cx, |root, _| root.search.input.clone());
+    focus_field(cx, &input);
+    cx.simulate_input("预算");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |root, _| root.search.pending));
+    assert_eq!(Arc::strong_count(&repository), owners + 1);
+    click_selector(cx, "workspace-search-clear");
+    cx.run_until_parked();
+    assert_eq!(
+        Arc::strong_count(&repository),
+        owners,
+        "clear must discard the queued search before any shared worker becomes free"
+    );
+
+    focus_field(cx, &input);
+    cx.simulate_input("预算");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter"); // Replacing a queued query keeps exactly one owner.
+    cx.run_until_parked();
+    assert_eq!(Arc::strong_count(&repository), owners + 1);
+    cx.simulate_input("草稿");
+    cx.run_until_parked();
+    assert!(!view.read_with(cx, |root, _| root.search.pending));
+    assert_eq!(
+        Arc::strong_count(&repository),
+        owners,
+        "editing the query must discard its previous queued read"
+    );
+    assert_eq!(documents.package_bytes("meeting"), bytes);
+    drop(occupied);
+    crate::document_tests::search(cx, &view, "预算");
+    assert_eq!(
+        view.read_with(cx, |root, _| root
+            .search
+            .result
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .hits
+            .len()),
+        1,
+        "a new search must still finish normally"
+    );
+    println!("UI_EXHAUSTION_VERIFIED");
+}
+
 #[gpui::test]
 fn workspace_search_is_available_beside_the_project_tree(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
@@ -123,6 +314,158 @@ fn workspace_search_shows_saved_markdown_without_replacing_a_dirty_draft(cx: &mu
     click_selector(cx, "content-mode-edit");
     assert_eq!(area_value(cx, &body), "未保存草稿");
     assert_eq!(documents.read("meeting").markdown, "新的决定");
+}
+
+#[gpui::test]
+fn saved_markdown_copy_preserves_source_and_dirty_draft(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let markdown = "# 会议 Review\r\n\r\n- [x] 保留 **Markdown**\r\n";
+    documents.put(processed("meeting", "Review"), markdown);
+    let before = documents.package_bytes("meeting");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    open_editor(cx, &view, "meeting");
+    let body = view.read_with(cx, |root, _| root.editor.body.clone());
+    retype_area(cx, &body, "未保存草稿");
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|s| s.outcome.is_some())
+    });
+    for locale in [i18n::Locale::ZhCn, i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let button = rendered(cx, "copy-saved-markdown");
+        assert!(
+            within(button, rendered(cx, "meeting-content")),
+            "copy must fit the smallest reading plane"
+        );
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()));
+        if locale == i18n::Locale::ZhCn {
+            click_selector(cx, "copy-saved-markdown");
+        } else {
+            for _ in 0..40 {
+                cx.simulate_keystrokes("tab");
+                if cx
+                    .debug_bounds("focus-ring")
+                    .is_some_and(|ring| within(ring, button))
+                {
+                    break;
+                }
+            }
+            assert!(
+                cx.debug_bounds("focus-ring")
+                    .is_some_and(|ring| within(ring, button)),
+                "copy is keyboard reachable"
+            );
+            cx.simulate_keystrokes("enter");
+            // Native buttons activate on release, unlike text-field Submit.
+            cx.simulate_event(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse("enter").unwrap(),
+            });
+        }
+        cx.run_until_parked();
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some(markdown),
+            "copy must activate in {locale:?}"
+        );
+        assert_eq!(
+            view.read_with(cx, |root, _| root.ui.notice.clone()),
+            i18n::text(locale, "saved_markdown_copied")
+        );
+    }
+    click_selector(cx, "content-mode-edit");
+    assert_eq!(area_value(cx, &body), "未保存草稿");
+    assert_eq!(
+        documents.package_bytes("meeting"),
+        before,
+        "copy is read-only"
+    );
+}
+
+#[gpui::test]
+fn saved_markdown_copy_rejects_unavailable_or_unselected_snapshots(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "Saved notes");
+    let record = documents.read("meeting");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    for scenario in [
+        "loading",
+        "failed",
+        "empty",
+        "other-document",
+        "other-view",
+        "other-route",
+        "switching",
+        "removed",
+    ] {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()));
+        view.update(cx, |root, cx| {
+            root.ui.route = Route::Meetings;
+            root.ui.content_mode = crate::state::ContentMode::Markdown;
+            root.ui.selected_project = Some(record.state.id().clone());
+            root.projects = vec![record.state.clone()];
+            root.documents_root_switch.switching = false;
+            root.saved_document = Some(crate::editor::SavedDocument {
+                document_id: record.state.id().clone(),
+                outcome: Some(Ok(record.clone())),
+            });
+            match scenario {
+                "loading" => root.saved_document.as_mut().unwrap().outcome = None,
+                "failed" => {
+                    root.saved_document.as_mut().unwrap().outcome = Some(Err("read failed".into()))
+                }
+                "empty" => {
+                    root.saved_document.as_mut().unwrap().outcome = Some(Ok(DocumentRecord {
+                        state: record.state.clone(),
+                        markdown: String::new(),
+                    }))
+                }
+                "other-document" => root.ui.selected_project = Some(ProjectId::new("other")),
+                "other-view" => root.ui.content_mode = crate::state::ContentMode::Edit,
+                "other-route" => root.ui.route = Route::Settings,
+                "switching" => root.documents_root_switch.switching = true,
+                "removed" => root.projects.clear(),
+                _ => unreachable!(),
+            }
+            root.copy_saved_markdown(cx);
+        });
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("sentinel"),
+            "must not copy {scenario}"
+        );
+    }
+}
+
+#[gpui::test]
+fn empty_saved_markdown_copy_preserves_the_clipboard(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    click_selector(cx, "content-mode-markdown");
+    wait_for(cx, &view, |root| {
+        root.saved_document
+            .as_ref()
+            .is_some_and(|s| s.outcome.is_some())
+    });
+    cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()));
+    click_selector(cx, "copy-saved-markdown");
+    assert_eq!(
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .as_deref(),
+        Some("sentinel")
+    );
 }
 
 #[gpui::test]

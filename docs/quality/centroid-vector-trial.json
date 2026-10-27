@@ -1,0 +1,23 @@
+{
+  "scope": "synthetic memory-saving centroid API trial; no production integration memory measurement or DER acceptance",
+  "fastcluster": "1.3.0",
+  "scipy": "1.18.1",
+  "numpy": "2.5.4",
+  "seed": 86739,
+  "trees": 48,
+  "partitionComparisons": 192,
+  "partitionMismatches": 0,
+  "maximumMergeHeightDifference": 8.881784197001252e-16,
+  "pythonModuleSha256": "70c681533d70806f6309ca7d01220a8f5cc918ec63f063a29f265fd176c43747",
+  "candidateApi": "linkage_vector(method=centroid, metric=euclidean)",
+  "sourceReference": "https://github.com/fastcluster/fastcluster/tree/efc82a184125494cbd639803b64a5c9a4e45c1b0",
+  "officialDocumentedMemory": "O(ND) vector API versus O(N^2) condensed linkage; not measured here",
+  "decision": "retain native production chain; next gate requires Rust/C++ ownership cancellation numeric parity real-model DER and resource measurements",
+  "schema": "meetnote.centroid-vector-api-trial.v1",
+  "date": "2026-10-26",
+  "officialDocumentation": "https://github.com/fastcluster/fastcluster/blob/efc82a184125494cbd639803b64a5c9a4e45c1b0/fastcluster.py",
+  "projectDependenciesChanged": false,
+  "memoryMeasured": false,
+  "wallTimeMeasured": false,
+  "realDiarizationMeasured": false
+}

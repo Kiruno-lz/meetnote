@@ -35,7 +35,7 @@ cargo test --workspace
 
 ### 长音频资源
 
-- 将长音频阻塞工作纳入 `JobContext` 共享 worker gate，覆盖并发任务测试。
+- 长音频已通过所属 `JobContext` 共享 worker gate 按录音取得名额；单名额回归覆盖排队、不提前加载模型、任一阶段排队取消和模型创建 panic 的错误分类。//TODO - 用固定真实模型验证多录音并行时的耗时、峰值 RSS 和 native runtime 稳定性；名额数不能作为推理线程总预算。
 - 限制 recording-wide clustering 输入规模；保留原始 observation 供重建与验证，但不能让 AHC 的二次距离数组随整段录音无限增长。
 - 使用真实 20 小时代表性音频记录耗时、峰值 RSS、observation 数和临时存储。
 - 执行取消、解码失败、模型失败、磁盘失败和进程中断注入，验证错误可见性与重新处理安全。
