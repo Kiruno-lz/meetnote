@@ -1,0 +1,410 @@
+{
+  "schema": "meetnote.sherpa-source-bounds-validation.v1",
+  "date": "2026-10-27",
+  "scope": "source-bounded Sherpa whole-file metadata, preserving extraction samples; fixed training crops and synthetic silence, no held-out or overall quality acceptance",
+  "baselineSourceCommit": "1a0ec34a640db242bec5c0087ed2f4f144321f4c",
+  "candidateSourceCommit": "06ea06593751373f58e13d858b768b480b9d5528",
+  "modelDirectory": "/Users/kiruno/Documents/_code/vibe/meetnote/models/diarization/sherpa-onnx-speaker-diarization-bundle",
+  "modelArtifacts": {
+    "embedding.onnx": "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
+    "segmentation.onnx": "220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079"
+  },
+  "cargoLockSha256": "5b7a4581f805e7bc23a2ad326a13a875f8017210a06561f2f0dc042332f02964",
+  "sourceHashes": {
+    "crates/diarization-sherpa-onnx/src/lib.rs": "41b995b5ddeaa92b0570636b0f9e90896adcd6529547bd42ce87c60ee9941147",
+    "crates/diarization-sherpa-onnx/tests/source_bounds.rs": "6435cc7048565a9a63208274acbb1b0618c5c97e6b5def5e5705f6d91bd0e8a5"
+  },
+  "baselineRunnerSha256": "c3655e0c43e9b40f6bbc0420f769dbef3b7472b5fbea47edada3ca48e5ace2f8",
+  "candidateRunnerSha256": "c8857f1b4e1980bb651a7614654d28a0bc32b9e9b377055d1bd6f23dd6b2e4e8",
+  "rawArtifacts": "eval-data/optimization-2026-10-27/sherpa-source-bounds",
+  "protocolSha256": "304fc556f69b6a195437e4e73936caacf059d8ef9124e26ffd52e57d2bb0cbbd",
+  "validationProtocolSha256": "6d2214782374b4340e90f8072c5938f3dc5c6bc3064f822ac79edeb72bf2d37b",
+  "validationResultSha256": "093d9054e356deb700792284a6059f9612c0ce916c83e26f47c4814c274b8fd6",
+  "qualitySummarySha256": "40aaf9085a1638c2a233d5ee90280258bf254d32710cd10bf8f0439905a7047d",
+  "temporaryScriptHashes": {
+    "meetnote-loop23-screen.py": "ba47497540f6bb1403b421615c9463131e9b163c0595af882eacc43f41790f62",
+    "meetnote-loop23-verify.py": "c029a5308e605e3f022368c63954126f268d3dedcba9ee28ef8f21184e9cd49b",
+    "meetnote-loop23-paired.py": "e1a7e02ecc66f1780a9b2f6fc2ca1310749a384522694f71d0c3545660e225df"
+  },
+  "configuration": {
+    "backend": "sherpa-onnx",
+    "device": "Cpu",
+    "repeatsPerProcess": 2,
+    "expectedSpeakers": null,
+    "speakerLibrary": null,
+    "clusteringThreshold": 0.5
+  },
+  "regressions": [
+    {
+      "case": "12.66 second explicit AMI speech",
+      "before": "timeline and observation end at 12687ms beyond decoded 12660ms; real integration test fails",
+      "after": "both end at 12660ms; explicit real integration test passes"
+    },
+    {
+      "case": "tail, padding-only, reversed and millisecond-collapsed unit ranges",
+      "before": "two unit tests fail with unbounded or empty ranges",
+      "after": "all unit tests pass; pure padding and collapsed ranges are omitted"
+    },
+    {
+      "case": "independent review: 16001 samples with model end beyond source",
+      "before": "intermediate metadata-based extraction ends at 16000, losing final real sample; deterministic regression fails",
+      "after": "preserve original raw endpoint clipped in samples to 16001; timeline ends at 1000ms; unit regression passes"
+    }
+  ],
+  "behavior": {
+    "timelineAndObservationMetadata": "same positive range bounded to integer source duration",
+    "embeddingExtraction": "preserve original whole-source clipped endpoint, including source tail shorter than 1ms",
+    "speakerCount": "distinct retained output labels, not maximum label plus one or pre-clipping cluster count",
+    "modelAndThresholdChanges": false
+  },
+  "matrix": {
+    "baselineCalls": 14,
+    "candidateCalls": 14,
+    "allSourceAudioModelRunnerHashesUnchanged": true,
+    "cases": [
+      {
+        "case": "ami-ES2002a-0",
+        "frames": 202560,
+        "audioEndMs": 12660,
+        "baselineMedianSeconds": 2.5008167085,
+        "candidateMedianSeconds": 2.513002396,
+        "segments": [
+          1,
+          1
+        ],
+        "observations": [
+          1,
+          1
+        ],
+        "fullBoundedProjectionEqual": true,
+        "vectorsExactlyUnchanged": true,
+        "baselinePredictionSha256": "00a46460c82e180b0bdfd7d35a06d2e3e503137c8fec7dc4c9af58ba0804fa68",
+        "candidatePredictionSha256": "6351a8f2c825db57126ca68090fac5e07e8daa76a65d9bb972862b4eb28fa982"
+      },
+      {
+        "case": "ami-ES2002a-1",
+        "frames": 99040,
+        "audioEndMs": 6190,
+        "baselineMedianSeconds": 0.49167431250000004,
+        "candidateMedianSeconds": 0.5037316665,
+        "segments": [
+          1,
+          1
+        ],
+        "observations": [
+          1,
+          1
+        ],
+        "fullBoundedProjectionEqual": true,
+        "vectorsExactlyUnchanged": true,
+        "baselinePredictionSha256": "2e931eda1f7c44ece6521a3bfb7a92c729a12e482ac72589b66f6b076ff09916",
+        "candidatePredictionSha256": "7b89dc0ec499857477b778281fbc005f4ae27a95683709684b7c65519ce970ac"
+      },
+      {
+        "case": "ami-ES2002a-2",
+        "frames": 74080,
+        "audioEndMs": 4630,
+        "baselineMedianSeconds": 0.43395910449999997,
+        "candidateMedianSeconds": 0.4282118545,
+        "segments": [
+          1,
+          1
+        ],
+        "observations": [
+          1,
+          1
+        ],
+        "fullBoundedProjectionEqual": true,
+        "vectorsExactlyUnchanged": true,
+        "baselinePredictionSha256": "20a399503cdcbae1809606f4dea73dbae670be73e22693cbc9fab8e32210c9d6",
+        "candidatePredictionSha256": "e6b85958189b3b4ca4c290506427c7fa2885d69a93762de9ad7ec5ae79e72938"
+      },
+      {
+        "case": "ami-ES2002a-3",
+        "frames": 82240,
+        "audioEndMs": 5140,
+        "baselineMedianSeconds": 0.428681208,
+        "candidateMedianSeconds": 0.5061926665,
+        "segments": [
+          2,
+          2
+        ],
+        "observations": [
+          2,
+          2
+        ],
+        "fullBoundedProjectionEqual": true,
+        "vectorsExactlyUnchanged": true,
+        "baselinePredictionSha256": "888ec1f5a7355e2e19ee9922a3ce4652f0f18165bbc4bd73ebfb8c222a78fe3c",
+        "candidatePredictionSha256": "0159766a9fb272878014b263f1aaea5379ab02b01908412a94ffad949a1dccb4"
+      },
+      {
+        "case": "ami-ES2002a-4",
+        "frames": 138720,
+        "audioEndMs": 8670,
+        "baselineMedianSeconds": 0.5949760829999999,
+        "candidateMedianSeconds": 0.7716211040000001,
+        "segments": [
+          1,
+          1
+        ],
+        "observations": [
+          1,
+          1
+        ],
+        "fullBoundedProjectionEqual": true,
+        "vectorsExactlyUnchanged": true,
+        "baselinePredictionSha256": "1c3e9fb557eeb14491b47a87bef31863b14e702aa01150bfabbcb6a442a1a359",
+        "candidatePredictionSha256": "51d8d8a31ac31f356f1341f7eb13aa1c16b6035c1c0fbafc9366ae0b7b0c245d"
+      },
+      {
+        "case": "silence8",
+        "frames": 128000,
+        "audioEndMs": 8000,
+        "baselineMedianSeconds": 0.2617320835,
+        "candidateMedianSeconds": 0.304163146,
+        "segments": [
+          0,
+          0
+        ],
+        "observations": [
+          0,
+          0
+        ],
+        "fullBoundedProjectionEqual": true,
+        "vectorsExactlyUnchanged": true,
+        "baselinePredictionSha256": "7f5943773172fa548e97407f7ed8df79e91c7eabedbb37b02b3ed07915fff8ba",
+        "candidatePredictionSha256": "32ed5d2b1c145136eb7141fbf2fa256dab9c5f40d99c4d6dbbba568d3055b288"
+      },
+      {
+        "case": "ami-ES2002a-0-plus-one-sample",
+        "frames": 202561,
+        "audioEndMs": 12660,
+        "baselineMedianSeconds": 2.5413161874999997,
+        "candidateMedianSeconds": 2.732122833,
+        "segments": [
+          1,
+          1
+        ],
+        "observations": [
+          1,
+          1
+        ],
+        "fullBoundedProjectionEqual": true,
+        "vectorsExactlyUnchanged": true,
+        "baselinePredictionSha256": "5462acc2782b8d0ae9d1dac50da3f8ae6d6e96bfdf228d3728e2ea73028f2539",
+        "candidatePredictionSha256": "dd55b011d5c4794cf3614971fa73c52a6b591f4d98bc5dee5df1887897fd7efe"
+      }
+    ],
+    "partialSampleRecipe": {
+      "sourceSha256": "9ac2cae979b74b296f9d8d4d0b0e12e2111f9b54ed555c7ce8eb1a22ad627bab",
+      "audioSha256": "b47e4b7a761ebc179d9fea0bf10aeec99698586e3ec7d3d0838914a177c2c487",
+      "recipe": "append one duplicate final signed 16-bit PCM sample at 16kHz; no quality reference for this transformed case"
+    }
+  },
+  "timingReview": {
+    "initialObservation": "single-process-per-version 8.67s candidate median was 29.7 percent slower; retained in raw matrix, not used as a speed claim",
+    "frozenPairedOrder": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline",
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "processes": 8,
+    "backendCalls": 16,
+    "gates": {
+      "medianCallRatio": 1.1,
+      "medianPeakRssRatio": 1.1
+    },
+    "result": {
+      "medians": {
+        "baseline": {
+          "medianCallSeconds": 0.6284731244999999,
+          "medianPeakRssBytes": 294297600.0
+        },
+        "candidate": {
+          "medianCallSeconds": 0.6422823125,
+          "medianPeakRssBytes": 297697280.0
+        }
+      },
+      "medianCallRatio": 1.021972599084466,
+      "medianPeakRssRatio": 1.0115518441196938,
+      "timeGatePassed": true,
+      "rssGatePassed": true,
+      "outputsExactlyEqual": true,
+      "protocolSha256": "c367732d8da1ee8d0c911fefbfe1af7655836881d4394fd6af2b5e9286201246",
+      "runsSha256": "3b269072891e91274d01e2d280ac71e67f6b343d4f81be416c91bc60cc67e950"
+    },
+    "scope": "fixed 8.67s diagnostic replay, process startup/RSS and per-call time; no throughput, hour-scale or speedup acceptance"
+  },
+  "diagnosticDer": [
+    {
+      "case": "ami-ES2002a-0",
+      "split": "train",
+      "referenceVariant": "only_words",
+      "baseline": {
+        "status": "invalid_timing",
+        "der": null,
+        "reportSha256": "aba576e65a552bc37f3caf8113029f39a9aa5b6a675be3ca0ac85a5c7844901f"
+      },
+      "candidate": {
+        "primaryDer": [
+          0.013643659711075413,
+          0.013643659711075413
+        ],
+        "full500msCollarDer": [
+          0.0,
+          0.0
+        ],
+        "reportSha256": "57fc395fafe20fd1a1efe095aacb4193fc01672260d2fbfcc6c8800220d2690a"
+      }
+    },
+    {
+      "case": "ami-ES2002a-1",
+      "split": "train",
+      "referenceVariant": "only_words",
+      "baseline": {
+        "primaryDer": [
+          0.09081803005008351,
+          0.09081803005008351
+        ],
+        "full500msCollarDer": [
+          0.04080145719489985,
+          0.04080145719489985
+        ],
+        "reportSha256": "bc69c85630cff0afb5fe66c66983e916127ce2faa3258b7e8f00ba67eb2b9b1d"
+      },
+      "candidate": {
+        "primaryDer": [
+          0.09081803005008351,
+          0.09081803005008351
+        ],
+        "full500msCollarDer": [
+          0.04080145719489985,
+          0.04080145719489985
+        ],
+        "reportSha256": "1253fa70ea97293d6fda959fec02d2a931c2c7e5f7863d2e4126662a00355b8c"
+      }
+    },
+    {
+      "case": "ami-ES2002a-2",
+      "split": "train",
+      "referenceVariant": "only_words",
+      "baseline": {
+        "primaryDer": [
+          0.02866817155756196,
+          0.02866817155756196
+        ],
+        "full500msCollarDer": [
+          0.0,
+          0.0
+        ],
+        "reportSha256": "fde82e89ad52fb9a44d201169ffbb9ecd1b0c810bbeb58e4e1ef05e8dfe0d30e"
+      },
+      "candidate": {
+        "primaryDer": [
+          0.02866817155756196,
+          0.02866817155756196
+        ],
+        "full500msCollarDer": [
+          0.0,
+          0.0
+        ],
+        "reportSha256": "7b26b5e0c4f7f676174acdf0a79ce2a051ad1504e7d3284d9d579eb68b4a539a"
+      }
+    },
+    {
+      "case": "ami-ES2002a-3",
+      "split": "train",
+      "referenceVariant": "only_words",
+      "baseline": {
+        "primaryDer": [
+          0.11639676113360328,
+          0.11639676113360328
+        ],
+        "full500msCollarDer": [
+          0.11418918918918933,
+          0.11418918918918933
+        ],
+        "reportSha256": "92552133ddb9ed3c7d5f21a4ba03ab7bf92d13f7d64fc53f5f90584734932363"
+      },
+      "candidate": {
+        "primaryDer": [
+          0.11639676113360328,
+          0.11639676113360328
+        ],
+        "full500msCollarDer": [
+          0.11418918918918933,
+          0.11418918918918933
+        ],
+        "reportSha256": "84e60be3f405c33f3bcaee98ec1023ddaf0e5a295acc1da21bf3921cef3e32d0"
+      }
+    },
+    {
+      "case": "ami-ES2002a-4",
+      "split": "train",
+      "referenceVariant": "only_words",
+      "baseline": {
+        "primaryDer": [
+          0.01818181818181814,
+          0.01818181818181814
+        ],
+        "full500msCollarDer": [
+          0.0,
+          0.0
+        ],
+        "reportSha256": "8f61070e38ac72a01517714c33c21d7656f2588b6e12039786f9276cd61afece"
+      },
+      "candidate": {
+        "primaryDer": [
+          0.01818181818181814,
+          0.01818181818181814
+        ],
+        "full500msCollarDer": [
+          0.0,
+          0.0
+        ],
+        "reportSha256": "181983b5161f9bd33d54dba4e7b0b00f9379630a27449ab9f8e125910f35ad72"
+      }
+    }
+  ],
+  "verification": {
+    "fmtAllCheck": "passed",
+    "cargoCheckWorkspaceLocked": "passed",
+    "cargoTestWorkspaceLocked": {
+      "rawHarnessPassed": 959,
+      "failed": 0,
+      "registeredIgnored": 14,
+      "mainHarnessPassed": 956,
+      "existingNestedHarnessPassed": 3,
+      "ignoredExecutionNote": "one UI child is explicitly executed by its parent; new Sherpa source-bounds test and existing shared-identity test explicitly run separately; others do not count as current real-model execution"
+    },
+    "cargoBuildWorkspaceLocked": "passed",
+    "explicitRealSourceBounds": "failed before fix, passed after final source",
+    "explicitSharedIdentity": "passed on the same 12.66s speech crop with two real diarization calls",
+    "review": "separate read-only diff and range/extraction review; added failing submillisecond tail case before correction; verify full bounded projections and every vector element, metadata and source hashes"
+  },
+  "qualityAcceptance": "not_assessed",
+  "notAssessed": [
+    "held-out meetings, Chinese multi-speaker, overlap quality and cross-recording identity",
+    "long audio or controlled concurrent application resource use",
+    "ASR word accuracy and full application end-to-end quality"
+  ],
+  "reproduction": "Run the permanent diarization_benchmark twice per fixed CPU input using both frozen runners; preserve raw reports; project baseline metadata to floor(decoded samples / 16) and compare all timeline and observation fields, vectors unchanged; additionally append one original final PCM sample and test the partial millisecond source; score only the five unchanged official AMI references with report_diarization.py; preserve invalid baseline timing as unscored",
+  "validationLogs": {
+    "/tmp/meetnote-loop23-red.log": "458bbfe63dcde582b6540cb6ccd669e049098b6a7a058d75725e9c6cb24c9e4c",
+    "/tmp/meetnote-loop23-unit-red.log": "c881e99d3b581320d666f3b108f9a2e4075306cf5386aa2b2f69b2d85a822f2c",
+    "/tmp/meetnote-loop23-tail-red.log": "22b2f2f71d8a74ef49a60324dd66d4a6e10c0f5015a3e4eb03bfec8f3a00c596",
+    "/tmp/meetnote-loop23-unit-final.log": "5fc2aa223c5c225ec15f099f0ffc9d04d4feb8daebbfa35049ae525eb70c82cd",
+    "/tmp/meetnote-loop23-green-final.log": "f7db613cf3ef2b6d475fe214f3324d9855c01c816d8badd29c0d324e3b1cb420",
+    "/tmp/meetnote-loop23-fmt.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/tmp/meetnote-loop23-check.log": "2b2406b337d4379073575ccef2e52a5a6c4170f2a4d78b9e091bd5e2b2890be3",
+    "/tmp/meetnote-loop23-workspace.log": "320a5698b15a3092329d69777e604fb237a7c2077c92e4c66b662e7f3c25569b",
+    "/tmp/meetnote-loop23-build-workspace.log": "985d444ecf7b23f736e6f011868bcb79d872925a5a54573d8e1b0c62aeedbd69",
+    "/tmp/meetnote-loop23-identity.log": "dd4c92dc0b2239d6ac1e263dd8aece7d9141bfeda951c21efb85c681dacfb83a"
+  }
+}

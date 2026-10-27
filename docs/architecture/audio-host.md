@@ -131,6 +131,7 @@ pub trait DiarizationBackend: Send + Sync {
 - 模型：包含 `segmentation.onnx` 与 `embedding.onnx` 的目录。
 - 设备：CPU；固定 sherpa runtime 不提供有效 provider 的验证回执，Core ML/Metal 请求返回 `DeviceUnavailable`，不静默回退。
 - pipeline：Pyannote segmentation、speaker embedding、sherpa fast clustering。
+- 输出范围：时间线与 embedding observation 共用实际解码源边界，按整数毫秒裁剪；纯越界或裁剪为空的区间移除，说话人数按保留标签计数。embedding 仍沿用原始时间转换后的 sample 裁剪，保留末尾不足 1 ms 的真实音频，不让元数据裁剪改变向量输入。
 - stage：不支持用户覆盖 segmentation、embedding 或 clustering。
 - provenance：分别记录 segmentation、embedding 与 `sherpa-fast-clustering`。
 - 长音频：尚未暴露未聚类的窗口中间结果，因此 `supports_windowed_audio == false`；application 对长音频明确拒绝该组合。
