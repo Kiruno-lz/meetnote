@@ -360,6 +360,18 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 真实调用发现 Whisper 对 `ami-ES2002a-4` 的 8670 ms 源音频返回 9000 ms 结束点，两轮一致。显式设置 base.en 权重和第五裁剪路径的真实 ignored 测试先失败；随后整文件与窗口共用有界 sample 范围转换，裁去 decoder padding 的时间，纯 padding 段不进入结果。修复后真实测试通过，十次配对调用保留全部文本、ID、起点和分段，仅两次 EOF 从 9000 改为 8670 ms。SenseVoice 十次、Whisper 前后各十次，共三十次独立 ASR 调用均成功；没有放宽评分器范围检查。该修复只保证源音频范围，不将 EOF 当作真实发声结束点。
 
+### Whisper 的精确数字静音
+
+2026-10-27 使用已验证的 8 秒、16 kHz mono、128,000 个全零 PCM 采样，固定 base.en、四线程、CPU/Metal 和整文件/windowed 四组，各两次；八次全部生成了 0–2.06 秒的 `you`。新增两个显式模型/音频测试分别复现红线。[官方模型卡](https://github.com/openai/whisper/blob/main/model-card.md#performance-and-limitations)也记录此类幻觉风险，但本修复依据本地全零输入与模型输出，不用上游描述代替复现。
+
+选择可确定的最小信号事实：非空输入全部 f32 采样严格为零时，保留正常模型 context 加载与错误，然后跳过 decoder state/full；窗口也只判断整个输入 waveform。零参考不计算 CER/WER，验证目标是空时间线。任意非零采样，包括最小正/负 subnormal，仍进入模型；空输入、NaN/无穷不归类为数字静音。它没有引入能量阈值、VAD、词语黑名单或新模型默认值，不处理一般噪声/弱声的幻觉问题。
+
+修复后四组八次 backend 调用均成功返回空输出，context 仍加载、decoder 有意不执行，不能将这八次描述为模型推理通过。六段既有 FLEURS 语音共 56.54 秒，含两个实际发音 `you` 的片段；两版本各四组、各 12 次，共 96 次真实语音推理，文本和时间逐项一致，均为非空且落在源范围内，各组四次正常 `you` 输出保留。原 CPU 静音首调用 8.286 秒异常值与后续 0.433 秒原样保留，计时只作诊断，没有提速门或提速验收声明。
+
+独立 review 先检查取消与模型生命周期，再补负例：已取消的全零 window 返回 `Cancelled`；将现存 WAV 作为损坏模型，两条路径均返回 `ModelLoadFailed`，不能由静音分支绕过；同一显式真实语音的正例通过。完整工作区在生产修复提交上 958 项主 harness、3 项已有子 harness 通过，零失败；16 项 registered ignored 不作为全部模型执行证据，另显式执行两种全零入口与原有正语音测试。fmt、check、build 全部通过；新增模型负例属于随后独立 review 的测试提交并已显式运行。来源、raw 指纹、调用/推理次数和边界见[数字静音回执](../quality/whisper-digital-silence-validation.json)。
+
+复现核心为正式 `asr_benchmark` 的四种配置与相同模型/音频 SHA；全零输入只检查可见段数，正常语音使用 `asr_benchmark.py` 保留输入快照与独立评分，再逐 case/repeat 比较完整时间线。临时 controller 已删除，样本、权重和原始预测仍留在忽略目录。
+
 ### 原生 Whisper 词级分段试接
 
 在现有锁定的 whisper-rs 0.16.0 / whisper-rs-sys 0.15.0 上，隔离验证上游标为 experimental 的[词级时间戳](https://github.com/ggml-org/whisper.cpp#word-level-timestamp-experimental)。沿用同一解码参数、base.en 权重、Metal 配置、四线程和 sample 范围过滤，仅设置 `token_timestamps=true`、`max_len=1`、`split_on_word=true`。没有启用 DTW；binding 的 DTW token point 与普通 segment 起止时间是不同字段，不能混称。
