@@ -378,7 +378,20 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 复现与核心方法：从永久 `diarization_benchmark.rs` 生成临时 example，仅把请求 `ComputeDevice::Cpu` 改为 `CoreMl` 并在原始行记录设备；用 `cargo build --release --locked -p diarization --features diarization-native/coreml --example coreml_trial` 编译，原运行器作 CPU 对照。模型准备使用现有 `huggingface_hub.hf_hub_download` 的固定 revision、明确文件列表和 `token=False`，不调用库的在线 model manager。每进程用 macOS `/usr/bin/time -l` 保存 RSS 与 footprint，评分前校验音频、参考、模型文件、runner 与 prediction 指纹，直接调用 `metrics.diarization(..., collar, 180000)`；CoreML receipt 不冒用 CPU-only 评分 schema。临时 example 与控制器清理，协议、模型与原始失败/成功数据留在忽略目录 `eval-data/optimization-2026-10-27/coreml-feasibility/`，精简可追溯结果见 [CoreML 验证](../quality/coreml-feasibility-validation.json)。
 
-全量验证首次遇到 UI 语言 notice 等待超时；单独执行该测试通过，未改 UI 的全量重跑为 968 次通过（含三次隔离子进程）、16 ignored，fmt/check/build 通过。保留首次失败，不能声称消除了这一 UI 时序失败。`//TODO - ` 比较 CoreML 运算单元策略的 macOS footprint，并在未参与调优的录音上评分；测试门槛须先固定，只有资源、质量和模型管理同时验收后才评估默认策略。
+全量验证首次遇到 UI 语言 notice 等待超时；单独执行该测试通过，未改 UI 的全量重跑为 968 次通过（含三次隔离子进程）、16 ignored，fmt/check/build 通过。保留首次失败，不能声称消除了这一 UI 时序失败。后续运算单元试接见下节；`//TODO - ` 在未参与调优的录音上评分，并覆盖低内存设备、冷启动和应用并发，只有资源、质量和模型管理同时验收后才评估默认策略。
+
+### CoreML 运算单元与内存口径
+
+针对上一节 `All` 路径的 3.67 GiB footprint，先固定 CPU+NeuralEngine footprint ≤All 一半、耗时 ≤All 两倍且 ≤原 CPU 80%、两个 collar 的 DER 增加 ≤1 个百分点，再按 All / CPU+NE / CPU+NE / All 各进程两次运行同一 180 s 裁片。[Apple 的 API](https://developer.apple.com/documentation/coreml/mlcomputeunits/cpuandneuralengine)只允许 CPU 与 Neural Engine，不允许 GPU，但不保证某个运算实际在 ANE 执行。实验仅在临时 binary 中替换默认 compute units，原源码在测量前恢复并校验哈希；不能把它直接提交，因为库公开的 `CoreMlComputeUnits::All` 仍应保留原语义。
+
+| 允许设备 | 调用中位数 s | 最大 RSS GiB | 最大 footprint GiB | DER 无 collar / 500 ms full collar |
+| --- | ---: | ---: | ---: | --- |
+| All | 1.5350 | 0.5041 | 3.6604 | 27.2940% / 26.2301% |
+| CPU + Neural Engine | 2.9070 | 2.7760 | 1.6700 | 27.3055% / 26.2301% |
+
+固定门槛通过；footprint 下降 54.38%，但 RSS 增为 5.51 倍，不能仅选更低的指标宣布所有设备资源改善。Apple 的[内存分析定义](https://developer.apple.com/documentation/xcode/analyzing-the-memory-usage-of-your-metal-app)区分 resident memory 与 dirty、compressed/swapped footprint；本轮只测各进程峰值，不把它们相加或解释成全机消耗。两策略分别稳定为 48/49 个 speaker 段、3 类、317 个 observation；CPU+NE 无 collar DER 仅增加 0.01145 个百分点，不声称向量或边界等价。原 CPU 模型文件逐个复核未变，生产默认与设备/API contract 未改。
+
+复现核心为在上一节临时 example 的相同 Cargo feature 下，仅将 vendor `CoreMlModel::default_compute_units` 返回值由 `All` 换成 `CPUAndNeuralEngine` 编译候选，再恢复源码；前后 binary 单独保存并核对 SHA。输入、模型、runner、预测与标准 metric 的指纹及逐次结果见[运算单元回执](../quality/coreml-compute-units-validation.json)。临时代码清理，仅保留忽略目录下的模型/预测/资源证据。这里没有新增生产代码，未重复运行已通过的工作区测试；库策略 API、未参与调优录音与低内存设备尚未验收，保留原默认。
 
 ### Native 分离窗口的整数毫秒范围
 
