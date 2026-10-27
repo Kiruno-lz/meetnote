@@ -1,0 +1,195 @@
+{
+  "schema": "meetnote.provenance-checksum-validation.v1",
+  "date": "2026-10-28",
+  "decision": "accept record-scoped checksum reuse; no inference or device changes",
+  "implementationCommit": "09dd732",
+  "protocol": {
+    "schema": "meetnote.provenance-checksum-protocol.v1",
+    "baseCommit": "17391f2f4a1fa0f4f858203ee8a7166570e9a39e",
+    "baselineSourceSha256": "e3fa56821b2b601324f02d36028ba60f65a072765b48a5673f69e25a36e4a397",
+    "baselineBinarySha256": "2e3ac013f0836a7cbfe0dc001d79c04732329d9e8ea6a3131e20b6888c338afa",
+    "recordSource": "eval-data/optimization-2026-10-27/coreml-managed-profile-final/acceptance-1/processing.jsonl",
+    "recordsSha256": "67c94a3703a02ba4548ff72848fe85f8cfe69eefb14c53fa00b43264f66c9bbc",
+    "modelRoot": "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-10-27/coreml-managed-profile-final/acceptance-1/managed-models",
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "rowsPerInvocation": [
+      "cpu",
+      "coreml",
+      "coreml",
+      "cpu"
+    ],
+    "gates": {
+      "provenance": "all saved base/stage/ASR records and input checksum exact; missing and edited files refreshed in next record",
+      "speed": "CoreML median provenance time <= 0.6 baseline; CPU <=1.1 baseline",
+      "bytes": "each profile stream bytes <=0.6 baseline",
+      "resource": "each process peak footprint <=100MiB"
+    },
+    "scope": "production processing_record on explicit real installed model/audio paths from real saved records; no inference or model quality measured; no cache purge",
+    "retryReason": "harness compared identity_matching although the provenance-only input intentionally has no inference observations; compare complete model/stage/clustering facts and input checksum, keep original gates",
+    "previousProtocolSha256": "f2771a10d988dd0faaeb3dd330d9dbf8cdc2d3317ee39ef6e1687508954b56ab",
+    "failedPreflightLogSha256": "c2cb281f5cf4b7b9d72d50f16a81ae48dedfff9e722a987f7e50ffbe92a9c2a2"
+  },
+  "result": {
+    "protocolSha256": "6f86c2dacb7a76a046db15e5cd9b68931e8387db25f64ed9a343b80b3ce76355",
+    "build": {
+      "candidateBinarySha256": "ffe1731418b58cddbc4f56f2e0244b45f089b7ceaaa3278eada69299b9d57998",
+      "candidateSourceSha256": "5bfc388c66f6965d7a202be3fb0d275b02fed042b6a93f8f35cc149e16469976",
+      "controllerSha256": "86026eb27a980903fde90dc8474b83eef53c143c3b85a4d2e0ecb252cb5de895"
+    },
+    "summary": {
+      "baseline": {
+        "speakrs-community-1-cpu": {
+          "medianSeconds": 1.3653295415,
+          "bytesStreamed": [
+            486814310
+          ],
+          "fileStreams": [
+            27
+          ]
+        },
+        "speakrs-community-1-coreml": {
+          "medianSeconds": 6.692323104,
+          "bytesStreamed": [
+            2398834566
+          ],
+          "fileStreams": [
+            377
+          ]
+        }
+      },
+      "candidate": {
+        "speakrs-community-1-cpu": {
+          "medianSeconds": 0.771297646,
+          "bytesStreamed": [
+            213476054
+          ],
+          "fileStreams": [
+            12
+          ]
+        },
+        "speakrs-community-1-coreml": {
+          "medianSeconds": 2.7426300625,
+          "bytesStreamed": [
+            573206979
+          ],
+          "fileStreams": [
+            78
+          ]
+        }
+      }
+    },
+    "timeRatios": {
+      "speakrs-community-1-cpu": 0.5649168369656931,
+      "speakrs-community-1-coreml": 0.409817341434207
+    },
+    "gates": {
+      "speed": true,
+      "bytes": true,
+      "resource": true,
+      "provenanceExact": true
+    },
+    "passed": true,
+    "runsSha256": "5aa27220b85a75745c30e1c986f818dba023fb5062323543d12875301567edfb"
+  },
+  "summarySha256": "d2a7cc60667e8f9e1b457550ab6fecf7c13cf2e93ebda7c7d5bbc922242a76be",
+  "scope": "production processing_record reads actual explicitly installed CPU/CoreML/Whisper model files and the original 180s WAV from four saved host records; no inference, WER/CER/DER or end-to-end elapsed measurement",
+  "method": "baseline/candidate/candidate/baseline processes, each hashes CPU/CoreML/CoreML/CPU once; four samples per profile per binary; both contain identical file-open instrumentation; OS caches not purged",
+  "measurement": {
+    "cpu": {
+      "medianSecondsBefore": 1.3653295415,
+      "medianSecondsAfter": 0.771297646,
+      "bytesBefore": 486814310,
+      "bytesAfter": 213476054,
+      "fileStreamsBefore": 27,
+      "fileStreamsAfter": 12
+    },
+    "coreml": {
+      "medianSecondsBefore": 6.692323104,
+      "medianSecondsAfter": 2.7426300625,
+      "bytesBefore": 2398834566,
+      "bytesAfter": 573206979,
+      "fileStreamsBefore": 377,
+      "fileStreamsAfter": 78
+    },
+    "peakChecksumProcessFootprintBytes": 3965336
+  },
+  "review": {
+    "method": "separate source/diff review plus independent raw-log/source/input fingerprint checks",
+    "passed": [
+      "cache is local to processing_record; no cross-task state, mtime shortcut or new dependency",
+      "one stream updates both per-file digest and sorted relative-path plus raw-content aggregate",
+      "all complete ASR, DIA base/stage/clustering provenance and input checksum match actual previously persisted records",
+      "all 16 file-hashing records passed; identity/runtime facts are outside this provenance-only fixture",
+      "multi-buffer nested-file regression fails at 8 reads before fix and passes at 1 read; edits and missing paths refreshed in a new record",
+      "read and traversal errors remain unknown rather than manufacturing checksum success",
+      "different nested bundle roots may require separate aggregate streams; no unsupported once-only claim for aliases or overlapping roots",
+      "no model/audio writes; temporary experiment generators removed"
+    ],
+    "remainingCut": "UI directly polls the processing future, including source hashing and save; address executor placement in the next separately tested round"
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed",
+    "testWorkspace": {
+      "mainPassed": 978,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 18
+    },
+    "buildWorkspace": "passed",
+    "explicitFileBenchmark": {
+      "recordsPassed": 16,
+      "failed": 0
+    },
+    "red": {
+      "path": "/tmp/meetnote-loop35-red.log",
+      "sha256": "dff3aec8b835d5fb1598cfb2ad82eacb4e5aae19ed93740712f098f070024d40"
+    },
+    "green": {
+      "path": "/tmp/meetnote-loop35-green.log",
+      "sha256": "e1ba6358f108cf301a699b2ce1a1e009b98b516698a5967738f1ae18eb8f6342"
+    },
+    "logs": {
+      "fmt": {
+        "path": "/tmp/meetnote-loop35-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "check": {
+        "path": "/tmp/meetnote-loop35-check.log",
+        "sha256": "3613a451c6c01676b3a762768e97489ec60640ec1868a2ad22240773dd6c5968"
+      },
+      "tests": {
+        "path": "/tmp/meetnote-loop35-tests.log",
+        "sha256": "0c61b4552ec892afec164c2f1d698fea39c4f3fb5b7cd4abd02e8d1d4773bf65"
+      },
+      "build": {
+        "path": "/tmp/meetnote-loop35-build.log",
+        "sha256": "c2d97683ba08c7b8f80665ea8cbfc701a30dd794ee95bea1836bd727d9d5c685"
+      },
+      "retry-measure": {
+        "path": "/tmp/meetnote-loop35-retry-measure.log",
+        "sha256": "3ba1709b545032aee699027097c2dcd80d4bddf8845a3232d483f4fde8ecd6f3"
+      }
+    },
+    "preflightFailure": "first benchmark compared identity_matching despite having no inference observations; no valid measurement accepted; original failure and protocol kept, retry narrows assertion to complete model/stage/clustering/input facts without changing gates"
+  },
+  "sources": [
+    "https://docs.rs/sha2/0.10.9/sha2/"
+  ],
+  "reproduce": {
+    "test": "MEETNOTE_PROVENANCE_RECORDS=<saved processing.jsonl> MEETNOTE_PROVENANCE_MODEL_ROOT=<managed-models> cargo test --release --locked -p application workspace::tests::benchmark_processing_provenance_with_explicit_real_model_files -- --ignored --exact --nocapture",
+    "requirements": "four saved CPU/CoreML/CoreML/CPU rows with complete base/stage provenance; explicit model paths beneath provided root; original audio still present"
+  },
+  "rawRoot": "eval-data/optimization-2026-10-28/provenance-checksums/retry",
+  "limits": [
+    "current M2 Pro 32GiB Mac and known installed model files only",
+    "checksum process footprint is not model-inference or whole-machine memory",
+    "no new end-to-end speed or model quality claim",
+    "cache does not create a transactional snapshot of externally edited files"
+  ]
+}
