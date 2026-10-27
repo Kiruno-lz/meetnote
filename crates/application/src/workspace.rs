@@ -772,6 +772,14 @@ impl WorkspaceService {
                 &result,
                 processing_revision,
             ));
+            // Hashing can outlive inference. Honor cancellation at the commit
+            // boundary; once admitted, the repository must finish its write.
+            if asr_status_context.is_cancelled() || diarization_status_context.is_cancelled() {
+                return Err(contracts::BackendError {
+                    code: contracts::BackendErrorCode::Cancelled,
+                    message: "processing cancelled before saving results".into(),
+                });
+            }
             project = workspace
                 .documents
                 .save_with_markdown(
@@ -1562,6 +1570,63 @@ mod tests {
     }
 
     #[test]
+    fn late_cancellation_after_inference_does_not_save_a_result() {
+        // The provider has produced its final result when cancellation arrives.
+        // Workspace must still honor the request at its persistence boundary.
+        struct CancelAtFinish;
+        impl DiarizationBackend for CancelAtFinish {
+            fn descriptor(&self) -> BackendDescriptor {
+                FakeDiarization.descriptor()
+            }
+            fn probe(&self, model: &ModelRef) -> Result<(), BackendError> {
+                FakeDiarization.probe(model)
+            }
+            fn diarize(
+                &self,
+                request: DiarizationRequest,
+                context: JobContext,
+            ) -> BackendFuture<DiarizationResult> {
+                let result = FakeDiarization.diarize(request, context.clone());
+                Box::pin(async move {
+                    let result = result.await?;
+                    context.cancel();
+                    Ok(result)
+                })
+            }
+        }
+        let repository = Arc::new(MemoryRepository::default());
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(CancelAtFinish)),
+            DocumentService::new(repository.clone()),
+        );
+        let audio = write_test_wav();
+        let project = workspace.import_audio(audio.display().to_string()).unwrap();
+        let before = repository.read(project.id()).unwrap();
+        let (asr, diarization) = fixture_models();
+        let result = futures::executor::block_on(workspace.process_project(
+            project.id().clone(),
+            asr,
+            diarization,
+        ));
+        std::fs::remove_file(audio).unwrap();
+        assert!(
+            matches!(
+                result,
+                Err(BackendError {
+                    code: contracts::BackendErrorCode::Cancelled,
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+        assert_eq!(
+            repository.read(project.id()).unwrap(),
+            before,
+            "cancelled finalization must preserve the document and markdown"
+        );
+    }
+
+    #[test]
     fn workspace_processes_and_persists_a_project() {
         let repository = Arc::new(MemoryRepository::default());
         let workspace = WorkspaceService::with_options(
@@ -2263,10 +2328,18 @@ mod tests {
             fixture.workspace.switch_documents_root(&target),
             Err(DocumentsRootError::WorkspaceBusy { .. })
         ));
-        // The future still writes the outcome into the root it started in.
-        let _ = futures::executor::block_on(job.future);
+        // Busy ownership lasts until the future exits, but cancellation does
+        // not admit its successful result into the original document.
+        let result = futures::executor::block_on(job.future);
+        assert!(matches!(
+            result,
+            Err(BackendError {
+                code: contracts::BackendErrorCode::Cancelled,
+                ..
+            })
+        ));
         let written = fixture.roots.repository(&fixture.old_root);
-        assert!(written.get(project.id()).unwrap().unwrap().revision() > project.revision());
+        assert_eq!(written.get(project.id()).unwrap(), Some(project));
         fixture.workspace.switch_documents_root(&target).unwrap();
 
         // A cancelled job dropped before it ran does not keep it busy.
