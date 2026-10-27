@@ -1082,6 +1082,7 @@ mod tests {
             schema_version: "meetnote.model-catalog.v1".into(),
             models: vec![ModelCatalogEntry {
                 supported_platforms: Vec::new(),
+                fixed_diarization_stages: false,
                 id: "fixture".into(),
                 task: "asr".into(),
                 model_family: "fixture".into(),

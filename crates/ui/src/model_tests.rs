@@ -60,6 +60,7 @@ const LONG_LICENSE: &str = "apache-2.0-and-mit-and-cc-by-4.0-model-notices-requi
 fn entry(id: &str, task: &str, family: &str, backends: &[&str]) -> ModelCatalogEntry {
     ModelCatalogEntry {
         supported_platforms: Vec::new(),
+        fixed_diarization_stages: false,
         id: id.into(),
         task: task.into(),
         model_family: family.into(),
@@ -1574,6 +1575,69 @@ fn old_model_selection(cx: &mut TestAppContext, later: LaterModelChoice, old_err
             "an obsolete result cannot replace the latest outcome"
         );
     }
+}
+
+#[gpui::test]
+fn fixed_model_stages_hide_controls_and_ignore_retained_dropdown_events(cx: &mut TestAppContext) {
+    let (view, cx, _, settings) = model_selection_fixture(cx, None);
+    let select = view.read_with(cx, |root, _| {
+        assert!(root.show_diarization_stage_options());
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .diarization_clustering
+            .clone()
+    });
+    let before = settings.snapshot().unwrap().diarization_stages;
+    view.update(cx, |root, cx| {
+        root.installation
+            .catalog
+            .iter_mut()
+            .find(|entry| entry.model.id == "choice-dia-base")
+            .unwrap()
+            .model
+            .fixed_diarization_stages = true;
+        cx.notify();
+    });
+    assert!(!view.read_with(cx, |root, _| root.show_diarization_stage_options()));
+    select.update(cx, |_, cx| {
+        cx.emit(crate::controls::DropdownEvent::Confirm(
+            "cluster-new".into(),
+        ))
+    });
+    settle_model_settings(cx, &view, &settings);
+    assert_eq!(settings.snapshot().unwrap().diarization_stages, before);
+    view.update(cx, |root, cx| {
+        root.installation
+            .catalog
+            .iter_mut()
+            .find(|entry| entry.model.id == "choice-dia-base")
+            .unwrap()
+            .model
+            .fixed_diarization_stages = false;
+        cx.notify();
+    });
+    assert!(view.read_with(cx, |root, _| root.show_diarization_stage_options()));
+    click_selector(cx, "settings-section-4");
+    let select = view.read_with(cx, |root, _| {
+        root.settings_selectors
+            .as_ref()
+            .unwrap()
+            .diarization_clustering
+            .clone()
+    });
+    choose_setting_value(cx, &select, "cluster-new");
+    settle_model_settings(cx, &view, &settings);
+    assert_eq!(
+        settings
+            .snapshot()
+            .unwrap()
+            .diarization_stages
+            .clustering_algorithm
+            .unwrap()
+            .id,
+        "cluster-new"
+    );
 }
 
 #[gpui::test]

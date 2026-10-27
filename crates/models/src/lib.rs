@@ -462,6 +462,8 @@ pub struct ModelCatalogEntry {
     #[serde(default)]
     pub supported_platforms: Vec<String>,
     #[serde(default)]
+    pub fixed_diarization_stages: bool,
+    #[serde(default)]
     pub revision: Option<String>,
     pub source_format: String,
     pub source: String,
@@ -764,7 +766,14 @@ mod tests {
             Some("diarization"),
             Some("diarization-native"),
         );
-        assert_eq!(native_models.len(), 1);
+        assert_eq!(
+            native_models.len(),
+            if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                2
+            } else {
+                1
+            }
+        );
         assert_eq!(native_models[0].model.id, "speakrs-community-1-cpu");
     }
 

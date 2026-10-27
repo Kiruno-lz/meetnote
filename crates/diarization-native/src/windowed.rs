@@ -1,5 +1,7 @@
-use crate::engine::{execution_mode, validate_cluster_layout, SPEAKRS_MODEL_REVISION};
-use crate::model::{prepare_model_bundle, PreparedNativeModelBundle};
+use crate::engine::{
+    execution_mode, prepare_speakrs_bundle, validate_cluster_layout, SPEAKRS_MODEL_REVISION,
+};
+use crate::model::PreparedNativeModelBundle;
 use crate::{
     EmbeddingFeatureExtractor, EmbeddingFrontend, EmbeddingNormalization, EmbeddingSpace,
     NativeDiarizationError, SpeakerEmbeddingObservation,
@@ -55,9 +57,8 @@ impl SpeakrsWindowSession {
                 "expected speaker count must be greater than zero".into(),
             ));
         }
-        let prepared_bundle = prepare_model_bundle(&request.model, &request.stage_configuration)?;
-        prepared_bundle.probe_cpu()?;
-        let mode = execution_mode(request.device)?;
+        let mode = execution_mode(&request.model, request.device)?;
+        let prepared_bundle = prepare_speakrs_bundle(&request.model, &request.stage_configuration)?;
         let pipeline = OwnedDiarizationPipeline::from_dir(prepared_bundle.root(), mode)
             .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
         let pipeline_config = pipeline.pipeline_config();

@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(feature = "online")]
-use crate::inference::ExecutionMode;
+use crate::inference::{ExecutionMode, ModelLoadError};
 
 const SEGMENTATION_ONNX: &str = "segmentation-3.0.onnx";
 const EMBEDDING_ONNX: &str = "wespeaker-voxceleb-resnet34.onnx";
@@ -39,6 +38,18 @@ impl ModelBundle {
         let manager = ModelManager::new()?;
         let dir = manager.ensure(mode)?;
         Ok(Self::from_dir(dir))
+    }
+
+    /// Check the local per-mode file manifest without initializing an inference runtime.
+    pub fn validate_files(&self, mode: ExecutionMode) -> Result<(), ModelLoadError> {
+        mode.validate()?;
+        for filename in required_files(mode) {
+            let path = self.plda_dir.join(filename);
+            if !path.is_file() {
+                return Err(ModelLoadError::MissingNativeAsset { mode, path });
+            }
+        }
+        Ok(())
     }
 
     /// Base ONNX path for the segmentation model
@@ -104,7 +115,6 @@ impl ModelManager {
     }
 }
 
-#[cfg(feature = "online")]
 const PLDA_FILES: &[&str] = &[
     "plda_lda.npy",
     "plda_tr.npy",
@@ -115,14 +125,12 @@ const PLDA_FILES: &[&str] = &[
     "wespeaker-voxceleb-resnet34.min_num_samples.txt",
 ];
 
-#[cfg(feature = "online")]
 const ONNX_FILES: &[&str] = &[
     "segmentation-3.0.onnx",
     "wespeaker-voxceleb-resnet34.onnx",
     "wespeaker-voxceleb-resnet34.onnx.data",
 ];
 
-#[cfg(feature = "online")]
 fn mlmodelc_files(name: &str) -> Vec<String> {
     vec![
         format!("{name}/model.mil"),
@@ -132,14 +140,12 @@ fn mlmodelc_files(name: &str) -> Vec<String> {
     ]
 }
 
-#[cfg(feature = "online")]
 fn extend_mlmodelc_files(files: &mut Vec<String>, names: &[&str]) {
     for name in names {
         files.extend(mlmodelc_files(name));
     }
 }
 
-#[cfg(feature = "online")]
 const COREML_COMMON_MODEL_STEMS: &[&str] = &[
     "segmentation-3.0.mlmodelc",
     "segmentation-3.0-b32.mlmodelc",
@@ -153,7 +159,6 @@ const COREML_COMMON_MODEL_STEMS: &[&str] = &[
     "wespeaker-voxceleb-resnet34-tail-b32.mlmodelc",
 ];
 
-#[cfg(feature = "online")]
 const COREML_CHUNK_MODEL_STEMS: &[&str] = &[
     "wespeaker-chunk-emb-s12-w22.mlmodelc",
     "wespeaker-chunk-emb-s12-w37.mlmodelc",
@@ -162,14 +167,12 @@ const COREML_CHUNK_MODEL_STEMS: &[&str] = &[
     "wespeaker-chunk-emb-s12-w116.mlmodelc",
 ];
 
-#[cfg(feature = "online")]
 const COREML_FAST_SEGMENTATION_MODEL_STEMS: &[&str] = &[
     "segmentation-3.0-w8a16.mlmodelc",
     "segmentation-3.0-b32-w8a16.mlmodelc",
     "segmentation-3.0-b64-w8a16.mlmodelc",
 ];
 
-#[cfg(feature = "online")]
 const COREML_FAST_CHUNK_MODEL_STEMS: &[&str] = &[
     "wespeaker-chunk-emb-s25-w11.mlmodelc",
     "wespeaker-chunk-emb-s25-w16.mlmodelc",
@@ -180,7 +183,6 @@ const COREML_FAST_CHUNK_MODEL_STEMS: &[&str] = &[
     "wespeaker-chunk-emb-s25-w56.mlmodelc",
 ];
 
-#[cfg(feature = "online")]
 fn required_files(mode: ExecutionMode) -> Vec<String> {
     let mut files: Vec<String> = PLDA_FILES.iter().map(|s| s.to_string()).collect();
 

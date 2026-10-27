@@ -20,6 +20,7 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+models = { path = "../models" }
 futures.workspace = true
 hound.workspace = true
 kodama = "=0.3.0"
