@@ -59,6 +59,7 @@ const LONG_LICENSE: &str = "apache-2.0-and-mit-and-cc-by-4.0-model-notices-requi
 
 fn entry(id: &str, task: &str, family: &str, backends: &[&str]) -> ModelCatalogEntry {
     ModelCatalogEntry {
+        supported_platforms: Vec::new(),
         id: id.into(),
         task: task.into(),
         model_family: family.into(),

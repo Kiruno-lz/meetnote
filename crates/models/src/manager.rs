@@ -96,6 +96,8 @@ pub trait BackendProbe: Send + Sync {
 pub enum ModelManagerError {
     #[error("model not found in catalog: {0}")]
     ModelNotFound(String),
+    #[error("model {model_id} does not support platform {platform}")]
+    UnsupportedPlatform { model_id: String, platform: String },
     #[error("model requires authentication: {0}")]
     AuthenticationRequired(String),
     #[error("model is already installed: {0}")]
@@ -131,6 +133,17 @@ pub enum ModelManagerError {
 impl From<DownloadError> for ModelManagerError {
     fn from(error: DownloadError) -> Self {
         Self::Download(Box::new(error))
+    }
+}
+
+fn ensure_supported_platform(model: &ModelCatalogEntry) -> Result<(), ModelManagerError> {
+    if model.supports_current_platform() {
+        Ok(())
+    } else {
+        Err(ModelManagerError::UnsupportedPlatform {
+            model_id: model.id.clone(),
+            platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+        })
     }
 }
 
@@ -235,6 +248,7 @@ impl ModelManager {
             .find(model_id)
             .cloned()
             .ok_or_else(|| ModelManagerError::ModelNotFound(model_id.into()))?;
+        ensure_supported_platform(&model)?;
         if model.requires_auth {
             return Err(ModelManagerError::AuthenticationRequired(model.id));
         }
@@ -372,6 +386,7 @@ impl ModelManager {
             .catalog
             .find(model_id)
             .ok_or_else(|| ModelManagerError::ModelNotFound(model_id.into()))?;
+        ensure_supported_platform(&model)?;
         if !model.supports_backend(backend_id) {
             return Err(ModelManagerError::BackendNotSupported {
                 model_id: model_id.into(),
@@ -413,7 +428,10 @@ impl ModelManager {
         }
         let ready = || {
             self.catalog.models.iter().filter(|model| {
-                model.task == task && model.supports_backend(backend_id) && model.status == "ready"
+                model.task == task
+                    && model.supports_backend(backend_id)
+                    && model.status == "ready"
+                    && model.supports_current_platform()
             })
         };
         let model = ready()
@@ -437,6 +455,7 @@ impl ModelManager {
             .catalog
             .find(model_id)
             .ok_or_else(|| ModelManagerError::ModelNotFound(model_id.into()))?;
+        ensure_supported_platform(&model)?;
         if !model.supports_backend(backend_id) {
             return Err(ModelManagerError::BackendNotSupported {
                 model_id: model_id.into(),
@@ -473,15 +492,17 @@ impl ModelManager {
             .map_err(|_| ModelManagerError::LockPoisoned)?
             .model_id
             .clone();
+        let model = self
+            .catalog
+            .find(&model_id)
+            .cloned()
+            .ok_or_else(|| ModelManagerError::ModelNotFound(model_id.clone()))?;
+        ensure_supported_platform(&model)?;
         record.control.resume();
         self.update(id, |progress| progress.state = DownloadState::Downloading)?;
         // Sequentially consistent with `cancel`, which ends the task itself
         // when it sees no worker.
         if !record.worker_started.swap(true, Ordering::SeqCst) {
-            let Some(model) = self.catalog.find(&model_id).cloned() else {
-                record.worker_started.store(false, Ordering::SeqCst);
-                return Err(ModelManagerError::ModelNotFound(model_id));
-            };
             self.spawn_worker(id, model, record)?;
         }
         Ok(())
@@ -499,6 +520,7 @@ impl ModelManager {
             .find(model_id)
             .cloned()
             .ok_or_else(|| ModelManagerError::ModelNotFound(model_id.into()))?;
+        ensure_supported_platform(&model)?;
         if model.install_state(&self.model_root) != crate::ModelInstallState::Installed {
             return Err(ModelManagerError::ModelNotInstalled(model.id));
         }
@@ -1059,6 +1081,7 @@ mod tests {
         ModelCatalog {
             schema_version: "meetnote.model-catalog.v1".into(),
             models: vec![ModelCatalogEntry {
+                supported_platforms: Vec::new(),
                 id: "fixture".into(),
                 task: "asr".into(),
                 model_family: "fixture".into(),
@@ -1076,6 +1099,112 @@ mod tests {
                 artifacts: vec![],
             }],
         }
+    }
+
+    fn platform_catalog() -> ModelCatalog {
+        let model = |id: &str, platforms: serde_json::Value| {
+            serde_json::json!({
+                "id": id, "task": "asr", "modelFamily": "fixture",
+                "candidateBackends": ["fake"], "sourceFormat": "fixture",
+                "source": "file://fixture/no-network", "sizeBytes": 4,
+                "sha256": "fixture-sha256", "license": "test", "requiresAuth": false,
+                "status": "ready", "supportedPlatforms": platforms
+            })
+        };
+        ModelCatalog::parse(
+            &serde_json::json!({
+                "schemaVersion": crate::CATALOG_SCHEMA_VERSION,
+                "models": [model("fixture", serde_json::json!(["unavailable-test-platform"])),
+                           model("portable", serde_json::json!([]))]
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn platform_incompatible_models_are_not_browsed_or_implicitly_selected() {
+        let root = temp_root("platform-browse");
+        let manager = ModelManager::new(platform_catalog(), &root);
+        let models = manager.browse(Some("asr"), Some("fake"));
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].model.id, "portable");
+        assert_eq!(
+            manager
+                .configured_model_ref("asr", "fake", None)
+                .unwrap()
+                .model_id,
+            "portable"
+        );
+        let mut matching = platform_catalog();
+        matching.models[0].supported_platforms = vec![format!(
+            "{}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )];
+        let matching = ModelManager::new(matching, &root);
+        assert_eq!(matching.browse(Some("asr"), Some("fake")).len(), 2);
+        assert_eq!(
+            matching
+                .configured_model_ref("asr", "fake", None)
+                .unwrap()
+                .model_id,
+            "fixture"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unsupported_platform_is_rejected_before_a_download_task_is_created() {
+        let root = temp_root("platform-start");
+        let manager = ModelManager::new(platform_catalog(), &root);
+        let before = manager.list().unwrap();
+        assert!(manager.start("fixture").is_err());
+        assert_eq!(manager.list().unwrap(), before);
+        assert!(!root.join(".download-tasks.json").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preferred_models_and_reprobe_cannot_bypass_platform_restrictions() {
+        let root = temp_root("platform-preferred");
+        std::fs::create_dir_all(root.join("asr/fixture")).unwrap();
+        let file = root.join("asr/fixture/no-network");
+        std::fs::write(&file, b"keep installed asset").unwrap();
+        let manager = ModelManager::new(platform_catalog(), &root);
+        let preferred = contracts::ModelRef {
+            backend_id: "fake".into(),
+            model_id: "fixture".into(),
+            revision: None,
+            artifact_path: file.display().to_string(),
+            artifacts: vec![],
+        };
+        assert!(manager
+            .configured_model_ref("asr", "fake", Some(&preferred))
+            .is_err());
+        assert!(manager.model_ref("fixture", "fake").is_err());
+        assert!(manager.reprobe("fixture").is_err());
+        assert_eq!(std::fs::read(file).unwrap(), b"keep installed asset");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resumed_tasks_cannot_bypass_platform_restrictions() {
+        let root = temp_root("platform-resume");
+        let id = write_interrupted_task(&root);
+        let before = std::fs::read(root.join(".download-tasks.json")).unwrap();
+        let manager = ModelManager::new(platform_catalog(), &root);
+        let result = manager.resume(id);
+        if result.is_ok() {
+            let _ = manager.cancel(id);
+        }
+        assert!(result.is_err());
+        assert_eq!(manager.status(id).unwrap().state, DownloadState::Paused);
+        assert_eq!(
+            std::fs::read(root.join(".download-tasks.json")).unwrap(),
+            before
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
