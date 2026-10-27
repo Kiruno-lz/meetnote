@@ -75,6 +75,28 @@ fn check_digital_silence(windowed: bool) {
         device: ComputeDevice::Cpu,
     };
     let backend = WhisperRsBackend::default();
+    // Silence must not hide an existing but invalid model artifact.
+    let invalid_request = AsrRequest {
+        model: ModelRef {
+            artifact_path: request.audio_path.clone(),
+            ..request.model.clone()
+        },
+        ..request.clone()
+    };
+    let invalid_error = if windowed {
+        backend
+            .create_window_session(invalid_request)
+            .err()
+            .unwrap()
+    } else {
+        let (invalid_context, _) = JobRuntime::default().create_job();
+        futures::executor::block_on(backend.transcribe(invalid_request, invalid_context))
+            .unwrap_err()
+    };
+    assert_eq!(
+        invalid_error.code,
+        contracts::BackendErrorCode::ModelLoadFailed
+    );
     let (context, _) = JobRuntime::default().create_job();
     let result = if windowed {
         let mut session = backend.create_window_session(request).unwrap();
