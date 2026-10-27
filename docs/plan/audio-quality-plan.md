@@ -43,7 +43,9 @@ AMI 的 B2 参考复用 [BUT/pyannote 固定 setup](https://github.com/pyannote/
 
 B1 的可选 `knownSilenceRangesMs` 标注以区间并集计算转写与已知静音的交集，分组输出 `knownSilence`；失败标为未测，不能当作零覆盖或词对齐通过。
 
-B1 的 `asr_benchmark` 直接运行生产 adapter；`asr_benchmark.py` 在独立进程记录失败、超时、wall 与 RSS，并采用精确 Levenshtein。原始行共享严格校验：repeat 只能是 JSON 整数，耗时必须是有限正数；布尔值和浮点 repeat 不能冒充整数覆盖。已有 run 读取时拒绝非法行；CLI 保留原预测并记录失败，不发布可排名分组。`test_benchmark_integrity.py` 覆盖加载、汇总与 CLI 的数值类型反例，合法测量的评分规则保持一致。
+B1 的 `asr_benchmark` 直接运行生产 adapter；`asr_benchmark.py` 在独立进程记录失败、超时、wall 与 RSS，并采用精确 Levenshtein。原始行共享严格校验：repeat 只能是 JSON 整数，耗时必须是有限正数；布尔值和浮点 repeat 不能冒充整数覆盖。已有 run 读取时拒绝非法行；CLI 保留原预测并记录失败，不发布可排名分组。
+
+评测 manifest 与配置各读取一次原始字节，并原子保存为 run 的输入快照；runner、评分和回执使用同一份快照，原输入后续编辑不改变本轮执行。run 快照发生变化时记录失败；新回执携带配置 SHA，读取时同时核对快照字节与回执配置。`test_benchmark_integrity.py` 覆盖加载、汇总与 CLI 的数值类型、运行中编辑及快照变化反例，合法测量的评分规则保持一致。
 
 B2 的 `diarization_benchmark` 保留独立执行/资源及完整 speaker timeline/embedding 输出；`check_diarization_cpu.py` 验证固定输入下的提速、资源与 baseline 一致性，speaker count 和一致性均不替代 DER。
 
