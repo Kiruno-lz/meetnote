@@ -1,0 +1,97 @@
+{
+  "schema": "meetnote.ui-processing-executor-validation.v1",
+  "date": "2026-10-28",
+  "decision": "accept background polling with a final cancellation checkpoint before result commit",
+  "implementationCommits": [
+    "16796f9",
+    "212532e"
+  ],
+  "problem": "follow_processing polled the complete processing future on the UI executor; synchronous decode setup, provenance hashing and saving can occupy that executor after native inference",
+  "implementation": "reuse the existing GPUI BackgroundExecutor to own the processing future; continue consuming job events and the final result on the UI executor; keep the existing JobRuntime and repository protocol",
+  "redGreen": {
+    "executor": "real GPUI test-dispatcher is_main_thread reports true before the fix; false both before a pending interval and after resumption with the fix",
+    "lateCancellation": "a controlled provider returns its successful inference result after cancelling its context; before the checkpoint Workspace returned success and wrote results, afterwards it returns Cancelled and leaves the complete document/markdown unchanged",
+    "ownership": "the existing busy-until-future-exit test remains; its obsolete expectation that cancellation still writes results is replaced with Cancelled plus exact original document equality",
+    "preflight": "first test compilation used the method form of VisualTestContext.background_executor instead of its field; corrected before actual red execution"
+  },
+  "review": {
+    "method": "independent read-only source/diff and lifecycle review after the initial implementation",
+    "fixedFinding": "moving polling off the UI allows a cancellation during synchronous provenance work; Workspace needs a token check after hashing and before repository admission",
+    "checks": [
+      "processing future and output already satisfy Send; no new thread pool or scheduler",
+      "the background Task stays owned by the event-following loop and is not detached separately",
+      "the UI continues to own entity updates progress and completion notices",
+      "success results remain local until commit admission; cancellation preserves existing files and processing history",
+      "after commit admission the original repository write is allowed to finish; no interruption of atomic replacement",
+      "in-flight workspace ownership is retained until the processing future exits",
+      "no changes to model selection inference providers checksums or persisted result schema"
+    ]
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed",
+    "testWorkspace": {
+      "mainPassed": 980,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 18
+    },
+    "buildWorkspace": "passed",
+    "logs": {
+      "red": {
+        "path": "/tmp/meetnote-loop36-red.log",
+        "sha256": "c5aecda5fa044e7a2025bc257825766667586340003f3469e55909ab8625fbc3"
+      },
+      "preflight-compile": {
+        "path": "/tmp/meetnote-loop36-preflight-compile.log",
+        "sha256": "99d1be6bf497a0cbdb4a3d7767fc691b504f1d12459fda55575dba439ca078f2"
+      },
+      "green": {
+        "path": "/tmp/meetnote-loop36-green.log",
+        "sha256": "af5b1296a53beddaedd314e0f748ca55dceb7e437ad6eda04dfd9f38954d6b1f"
+      },
+      "cancel-red": {
+        "path": "/tmp/meetnote-loop36-cancel-red.log",
+        "sha256": "20af8f8fc0aa1eb06c41bee29ea0fc1704e880a914ec27b12c1d6fc778dceb88"
+      },
+      "cancel-green": {
+        "path": "/tmp/meetnote-loop36-cancel-green.log",
+        "sha256": "251b68cccf9c4dc083f676cb516ba87ed92238ef69b65d41f1e7466988a05e60"
+      },
+      "cancel-ownership-green": {
+        "path": "/tmp/meetnote-loop36-cancel-ownership-green.log",
+        "sha256": "bc78d9d4c2b1cdb1857be2272d9d10c386c56f09b4a991bfb7768ff3af643030"
+      },
+      "tests-before-cancel-expectation": {
+        "path": "/tmp/meetnote-loop36-tests-before-cancel-expectation.log",
+        "sha256": "32d58f8978b97206eaa6b6b0fbba05f1b5cdda76be8b3952ca21f0b73096b5ef"
+      },
+      "final-fmt": {
+        "path": "/tmp/meetnote-loop36-final-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "final-check": {
+        "path": "/tmp/meetnote-loop36-final-check.log",
+        "sha256": "4f94152c4c82c6e7ef49c8364df7d82cdd0c4015caa325534f0d6010da9220d6"
+      },
+      "final-tests": {
+        "path": "/tmp/meetnote-loop36-final-tests.log",
+        "sha256": "c698c74e64101e723f68065caa165d5318886763134ca719f20971b9cf4f9430"
+      },
+      "final-build": {
+        "path": "/tmp/meetnote-loop36-final-build.log",
+        "sha256": "2f74efb4900442cd62f1c5d697000e3ed4a6b1606f4c162c1bf7dd257325c581"
+      }
+    }
+  },
+  "sources": {
+    "gpuiPinnedRevision": "5d54d27579d87c6027e7699a2b9fcfffcb125b6b",
+    "inspectedLocalSource": "crates/gpui/src/executor.rs and platform/test/dispatcher.rs in the pinned zui checkout"
+  },
+  "limits": [
+    "executor and persistence boundary behavior tested; no measured FPS or UI wall latency claim",
+    "fake providers exercise lifecycle and do not prove inference or audio quality",
+    "cancellation waits for the current synchronous checksum work to return to the checkpoint",
+    "no guarantee of aborting a repository transaction after it has been admitted"
+  ]
+}
