@@ -98,6 +98,12 @@ impl AsrWindowSession for WhisperWindowSession {
         window: Arc<AudioWindow>,
         context: &JobContext,
     ) -> Result<(), BackendError> {
+        if context.is_cancelled() {
+            return Err(cancelled_error("Whisper transcription was cancelled"));
+        }
+        if is_digital_silence(&window.samples) {
+            return Ok(());
+        }
         let mut state = self.whisper.create_state().map_err(|error| BackendError {
             code: BackendErrorCode::ModelLoadFailed,
             message: error.to_string(),
@@ -210,6 +216,17 @@ fn transcribe_sync(
                 message: error.to_string(),
             },
         )?;
+    if context.is_cancelled() {
+        return Err(cancelled_error("Whisper transcription was cancelled"));
+    }
+    if is_digital_silence(&audio.samples) {
+        return Ok(AsrResult {
+            backend: WhisperRsBackend::default().descriptor(),
+            model: request.model,
+            language: request.language,
+            segments: Vec::new(),
+        });
+    }
     let mut state = whisper_context
         .create_state()
         .map_err(|error| BackendError {
@@ -272,6 +289,10 @@ fn transcribe_sync(
         language: request.language,
         segments,
     })
+}
+
+fn is_digital_silence(samples: &[f32]) -> bool {
+    !samples.is_empty() && samples.iter().all(|sample| *sample == 0.0)
 }
 
 fn validate_device(device: ComputeDevice) -> Result<(), BackendError> {
@@ -394,6 +415,24 @@ fn cancelled_error(message: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn digital_silence_requires_a_nonempty_exact_zero_waveform() {
+        assert!(is_digital_silence(&[0.0, -0.0, 0.0]));
+        assert!(!is_digital_silence(&[]));
+    }
+
+    #[test]
+    fn weak_or_nonfinite_samples_are_never_classified_as_digital_silence() {
+        for sample in [
+            f32::from_bits(1),
+            -f32::from_bits(1),
+            f32::NAN,
+            f32::INFINITY,
+        ] {
+            assert!(!is_digital_silence(&[0.0, sample, 0.0]));
+        }
+    }
 
     #[test]
     fn timestamp_ranges_preserve_source_overlap_without_exposing_padding() {
