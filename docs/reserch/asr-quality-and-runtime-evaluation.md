@@ -210,7 +210,22 @@ Whisper 默认固定四线程与 native diarization 的预算是独立路径。�
 
 仅在 uv 隔离评测环境固定 fastcluster 1.3.0、SciPy 1.18.1、NumPy 2.5.4，未改产品依赖。seed 86739 生成 N=3/8/32/64、D=2/8/32 的归一化向量，转为 f32 再回到相同 f64 输入；每组四棵树，在 0.2/0.6/1.0/1.6 上按 distance 规则和标签置换比较，共 48 棵树、192 次分组零差异，最大合并高度差约 8.88e-16。此试接只核对 API 与标准语义，没有测内存/耗时，也不证明 native f32 或模型 DER 一致，见[候选回执](../quality/centroid-vector-trial.json)。
 
-//TODO - 先以固定向量与 dtype 对照 Rust/C++ 所有权、异常及取消边界，再测 N=1,000/10,000 的进程峰值 RSS、wall 与合并差异；真实保留集 DER 不退化后才评估原生接入。省去距离数组仍不解决 session 保留全部 window artifact 的内存，不能据此宣布小时级资源通过。产品继续使用当前 native 链路。复现核心为 `linkage_vector(X, method="centroid", metric="euclidean")` 对照 SciPy `linkage`，再用同一个 `fcluster(..., criterion="distance")` 比较按首次出现重编号的完整标签；无临时代码留在项目。
+2026-10-27 补测资源，先冻结 N=1,000/10,000、D=256、分散/32 中心聚集两类构造输入、每组 `native → SciPy → vector → vector → SciPy → native` 顺序，以及一万条时候选相对 SciPy 中位耗时不超过 2 倍、进程 RSS 不超过一半的筛选门。24 个独立进程全部完成。native probe 逐字节复用当前 AHC、flat cut 和归一化源码，使用既有锁定依赖；Python 两路接收同一份 native 归一化 f32 再展开为 f64 的输入，没有改产品依赖。
+
+| 输入 | 当前 Rust 耗时 / 峰值 RSS | SciPy 耗时 / 峰值 RSS | vector 候选耗时 / 峰值 RSS |
+|---|---|---|---|
+| 分散 1,000 × 256 | 0.0765 s / 11.46 MiB | 0.0375 s / 74.52 MiB | 0.2336 s / 67.61 MiB |
+| 聚集 1,000 × 256 | 0.0671 s / 11.48 MiB | 0.0337 s / 74.62 MiB | 0.2341 s / 66.36 MiB |
+| 分散 10,000 × 256 | 7.459 s / 227.79 MiB | 4.464 s / 921.32 MiB | 23.973 s / 111.32 MiB |
+| 聚集 10,000 × 256 | 7.394 s / 228.09 MiB | 4.101 s / 921.65 MiB | 24.624 s / 111.26 MiB |
+
+每项为两个进程的中位数；RSS 是 macOS `/usr/bin/time -l` 的整进程峰值，包含启动、导入和输入，不能当作聚类新增分配。native 计时包含 f32 归一化、距离、linkage 和平面切分，Python 计时只含 f64 linkage；该表不是完整 backend 的替换性能。候选在两个一万条场景通过 RSS 门，但耗时分别为 SciPy 的 5.37/6.00 倍、当前 Rust 的约 3.21/3.33 倍，速度门均失败，拒绝默认替换。低内存候选仍有价值，不能把内存下降同时表述成提速。
+
+四组输入在七个阈值的 28 次标准 distance 分组比较零差异；SciPy 与 vector 的合并节点/大小完全一致，最大高度差约 1.69e-14；四组默认 0.6 的候选分组与当前 native 也一致。这些构造分组不覆盖 f32 临界值、相等距离、实际模型 DER 或留出质量。独立 review 重新核对 24 份输出 hash、stdout 耗时和中位数，校验输入/源码未变，完整版本、原始路径和门槛见[资源回执](../quality/centroid-resource-evaluation.json)。
+
+//TODO - 在原生试接前核对 Rust/C++ 所有权、异常和取消边界，并补 f32 临界/相等距离与真实保留集 DER。当前 wheel 的高维耗时门失败，先定位距离计算与构建选项是否能达到固定速度门，再评估原生接入；不能通过放宽门槛改称通过。省去距离数组仍不解决 session 保留全部 window artifact 的内存，小时级资源尚未验收，产品继续使用当前 native 链路。
+
+复现核心：seed 86740 加四组 case index 生成 f32 输入；分散场景为标准正态，聚集场景为 32 个单位中心循环分配、叠加 sigma=0.025 正态噪声。独立 probe 对原生产归一化生成固定 f32 文件；Python 读取为相同 f64 输入，在 1 线程 BLAS 环境分别调用 `linkage(X, method="centroid", metric="euclidean")` 与 `linkage_vector`，完整保存合并树，另保存 native 默认标签。进程外采 RSS，进程内仅计聚类调用；用 `fcluster(..., criterion="distance")` 在 0.2/0.4/0.6/1.0/1.2/1.4/1.6 比较首次出现重编号后的完整标签。每次输入与重复输出均校验，临时 probe/controller 已删除，源码指纹和原始日志保留于忽略评测目录及回执。
 
 ### UI 回归的共享 worker 隔离
 
