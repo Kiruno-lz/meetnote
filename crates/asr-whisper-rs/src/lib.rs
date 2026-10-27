@@ -123,7 +123,6 @@ impl AsrWindowSession for WhisperWindowSession {
                 }
             }
         })?;
-        let window_len = window.samples.len() as u64;
         for segment in state.as_iter() {
             let text = segment
                 .to_str_lossy()
@@ -133,26 +132,18 @@ impl AsrWindowSession for WhisperWindowSession {
                 })?
                 .trim()
                 .to_string();
-            let Some((local_start, local_end)) = bounded_sample_range(
-                segment.start_timestamp(),
-                segment.end_timestamp(),
-                window_len,
-            ) else {
+            let Some((start_ms, end_ms)) =
+                owned_window_range(&window, segment.start_timestamp(), segment.end_timestamp())
+            else {
                 continue;
             };
             if text.is_empty() {
                 continue;
             }
-            let global_start = window.global_start_sample.saturating_add(local_start);
-            let global_end = window.global_start_sample.saturating_add(local_end);
-            let midpoint = global_start.saturating_add((global_end - global_start) / 2);
-            if !core_owns(&window, midpoint) {
-                continue;
-            }
             self.segments.push(domain::TranscriptSegment {
                 id: String::new(),
-                start_ms: sample_to_ms(global_start),
-                end_ms: sample_to_ms(global_end),
+                start_ms,
+                end_ms,
                 text,
             });
         }
@@ -379,6 +370,19 @@ fn sample_to_ms(sample: u64) -> u64 {
     sample.saturating_mul(1_000) / u64::from(TARGET_SAMPLE_RATE_HZ)
 }
 
+fn owned_window_range(window: &AudioWindow, start: i64, end: i64) -> Option<(u64, u64)> {
+    let (local_start, local_end) = bounded_sample_range(start, end, window.samples.len() as u64)?;
+    let global_start = window.global_start_sample.saturating_add(local_start);
+    let global_end = window.global_start_sample.saturating_add(local_end);
+    let midpoint = global_start.saturating_add((global_end - global_start) / 2);
+    if !core_owns(window, midpoint) {
+        return None;
+    }
+    let start_ms = sample_to_ms(global_start);
+    let end_ms = sample_to_ms(global_end);
+    (start_ms < end_ms).then_some((start_ms, end_ms))
+}
+
 fn core_owns(window: &AudioWindow, sample: u64) -> bool {
     sample >= window.valid_core_start_sample
         && (sample < window.valid_core_end_sample
@@ -415,6 +419,63 @@ fn cancelled_error(message: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn final_single_sample_core(core_extra_samples: u64) -> AudioWindow {
+        let core_samples = 60 * u64::from(TARGET_SAMPLE_RATE_HZ) + core_extra_samples;
+        let plan = audio::AudioWindowPlan::new(core_samples, 15 * u64::from(TARGET_SAMPLE_RATE_HZ))
+            .unwrap();
+        let end = core_samples + 1;
+        let bounds = plan.bounds_for_total(end).last().unwrap();
+        AudioWindow {
+            sequence: bounds.sequence,
+            sample_rate: TARGET_SAMPLE_RATE_HZ,
+            samples: vec![0.5; (bounds.global_end_sample - bounds.global_start_sample) as usize]
+                .into(),
+            global_start_sample: bounds.global_start_sample,
+            global_end_sample: bounds.global_end_sample,
+            valid_core_start_sample: bounds.valid_core_start_sample,
+            valid_core_end_sample: bounds.valid_core_end_sample,
+            source_total_samples: Some(end),
+            is_final: true,
+        }
+    }
+
+    #[test]
+    fn window_sample_clipping_does_not_create_zero_millisecond_segments() {
+        let window = final_single_sample_core(0);
+        assert_eq!(
+            bounded_sample_range(1_500, 1_501, window.samples.len() as u64),
+            Some((240_000, 240_001))
+        );
+        assert_eq!(owned_window_range(&window, 1_500, 1_501), None);
+    }
+
+    #[test]
+    fn keeps_a_short_tail_that_crosses_a_global_millisecond_boundary() {
+        let window = final_single_sample_core(15);
+        assert_eq!(
+            owned_window_range(&window, 1_500, 1_501),
+            Some((60_000, 60_001))
+        );
+    }
+
+    #[test]
+    fn window_time_mapping_preserves_midpoint_ownership_and_source_bounds() {
+        let window = AudioWindow {
+            sequence: 2,
+            sample_rate: TARGET_SAMPLE_RATE_HZ,
+            samples: vec![0.5; 48_000].into(),
+            global_start_sample: 16_000,
+            global_end_sample: 64_000,
+            valid_core_start_sample: 32_000,
+            valid_core_end_sample: 48_000,
+            source_total_samples: Some(80_000),
+            is_final: false,
+        };
+        assert_eq!(owned_window_range(&window, 0, 100), None);
+        assert_eq!(owned_window_range(&window, 100, 200), Some((2_000, 3_000)));
+        assert_eq!(owned_window_range(&window, 200, 400), None);
+    }
 
     #[test]
     fn digital_silence_requires_a_nonempty_exact_zero_waveform() {
