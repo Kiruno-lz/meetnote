@@ -2,6 +2,7 @@ use ndarray::{Array2, Array3, s};
 use tracing::{debug, trace};
 
 use crate::inference::embedding::EmbeddingModel;
+use crate::inference::segmentation::streaming_total_windows;
 use crate::powerset::PowersetMapping;
 
 use super::config::MIN_SPEAKER_ACTIVITY;
@@ -21,19 +22,6 @@ impl ConcurrentEmbeddingResult {
     pub fn is_empty(&self) -> bool {
         self.num_chunks == 0
     }
-}
-
-/// Compute total window count matching the streaming segmentation sliding-window logic
-/// Includes the zero-padded tail window. Returns 0 when audio is shorter than one window
-fn streaming_total_windows(audio_len: usize, window_samples: usize, step_samples: usize) -> usize {
-    let full_windows = if audio_len >= window_samples {
-        (audio_len - window_samples) / step_samples + 1
-    } else {
-        return 0;
-    };
-    let offset_after_full = full_windows * step_samples;
-    let has_tail = offset_after_full < audio_len;
-    full_windows + has_tail as usize
 }
 
 struct MultiMaskBatch<'a> {

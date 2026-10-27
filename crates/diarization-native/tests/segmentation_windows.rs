@@ -48,3 +48,23 @@ fn longer_unaligned_recordings_keep_their_existing_windows() {
         }
     }
 }
+
+#[path = "../../../third_party/speakrs/src/inference/segmentation/window_count.rs"]
+mod window_count;
+
+#[test]
+fn concurrent_allocation_matches_producer_at_every_short_boundary() {
+    for window in [10, 160] {
+        for step in [1, 3, window] {
+            for len in 0..=window * 3 {
+                let audio = vec![0.25; len];
+                let windows = tensor::SegmentationWindows::collect(&audio, window, step);
+                assert_eq!(
+                    window_count::streaming_total_windows(len, window, step),
+                    windows.total_windows(),
+                    "len={len} window={window} step={step}"
+                );
+            }
+        }
+    }
+}

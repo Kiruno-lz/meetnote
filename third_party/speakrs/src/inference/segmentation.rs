@@ -12,6 +12,8 @@ mod native;
 mod parallel;
 mod run;
 mod tensor;
+mod window_count;
+pub(crate) use window_count::streaming_total_windows;
 
 /// Errors that can occur during segmentation inference
 #[derive(Debug, thiserror::Error)]
