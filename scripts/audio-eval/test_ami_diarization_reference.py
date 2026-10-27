@@ -138,6 +138,92 @@ class AmiDiarizationReferenceTests(unittest.TestCase):
             self.assertTrue(all(path.read_bytes() == content for path, content in before.items()))
             self.assertFalse(list(root.glob(".ami-reference-*")))
 
+    def test_explicit_heldout_profile_preserves_source_and_partition_pins(self):
+        import prepare_ami_diarization as prepare
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.wav"
+            with wave.open(str(source), "wb") as stream:
+                stream.setnchannels(1)
+                stream.setsampwidth(2)
+                stream.setframerate(16000)
+                stream.writeframes(array("h", range(16000)).tobytes())
+            rttm, uem, split = root / "reference.rttm", root / "reference.uem", root / "test.txt"
+            rttm.write_text("SPEAKER heldout 1 0.25 0.5 <NA> <NA> A <NA> <NA>\n")
+            uem.write_text("heldout 1 0.0 1.0\n")
+            split.write_text("heldout\n")
+            inputs = [source, rttm, uem, split]
+            before = {path: path.read_bytes() for path in inputs}
+            digest = lambda path: hashlib.sha256(before[path]).hexdigest()
+            profile = {
+                "split": "test",
+                "audioSha256": digest(source),
+                "rttmSha256": digest(rttm),
+                "uemSha256": digest(uem),
+                "splitSha256": digest(split),
+            }
+            argv = [
+                "prepare",
+                "--meeting",
+                "heldout",
+                "--source-audio",
+                str(source),
+                "--audio",
+                str(source),
+                "--rttm",
+                str(rttm),
+                "--uem",
+                str(uem),
+                "--split-file",
+                str(split),
+                "--root",
+                str(root),
+            ]
+            output = root / "diarization-reference.json"
+            with mock.patch.object(
+                prepare, "HELDOUT_SOURCES", {"heldout": profile}, create=True
+            ), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+                prepare.main()
+                record = json.loads(output.read_bytes())
+                self.assertEqual(record["meetingId"], "heldout")
+                self.assertEqual(record["split"], "test")
+                self.assertEqual(record["sourceRttmPath"], "only_words/rttms/test/heldout.rttm")
+                self.assertEqual(record["sourceUemPath"], "uems/test/heldout.uem")
+                self.assertEqual(record["sourceSplitPath"], "lists/test.meetings.txt")
+                self.assertEqual(record["sourceAudioSha256"], digest(source))
+                self.assertEqual(
+                    record["referenceSpeakerSegments"],
+                    [{"startMs": 250, "endMs": 750, "speaker": "A"}],
+                )
+                preserved = output.read_bytes()
+                for path in inputs:
+                    with self.subTest(tampered=path.name):
+                        path.write_bytes(before[path] + b"changed")
+                        with self.assertRaisesRegex(ValueError, "checksum"):
+                            prepare.main()
+                        self.assertEqual(output.read_bytes(), preserved)
+                        path.write_bytes(before[path])
+                for field, path, value, message in [
+                    ("splitSha256", split, b"different-meeting\n", "partition"),
+                    (
+                        "rttmSha256",
+                        rttm,
+                        b"SPEAKER other 1 0.25 0.5 <NA> <NA> A <NA> <NA>\n",
+                        "identity",
+                    ),
+                ]:
+                    with self.subTest(field=field):
+                        path.write_bytes(value)
+                        profile[field] = hashlib.sha256(value).hexdigest()
+                        with self.assertRaisesRegex(ValueError, message):
+                            prepare.main()
+                        self.assertEqual(output.read_bytes(), preserved)
+                        path.write_bytes(before[path])
+                        profile[field] = digest(path)
+            self.assertTrue(all(path.read_bytes() == data for path, data in before.items()))
+            self.assertFalse(list(root.glob(".ami-reference-*")))
+
     def test_reference_output_cannot_alias_an_input(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
