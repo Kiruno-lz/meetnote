@@ -92,6 +92,13 @@ def load_benchmark_run(path: Path, report: dict | None = None) -> tuple[dict, li
     case_bytes = (path / "cases.json").read_bytes()
     if hashlib.sha256(case_bytes).hexdigest() != report["casesSha256"]:
         raise ValueError("case manifest mismatch")
+    if "configSha256" in report:
+        config_bytes = (path / "config.json").read_bytes()
+        if (
+            hashlib.sha256(config_bytes).hexdigest() != report["configSha256"]
+            or json.loads(config_bytes) != report["config"]
+        ):
+            raise ValueError("configuration snapshot checksum or receipt mismatch")
     prediction = path / "prediction.jsonl"
     prediction_bytes = prediction.read_bytes()
     if (
@@ -262,9 +269,11 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     report_path = args.output / "report.json"
     report_path.unlink(missing_ok=True)
-    cases = json.loads(args.cases.read_text())
+    case_bytes = args.cases.read_bytes()
+    cases = json.loads(case_bytes)
     validate_cases(cases)
-    config = json.loads(args.config.read_text())
+    config_bytes = args.config.read_bytes()
+    config = json.loads(config_bytes)
     model_path = Path(config["model"]["artifactPath"])
     artifact_paths = (
         sorted(p for p in model_path.rglob("*") if p.is_file())
@@ -279,15 +288,17 @@ def main() -> None:
         }
         for p in artifact_paths
     ]
-    (args.output / "cases.json").write_bytes(args.cases.read_bytes())
-    (args.output / "config.json").write_bytes(args.config.read_bytes())
+    for name, payload in (("cases", case_bytes), ("config", config_bytes)):
+        partial = args.output / f".{name}.json.part"
+        partial.write_bytes(payload)
+        partial.replace(args.output / f"{name}.json")
     prediction = args.output / "prediction.jsonl"
     prediction.unlink(missing_ok=True)
     runner_sha = sha256(args.runner)
     command = [
         str(args.runner.resolve()),
-        str(args.config.resolve()),
-        str(args.cases.resolve()),
+        str((args.output / "config.json").resolve()),
+        str((args.output / "cases.json").resolve()),
         str(prediction.resolve()),
     ]
     if args.runner.suffix == ".py":
@@ -323,6 +334,12 @@ def main() -> None:
             signal.signal(signal.SIGINT, previous_int)
             signal.signal(signal.SIGTERM, previous_term)
     try:
+        for name, payload in (("cases", case_bytes), ("config", config_bytes)):
+            if (args.output / f"{name}.json").read_bytes() != payload:
+                failure = failure or f"input snapshot changed: {name}.json"
+    except OSError as error:
+        failure = failure or f"input snapshot unavailable: {error}"
+    try:
         rows = (
             [json.loads(line) for line in prediction.read_text().splitlines()]
             if prediction.exists()
@@ -345,7 +362,8 @@ def main() -> None:
     report = {
         "schema": "meetnote.asr-benchmark.v1",
         "config": config,
-        "casesSha256": sha256(args.cases),
+        "casesSha256": hashlib.sha256(case_bytes).hexdigest(),
+        "configSha256": hashlib.sha256(config_bytes).hexdigest(),
         "runnerSha256": runner_sha,
         "predictionSha256": sha256(prediction) if prediction.exists() else None,
         "scoringVersion": "meetnote.asr-scoring.v2",
