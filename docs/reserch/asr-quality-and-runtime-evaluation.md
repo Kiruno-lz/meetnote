@@ -360,6 +360,26 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 真实调用发现 Whisper 对 `ami-ES2002a-4` 的 8670 ms 源音频返回 9000 ms 结束点，两轮一致。显式设置 base.en 权重和第五裁剪路径的真实 ignored 测试先失败；随后整文件与窗口共用有界 sample 范围转换，裁去 decoder padding 的时间，纯 padding 段不进入结果。修复后真实测试通过，十次配对调用保留全部文本、ID、起点和分段，仅两次 EOF 从 9000 改为 8670 ms。SenseVoice 十次、Whisper 前后各十次，共三十次独立 ASR 调用均成功；没有放宽评分器范围检查。该修复只保证源音频范围，不将 EOF 当作真实发声结束点。
 
+### Native CoreML 试接与资源边界
+
+固定模型 revision `5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f`，复用现有 `speakrs 0.5.0` native CoreML feature；不新增执行载体、不启用 backend 下载。官方 [模型仓库](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) 提供 ONNX 与转换后的 CoreML bundle；库与模型条款分别处理，不将 Rust 库许可证当作权重许可证。试验目录共 76 个文件、419,482,724 bytes，其中新下载 359,730,925 bytes；逐个校验上游 LFS SHA256 或 Git blob 与文件大小，并保存本地 SHA256。未修改原 CPU 安装目录、模型目录清单或默认设备。
+
+8.67 s 的真实短音频先在 concurrent multi-mask 路径触发 `ndarray index < dim`。分割 producer 已生成补零窗口，但 concurrent consumer 仍为短音频分配零行；恰好完整一窗也被额外计数。回归直接比较实际 vendor planner 与计数器，红线后修正，1,536 个长度/窗口/步长组合全部通过；同一真实 CoreML 音频连续两次通过。修复不改变 segmentation step、精度、聚类或长音频窗口数量。
+
+180 s AMI ES2002a `train / only_words` 录音分别使用原 CPU 文件、同一扩展文件的 CPU、native CoreML，按 A/B/C/C/B/A 顺序各两个进程、每进程两次调用；固定 60 s core、15 s context，先做短音频 smoke。以下时间均含每次 pipeline 初始化，不代表清空 CoreML 系统缓存后的首次安装体验。
+
+| 路径 | 调用中位数 s | 最大进程 RSS MiB | 最大 macOS footprint GiB | DER 无 collar / 500 ms full collar |
+| --- | ---: | ---: | ---: | --- |
+| CPU 原包 | 45.6289 | 305.06 | 0.2565 | 27.9937% / 26.5862% |
+| CPU 扩展包 | 120.4635 | 1213.89 | 1.1392 | 27.9937% / 26.5862% |
+| CoreML 扩展包 | 1.5900 | 523.83 | 3.6724 | 27.2940% / 26.2301% |
+
+预先固定的 DER 增加 ≤1 个百分点、耗时 ≤CPU 80%、进程 RSS ≤CPU 两倍门槛通过；这些门槛仅覆盖该训练裁片与 RSS。独立资源复核发现 CoreML 的 macOS footprint 显著高于 RSS，因此保留 CPU 默认，不将筛选通过扩展为整体内存或生产验收。CoreML `All` 由框架安排各运算设备，允许 GPU 低精度累加；CoreML segmentation step 为 0.96 s，CPU 为 1 s。不同 observation 数与边界不能声称向量等价；同文件 CPU 对照也证实收益并非简单来自添加文件。所有 12 次长音频输出均为合法源内正时长，DER 使用现有固定 pyannote.metrics 评分器；未评估 ASR/Assistant 质量。
+
+复现与核心方法：从永久 `diarization_benchmark.rs` 生成临时 example，仅把请求 `ComputeDevice::Cpu` 改为 `CoreMl` 并在原始行记录设备；用 `cargo build --release --locked -p diarization --features diarization-native/coreml --example coreml_trial` 编译，原运行器作 CPU 对照。模型准备使用现有 `huggingface_hub.hf_hub_download` 的固定 revision、明确文件列表和 `token=False`，不调用库的在线 model manager。每进程用 macOS `/usr/bin/time -l` 保存 RSS 与 footprint，评分前校验音频、参考、模型文件、runner 与 prediction 指纹，直接调用 `metrics.diarization(..., collar, 180000)`；CoreML receipt 不冒用 CPU-only 评分 schema。临时 example 与控制器清理，协议、模型与原始失败/成功数据留在忽略目录 `eval-data/optimization-2026-10-27/coreml-feasibility/`，精简可追溯结果见 [CoreML 验证](../quality/coreml-feasibility-validation.json)。
+
+全量验证首次遇到 UI 语言 notice 等待超时；单独执行该测试通过，未改 UI 的全量重跑为 968 次通过（含三次隔离子进程）、16 ignored，fmt/check/build 通过。保留首次失败，不能声称消除了这一 UI 时序失败。`//TODO - ` 比较 CoreML 运算单元策略的 macOS footprint，并在未参与调优的录音上评分；测试门槛须先固定，只有资源、质量和模型管理同时验收后才评估默认策略。
+
 ### Native 分离窗口的整数毫秒范围
 
 2026-10-27 重新审查资源链路，确认 session 已只保留 `WindowTimeline` 和 inference 数组，没有保留输入 `Arc<AudioWindow>` PCM；没有按假设修改所有权。审查导出时发现另一处确定性范围问题：speaker segment 的 15 秒 context 尾窗、embedding observation 的 5 秒 context 尾窗，在有效 core 只剩一个采样时，都可从正 sample 范围变成 `60000..60000 ms`。两个直接生产导出 helper 的回归先红；它们是 typed projection fixture，不作为实际模型输出这种尾段的证据。

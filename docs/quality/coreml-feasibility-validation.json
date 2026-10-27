@@ -1,0 +1,707 @@
+{
+  "schema": "meetnote.coreml-feasibility-validation.v1",
+  "date": "2026-10-27",
+  "scope": "native CoreML trial with source-bound train recording; no production default or heldout acceptance",
+  "sourceCommit": "564ded12412cba01d925bfc0c8cceb0fd44d04b4",
+  "measuredCommitBeforeMessageFormatting": "f839a12b7ac274bcd7634197995b5fcec458590a",
+  "identicalSourceTree": "ea7020079ac86dff67dd7c63120a1378e99bd8b2",
+  "protocol": {
+    "schema": "meetnote.coreml-screen-protocol.v1",
+    "sourceCommit": "f839a12b7ac274bcd7634197995b5fcec458590a",
+    "trialSourceSha256": "15f3dee16a3e684910bc48dede81d5b65787263ff87a0ba0733e728c75652113",
+    "cpuRunnerSha256": "159e7fe446892b9d1c50010d27c9e84e91448cfdcda593dd15c2f241100878f5",
+    "coremlRunnerSha256": "955f82e8b13dfdd04791465a72f2d316f1847e8510a838abd1cf0865763a1219",
+    "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+    "referenceSha256": "66100d9e2c94bfa068512056a27a3306926544ba38b419ad4fc8d5f09ec8e835",
+    "mode": "windowed",
+    "coreSamples": 960000,
+    "contextSamples": 240000,
+    "computeUnits": "All; actual per-operation placement not measured",
+    "gpuLowPrecisionAccumulationAllowed": true,
+    "roles": [
+      "cpu_original",
+      "cpu_expanded",
+      "coreml_expanded"
+    ],
+    "processOrder": [
+      "cpu_original",
+      "cpu_expanded",
+      "coreml_expanded",
+      "coreml_expanded",
+      "cpu_expanded",
+      "cpu_original"
+    ],
+    "repeatsPerProcess": 2,
+    "gates": {
+      "quality": "DER no more than 0.01 absolute worse than both CPU controls at each collar 0/500 ms",
+      "speed": "median call seconds <= 0.8 times both CPU controls",
+      "memory": "max process RSS <= 2 times both CPU controls",
+      "sourceBounds": "positive integer ms <=180000 for segments and observations",
+      "adoption": "screen only; known training crop cannot authorize production default"
+    },
+    "controllerSha256": "7e2d99e48d41f37346db6235d3c85d82c76642144671c3182f6e58f68b258243",
+    "assetManifestSha256": "af5f2fae3034da586768a5ebddf4c89d8be210be0cce558ccc6302c0818a89d7"
+  },
+  "summary": {
+    "schema": "meetnote.coreml-screen-result.v1",
+    "protocolSha256": "b4bb60f159a722d8a0c876f390740a5fbbd8061a59eb2c54b71c254ac880f0d5",
+    "assetManifestSha256": "af5f2fae3034da586768a5ebddf4c89d8be210be0cce558ccc6302c0818a89d7",
+    "scorerSha256": "017329155240813027e60f75bd5bfbd08bea2cb3934252c76e05a6c3aa2044e4",
+    "metricImplementationSha256": "5c9d82d039f1c185920dbec3d6d42f2891099ff986b6bee0225b1128b946385d",
+    "qualityAcceptance": "not_assessed",
+    "roles": {
+      "cpu_original": {
+        "medianCallSeconds": 45.6288614375,
+        "callSeconds": [
+          47.86983225,
+          47.248768125,
+          44.00895475,
+          42.978513375
+        ],
+        "maxPeakRssBytes": 319881216,
+        "peakRssBytes": [
+          319881216,
+          312606720
+        ],
+        "scores": [
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.603999999999999,
+              "falseAlarmSpeakerSeconds": 22.038999999999962,
+              "confusedSpeakerSeconds": 4.126999999999995,
+              "der": 0.27993655828707337,
+              "missRate": 0.0493787998942638,
+              "falseAlarmRate": 0.19419332099744435,
+              "confusionRate": 0.036364437395365184
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.775999999999968,
+              "falseAlarmSpeakerSeconds": 20.276999999999997,
+              "confusedSpeakerSeconds": 2.1799999999999926,
+              "der": 0.26586239595406114,
+              "missRate": 0.029248761985038098,
+              "falseAlarmRate": 0.21364450532083007,
+              "confusionRate": 0.022969128648192932
+            }
+          ],
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.603999999999999,
+              "falseAlarmSpeakerSeconds": 22.038999999999962,
+              "confusedSpeakerSeconds": 4.126999999999995,
+              "der": 0.27993655828707337,
+              "missRate": 0.0493787998942638,
+              "falseAlarmRate": 0.19419332099744435,
+              "confusionRate": 0.036364437395365184
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.775999999999968,
+              "falseAlarmSpeakerSeconds": 20.276999999999997,
+              "confusedSpeakerSeconds": 2.1799999999999926,
+              "der": 0.26586239595406114,
+              "missRate": 0.029248761985038098,
+              "falseAlarmRate": 0.21364450532083007,
+              "confusionRate": 0.022969128648192932
+            }
+          ],
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.603999999999999,
+              "falseAlarmSpeakerSeconds": 22.038999999999962,
+              "confusedSpeakerSeconds": 4.126999999999995,
+              "der": 0.27993655828707337,
+              "missRate": 0.0493787998942638,
+              "falseAlarmRate": 0.19419332099744435,
+              "confusionRate": 0.036364437395365184
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.775999999999968,
+              "falseAlarmSpeakerSeconds": 20.276999999999997,
+              "confusedSpeakerSeconds": 2.1799999999999926,
+              "der": 0.26586239595406114,
+              "missRate": 0.029248761985038098,
+              "falseAlarmRate": 0.21364450532083007,
+              "confusionRate": 0.022969128648192932
+            }
+          ],
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.603999999999999,
+              "falseAlarmSpeakerSeconds": 22.038999999999962,
+              "confusedSpeakerSeconds": 4.126999999999995,
+              "der": 0.27993655828707337,
+              "missRate": 0.0493787998942638,
+              "falseAlarmRate": 0.19419332099744435,
+              "confusionRate": 0.036364437395365184
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.775999999999968,
+              "falseAlarmSpeakerSeconds": 20.276999999999997,
+              "confusedSpeakerSeconds": 2.1799999999999926,
+              "der": 0.26586239595406114,
+              "missRate": 0.029248761985038098,
+              "falseAlarmRate": 0.21364450532083007,
+              "confusionRate": 0.022969128648192932
+            }
+          ]
+        ],
+        "counts": [
+          {
+            "speakerCount": 3,
+            "segments": 45,
+            "observations": 303
+          },
+          {
+            "speakerCount": 3,
+            "segments": 45,
+            "observations": 303
+          },
+          {
+            "speakerCount": 3,
+            "segments": 45,
+            "observations": 303
+          },
+          {
+            "speakerCount": 3,
+            "segments": 45,
+            "observations": 303
+          }
+        ],
+        "receiptSha256": [
+          "1bf7b4cf5686fa5942611ea0e78198201fd77a017c674f7fabecbe997c710f1b",
+          "5aac638087bd080325a4b39915fa540cf4ad8c39aaadbc12aebc7ed4c9c64b96"
+        ],
+        "peakMemoryFootprintBytes": [
+          275366920,
+          266142704
+        ],
+        "maxPeakMemoryFootprintBytes": 275366920
+      },
+      "cpu_expanded": {
+        "medianCallSeconds": 120.463549896,
+        "callSeconds": [
+          122.145916917,
+          120.89573375,
+          120.031366042,
+          118.891516292
+        ],
+        "maxPeakRssBytes": 1272856576,
+        "peakRssBytes": [
+          1251229696,
+          1272856576
+        ],
+        "scores": [
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.603999999999999,
+              "falseAlarmSpeakerSeconds": 22.038999999999962,
+              "confusedSpeakerSeconds": 4.126999999999995,
+              "der": 0.27993655828707337,
+              "missRate": 0.0493787998942638,
+              "falseAlarmRate": 0.19419332099744435,
+              "confusionRate": 0.036364437395365184
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.775999999999968,
+              "falseAlarmSpeakerSeconds": 20.276999999999997,
+              "confusedSpeakerSeconds": 2.1799999999999926,
+              "der": 0.26586239595406114,
+              "missRate": 0.029248761985038098,
+              "falseAlarmRate": 0.21364450532083007,
+              "confusionRate": 0.022969128648192932
+            }
+          ],
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.603999999999999,
+              "falseAlarmSpeakerSeconds": 22.038999999999962,
+              "confusedSpeakerSeconds": 4.126999999999995,
+              "der": 0.27993655828707337,
+              "missRate": 0.0493787998942638,
+              "falseAlarmRate": 0.19419332099744435,
+              "confusionRate": 0.036364437395365184
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.775999999999968,
+              "falseAlarmSpeakerSeconds": 20.276999999999997,
+              "confusedSpeakerSeconds": 2.1799999999999926,
+              "der": 0.26586239595406114,
+              "missRate": 0.029248761985038098,
+              "falseAlarmRate": 0.21364450532083007,
+              "confusionRate": 0.022969128648192932
+            }
+          ],
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.603999999999999,
+              "falseAlarmSpeakerSeconds": 22.038999999999962,
+              "confusedSpeakerSeconds": 4.126999999999995,
+              "der": 0.27993655828707337,
+              "missRate": 0.0493787998942638,
+              "falseAlarmRate": 0.19419332099744435,
+              "confusionRate": 0.036364437395365184
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.775999999999968,
+              "falseAlarmSpeakerSeconds": 20.276999999999997,
+              "confusedSpeakerSeconds": 2.1799999999999926,
+              "der": 0.26586239595406114,
+              "missRate": 0.029248761985038098,
+              "falseAlarmRate": 0.21364450532083007,
+              "confusionRate": 0.022969128648192932
+            }
+          ],
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.603999999999999,
+              "falseAlarmSpeakerSeconds": 22.038999999999962,
+              "confusedSpeakerSeconds": 4.126999999999995,
+              "der": 0.27993655828707337,
+              "missRate": 0.0493787998942638,
+              "falseAlarmRate": 0.19419332099744435,
+              "confusionRate": 0.036364437395365184
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.775999999999968,
+              "falseAlarmSpeakerSeconds": 20.276999999999997,
+              "confusedSpeakerSeconds": 2.1799999999999926,
+              "der": 0.26586239595406114,
+              "missRate": 0.029248761985038098,
+              "falseAlarmRate": 0.21364450532083007,
+              "confusionRate": 0.022969128648192932
+            }
+          ]
+        ],
+        "counts": [
+          {
+            "speakerCount": 3,
+            "segments": 45,
+            "observations": 304
+          },
+          {
+            "speakerCount": 3,
+            "segments": 45,
+            "observations": 304
+          },
+          {
+            "speakerCount": 3,
+            "segments": 45,
+            "observations": 304
+          },
+          {
+            "speakerCount": 3,
+            "segments": 45,
+            "observations": 304
+          }
+        ],
+        "receiptSha256": [
+          "8fc887af8b12591fab96695d116ff588313e7bf3b05782d0b5e8f53449d0e6ab",
+          "89b9ef94febe99a452ab81d70d50224fc2e3b20a4e33e40747d160e1ffe9933a"
+        ],
+        "peakMemoryFootprintBytes": [
+          1204160264,
+          1223264008
+        ],
+        "maxPeakMemoryFootprintBytes": 1223264008
+      },
+      "coreml_expanded": {
+        "medianCallSeconds": 1.5899588125,
+        "callSeconds": [
+          3.439809709,
+          1.51640025,
+          1.663517375,
+          1.499673708
+        ],
+        "maxPeakRssBytes": 549273600,
+        "peakRssBytes": [
+          534888448,
+          549273600
+        ],
+        "scores": [
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.495000000000118,
+              "falseAlarmSpeakerSeconds": 22.379999999999974,
+              "confusedSpeakerSeconds": 3.100999999999928,
+              "der": 0.27294034716715143,
+              "missRate": 0.04841836285135358,
+              "falseAlarmRate": 0.19719799101242375,
+              "confusionRate": 0.027323993303374112
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.5400000000000347,
+              "falseAlarmSpeakerSeconds": 20.47699999999999,
+              "confusedSpeakerSeconds": 1.8779999999999717,
+              "der": 0.2623011273838371,
+              "missRate": 0.026762195764408733,
+              "falseAlarmRate": 0.21575176482983854,
+              "confusionRate": 0.019787166789589826
+            }
+          ],
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.495000000000118,
+              "falseAlarmSpeakerSeconds": 22.379999999999974,
+              "confusedSpeakerSeconds": 3.100999999999928,
+              "der": 0.27294034716715143,
+              "missRate": 0.04841836285135358,
+              "falseAlarmRate": 0.19719799101242375,
+              "confusionRate": 0.027323993303374112
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.5400000000000347,
+              "falseAlarmSpeakerSeconds": 20.47699999999999,
+              "confusedSpeakerSeconds": 1.8779999999999717,
+              "der": 0.2623011273838371,
+              "missRate": 0.026762195764408733,
+              "falseAlarmRate": 0.21575176482983854,
+              "confusionRate": 0.019787166789589826
+            }
+          ],
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.495000000000118,
+              "falseAlarmSpeakerSeconds": 22.379999999999974,
+              "confusedSpeakerSeconds": 3.100999999999928,
+              "der": 0.27294034716715143,
+              "missRate": 0.04841836285135358,
+              "falseAlarmRate": 0.19719799101242375,
+              "confusionRate": 0.027323993303374112
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.5400000000000347,
+              "falseAlarmSpeakerSeconds": 20.47699999999999,
+              "confusedSpeakerSeconds": 1.8779999999999717,
+              "der": 0.2623011273838371,
+              "missRate": 0.026762195764408733,
+              "falseAlarmRate": 0.21575176482983854,
+              "confusionRate": 0.019787166789589826
+            }
+          ],
+          [
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 0,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 113.49000000000001,
+              "missedSpeakerSeconds": 5.495000000000118,
+              "falseAlarmSpeakerSeconds": 22.379999999999974,
+              "confusedSpeakerSeconds": 3.100999999999928,
+              "der": 0.27294034716715143,
+              "missRate": 0.04841836285135358,
+              "falseAlarmRate": 0.19719799101242375,
+              "confusionRate": 0.027323993303374112
+            },
+            {
+              "status": "measured",
+              "method": "pyannote.metrics-4.0.0-hungarian",
+              "collarMs": 500,
+              "collarConvention": "full_duration_centered_on_reference_boundaries",
+              "overlap": "included",
+              "scoringRegion": "source_duration",
+              "scoredSpeakerSeconds": 94.91000000000007,
+              "missedSpeakerSeconds": 2.5400000000000347,
+              "falseAlarmSpeakerSeconds": 20.47699999999999,
+              "confusedSpeakerSeconds": 1.8779999999999717,
+              "der": 0.2623011273838371,
+              "missRate": 0.026762195764408733,
+              "falseAlarmRate": 0.21575176482983854,
+              "confusionRate": 0.019787166789589826
+            }
+          ]
+        ],
+        "counts": [
+          {
+            "speakerCount": 3,
+            "segments": 48,
+            "observations": 317
+          },
+          {
+            "speakerCount": 3,
+            "segments": 48,
+            "observations": 317
+          },
+          {
+            "speakerCount": 3,
+            "segments": 48,
+            "observations": 317
+          },
+          {
+            "speakerCount": 3,
+            "segments": 48,
+            "observations": 317
+          }
+        ],
+        "receiptSha256": [
+          "3c664fce6d2345756c4516fe9055650ffc2901eb61728f32b8d93d58fbbd5a8c",
+          "aff334927a77e9f7b21d2383eb8998a44353fb633ec31730d4a41a671d2564da"
+        ],
+        "peakMemoryFootprintBytes": [
+          3943188208,
+          3913221944
+        ],
+        "maxPeakMemoryFootprintBytes": 3943188208
+      }
+    },
+    "references": {
+      "dataset": "AMI",
+      "split": "train",
+      "referenceVariant": "only_words",
+      "referenceTiming": "word-activity intervals derived from AMI manual-1.6.2; forced-alignment times, not manually verified acoustic boundaries",
+      "sourceRevision": "67c2d539286e89f68952d5dcf83912bd9f01dfae",
+      "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493"
+    },
+    "gates": {
+      "cpu_original": {
+        "speedRatio": 0.03484546320924184,
+        "rssRatio": 1.7171173939766442,
+        "qualityDeltaByCollar": [
+          -0.006996211119921936,
+          -0.003561268570224041
+        ],
+        "speedPassed": true,
+        "memoryPassed": true,
+        "qualityPassed": true
+      },
+      "cpu_expanded": {
+        "speedRatio": 0.0131986714144873,
+        "rssRatio": 0.4315282729858796,
+        "qualityDeltaByCollar": [
+          -0.006996211119921936,
+          -0.003561268570224041
+        ],
+        "speedPassed": true,
+        "memoryPassed": true,
+        "qualityPassed": true
+      }
+    },
+    "screenPassed": true,
+    "resourceCaveat": "RSS gates cover process RSS only; macOS peak memory footprint is a different additional observed resource metric, not total machine usage",
+    "decision": "retain CPU default; CoreML is promising but its 3.94 GB footprint and lack of heldout/profile acceptance prevent automatic adoption",
+    "summaryScorerSha256": "017329155240813027e60f75bd5bfbd08bea2cb3934252c76e05a6c3aa2044e4",
+    "resourceAugmentation": "parse macOS time -l peak memory footprint for every process without changing frozen RSS gates"
+  },
+  "review": {
+    "schema": "meetnote.coreml-window-count-review.v1",
+    "fixCommit": "f839a12b7ac274bcd7634197995b5fcec458590a",
+    "finding": "producer emits one short padded result while concurrent consumers allocated zero rows; exact full window was also overcounted",
+    "scope": "concurrent split, multi-mask and masked paths reuse the same counter; no step, clustering or precision changes",
+    "regression": {
+      "redLogSha256": "2dee932bebd74cd718ad3a8f6ac7e51e6a1a620bcb2a5f23c9df5465dc6b4a93",
+      "greenLogSha256": "cc546feb954f11a305705729e8a19ff307929738fd67a6db4ef039c300d6b1c1",
+      "combinations": 1536,
+      "unitResult": "7 passed"
+    },
+    "workspace": {
+      "firstRun": "failed; unrelated UI language notice wait timed out; retained raw log",
+      "focusedRetry": "1 passed",
+      "fullRetry": {
+        "rawPassed": 968,
+        "nestedChildPassed": 3,
+        "mainProcessPassed": 965,
+        "failed": 0,
+        "ignored": 16
+      },
+      "fmt": "passed",
+      "check": "passed",
+      "build": "passed"
+    },
+    "limits": "no all-device, heldout, long-duration resource or production quality acceptance",
+    "initialFullTestLogSha256": "df019feb118d0a4ecbebc9e0b09bec4ea5eda990f9ccd1dfb45196cb5217af76",
+    "fullRetryLogSha256": "88198ad9c4fcbe31182a4c9d8018c5414bbd7009c9d542dd8bda3bbc114c5700"
+  },
+  "artifacts": {
+    "modelRevision": "5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f",
+    "fileCount": 76,
+    "totalBytes": 419482724,
+    "newDownloadBytes": 359730925,
+    "assetManifestSha256": "af5f2fae3034da586768a5ebddf4c89d8be210be0cce558ccc6302c0818a89d7",
+    "checks": "every file size and upstream LFS SHA256 or Git blob identity verified; local SHA256 retained",
+    "metadataSha256": "580e8198e94c4f8e6ad5e521e58a588e74bde038b4743a7341cbb9bf00d799fd"
+  },
+  "failedProbe": {
+    "error": "ndarray index < dim in concurrent multi-mask embedding",
+    "realAudioSeconds": 8.67,
+    "baselineExitCode": 101,
+    "baselineLogSha256": "75cf298efef9172d74ee1094127718e5670fef96c8bff77e072012977bc28667",
+    "fixedSmokePredictionSha256": "14de31b623e858055ab19a088427552b461bfd5d57b6fef6ccbd7c7ea2a0b506",
+    "fixedCalls": 2,
+    "fixedCounts": {
+      "segments": 1,
+      "speakerCount": 1,
+      "observations": 1
+    }
+  },
+  "evidenceRoot": "eval-data/optimization-2026-10-27/coreml-feasibility",
+  "limitations": [
+    "known AMI ES2002a train crop only; no heldout quality acceptance",
+    "CoreML All delegates per-operation placement; no ANE-only claim",
+    "GPU low precision accumulation is permitted; segmentation step 0.96s versus CPU 1s",
+    "CoreML caches warmed by explicit smoke; no fresh installation cold-start claim",
+    "macOS time footprint and RSS are distinct; neither establishes whole-machine peak",
+    "CPU with expanded assets changes batching; do not replace CPU default bundle",
+    "first full test failed one UI language notice wait; focused and full retries passed without UI edits",
+    "scorer preflight rejected mismatched observation field names before scoring; raw predictions unchanged"
+  ],
+  "sources": [
+    "https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f",
+    "https://github.com/avencera/speakrs"
+  ]
+}
