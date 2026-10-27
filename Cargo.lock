@@ -1536,6 +1536,7 @@ name = "diarization"
 version = "0.1.0"
 dependencies = [
  "application",
+ "audio",
  "contracts",
  "diarization-native",
  "diarization-sherpa-onnx",
