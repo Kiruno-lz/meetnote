@@ -51,6 +51,8 @@ B2 的 `diarization_benchmark` 保留独立执行/资源及完整 speaker timeli
 
 Whisper 的 1–16 线程范围及 large/Turbo 补查见[线程回执](../quality/whisper-thread-evaluation.json)：六线程改善本机单任务 CPU 耗时，但两个独立推理进程的反向批次增加 44.78%，拒绝全局默认提高。JobRuntime worker 名额与各 native pool 的线程预算必须分开验证；后续在同进程和固定总 CPU 预算下补吞吐、取消与小时级资源证据。
 
+CoreML 普通模式的受管理 profile 通过 macOS ARM64 上的隔离安装、逐文件校验、真实整文件/窗口加载及 Audio Host 处理验证，作为可选模型提供，CPU 默认不变。既有三份 180 秒音频均已作为回归数据使用；其结果不能再称为新留出验收。阶段固定、完整模型溯源和端到端耗时以[受管理 profile 回执](../quality/coreml-managed-profile-validation.json)为准；fast 模式因单录音质量退步拒绝接入。
+
 B2 的 `metrics.py` 使用独立 `requirements-diarization.txt` 中锁定的 pyannote.metrics 4.0.0 / core 6.1.0，替换错误的手写 DER：最优标签映射、重叠与参考边界 collar 由库处理；collar 参数是以参考边界为中心的完整时长。没有依赖、缺少分离输出或参考 speaker time 为零时明确未评分，不能记作零 DER。`durationMs` 缺失时范围标为 observed extent；完整会议仍须显式 UEM/gold 和独立模型执行。手算反例、20 speaker 映射、输入快照/失败回执与 Rust export 验证见[评分器回执](../quality/der-scorer-validation.json)。
 
 B2 的 `report_diarization.py --run <cpu-run> --reference <diarization-reference.json> --output <report.json> --collar-ms 0 500` 复用标准评分器和已有 run 完整性校验，独立输出 DER 及各秒数/比率，不虚构 ASR 分数。reference、audio、时长、runner/model/prediction SHA、backend/CPU 与重复覆盖必须对应；明确空预测按漏检评分，失败或缺执行拒绝评分。JSON 使用实际读取快照的指纹，原子发布，失败清理旧同类报告，输入、音频与无关既有文件不可覆盖。CPU embedding 对照仍保持原来的非空向量/时间线要求。
