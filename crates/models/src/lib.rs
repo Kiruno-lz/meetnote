@@ -458,6 +458,11 @@ pub struct ModelCatalogEntry {
     pub task: String,
     pub model_family: String,
     pub candidate_backends: Vec<String>,
+    /// Empty means any platform; values use `<os>-<arch>` from Rust platform constants.
+    #[serde(default)]
+    pub supported_platforms: Vec<String>,
+    #[serde(default)]
+    pub fixed_diarization_stages: bool,
     #[serde(default)]
     pub revision: Option<String>,
     pub source_format: String,
@@ -552,6 +557,7 @@ impl ModelCatalog {
     ) -> Vec<ModelAvailability> {
         self.models
             .iter()
+            .filter(|model| model.supports_current_platform())
             .filter(|model| task.is_none_or(|task| model.task == task))
             .filter(|model| backend_id.is_none_or(|backend| model.supports_backend(backend)))
             .map(|model| model.availability(model_root.as_ref()))
@@ -604,6 +610,13 @@ impl ModelCatalog {
 }
 
 impl ModelCatalogEntry {
+    pub fn supports_current_platform(&self) -> bool {
+        self.supported_platforms.is_empty()
+            || self.supported_platforms.iter().any(|platform| {
+                platform == &format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+            })
+    }
+
     pub fn supports_backend(&self, backend_id: &str) -> bool {
         self.candidate_backends
             .iter()
@@ -753,7 +766,14 @@ mod tests {
             Some("diarization"),
             Some("diarization-native"),
         );
-        assert_eq!(native_models.len(), 1);
+        assert_eq!(
+            native_models.len(),
+            if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                2
+            } else {
+                1
+            }
+        );
         assert_eq!(native_models[0].model.id, "speakrs-community-1-cpu");
     }
 

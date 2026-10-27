@@ -8,6 +8,7 @@ use speakrs::{ExecutionMode, OwnedDiarizationPipeline};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const SPEAKRS_MODEL_ID: &str = "speakrs-community-1-cpu";
+pub const SPEAKRS_COREML_MODEL_ID: &str = "speakrs-community-1-coreml";
 pub const SPEAKRS_MODEL_REVISION: &str = "5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -115,6 +116,15 @@ pub trait NativeDiarizationEngine: Send + Sync {
                 "native engine does not support diarization stage overrides".into(),
             ))
         }
+    }
+    fn probe_with_device(
+        &self,
+        model: &ModelRef,
+        device: ComputeDevice,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), NativeDiarizationError> {
+        let _ = device;
+        self.probe_with_stages(model, configuration)
     }
     fn run(
         &self,
@@ -268,13 +278,17 @@ pub struct SpeakrsEngine;
 
 impl NativeDiarizationEngine for SpeakrsEngine {
     fn probe(&self, model: &ModelRef) -> Result<(), NativeDiarizationError> {
-        if model.model_id != SPEAKRS_MODEL_ID {
-            return Err(NativeDiarizationError::ModelIncompatible(format!(
-                "SpeakrsEngine requires model `{SPEAKRS_MODEL_ID}`, got `{}`",
-                model.model_id
-            )));
-        }
-        NativeModelBundle::from_model(model)?.probe_cpu()
+        self.probe_with_stages(model, &DiarizationStageConfiguration::default())
+    }
+
+    fn probe_with_device(
+        &self,
+        model: &ModelRef,
+        device: ComputeDevice,
+        configuration: &DiarizationStageConfiguration,
+    ) -> Result<(), NativeDiarizationError> {
+        execution_mode(model, device)?;
+        self.probe_with_stages(model, configuration)
     }
 
     fn run(
@@ -303,14 +317,7 @@ impl NativeDiarizationEngine for SpeakrsEngine {
         model: &ModelRef,
         configuration: &DiarizationStageConfiguration,
     ) -> Result<(), NativeDiarizationError> {
-        if model.model_id != SPEAKRS_MODEL_ID {
-            return Err(NativeDiarizationError::ModelIncompatible(format!(
-                "SpeakrsEngine requires model `{SPEAKRS_MODEL_ID}`, got `{}`",
-                model.model_id
-            )));
-        }
-        let bundle = prepare_model_bundle(model, configuration)?;
-        bundle.probe_cpu()
+        prepare_speakrs_bundle(model, configuration).map(|_| ())
     }
 
     fn run_with_stages(
@@ -326,9 +333,8 @@ impl NativeDiarizationEngine for SpeakrsEngine {
                 "expected speaker count must be greater than zero".into(),
             ));
         }
-        self.probe_with_stages(model, configuration)?;
-        let bundle = prepare_model_bundle(model, configuration)?;
-        let mode = execution_mode(device)?;
+        let mode = execution_mode(model, device)?;
+        let bundle = prepare_speakrs_bundle(model, configuration)?;
         let mut pipeline = OwnedDiarizationPipeline::from_dir(bundle.root(), mode)
             .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
         let result = pipeline
@@ -447,23 +453,81 @@ impl NativeDiarizationEngine for SpeakrsEngine {
     }
 }
 
+pub(crate) fn validate_model_profile(
+    model: &ModelRef,
+    configuration: &DiarizationStageConfiguration,
+) -> Result<(), NativeDiarizationError> {
+    if model.backend_id != "diarization-native" {
+        return Err(NativeDiarizationError::ModelIncompatible(format!(
+            "model backend `{}` does not match diarization-native",
+            model.backend_id
+        )));
+    }
+    if model.model_id != SPEAKRS_MODEL_ID && model.model_id != SPEAKRS_COREML_MODEL_ID {
+        return Err(NativeDiarizationError::ModelIncompatible(format!(
+            "SpeakrsEngine requires model `{SPEAKRS_MODEL_ID}` or `{SPEAKRS_COREML_MODEL_ID}`, got `{}`",
+            model.model_id
+        )));
+    }
+    if model.model_id == SPEAKRS_COREML_MODEL_ID {
+        if model.revision.as_deref() != Some(SPEAKRS_MODEL_REVISION) {
+            return Err(NativeDiarizationError::ModelIncompatible(format!(
+                "CoreML profile requires revision {SPEAKRS_MODEL_REVISION}"
+            )));
+        }
+        if !configuration.is_empty() {
+            return Err(NativeDiarizationError::ModelIncompatible(
+                "CoreML profile uses fixed stages; reset stage overrides to bundle defaults".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare_speakrs_bundle(
+    model: &ModelRef,
+    configuration: &DiarizationStageConfiguration,
+) -> Result<crate::model::PreparedNativeModelBundle, NativeDiarizationError> {
+    validate_model_profile(model, configuration)?;
+    let mode = execution_mode(model, ComputeDevice::Auto)?;
+    let bundle = prepare_model_bundle(model, configuration)?;
+    if model.model_id == SPEAKRS_COREML_MODEL_ID {
+        speakrs::ModelBundle::from_dir(bundle.root())
+            .validate_files(mode)
+            .map_err(|error| NativeDiarizationError::ModelMissing(error.to_string()))?;
+    } else {
+        bundle.probe_cpu()?;
+    }
+    Ok(bundle)
+}
+
 pub(crate) fn execution_mode(
+    model: &ModelRef,
     device: ComputeDevice,
 ) -> Result<ExecutionMode, NativeDiarizationError> {
-    match device {
-        ComputeDevice::Auto | ComputeDevice::Cpu => Ok(ExecutionMode::Cpu),
-        ComputeDevice::Metal | ComputeDevice::CoreMl => {
-            #[cfg(feature = "coreml")]
-            {
-                Ok(ExecutionMode::CoreMl)
-            }
-            #[cfg(not(feature = "coreml"))]
-            {
-                Err(NativeDiarizationError::DeviceUnavailable(
-                    "build diarization-native with the `coreml` feature".into(),
-                ))
-            }
-        }
+    validate_model_profile(model, &DiarizationStageConfiguration::default())?;
+    if model.model_id == SPEAKRS_MODEL_ID {
+        return match device {
+            ComputeDevice::Auto | ComputeDevice::Cpu => Ok(ExecutionMode::Cpu),
+            _ => Err(NativeDiarizationError::DeviceUnavailable(format!(
+                "CPU profile requires CPU or Auto; select {SPEAKRS_COREML_MODEL_ID} for CoreML"
+            ))),
+        };
+    }
+    if device == ComputeDevice::Cpu {
+        return Err(NativeDiarizationError::DeviceUnavailable(format!(
+            "CoreML profile requires Auto, CoreMl or Metal; select {SPEAKRS_MODEL_ID} for CPU"
+        )));
+    }
+    #[cfg(feature = "coreml")]
+    {
+        Ok(ExecutionMode::CoreMl)
+    }
+    #[cfg(not(feature = "coreml"))]
+    {
+        Err(NativeDiarizationError::DeviceUnavailable(
+            "CoreML profile requires a build with native CoreML support".into(),
+        ))
     }
 }
 
@@ -523,6 +587,49 @@ fn seconds_to_ms(seconds: f64) -> Result<u64, NativeDiarizationError> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn compute_policy_keeps_cpu_profile_explicit_and_routes_the_coreml_profile() {
+        let mut model = contracts::ModelRef {
+            backend_id: "diarization-native".into(),
+            model_id: super::SPEAKRS_MODEL_ID.into(),
+            revision: Some(super::SPEAKRS_MODEL_REVISION.into()),
+            artifact_path: "not read by policy".into(),
+            artifacts: vec![],
+        };
+        for device in [
+            contracts::ComputeDevice::Auto,
+            contracts::ComputeDevice::Cpu,
+        ] {
+            assert_eq!(
+                super::execution_mode(&model, device).unwrap(),
+                speakrs::ExecutionMode::Cpu
+            );
+        }
+        assert!(matches!(
+            super::execution_mode(&model, contracts::ComputeDevice::Metal),
+            Err(super::NativeDiarizationError::DeviceUnavailable(_))
+        ));
+        model.model_id = super::SPEAKRS_COREML_MODEL_ID.into();
+        assert!(matches!(
+            super::execution_mode(&model, contracts::ComputeDevice::Cpu),
+            Err(super::NativeDiarizationError::DeviceUnavailable(_))
+        ));
+        for device in [
+            contracts::ComputeDevice::Auto,
+            contracts::ComputeDevice::CoreMl,
+            contracts::ComputeDevice::Metal,
+        ] {
+            let mode = super::execution_mode(&model, device);
+            #[cfg(feature = "coreml")]
+            assert_eq!(mode.unwrap(), speakrs::ExecutionMode::CoreMl);
+            #[cfg(not(feature = "coreml"))]
+            assert!(matches!(
+                mode,
+                Err(super::NativeDiarizationError::DeviceUnavailable(_))
+            ));
+        }
+    }
+
     #[test]
     fn empty_speaker_sentinel_is_valid_but_inconsistent_clusters_are_errors() {
         assert!(!super::validate_cluster_layout(&[0, 0], &[1, 3, 256], false).unwrap());

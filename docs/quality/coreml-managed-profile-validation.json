@@ -1,0 +1,427 @@
+{
+  "schema": "meetnote.coreml-managed-profile-validation.v1",
+  "date": "2026-10-28",
+  "decision": "accept as an explicit optional macos-aarch64 profile; retain CPU defaults and reject fast",
+  "implementationCommits": [
+    "925d26e",
+    "b342a81",
+    "597faed"
+  ],
+  "protocol": {
+    "schema": "meetnote.managed-coreml-integration-protocol.v1",
+    "baseCommit": "925d26e0194bfe3556c946dd9151d035c36e596a",
+    "sourcePatchSha256": "17f9eecab55b533b05c0867709e43d342c2dd2476800edf8581e6b57d659cf34",
+    "catalogSha256": "2260c6f808c7a4b8992ef03a591aa20e3156ba1f958895134e929a60ebb4baca",
+    "runnerSha256": "da840b1a7231784b1c4bfff6ea419ad044aa7016ccbb27dbf317d50d91d1c63c",
+    "harnessSourceSha256": "6fbc04fe348e2c6abbcf203743e4b80af21361eeb5e3fa21d405c12f9978ef2c",
+    "testSourceSha256": "b6b6d552c306ebac9e34f5627b91746f586e53c50072f4ad8ea9112a09452e03",
+    "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+    "referenceSha256": "66100d9e2c94bfa068512056a27a3306926544ba38b419ad4fc8d5f09ec8e835",
+    "processProfiles": [
+      "cpu",
+      "coreml",
+      "coreml",
+      "cpu"
+    ],
+    "processingDevice": "Auto",
+    "language": "en",
+    "stageOverrides": "none",
+    "download": "real ModelManager HTTP download from loopback mirror of verified upstream bytes; not a live HuggingFace transfer test",
+    "gates": {
+      "install": "all three profiles complete with matched checksums and backend probes; original catalog reprobe passes",
+      "asr": "all four canonical transcripts identical",
+      "diarization": "per-profile repeats stable; strictly positive ranges within source; coreml whole-file DER <= CPU+0.01 absolute at collars 0/500ms",
+      "provenance": "selected base bundle id/revision and every expected/observed artifact checksum correct; coreml stage manifests include compiled graph weights",
+      "speed": "coreml median process_project time <=0.6 times CPU profile",
+      "resource": "whole harness peak macOS footprint <=8GiB on current32GiB Mac; not machine-wide or low-memory acceptance"
+    },
+    "controllerSha256": "e9b606bfff1fc8e07155d4cb996117a0921063ed4c550c071c8167092be32669"
+  },
+  "protocolSha256": "a3f856ec95e58a453a578c5476c5b65f9a8ba11854b5f1f2ec633d0d213d09f5",
+  "summarySha256": "215ab6d24e5e475ff636574d447d56ca326b9dc44c9a1414354efa7b2c4bf700",
+  "modelAssets": {
+    "revision": "5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f",
+    "coremlFiles": 76,
+    "coremlBytes": 419482724,
+    "assetReceiptSha256": "af5f2fae3034da586768a5ebddf4c89d8be210be0cce558ccc6302c0818a89d7",
+    "downloadedProfiles": {
+      "whisper-base-en-ggml": 1,
+      "speakrs-community-1-cpu": 10,
+      "speakrs-community-1-coreml": 76
+    },
+    "allProfilesBytes": 627198734,
+    "source": "unchanged fixed upstream bytes served from a private loopback mirror; tests real ModelManager transfer/checksum/probe, not current public server reachability"
+  },
+  "hardware": {
+    "chip": "Apple M2 Pro",
+    "cpuCores": 10,
+    "unifiedMemoryGiB": 32,
+    "os": "macOS 27.0.1",
+    "scope": "current host only; no low-memory or cross-platform runtime acceptance"
+  },
+  "result": {
+    "schema": "meetnote.managed-coreml-integration-result.v1",
+    "protocolSha256": "a3f856ec95e58a453a578c5476c5b65f9a8ba11854b5f1f2ec633d0d213d09f5",
+    "scorerSha256": "98fe130cfe2212fc92abf31a4fe0e2b7e38ed15a3b6eae06271d1218e95cbd99",
+    "metricImplementationSha256": "5c9d82d039f1c185920dbec3d6d42f2891099ff986b6bee0225b1128b946385d",
+    "resource": {
+      "exitCode": 0,
+      "wallSeconds": 139.78590308316052,
+      "peakRssBytes": 612040704,
+      "peakMemoryFootprintBytes": 2655946624,
+      "hostLogSha256": "fee8c00286632cacff0a8d20c6409a2d4f68b7fd2f048a15d64cb96aac65a327",
+      "processingSha256": "67c94a3703a02ba4548ff72848fe85f8cfe69eefb14c53fa00b43264f66c9bbc",
+      "loopbackServerClosed": true
+    },
+    "installChecks": {
+      "whisper-base-en-ggml": {
+        "checksums": 1,
+        "recordSha256": "b4c2b02c9f9384b8918ec812f163fed8a16d985a10536d891745e21e32d5140e"
+      },
+      "speakrs-community-1-cpu": {
+        "checksums": 10,
+        "recordSha256": "fcfa0303c6bb0d74ca99e39179404e421077a990728211a4a4d7b981fd020150"
+      },
+      "speakrs-community-1-coreml": {
+        "checksums": 76,
+        "recordSha256": "ad6ec081d574f0bc8ab88cc74880d3cd913ea17f748e1a0aed4012e2b42104e7"
+      }
+    },
+    "processing": {
+      "speakrs-community-1-cpu": {
+        "medianProcessProjectSeconds": 49.236292313,
+        "calls": [
+          {
+            "index": 0,
+            "seconds": 54.132703917,
+            "segments": 45,
+            "speakers": 3,
+            "scores": [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 113.49000000000001,
+                "missedSpeakerSeconds": 5.560999999999993,
+                "falseAlarmSpeakerSeconds": 22.02399999999999,
+                "confusedSpeakerSeconds": 4.168000000000006,
+                "der": 0.27978676535377556,
+                "missRate": 0.048999911886509755,
+                "falseAlarmRate": 0.19406115076218158,
+                "confusionRate": 0.0367257027050842
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 94.91000000000007,
+                "missedSpeakerSeconds": 2.787000000000006,
+                "falseAlarmSpeakerSeconds": 20.27,
+                "confusedSpeakerSeconds": 2.1959999999999837,
+                "der": 0.2660731219049623,
+                "missRate": 0.02936466125803397,
+                "falseAlarmRate": 0.2135707512380148,
+                "confusionRate": 0.02313770940891352
+              }
+            ]
+          },
+          {
+            "index": 3,
+            "seconds": 44.339880709,
+            "segments": 45,
+            "speakers": 3,
+            "scores": [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 113.49000000000001,
+                "missedSpeakerSeconds": 5.560999999999993,
+                "falseAlarmSpeakerSeconds": 22.02399999999999,
+                "confusedSpeakerSeconds": 4.168000000000006,
+                "der": 0.27978676535377556,
+                "missRate": 0.048999911886509755,
+                "falseAlarmRate": 0.19406115076218158,
+                "confusionRate": 0.0367257027050842
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 94.91000000000007,
+                "missedSpeakerSeconds": 2.787000000000006,
+                "falseAlarmSpeakerSeconds": 20.27,
+                "confusedSpeakerSeconds": 2.1959999999999837,
+                "der": 0.2660731219049623,
+                "missRate": 0.02936466125803397,
+                "falseAlarmRate": 0.2135707512380148,
+                "confusionRate": 0.02313770940891352
+              }
+            ]
+          }
+        ]
+      },
+      "speakrs-community-1-coreml": {
+        "medianProcessProjectSeconds": 11.354790167,
+        "calls": [
+          {
+            "index": 1,
+            "seconds": 11.995003875,
+            "segments": 43,
+            "speakers": 3,
+            "scores": [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 113.49000000000001,
+                "missedSpeakerSeconds": 5.241000000000028,
+                "falseAlarmSpeakerSeconds": 22.31099999999999,
+                "confusedSpeakerSeconds": 3.184999999999988,
+                "der": 0.27083443475196056,
+                "missRate": 0.046180280200899,
+                "falseAlarmRate": 0.196590007930214,
+                "confusionRate": 0.028064146620847545
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 94.91000000000007,
+                "missedSpeakerSeconds": 2.372,
+                "falseAlarmSpeakerSeconds": 20.502,
+                "confusedSpeakerSeconds": 2.006999999999991,
+                "der": 0.2621536192182064,
+                "missRate": 0.0249920977768412,
+                "falseAlarmRate": 0.2160151722684647,
+                "confusionRate": 0.02114634917290053
+              }
+            ]
+          },
+          {
+            "index": 2,
+            "seconds": 10.714576459,
+            "segments": 43,
+            "speakers": 3,
+            "scores": [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 113.49000000000001,
+                "missedSpeakerSeconds": 5.241000000000028,
+                "falseAlarmSpeakerSeconds": 22.31099999999999,
+                "confusedSpeakerSeconds": 3.184999999999988,
+                "der": 0.27083443475196056,
+                "missRate": 0.046180280200899,
+                "falseAlarmRate": 0.196590007930214,
+                "confusionRate": 0.028064146620847545
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 94.91000000000007,
+                "missedSpeakerSeconds": 2.372,
+                "falseAlarmSpeakerSeconds": 20.502,
+                "confusedSpeakerSeconds": 2.006999999999991,
+                "der": 0.2621536192182064,
+                "missRate": 0.0249920977768412,
+                "falseAlarmRate": 0.2160151722684647,
+                "confusionRate": 0.02114634917290053
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "gates": {
+      "speedRatio": 0.23061830275148404,
+      "qualityDeltaByCollar": [
+        -0.008952330601814995,
+        -0.0039195026867558935
+      ],
+      "asrExact": true,
+      "repeatDiarizationExact": true,
+      "speedPassed": true,
+      "qualityPassed": true,
+      "footprintPassed": true
+    },
+    "screenPassed": true,
+    "asrScope": "18 transcript segments identical across all four real host calls; no new WER/CER claim",
+    "provenanceScope": "persisted DIA base_model identifies selected profile and every artifact checksum including sidecars and PLDA; stage manifests identify compiled graph weights",
+    "qualityAcceptance": "not_assessed; fixed known training crop and one current Mac only"
+  },
+  "realShortRegression": {
+    "audioSha256": "5ab60058843644c12f757a0a0d333b7141714efdb89e72bf325b385fdd0f816a",
+    "seconds": 8.67,
+    "invocations": [
+      "CoreML Auto whole-file",
+      "CoreML Auto one window",
+      "CPU Auto whole-file"
+    ],
+    "withinModeCosine": 0.9999999,
+    "cpuCrossDeviceCosine": 0.99989146,
+    "checksumsMatched": 76,
+    "result": "passed; not a general Speaker Library threshold calibration"
+  },
+  "review": {
+    "method": "separate read-only source/diff review and independent raw-result scorer; no subagents",
+    "findingsFixed": [
+      "platform restrictions must guard explicit selection, resume and reprobe before state or file changes",
+      "fixed graph models must hide stage controls and reject stale callbacks and backend overrides",
+      "base bundle provenance must retain profile id, revision, external weights and PLDA checksums"
+    ],
+    "checks": [
+      "existing catalog rows are byte-equivalent JSON values",
+      "76 catalog SHA256 and total bytes match previously verified fixed revision assets",
+      "CPU Auto remains CPU; CoreML explicit profile Auto selects normal CoreML; incompatible devices fail before decode",
+      "backend online downloads stay disabled; only models owns installation",
+      "whole-file and windowed paths share profile validation and execution mode",
+      "base bundle hashes independently reconstructed from sorted relative names and file contents",
+      "ASR exact text/times across four host runs; repeated per-profile DIA timelines exact; all ranges within 180 seconds",
+      "temporary integration example and controllers removed; model/audio/raw output are ignored"
+    ]
+  },
+  "validation": {
+    "workspace": {
+      "passed": 977,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 17,
+      "fmt": "passed",
+      "check": "passed",
+      "build": "passed"
+    },
+    "nativeWithoutCoreml": {
+      "passed": 34,
+      "failed": 0,
+      "ignored": 2
+    },
+    "explicitIgnoredRealTest": {
+      "passed": 1,
+      "failed": 0
+    },
+    "regressionProcess": "runtime assertions failed before fixes and passed after fixes; fixture compilation errors and hidden-control input simulation errors are preflight failures, not bug reproduction",
+    "logs": {
+      "platform-red": {
+        "path": "/tmp/meetnote-loop34-platform-red.log",
+        "sha256": "466bdf538a427baa5020e138a1a66ac345841ea279c35701926da2de1d0dc399"
+      },
+      "platform-green": {
+        "path": "/tmp/meetnote-loop34-platform-green.log",
+        "sha256": "c5ab6002494123afc0ef6c4b693a0f3b1f1bffa56620dc709d6007e84f0d08a4"
+      },
+      "coreml-red": {
+        "path": "/tmp/meetnote-loop34-coreml-red.log",
+        "sha256": "5f43c6111383093c31ba5389f645a349d0776c276ef13edb54b6f04a2e20fd5c"
+      },
+      "coreml-green": {
+        "path": "/tmp/meetnote-loop34-coreml-green.log",
+        "sha256": "d3e82f72b6e7a3b48561b845136a0af666dc5c10ab10837eead8ff5795419f79"
+      },
+      "coreml-enabled": {
+        "path": "/tmp/meetnote-loop34-coreml-enabled.log",
+        "sha256": "9c11ff9ecbd53e9050da136b3a675612cf0f917f5a25b11eaab45ec39a00eeef"
+      },
+      "fixed-ui-red": {
+        "path": "/tmp/meetnote-loop34-fixed-ui-red.log",
+        "sha256": "6c2759f103d3c7eefe9ee790d5d1d30b8df7e54ed1001697ca75bf385990ba24"
+      },
+      "fixed-ui-event-red": {
+        "path": "/tmp/meetnote-loop34-fixed-ui-event-red.log",
+        "sha256": "68382f456edf049a634803154408261b37c3eed7e5372727d65a49ac3d5279ae"
+      },
+      "fixed-ui-green": {
+        "path": "/tmp/meetnote-loop34-fixed-ui-green.log",
+        "sha256": "130600f4b0a342076d2120ce42830ee47f344f02d9728270de874f50e3716eb7"
+      },
+      "domain-provenance-red": {
+        "path": "/tmp/meetnote-loop34-domain-provenance-red.log",
+        "sha256": "58fa4cfee363a5d7b4bbab7f46cb876bcd028dcac1211e7280ce2398d2971efd"
+      },
+      "domain-provenance-green": {
+        "path": "/tmp/meetnote-loop34-domain-provenance-green.log",
+        "sha256": "c7abf15df2d3c6e93ecdd83d3792510b968bd450d03a789040af0604513315a2"
+      },
+      "provenance-red": {
+        "path": "/tmp/meetnote-loop34-provenance-red.log",
+        "sha256": "038ff236122148440eb6bd64ffd8b46da43da70f58ad2e531ea18e8af3948846"
+      },
+      "provenance-green": {
+        "path": "/tmp/meetnote-loop34-provenance-green.log",
+        "sha256": "14033d8b2a686babc31f1a2fa3c01a2d5e9557b0d8fbb3b4e3e6e6699b714691"
+      },
+      "final-fmt-check": {
+        "path": "/tmp/meetnote-loop34-final-fmt-check.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "final-check": {
+        "path": "/tmp/meetnote-loop34-final-check.log",
+        "sha256": "15c1b50ad03b337240d731ec32de7ec6977baa0127058aec555618cd1fac6b05"
+      },
+      "final-tests": {
+        "path": "/tmp/meetnote-loop34-final-tests.log",
+        "sha256": "308bbcf493605fcb17beeb0fb438c64e25f6c0a289a5a2a9fa8a388a2e1f0cfe"
+      },
+      "final-build": {
+        "path": "/tmp/meetnote-loop34-final-build.log",
+        "sha256": "234304056b7ebb905384ade59e7af377f09fc825b914fe197bbd0e51c0f400d9"
+      },
+      "final-no-coreml": {
+        "path": "/tmp/meetnote-loop34-final-no-coreml.log",
+        "sha256": "9cebdce424a75aaad64f039a794fc3e6d960899ff56d4663c01c720081e60bdc"
+      },
+      "real-coreml": {
+        "path": "/tmp/meetnote-loop34-real-coreml.log",
+        "sha256": "f564bfde995e7401893cca38e01ae73fc7fe1d409048391435b6fd42bd6a43d8"
+      },
+      "final-managed-build": {
+        "path": "/tmp/meetnote-loop34-final-managed-build.log",
+        "sha256": "629907871625455eca8f8b619e6a5006a3f7fedf66977e238fe88d8baa281ade"
+      },
+      "final-managed-run": {
+        "path": "/tmp/meetnote-loop34-final-managed-run.log",
+        "sha256": "3dac38dd283afe3c88ba25567055b0cf42ae13d7769a9044e747dd1ee282e972"
+      },
+      "final-managed-score": {
+        "path": "/tmp/meetnote-loop34-final-managed-score.log",
+        "sha256": "d530f24c0e51464e6bb171a3a51f5c7ef1ffd17aa9387b937633bdbdc451d5b8"
+      }
+    }
+  },
+  "limits": [
+    "known ES2002a training crop; prior test crops are now regression data, not newly held-out",
+    "no new WER/CER or general identity accuracy claim",
+    "whole host footprint is measured for the complete four-job process, not per-profile allocation or whole-machine usage",
+    "no CoreML system-cache purge, low-memory Mac, 20-hour meeting or release acceptance",
+    "two repeats per profile; no broad statistical performance claim",
+    "prototype before base provenance had lower latency and is retained separately, not reported as delivered performance"
+  ],
+  "rawRoot": "eval-data/optimization-2026-10-27/coreml-managed-profile-final",
+  "prototypeSummarySha256": "a3e89291d19909ee347c1b260f11e2f4bd814194d2b187243864fdcdba8b0440"
+}

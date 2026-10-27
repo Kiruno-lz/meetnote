@@ -21,8 +21,8 @@ pub use backend::{NativeBackendFuture, NativeDiarizationBackend, NativeDiarizati
 pub use engine::{
     ClusterAssignment, ClusteringAdapter, ClusteringOutput, EmbeddingAdapter, EmbeddingOutput,
     EngineOutput, EngineSegment, NativeDiarizationEngine, SegmentationAdapter, SegmentationOutput,
-    SegmentedTrack, SpeakrsEngine, StagePipelineEngine, UnclusteredEmbedding, SPEAKRS_MODEL_ID,
-    SPEAKRS_MODEL_REVISION,
+    SegmentedTrack, SpeakrsEngine, StagePipelineEngine, UnclusteredEmbedding,
+    SPEAKRS_COREML_MODEL_ID, SPEAKRS_MODEL_ID, SPEAKRS_MODEL_REVISION,
 };
 pub use error::{NativeDiarizationError, SpeakerLibraryError};
 pub use model::{NativeModelBundle, REQUIRED_CPU_ARTIFACTS};

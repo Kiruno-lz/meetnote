@@ -135,6 +135,9 @@ pub struct ModelArtifactProvenance {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct DiarizationProvenance {
+    /// The selected base bundle; stage overrides have their own provenance below.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_model: Option<ModelProvenance>,
     pub backend_id: String,
     pub model_revision: Option<String>,
     pub segmentation: Option<ModelProvenance>,
@@ -790,6 +793,30 @@ pub fn align_transcript_and_speakers(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn diarization_base_model_roundtrips_and_missing_source_stays_unknown() {
+        let base = ModelProvenance {
+            backend_id: "native".into(),
+            model_id: "bundle-profile".into(),
+            revision: Some("r1".into()),
+            artifact_path: "models/bundle".into(),
+            ..Default::default()
+        };
+        let mut json = serde_json::to_value(DiarizationProvenance::default()).unwrap();
+        json["base_model"] = serde_json::to_value(base).unwrap();
+        let parsed: DiarizationProvenance = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(parsed).unwrap()["base_model"]["model_id"],
+            "bundle-profile"
+        );
+        json.as_object_mut().unwrap().remove("base_model");
+        let unknown: DiarizationProvenance = serde_json::from_value(json).unwrap();
+        assert!(serde_json::to_value(unknown)
+            .unwrap()
+            .get("base_model")
+            .is_none());
+    }
+
     use super::*;
 
     #[test]

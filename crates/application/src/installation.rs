@@ -256,6 +256,8 @@ mod tests {
 
     fn catalog_entry(id: &str, task: &str, backend: &str, source: String) -> ModelCatalogEntry {
         ModelCatalogEntry {
+            supported_platforms: Vec::new(),
+            fixed_diarization_stages: false,
             id: id.into(),
             task: task.into(),
             model_family: "fixture".into(),

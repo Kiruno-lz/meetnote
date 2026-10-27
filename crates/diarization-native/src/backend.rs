@@ -1,7 +1,8 @@
 use crate::{
     IdentityResolverConfig, JsonSpeakerProfileStore, NativeDiarizationEngine,
     NativeDiarizationError, NativeDiarizationOutput, SpeakerEmbeddingObservation,
-    SpeakerLibraryService, SpeakrsEngine, SPEAKRS_MODEL_ID, SPEAKRS_MODEL_REVISION,
+    SpeakerLibraryService, SpeakrsEngine, SPEAKRS_COREML_MODEL_ID, SPEAKRS_MODEL_ID,
+    SPEAKRS_MODEL_REVISION,
 };
 use application::{
     diarization_descriptor_with_stages, run_backend_worker, BackendFuture, DiarizationBackend,
@@ -101,8 +102,11 @@ impl NativeDiarizationBackend {
         context: JobContext,
     ) -> Result<NativeDiarizationOutput, NativeDiarizationError> {
         ensure_not_cancelled(&context)?;
-        self.engine
-            .probe_with_stages(&request.model, &request.stage_configuration)?;
+        self.engine.probe_with_device(
+            &request.model,
+            request.device,
+            &request.stage_configuration,
+        )?;
         let audio = read_audio_mono_16k(&request.audio_path)
             .map_err(|error| NativeDiarizationError::InvalidAudio(error.to_string()))?;
         context.report(Progress {
@@ -235,12 +239,7 @@ impl DiarizationBackend for NativeDiarizationBackend {
         model: &ModelRef,
         configuration: &DiarizationStageConfiguration,
     ) -> Result<(), BackendError> {
-        if model.model_id != SPEAKRS_MODEL_ID {
-            return Err(BackendError {
-                code: contracts::BackendErrorCode::ModelIncompatible,
-                message: format!("unsupported native diarization model: {}", model.model_id),
-            });
-        }
+        crate::engine::validate_model_profile(model, configuration).map_err(BackendError::from)?;
         if let Some(model) = &configuration.segmentation_model {
             if model.backend_id != "diarization-native" {
                 return Err(BackendError {
@@ -293,7 +292,7 @@ impl DiarizationBackend for NativeDiarizationBackend {
             .revision
             .clone()
             .or_else(|| Some(SPEAKRS_MODEL_REVISION.into()));
-        DiarizationStageProvenance {
+        let mut provenance = DiarizationStageProvenance {
             segmentation: Some(
                 configuration
                     .segmentation_model
@@ -333,7 +332,27 @@ impl DiarizationBackend for NativeDiarizationBackend {
                         parameters: Some("community-1-default".into()),
                     }),
             ),
+        };
+        if model.model_id == SPEAKRS_COREML_MODEL_ID {
+            for (stage, prefix) in [
+                (&mut provenance.segmentation, "segmentation-"),
+                (&mut provenance.embedding, "wespeaker-"),
+            ] {
+                if let Some(stage) = stage {
+                    stage.artifact_path = model.artifact_path.clone();
+                    stage.artifacts = model
+                        .artifacts
+                        .iter()
+                        .filter(|artifact| artifact.filename.starts_with(prefix))
+                        .cloned()
+                        .collect();
+                }
+            }
+            if let Some(clustering) = &mut provenance.clustering {
+                clustering.revision = Some(SPEAKRS_MODEL_REVISION.into());
+            }
         }
+        provenance
     }
 
     fn diarize(

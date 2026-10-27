@@ -33,6 +33,8 @@ models/
 | `candidate-source` | 来源已记录，但下载 manifest 或 backend 适配尚不完整，不可安装 |
 | `requires-native-adapter` | 只有模型来源，没有可用 Rust backend |
 
+`supportedPlatforms` 是可选的 `OS-ARCH` 列表（如 `macos-aarch64`）；缺省或空列表支持所有平台。浏览和隐式默认选择过滤不支持当前平台的条目，显式选择、下载、恢复下载、获取 ModelRef 和 reprobe 在文件或任务状态变更前返回 `UnsupportedPlatform`。`fixedDiarizationStages` 缺省为 false；为 true 时该模型仅接受 bundle 默认阶段，UI 隐藏覆盖控件并忽略控件残留事件，backend 仍独立拒绝覆盖配置。
+
 `candidateBackends` 只表示格式和 adapter 的候选关系，不代表模型已经下载、probe 成功或完成真实推理验收。
 
 ## 当前模型
@@ -48,8 +50,11 @@ models/
 | `whisper-base-en-ggml` | `whisper-rs` / `ready` | [whisper.cpp GGML base.en](https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin) | 147,964,211 B | 512 MiB | 英文 Whisper GGML；已固定 revision/checksum，MIT 许可，CPU/Metal 真实执行 |
 | `whisper-large-v3-turbo-q5` | `whisper-rs` / `ready` | [固定 revision GGML](https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin) | 574,041,195 B | 2 GiB | 多语言 Turbo Q5；MIT 许可，Metal 真实执行；量化质量按场景评测 |
 | `speakrs-community-1-cpu` | `diarization-native` / `ready` | [固定 revision 资产目录](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | 59,751,799 B | 1 GiB | Pyannote segmentation、WeSpeaker embedding 与 AHC/PLDA/VBx 参数，共 10 个固定 artifact；支持整文件和离线分窗 |
+| `speakrs-community-1-coreml` | `diarization-native` / `ready` | [固定 revision 资产目录](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | 419,482,724 B | 4 GiB | 仅 macOS ARM64；76 个固定 artifact，包含普通 CoreML 编译图、ONNX 与 PLDA；不启用 fast 或阶段覆盖，CPU 默认不变 |
 | `sherpa-onnx-speaker-diarization-bundle` | `sherpa-onnx` / `candidate-source` | [segmentation archive](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2) + [3D-Speaker embedding](https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx) | 45,586,674 B | 512 MiB | sherpa-onnx 离线 diarization；当前只支持整文件处理 |
 | `pyannote-speaker-diarization-3.1` | 无 backend / `requires-native-adapter` | [Pyannote 3.1](https://huggingface.co/pyannote/speaker-diarization-3.1) | — | 1 GiB | gated 参考来源，不能进入当前处理链路 |
+
+macOS ARM64 桌面构建启用 native CoreML feature；选择 CoreML profile 后 `Auto` 使用普通 CoreML，CPU profile 的 `Auto` 保持 CPU。4 GiB 是 catalog 的资源预估，不是低内存设备或全机占用保证；模型管理、实际处理与适用边界见[受管理 CoreML 验证](../quality/coreml-managed-profile-validation.json)。
 
 Qwen3-ASR 0.6B/1.7B 的 MLX 量化模型仅在隔离 benchmark 中验证；不增加桌面 Python 依赖，不将驻留 session 的性能与逐次加载混为同一条件。`ready` 不代表已通过所有语言、噪声、时间戳或长会议质量门。
 
@@ -128,7 +133,7 @@ queued -> downloading <-> paused -> verifying -> completed
 
 - backend、model ID 与 revision
 - artifact 路径、聚合 checksum 和逐 artifact 期望/实际 checksum
-- diarization segmentation、embedding 与 clustering 来源
+- diarization 的可选 `base_model` 保存所选完整 bundle 的 ID、revision、聚合与逐 artifact checksum，覆盖 external data、PLDA 和编译图；segmentation、embedding 与 clustering 另记实际阶段来源。历史记录缺少 `base_model` 时保持未知，不推断或补造模型信息
 - 设备、语言、采样率、expected speakers 与窗口参数
 - 输入音频 checksum 和对齐算法
 

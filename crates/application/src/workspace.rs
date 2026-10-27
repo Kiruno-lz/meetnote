@@ -847,6 +847,7 @@ fn processing_record(
         input_audio_checksum: file_sha256(&request.audio_path),
         asr: model_provenance(&result.asr.model),
         diarization: DiarizationProvenance {
+            base_model: Some(model_provenance(&result.diarization.model)),
             backend_id: result.diarization.backend.id.clone(),
             model_revision: result.diarization.model.revision.clone(),
             segmentation: result
@@ -1209,6 +1210,102 @@ mod tests {
         }
         writer.finalize().unwrap();
         path
+    }
+
+    #[test]
+    fn processing_provenance_keeps_the_base_bundle_and_external_sidecars() {
+        // Byte fixtures and fake providers test persisted provenance, not model quality.
+        struct UnstagedDiarization;
+        impl DiarizationBackend for UnstagedDiarization {
+            fn descriptor(&self) -> BackendDescriptor {
+                FakeDiarization.descriptor()
+            }
+            fn probe(&self, model: &ModelRef) -> Result<(), BackendError> {
+                FakeDiarization.probe(model)
+            }
+            fn diarize(
+                &self,
+                request: DiarizationRequest,
+                context: JobContext,
+            ) -> BackendFuture<DiarizationResult> {
+                FakeDiarization.diarize(request, context)
+            }
+        }
+        let root = std::env::temp_dir().join(format!("meetnote-base-bundle-{}", unique_suffix()));
+        std::fs::create_dir_all(&root).unwrap();
+        let files = [
+            (
+                "graph.onnx",
+                "graph",
+                "eef93e1d14482804277fca0172464032d1a4fdbcc338524059fa1e861454ad4d",
+            ),
+            (
+                "graph.onnx.data",
+                "external weights",
+                "474a90a73b4c8dcefbf595d24cef79ce69a9eb252e8c10a405928967122ac368",
+            ),
+            (
+                "plda.npy",
+                "calibration",
+                "e152337e4e85aa3e81482f0ce329aec7bfad531413fe53fef84f1f0d4165caee",
+            ),
+        ];
+        for (name, bytes, _) in &files {
+            std::fs::write(root.join(name), bytes).unwrap();
+        }
+        let model = ModelRef {
+            backend_id: "fake-diarization".into(),
+            model_id: "fixture-bundle-profile".into(),
+            revision: Some("bundle-revision".into()),
+            artifact_path: root.display().to_string(),
+            artifacts: files
+                .iter()
+                .map(|(name, _, sha)| contracts::ModelArtifactRef {
+                    filename: (*name).into(),
+                    expected_sha256: Some((*sha).into()),
+                    archive_member: None,
+                })
+                .collect(),
+        };
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(UnstagedDiarization)),
+            DocumentService::new(Arc::new(MemoryRepository::default())),
+        );
+        let audio = write_test_wav();
+        let project = workspace.import_audio(audio.display().to_string()).unwrap();
+        let asr = ModelRef {
+            backend_id: "fake-asr".into(),
+            model_id: "fixture".into(),
+            revision: None,
+            artifact_path: "not a model execution".into(),
+            artifacts: vec![],
+        };
+        let output = futures::executor::block_on(workspace.process_project(
+            project.id().clone(),
+            asr,
+            model,
+        ))
+        .unwrap();
+        let json = serde_json::to_value(output.processing.latest.as_ref().unwrap()).unwrap();
+        let base = &json["diarization"]["base_model"];
+        assert_eq!(base["model_id"], "fixture-bundle-profile");
+        assert_eq!(base["revision"], "bundle-revision");
+        assert_eq!(base["artifact_path"], root.display().to_string());
+        assert_eq!(base["artifacts"].as_array().unwrap().len(), files.len());
+        for (name, _, sha) in files {
+            let row = base["artifacts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["filename"] == name)
+                .unwrap();
+            assert_eq!(row["expected_sha256"], sha);
+            assert_eq!(row["observed_sha256"], sha);
+        }
+        assert!(json["diarization"]["segmentation"].is_null());
+        assert!(json["diarization"]["embedding"].is_null());
+        std::fs::remove_file(audio).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

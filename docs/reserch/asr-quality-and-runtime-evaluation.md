@@ -430,6 +430,27 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 复现核心为上一节的相同 runner 与 `--windowed`，候选 temporary engine 仅将 `Ok(ExecutionMode::CoreMl)` 改成 `Ok(ExecutionMode::CoreMlFast)`，不混入自定义 clustering 参数；模型文件按 vendor `required_files(CoreMlFast)` 的固定清单准备。协议、模式/runner/artifact 指纹和失败依据见[fast 回执](../quality/coreml-fast-validation.json)。临时代码清理，原始数据保留在忽略目录 `eval-data/optimization-2026-10-27/coreml-fast/`。没有保留 Rust 改动或新依赖，故未重复已通过的工作区测试。
 
+### 受管理普通 CoreML profile 接入
+
+2026-10-28 将已通过普通模式筛选的路径接入现有模型管理，不新增 provider 或 Python runtime。`speakrs-community-1-coreml` 固定同一 revision 的 76 个文件、419,482,724 bytes，仅供 macOS ARM64；桌面在该平台编译 native CoreML。CPU profile 的 `Auto` 保持 CPU，选中 CoreML profile 后 `Auto` 使用普通模式，框架自行分配运算设备。fast 质量失败结论保留，不混入新 profile。
+
+红绿回归覆盖平台不匹配时的浏览、显式选择、下载、恢复与 reprobe；后台在任务或文件变更前拒绝。固定图不接受阶段覆盖，UI 隐藏控件且拒绝残留事件，backend 再独立检查。独立 review 还发现仅记 segmentation/embedding 无法追溯整包外部权重和 PLDA，因此新增可选 `diarization.base_model`，保存所选 profile、revision 和完整逐文件校验值；旧记录缺失时仍为未知。CoreML 阶段清单含编译图权重，不以 CPU 单图冒充。
+
+以隔离目录和仅监听 loopback 的 HTTP 镜像，真实执行 ModelManager 下载、校验、probe、原 catalog reprobe，再通过 Audio Host 与 Workspace 保存结果。镜像内容逐文件来自已核实的固定上游资产，87 个 artifact 共 627,198,734 bytes；这验证实际下载生命周期，不是公网可达性测试。180 s ES2002a 仍为已知训练裁片，顺序固定 CPU / CoreML / CoreML / CPU，两次调用均含模型初始化、ASR、分离、完整来源校验与结果保存。
+
+| Profile | 逐次 Audio Host 耗时 s | 中位数 s | DER 无 collar / 500 ms full collar | 分离段 / 类数 |
+| --- | --- | ---: | --- | --- |
+| CPU | 54.1327 / 44.3399 | 49.2363 | 27.9787% / 26.6073% | 45 / 3 |
+| 普通 CoreML | 11.9950 / 10.7146 | 11.3548 | 27.0834% / 26.2154% | 43 / 3 |
+
+最终 CoreML 耗时为 CPU 的 23.06%，约快 4.34 倍，固定耗时 ≤60% 门通过；逐 collar DER 未退步，四次 ASR 的 18 段文本和时间完全相同，各 profile 两次分离时间线一致且均在源范围内。独立 scorer 从实际文件重算整包聚合 SHA 和 76/10 个逐项 SHA，与持久化基础模型和阶段记录一致。新增来源信息前的原型更快，原始证据单独保留，不将原型时间当作交付结果。整条四任务进程峰值 RSS 612,040,704 B，macOS footprint 2,655,946,624 B（2.4735 GiB）；门槛为当前 32 GiB Mac 上整条进程 ≤8 GiB，不等于每个 profile 或全机内存保证。
+
+另用永久 ignored 测试显式指定已安装模型根目录与 8.67 s 单人 WAV：CoreML 整文件和单窗口、CPU 整文件共三次真实执行；CoreML 两路径时间线一致、向量 cosine 0.9999999，与 CPU cosine 0.99989146。这里只验证该已知短控制样本的兼容性，不重新校准 Speaker Library 阈值。常规工作区 977 个主测试、三次子进程测试通过，0 failed、17 ignored，fmt/check/build 通过；禁用 CoreML 的 native 另有 34 passed、2 ignored，真实 ignored 测试另行显式通过。
+
+接入为用户明确选择的可选模型，保留 CPU 默认。低内存 Mac、清除系统编译缓存后的首次体验、20 小时会议、全语言文本质量和生产发布尚未验收。完整协议、runner/source/输出指纹、红绿测试及独立 review 见[受管理 profile 回执](../quality/coreml-managed-profile-validation.json)；模型、音频与原始输出只保留在忽略目录。临时 Rust example 与控制器删除。
+
+复现核心：镜像只替换 clone catalog 的下载 URL，保留 revision/license/SHA；由真实 ModelManager 下载到全新目录后，切回原 catalog 逐项 reprobe。固定 `ProcessingOptions { device: Auto, language: Some("en"), speaker_library_path: None, diarization_stages: Default::default(), .. }`，以注册的 Whisper/native backend 经 `WorkspaceService::process_project` 保存四次完整 state；独立评分读取 state，不复用被测实现计算聚合 SHA。短路径永久入口为 `cargo test --locked -p diarization-native --features coreml --test coreml_profile real_managed_coreml_profile_reprobes_and_preserves_the_short_baseline -- --ignored --exact --nocapture`，必须显式提供 `MEETNOTE_COREML_MODEL_ROOT` 与 `MEETNOTE_DIARIZATION_AUDIO`，根目录同时安装 CPU/CoreML profiles。
+
 ### Native 分离窗口的整数毫秒范围
 
 2026-10-27 重新审查资源链路，确认 session 已只保留 `WindowTimeline` 和 inference 数组，没有保留输入 `Arc<AudioWindow>` PCM；没有按假设修改所有权。审查导出时发现另一处确定性范围问题：speaker segment 的 15 秒 context 尾窗、embedding observation 的 5 秒 context 尾窗，在有效 core 只剩一个采样时，都可从正 sample 范围变成 `60000..60000 ms`。两个直接生产导出 helper 的回归先红；它们是 typed projection fixture，不作为实际模型输出这种尾段的证据。

@@ -416,6 +416,7 @@ fn documents() -> Vec<DocumentState> {
             artifacts: Vec::new(),
         },
         diarization: DiarizationProvenance {
+            base_model: None,
             backend_id: "sherpa-onnx".into(),
             model_revision: Some("2024-10".into()),
             segmentation: None,

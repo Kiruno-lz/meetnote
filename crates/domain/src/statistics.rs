@@ -219,6 +219,7 @@ mod tests {
             input_audio_checksum: Some("cd".repeat(32)),
             asr: model("asr"),
             diarization: DiarizationProvenance {
+                base_model: None,
                 backend_id: "diarization".into(),
                 model_revision: Some("r2".into()),
                 segmentation: Some(model("segmentation")),

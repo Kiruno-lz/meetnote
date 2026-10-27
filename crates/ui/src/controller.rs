@@ -1413,8 +1413,30 @@ impl RootView {
     }
 
     pub(crate) fn show_diarization_stage_options(&self) -> bool {
-        self.selected_diarization_descriptor()
-            .is_some_and(|descriptor| !descriptor.configurable_diarization_stages.is_empty())
+        let selected_id = self
+            .settings_draft
+            .diarization_model
+            .as_ref()
+            .map(|model| model.model_id.as_str())
+            .or_else(|| {
+                self.installation
+                    .stage_root
+                    .as_deref()
+                    .and_then(|root| Path::new(root).file_name())
+                    .and_then(|name| name.to_str())
+            });
+        let configurable_model = selected_id
+            .and_then(|id| {
+                self.installation
+                    .catalog
+                    .iter()
+                    .find(|entry| entry.model.id == id)
+            })
+            .is_some_and(|entry| !entry.model.fixed_diarization_stages);
+        configurable_model
+            && self
+                .selected_diarization_descriptor()
+                .is_some_and(|descriptor| !descriptor.configurable_diarization_stages.is_empty())
     }
 
     fn stage_model_ref(&self, stage: DiarizationStageKind, id: &str) -> Option<ModelRef> {
@@ -2055,6 +2077,9 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.show_diarization_stage_options() {
+            return;
+        }
         let DropdownEvent::Confirm(value) = event;
         self.invalidate_diarization_model_selection(cx);
         let model = self.stage_model_ref(DiarizationStageKind::Segmentation, value);
@@ -2071,6 +2096,9 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.show_diarization_stage_options() {
+            return;
+        }
         let DropdownEvent::Confirm(value) = event;
         self.invalidate_diarization_model_selection(cx);
         let model = self.stage_model_ref(DiarizationStageKind::Embedding, value);
@@ -2087,6 +2115,9 @@ impl RootView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.show_diarization_stage_options() {
+            return;
+        }
         let DropdownEvent::Confirm(value) = event;
         self.invalidate_diarization_model_selection(cx);
         let option = self
