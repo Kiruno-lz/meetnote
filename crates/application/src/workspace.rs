@@ -15,7 +15,7 @@ use domain::{
 use futures::channel::mpsc::UnboundedReceiver;
 use runtime::{JobContext, JobEvent, JobId, JobRuntime, JobRuntimeError, JobSnapshot, JobState};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -829,6 +829,7 @@ fn processing_record(
     result: &PipelineResult,
     processing_revision: u64,
 ) -> ProcessingRecord {
+    let mut checksums = ProcessingChecksums::default();
     let identity_matching = result
         .diarization
         .embedding_observations
@@ -844,22 +845,22 @@ fn processing_record(
     ProcessingRecord {
         processing_revision,
         completed_at_ms: now_ms(),
-        input_audio_checksum: file_sha256(&request.audio_path),
-        asr: model_provenance(&result.asr.model),
+        input_audio_checksum: checksums.file(Path::new(&request.audio_path)),
+        asr: model_provenance(&result.asr.model, &mut checksums),
         diarization: DiarizationProvenance {
-            base_model: Some(model_provenance(&result.diarization.model)),
+            base_model: Some(model_provenance(&result.diarization.model, &mut checksums)),
             backend_id: result.diarization.backend.id.clone(),
             model_revision: result.diarization.model.revision.clone(),
             segmentation: result
                 .diarization_stage_provenance
                 .segmentation
                 .as_ref()
-                .map(model_provenance),
+                .map(|model| model_provenance(model, &mut checksums)),
             embedding: result
                 .diarization_stage_provenance
                 .embedding
                 .as_ref()
-                .map(model_provenance),
+                .map(|model| model_provenance(model, &mut checksums)),
             clustering: result
                 .diarization_stage_provenance
                 .clustering
@@ -899,12 +900,12 @@ fn processing_record(
     }
 }
 
-fn model_provenance(model: &ModelRef) -> ModelProvenance {
+fn model_provenance(model: &ModelRef, checksums: &mut ProcessingChecksums) -> ModelProvenance {
     ModelProvenance {
         backend_id: model.backend_id.clone(),
         model_id: model.model_id.clone(),
         revision: model.revision.clone(),
-        artifact_sha256: artifact_sha256(&model.artifact_path),
+        artifact_sha256: checksums.artifact(Path::new(&model.artifact_path)),
         artifact_path: model.artifact_path.clone(),
         artifacts: model
             .artifacts
@@ -919,7 +920,7 @@ fn model_provenance(model: &ModelRef) -> ModelProvenance {
                     } else {
                         root.join(&artifact.filename)
                     };
-                    file_sha256(&artifact_path.display().to_string())
+                    checksums.file(&artifact_path)
                 },
                 archive_member: artifact.archive_member.clone(),
             })
@@ -927,14 +928,26 @@ fn model_provenance(model: &ModelRef) -> ModelProvenance {
     }
 }
 
-fn file_sha256(path: &str) -> Option<String> {
-    read_file_sha256(Path::new(path)).ok()
+#[cfg(test)]
+thread_local! {
+    static CHECKSUM_FILE_READS: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn open_checksum_file(path: &Path) -> std::io::Result<fs::File> {
+    let file = fs::File::open(path)?;
+    #[cfg(test)]
+    CHECKSUM_FILE_READS.with(|reads| reads.borrow_mut().push(path.to_path_buf()));
+    Ok(file)
 }
 
 /// The lowercase hex SHA-256 of the file at `path`, as recorded in
 /// `processing.latest.input_audio_checksum`.
 pub(crate) fn read_file_sha256(path: &Path) -> std::io::Result<String> {
-    let file = fs::File::open(path)?;
+    stream_file_sha256(path, None)
+}
+
+fn stream_file_sha256(path: &Path, mut aggregate: Option<&mut Sha256>) -> std::io::Result<String> {
+    let file = open_checksum_file(path)?;
     let mut reader = BufReader::new(file);
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
@@ -944,37 +957,60 @@ pub(crate) fn read_file_sha256(path: &Path) -> std::io::Result<String> {
             break;
         }
         hasher.update(&buffer[..read]);
+        if let Some(aggregate) = aggregate.as_deref_mut() {
+            aggregate.update(&buffer[..read]);
+        }
     }
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn artifact_sha256(path: &str) -> Option<String> {
-    let root = Path::new(path);
-    if root.is_file() {
-        return file_sha256(path);
+/// Reuse observations only while constructing one record. No process-wide cache:
+/// later jobs must observe external edits, missing files and restored files afresh.
+#[derive(Default)]
+struct ProcessingChecksums {
+    files: BTreeMap<PathBuf, Option<String>>,
+    bundles: BTreeMap<PathBuf, Option<String>>,
+}
+
+impl ProcessingChecksums {
+    fn file(&mut self, path: &Path) -> Option<String> {
+        self.files
+            .entry(path.to_path_buf())
+            .or_insert_with(|| read_file_sha256(path).ok())
+            .clone()
     }
-    if !root.is_dir() {
-        return None;
-    }
-    let mut files = Vec::new();
-    collect_files(root, &mut files).ok()?;
-    files.sort();
-    let mut hasher = Sha256::new();
-    for file in files {
-        let relative = file.strip_prefix(root).ok()?;
-        hasher.update(relative.to_string_lossy().as_bytes());
-        let file = fs::File::open(file).ok()?;
-        let mut reader = BufReader::new(file);
-        let mut buffer = [0u8; 64 * 1024];
-        loop {
-            let read = reader.read(&mut buffer).ok()?;
-            if read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..read]);
+
+    fn artifact(&mut self, root: &Path) -> Option<String> {
+        if root.is_file() {
+            return self.file(root);
         }
+        if let Some(checksum) = self.bundles.get(root) {
+            return checksum.clone();
+        }
+        let checksum = self.read_bundle(root);
+        self.bundles.insert(root.to_path_buf(), checksum.clone());
+        checksum
     }
-    Some(format!("{:x}", hasher.finalize()))
+
+    fn read_bundle(&mut self, root: &Path) -> Option<String> {
+        if !root.is_dir() {
+            return None;
+        }
+        let mut files = Vec::new();
+        collect_files(root, &mut files).ok()?;
+        files.sort();
+        let mut aggregate = Sha256::new();
+        for file in files {
+            let relative = file.strip_prefix(root).ok()?;
+            aggregate.update(relative.to_string_lossy().as_bytes());
+            // Preserve the aggregate's sorted relative-name + raw-byte format.
+            // Hashing file digests instead would silently change stored checksums.
+            let checksum = stream_file_sha256(&file, Some(&mut aggregate)).ok();
+            self.files.insert(file, checksum.clone());
+            checksum?;
+        }
+        Some(format!("{:x}", aggregate.finalize()))
+    }
 }
 
 fn collect_files(root: &Path, files: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
@@ -1210,6 +1246,223 @@ mod tests {
         }
         writer.finalize().unwrap();
         path
+    }
+
+    fn provenance_fixture_record(
+        audio: &str,
+        asr: ModelRef,
+        diarization: ModelRef,
+    ) -> ProcessingRecord {
+        let request = ProcessingRequest {
+            audio_path: audio.into(),
+            asr_model: asr.clone(),
+            diarization_model: diarization.clone(),
+            language: Some("en".into()),
+            expected_speakers: None,
+            device: ComputeDevice::Auto,
+            speaker_library_path: None,
+            stage_configuration: Default::default(),
+        };
+        let result = PipelineResult {
+            asr: AsrResult {
+                backend: FakeAsr.descriptor(),
+                model: asr,
+                language: Some("en".into()),
+                segments: vec![],
+            },
+            diarization: DiarizationResult {
+                backend: FakeDiarization.descriptor(),
+                model: diarization.clone(),
+                segments: vec![],
+                speaker_count: None,
+                embedding_observations: vec![],
+                speaker_profile_candidates: vec![],
+            },
+            aligned: vec![],
+            windowing: None,
+            diarization_stage_provenance: FakeDiarization.stage_provenance(&diarization),
+        };
+        processing_record(&request, &result, 1)
+    }
+
+    #[test]
+    fn processing_provenance_reads_a_shared_bundle_once_and_refreshes_next_record() {
+        // Real filesystem bytes, not model execution. The recorder must not repeatedly
+        // stream one bundle for its base, segmentation, embedding and artifact entries.
+        let root = std::env::temp_dir().join(format!("meetnote-checksum-{}", unique_suffix()));
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("a.onnx"), b"graph").unwrap();
+        std::fs::write(root.join("nested/weights.bin"), vec![19u8; 65_537]).unwrap();
+        let model = ModelRef {
+            backend_id: "fake-diarization".into(),
+            model_id: "shared-bundle".into(),
+            revision: None,
+            artifact_path: root.display().to_string(),
+            artifacts: vec![
+                contracts::ModelArtifactRef {
+                    filename: "a.onnx".into(),
+                    expected_sha256: None,
+                    archive_member: None,
+                },
+                contracts::ModelArtifactRef {
+                    filename: "nested/weights.bin".into(),
+                    expected_sha256: None,
+                    archive_member: None,
+                },
+            ],
+        };
+        let audio = write_test_wav();
+        CHECKSUM_FILE_READS.with(|reads| reads.borrow_mut().clear());
+        let first =
+            provenance_fixture_record(&audio.display().to_string(), model.clone(), model.clone());
+        for path in [
+            root.join("a.onnx"),
+            root.join("nested/weights.bin"),
+            audio.clone(),
+        ] {
+            let reads = CHECKSUM_FILE_READS
+                .with(|reads| reads.borrow().iter().filter(|read| **read == path).count());
+            assert_eq!(reads, 1, "stream each shared file once: {}", path.display());
+        }
+        let base = first.diarization.base_model.as_ref().unwrap();
+        assert_eq!(
+            base.artifact_sha256.as_deref(),
+            Some("fdea8d895858cfeb7eadbba8b77ecb6a1bc90a98dc7a4814ef4c885df48f8171")
+        );
+        assert_eq!(
+            base.artifacts[1].observed_sha256.as_deref(),
+            Some("882eeb071086100fc0b9da9a6d168a7df202e4a405593a819df1e45bdf232446")
+        );
+        assert_eq!(first.asr, *base);
+        assert_eq!(first.diarization.segmentation.as_ref(), Some(base));
+        assert_eq!(first.diarization.embedding.as_ref(), Some(base));
+        std::fs::write(root.join("nested/weights.bin"), b"edited weights").unwrap();
+        let second =
+            provenance_fixture_record(&audio.display().to_string(), model.clone(), model.clone());
+        let refreshed = second.diarization.base_model.as_ref().unwrap();
+        assert_ne!(base.artifact_sha256, refreshed.artifact_sha256);
+        assert_ne!(
+            base.artifacts[1].observed_sha256,
+            refreshed.artifacts[1].observed_sha256
+        );
+        std::fs::remove_file(root.join("nested/weights.bin")).unwrap();
+        let missing = provenance_fixture_record(&audio.display().to_string(), model.clone(), model);
+        assert_eq!(
+            missing.diarization.base_model.unwrap().artifacts[1].observed_sha256,
+            None
+        );
+        std::fs::remove_file(audio).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "explicit MEETNOTE_PROVENANCE_RECORDS and MEETNOTE_PROVENANCE_MODEL_ROOT; hashes real model bytes, does not run inference"]
+    fn benchmark_processing_provenance_with_explicit_real_model_files() {
+        let root = PathBuf::from(
+            std::env::var("MEETNOTE_PROVENANCE_MODEL_ROOT").expect("explicit model root"),
+        );
+        let records =
+            std::env::var("MEETNOTE_PROVENANCE_RECORDS").expect("explicit saved processing rows");
+        let text = std::fs::read_to_string(records).unwrap();
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 4);
+        let mut output = Vec::new();
+        for row in rows {
+            let saved: DocumentState = serde_json::from_value(row["state"].clone()).unwrap();
+            let original = saved.processing.latest.as_ref().unwrap();
+            let model = |source: &ModelProvenance| ModelRef {
+                backend_id: source.backend_id.clone(),
+                model_id: source.model_id.clone(),
+                revision: source.revision.clone(),
+                artifact_path: source.artifact_path.clone(),
+                artifacts: source
+                    .artifacts
+                    .iter()
+                    .map(|a| contracts::ModelArtifactRef {
+                        filename: a.filename.clone(),
+                        expected_sha256: a.expected_sha256.clone(),
+                        archive_member: a.archive_member.clone(),
+                    })
+                    .collect(),
+            };
+            let base = original.diarization.base_model.as_ref().unwrap();
+            for source in [
+                &original.asr,
+                base,
+                original.diarization.segmentation.as_ref().unwrap(),
+                original.diarization.embedding.as_ref().unwrap(),
+            ] {
+                assert!(Path::new(&source.artifact_path).starts_with(&root));
+            }
+            let request = ProcessingRequest {
+                audio_path: saved.audio_path().into(),
+                asr_model: model(&original.asr),
+                diarization_model: model(base),
+                language: Some("en".into()),
+                expected_speakers: None,
+                device: ComputeDevice::Auto,
+                speaker_library_path: None,
+                stage_configuration: Default::default(),
+            };
+            let result = PipelineResult {
+                asr: AsrResult {
+                    backend: FakeAsr.descriptor(),
+                    model: request.asr_model.clone(),
+                    language: Some("en".into()),
+                    segments: vec![],
+                },
+                diarization: DiarizationResult {
+                    backend: contracts::BackendDescriptor {
+                        id: original.diarization.backend_id.clone(),
+                        ..FakeDiarization.descriptor()
+                    },
+                    model: request.diarization_model.clone(),
+                    segments: vec![],
+                    speaker_count: None,
+                    embedding_observations: vec![],
+                    speaker_profile_candidates: vec![],
+                },
+                aligned: vec![],
+                windowing: None,
+                diarization_stage_provenance: crate::DiarizationStageProvenance {
+                    segmentation: original.diarization.segmentation.as_ref().map(model),
+                    embedding: original.diarization.embedding.as_ref().map(model),
+                    clustering: Some(original.diarization.clustering.clone()),
+                },
+            };
+            CHECKSUM_FILE_READS.with(|reads| reads.borrow_mut().clear());
+            let started = std::time::Instant::now();
+            let record = processing_record(&request, &result, original.processing_revision);
+            let seconds = started.elapsed().as_secs_f64();
+            assert_eq!(record.input_audio_checksum, original.input_audio_checksum);
+            assert_eq!(record.asr, original.asr);
+            assert_eq!(
+                record.diarization.base_model,
+                original.diarization.base_model
+            );
+            assert_eq!(
+                record.diarization.segmentation,
+                original.diarization.segmentation
+            );
+            assert_eq!(record.diarization.embedding, original.diarization.embedding);
+            assert_eq!(
+                record.diarization.clustering,
+                original.diarization.clustering
+            );
+            let reads = CHECKSUM_FILE_READS.with(|reads| reads.borrow().clone());
+            let bytes: u64 = reads
+                .iter()
+                .map(|p| std::fs::metadata(p).unwrap().len())
+                .sum();
+            output.push(serde_json::json!({"profile":row["profile"],"seconds":seconds,"fileStreams":reads.len(),"bytesStreamed":bytes,"provenanceExact":true}));
+        }
+        println!(
+            "provenance-benchmark: {}",
+            serde_json::to_string(&output).unwrap()
+        );
     }
 
     #[test]
