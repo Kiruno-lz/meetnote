@@ -459,7 +459,7 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 另一组独立子进程试验把副本 `wespeaker-chunk-emb-s12-w116.mlmodelc/model.mil` 改成四个 `0xff`，或改为不可读。8.67 s 不进入 chunk 加载，最初预检因此没有得到预期失败；改用 180 s 才进入目标路径。两种输入均触发 SIGSEGV，faulting stack 位于 CoreML 的 `makeProgramWithMemoryLayout` / `MLE5ProgramLibrary...`，没有 Rust Result 返回。这证明普通错误映射不能处理该原生进程故障，不据闭源栈推断更细的框架实现原因。两份原始 crash report 和日志保留在忽略目录 `eval-data/optimization-2026-11-01/coreml-invalid-input/`，两份拥有明确损坏标记的临时模型副本已清理；原安装文件未改动。
 
-//TODO - 在受管理 CoreML profile 进入原生运行时前校验完整声明 checksum，拒绝缺少完整 manifest 的执行。用同一隔离损坏编译文件验证返回可观察错误且测试进程正常退出；该完整性拦截单独实施，不把本节错误分类修复声称为进程隔离或任意原生故障恢复。
+后续独立切口已加入完整性拦截：完整 76 项直接文件 SHA-256 清单必须覆盖 SDK 自身 manifest，重复/未知路径、缺值、非法 SHA 与 archive checksum 在执行前拒绝。模型管理器提供声明，backend 复用 models 的流式读取，在创建新 pipeline/window session 前核对内容，不修改模型。带完整清单的同一损坏 MIL 回归在拦截前仍实际 SIGSEGV，拦截后整文件和窗口均返回 checksum mismatch、进程正常退出；不可读文件另返回验证失败。正常短基线和恢复后的 180 s 路径通过。release 五次完整校验中位数 0.2121 s、校验进程峰值 footprint 3,244,560 B；仅为当前 M2 Pro 的热文件缓存开销，不推算总处理提速。数据与 review 见[完整性回执](../quality/coreml-integrity-validation.json)。清单值本身须来自受信任的 catalog/ModelManager；该门不认证自写声明、不提供运行期文件快照，也不宣称进程隔离或任意原生故障恢复。
 
 复现入口为 `native_pipeline::corrupt_model_is_a_load_failure_in_whole_and_windowed_paths` 和 `coreml_profile::lazy_coreml_missing_asset_keeps_the_model_category` 两个 ignored 测试；前者必须给 `MEETNOTE_DIARIZATION_MODEL_DIR`/`MEETNOTE_DIARIZATION_AUDIO`，后者给 `MEETNOTE_COREML_MODEL_ROOT` 和 150–300 s 音频。核心方法是复制完整资产、让健康构造先成功、只在副本移走惰性目录，再验证失败分类、恢复后的正常运行和源文件未变；不提交权重或音频。故障边界、真实执行和类型 fixture 分别记录在[加载错误验证](../quality/native-load-error-validation.json)。
 

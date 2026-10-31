@@ -120,6 +120,8 @@ queued -> downloading <-> paused -> verifying -> completed
 
 `ProcessingService::probe` 在任务进入 runtime 前再次检查选中的 ASR、diarization 模型和 stage configuration。真正的 ONNX graph、GGML/GGUF context、provider/ABI 与推理 session 在 backend 执行时加载；快速 probe 不能替代这一层。
 
+受管理 CoreML profile 在每次新 pipeline/window session 创建前额外校验执行资产：ModelRef 必须声明 SDK 所需的完整 76 个直接文件及合法 SHA-256，不接受重复、未知路径、缺少 checksum 或 archive checksum；backend 复用 models 的流式 checksum 读取，内容不符或不可读在进入原生加载前返回 `ModelLoadFailed`，文件丢失返回 `ModelMissing`。快速 probe 仍只检查结构和文件存在，不代替该内容门。清单应由版本化 catalog 经 ModelManager 解析；校验针对声明内容，不认证调用方自写的清单。每个 session 校验一次，不使用跨任务缓存；运行期间模型缓存须保持稳定，该检查不是文件系统事务快照或任意原生故障隔离，见[CoreML 完整性验证](../quality/coreml-integrity-validation.json)。
+
 ```text
 下载后 artifact probe
   -> 处理前 model/stage preflight
