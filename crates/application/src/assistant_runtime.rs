@@ -2858,7 +2858,11 @@ mod tests {
     fn markdown_sha256(markdown: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(markdown.as_bytes());
-        format!("{:x}", hasher.finalize())
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
     }
 
     #[test]

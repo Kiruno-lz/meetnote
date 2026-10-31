@@ -193,7 +193,7 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "thiserror 2.0.20",
  "uuid",
 ]
@@ -3873,7 +3873,7 @@ dependencies = [
  "futures",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tar",
  "thiserror 2.0.20",
  "ureq 2.12.1",

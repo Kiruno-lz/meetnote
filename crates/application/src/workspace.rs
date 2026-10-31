@@ -969,7 +969,11 @@ fn stream_file_sha256(path: &Path, mut aggregate: Option<&mut Sha256>) -> std::i
             aggregate.update(&buffer[..read]);
         }
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
 }
 
 /// Reuse observations only while constructing one record. No process-wide cache:
@@ -1017,7 +1021,13 @@ impl ProcessingChecksums {
             self.files.insert(file, checksum.clone());
             checksum?;
         }
-        Some(format!("{:x}", aggregate.finalize()))
+        Some(
+            aggregate
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        )
     }
 }
 

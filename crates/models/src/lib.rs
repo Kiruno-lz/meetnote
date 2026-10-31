@@ -221,7 +221,11 @@ pub mod download {
                 });
             }
         }
-        let actual = format!("{:x}", hash.finalize());
+        let actual = hash
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         if let Some(expected) = expected_sha256 {
             if !actual.eq_ignore_ascii_case(expected) {
                 let _ = fs::remove_file(&partial);

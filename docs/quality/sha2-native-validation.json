@@ -1,0 +1,176 @@
+{
+  "schema": "meetnote.sha2-native-validation.v1",
+  "validatedDate": "2026-11-01",
+  "measurementDate": "2026-10-28",
+  "decision": "accept automatic native SHA-256 dispatch from existing sha2 0.11.0; retain digest format and software fallback",
+  "implementationCommit": "41827514e0a3df92df86c95b4a9676cacfad04c8",
+  "protocol": {
+    "schema": "meetnote.sha2-native-protocol.v1",
+    "baseCommit": "daae6474bd2f273aa44a7fcfa600907733355301",
+    "baselineBinarySha256": "ffe1731418b58cddbc4f56f2e0244b45f089b7ceaaa3278eada69299b9d57998",
+    "checksumImplementationSha256": "a6fa20b29f35b1768468e5bef24b50571a1c0078c002c481b96ac82ccbddc5ad",
+    "recordSource": "eval-data/optimization-2026-10-27/coreml-managed-profile-final/acceptance-1/processing.jsonl",
+    "recordsSha256": "67c94a3703a02ba4548ff72848fe85f8cfe69eefb14c53fa00b43264f66c9bbc",
+    "modelRoot": "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-10-27/coreml-managed-profile-final/acceptance-1/managed-models",
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "baseline": "sha2 0.10.9 default features; round35 cached checksum implementation byte-identical to current checksum functions",
+    "candidate": "sha2 0.11.0 default automatic architecture dispatch; no forced target features or backend",
+    "gates": {
+      "timing": "each profile median <=0.6 baseline",
+      "bytes": "equal input stream counts and bytes; no skipped hashes",
+      "quality": "all recorded model/stage/clustering and input hashes exact",
+      "footprint": "each checksum process <=100MiB"
+    },
+    "scope": "real model-file checksum stage only, not inference or end-to-end processing; warm filesystem caches"
+  },
+  "result": {
+    "protocolSha256": "9da7a9cbd1c9728dc36a66ec7f1ee7d00b072ddb61f872943d088a12c3739588",
+    "summary": {
+      "baseline": {
+        "speakrs-community-1-cpu": {
+          "medianSeconds": 0.752407125,
+          "bytes": [
+            213476054
+          ],
+          "streams": [
+            12
+          ]
+        },
+        "speakrs-community-1-coreml": {
+          "medianSeconds": 2.7020774585,
+          "bytes": [
+            573206979
+          ],
+          "streams": [
+            78
+          ]
+        }
+      },
+      "candidate": {
+        "speakrs-community-1-cpu": {
+          "medianSeconds": 0.1352432705,
+          "bytes": [
+            213476054
+          ],
+          "streams": [
+            12
+          ]
+        },
+        "speakrs-community-1-coreml": {
+          "medianSeconds": 0.475941271,
+          "bytes": [
+            573206979
+          ],
+          "streams": [
+            78
+          ]
+        }
+      }
+    },
+    "ratios": {
+      "speakrs-community-1-cpu": 0.17974746118997745,
+      "speakrs-community-1-coreml": 0.17613901833303053
+    },
+    "gates": {
+      "time": true,
+      "equalStreams": true,
+      "hashesExact": true,
+      "footprint": true
+    },
+    "passed": true,
+    "build": {
+      "candidateBinarySha256": "86790986fe88e68d8e05ae84ac9e402c4e10fab2fc20a3a4fdfefe318c76f03a",
+      "controllerSha256": "23ef81a7134cb19bf802bd61c6c3a1c624a98a4fa24df84a0eb5dc5201186da7",
+      "cargoLockSha256": "9117a092db96c3cedb37375b7dfda8df86c4b4074a6b1b7ead495a9fc2f3fdb7",
+      "sourcePatchSha256": "d58457a4c2229140b3449b26404e5a935c51993838f4f299f04f03a95894fbc8"
+    },
+    "runsSha256": "4b3582d91fab7d29728668bf33d7b21b21aad60b2dc1a7cdea9ee7aed86b98fa"
+  },
+  "summarySha256": "c3944dca5e79b3f1934d290337beba4d844620e6f7e936e42af4752fafa83743",
+  "scope": "real installed model/audio bytes through production processing_record; no inference or end-to-end timing measurement",
+  "review": {
+    "method": "independent source/diff, dependency graph, raw receipt and digest checks",
+    "checks": [
+      "Cargo.lock changes only application and models sha2 edges; no new package versions",
+      "sha2 0.11.0 already present through rust-embed-utils; minimum Rust 1.85, active compiler 1.98.1",
+      "default AArch64/x86 runtime detection keeps software fallback; no RUSTFLAGS or target feature forcing",
+      "the current host reports hw.optional.arm.FEAT_SHA256=1; performance results are measured independently of that report",
+      "streamed byte counts remain 213476054 CPU and 573206979 CoreML; no skipped content or weaker checksum",
+      "all 16 record reconstructions match complete model and input digests from original real host records",
+      "64-character lowercase hexadecimal and sorted relative-name plus content aggregate stay unchanged",
+      "hex output uses the iterator pattern already present in application markdown checksums",
+      "all source and lock fingerprints matched the measured candidate before document edits"
+    ],
+    "alternatives": "did not add sha2-asm or force target-cpu=native; use the existing maintained dependency with automatic portable dispatch"
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed",
+    "testWorkspace": {
+      "mainPassed": 980,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 18
+    },
+    "buildWorkspace": "passed",
+    "realFileRecords": 16,
+    "logs": {
+      "check-update": {
+        "path": "/tmp/meetnote-loop37-check-update.log",
+        "sha256": "11cbdcfd0b191940c35cb8e4714bd78d1e0aaf85d49a8aafe3165c8dce3c1ca1"
+      },
+      "candidate-build": {
+        "path": "/tmp/meetnote-loop37-candidate-build.log",
+        "sha256": "3ba56b52a1e7d729f8a18c19943f8ffa233318563d4ea4eb9744bb497f87afec"
+      },
+      "candidate-final-build": {
+        "path": "/tmp/meetnote-loop37-candidate-final-build.log",
+        "sha256": "c80626660a5f3d00f4310e4f64d945b5f3c0f18e99267ca2304f13bc1f4b864d"
+      },
+      "measure": {
+        "path": "/tmp/meetnote-loop37-measure.log",
+        "sha256": "3047b26b472ec931d0a31c95eed5beb254b46468d5417014656f5deab3298b92"
+      },
+      "final-fmt": {
+        "path": "/tmp/meetnote-loop37-final-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "final-check": {
+        "path": "/tmp/meetnote-loop37-final-check.log",
+        "sha256": "f66f58877c3cca5693841423a3515680072a005504b237d96e3ae6720425b418"
+      },
+      "final-tests": {
+        "path": "/tmp/meetnote-loop37-final-tests.log",
+        "sha256": "d0b4ce953d27b93d1781e15773fb2451f151737c01443c642d6d56bd12f48bd5"
+      },
+      "final-build": {
+        "path": "/tmp/meetnote-loop37-final-build.log",
+        "sha256": "3eb05d6a48b480a565315bc1c91ba830cc23331497ec52c0f7d7a41c2206416f"
+      }
+    },
+    "preflight": "first compile identified removed LowerHex on digest output; adapted existing formatting before successful tests and measurement; not a functional red regression"
+  },
+  "performance": {
+    "cpuMedianSecondsBefore": 0.752407125,
+    "cpuMedianSecondsAfter": 0.1352432705,
+    "coremlMedianSecondsBefore": 2.7020774585,
+    "coremlMedianSecondsAfter": 0.475941271,
+    "checksumProcessPeakFootprintBytes": 3801496
+  },
+  "sources": [
+    "https://docs.rs/sha2/0.11.0/sha2/",
+    "https://github.com/RustCrypto/hashes/blob/master/sha2/CHANGELOG.md"
+  ],
+  "limits": [
+    "current M2 Pro result; no runtime testing on every fallback device",
+    "no new WER/CER/DER, FPS, or total transcription speed claim",
+    "warm file-cache stage measurement, not cold installation"
+  ],
+  "rawRoot": "eval-data/optimization-2026-10-28/sha2-native",
+  "reproduce": "use the existing ignored application benchmark with explicit MEETNOTE_PROVENANCE_RECORDS and MEETNOTE_PROVENANCE_MODEL_ROOT, release builds and the frozen process order"
+}

@@ -137,6 +137,6 @@ queued -> downloading <-> paused -> verifying -> completed
 - 设备、语言、采样率、expected speakers 与窗口参数
 - 输入音频 checksum 和对齐算法
 
-构造一条 processing record 时，相同路径的文件校验值和相同 bundle 根目录的聚合校验值仅在该记录内复用；目录流式读取同时更新逐文件 SHA 与聚合 SHA，聚合格式仍为排序相对路径加原始文件内容。下一条记录重新观察文件，不使用跨任务缓存、mtime 或文件大小替代内容校验；这也不构成文件系统事务快照。重复读取的隔离对照见[校验开销回执](../quality/provenance-checksum-validation.json)。
+构造一条 processing record 时，相同路径的文件校验值和相同 bundle 根目录的聚合校验值仅在该记录内复用；目录流式读取同时更新逐文件 SHA 与聚合 SHA，聚合格式仍为排序相对路径加原始文件内容。下一条记录重新观察文件，不使用跨任务缓存、mtime 或文件大小替代内容校验；这也不构成文件系统事务快照。重复读取的隔离对照见[校验开销回执](../quality/provenance-checksum-validation.json)。 内容哈希固定使用 `sha2 0.11.0` 的默认自动架构选择和软件回退，不强制目标指令集；大写/小写兼容判断、64 字符小写十六进制输出及聚合字节格式保持不变，升级对照见[哈希执行验证](../quality/sha2-native-validation.json)。
 
 模型 license 与来源保留在版本化 catalog 中；将其快照写入每次处理记录属于当前生产化计划，见[工程实施计划](../plan/implementation-plan.md)。
