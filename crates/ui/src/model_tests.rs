@@ -1332,8 +1332,13 @@ fn a_real_reprobe_of_changed_files_reports_the_mismatch_and_keeps_the_model_inst
             file.display()
         )
     );
+    let failed_probe = failed.probe.unwrap();
     assert_eq!(
-        failed.probe.unwrap().artifacts,
+        failed_probe.backends,
+        [row("fake-asr", "未执行：文件校验失败")]
+    );
+    assert_eq!(
+        failed_probe.artifacts,
         [row(
             "fixture.bin",
             format!("不一致，实际为 {CHANGED_SHA256} · 应为 {MODEL_SHA256}")
@@ -1346,6 +1351,12 @@ fn a_real_reprobe_of_changed_files_reports_the_mismatch_and_keeps_the_model_inst
     );
     assert!(shown(cx, "failure", "real-asr") && shown(cx, "reprobe", "real-asr"));
     assert!(!shown(cx, "retry", "real-asr") && !shown(cx, "download", "real-asr"));
+
+    std::fs::write(&file, MODEL_BYTES).unwrap();
+    reprobed(cx, &view);
+    let restored = facts(cx, &view, "real-asr");
+    assert_eq!(restored.failure, None);
+    assert_eq!(restored.probe.unwrap().backends, [row("fake-asr", "通过")]);
     std::fs::remove_dir_all(root).ok();
 }
 

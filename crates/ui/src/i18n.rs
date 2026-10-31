@@ -1665,6 +1665,10 @@ pub fn backend_check(locale: Locale, check: &BackendCheck) -> String {
     match (locale, check) {
         (_, BackendCheck::Passed) => text(locale, "probe_passed").into(),
         (_, BackendCheck::NotRegistered) => text(locale, "backend_not_registered").into(),
+        (Locale::ZhCn, BackendCheck::SkippedChecksumFailure) => "未执行：文件校验失败".into(),
+        (Locale::EnUs, BackendCheck::SkippedChecksumFailure) => {
+            "not run: file verification failed".into()
+        }
         (Locale::ZhCn, BackendCheck::Failed { message }) => format!("未通过：{message}"),
         (Locale::EnUs, BackendCheck::Failed { message }) => format!("failed: {message}"),
     }
@@ -2254,6 +2258,7 @@ mod tests {
                 message: "graph does not load".into(),
             },
             BackendCheck::NotRegistered,
+            BackendCheck::SkippedChecksumFailure,
         ];
         let mut results = std::collections::BTreeSet::new();
         for (chinese, english) in checksums

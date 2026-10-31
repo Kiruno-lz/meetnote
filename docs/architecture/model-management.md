@@ -114,7 +114,9 @@ queued -> downloading <-> paused -> verifying -> completed
 - 逐 artifact checksum 结果（`matched`、`archive-matched`、`archive-not-rechecked`、`not-declared`、`mismatched`、`unreadable`）与逐 backend 结果；
 - 最近一次失败的操作与类型化原因（`network`、`io`、`size-mismatch`、`checksum-mismatch`、`archive`、`unsupported-source`、`backend-probe`），之后一次成功即清除。
 
-`ModelAvailability` 携带该记录、失败原因与记录读取错误（无法解析、schema 未知或属于其他模型时报告路径和原因，下次写入覆盖）。`ModelManager::reprobe` 在独立线程上对已安装模型重新校验 checksum 并执行 backend probe；archive 成员因 archive 未保留而记为 `archive-not-rechecked`。重新 probe 失败只更新记录与失败原因，不删除已安装文件，模型仍可选择，处理前 preflight 照常把关。
+`ModelAvailability` 携带该记录、失败原因与记录读取错误（无法解析、schema 未知或属于其他模型时报告路径和原因，下次写入覆盖）。`ModelManager::reprobe` 在独立线程上先对已安装模型重新校验全部 checksum，仅当没有 checksum mismatch 或读取失败时才调用候选 backend。文件校验失败时保留各候选项，结果记为 `skipped-checksum-failure`，界面显示“未执行：文件校验失败”，不将跳过伪装成通过、backend 失败或未注册；文件恢复后再次校验会正常执行所有候选项。
+
+archive 成员因 archive 未保留而记为 `archive-not-rechecked`，没有声明 checksum 或无法重验 archive 不当作已确认的校验失败，见[校验边界回执](../quality/reprobe-checksum-boundary-validation.json)。重新 probe 失败只更新记录与失败原因，不删除已安装文件，模型仍可选择，处理前 preflight 照常把关。
 
 ### 3. 处理前 preflight 与真实加载
 
