@@ -1,0 +1,161 @@
+{
+  "schema": "meetnote.coreml-integrity-validation.v1",
+  "date": "2026-11-01",
+  "decision": "accept a content-integrity gate for declared managed CoreML assets before native loading",
+  "implementationCommit": "1ae54d6de437419cb0fa727ce37763869179b24c",
+  "boundary": {
+    "metadata": "complete SDK required file set, unique known relative names, direct-file 64-character hex SHA256; reject absent duplicate unknown archive or malformed values",
+    "io": "reuse models streaming SHA256; mismatch/unreadable -> ModelLoadFailed, missing -> ModelMissing",
+    "execution": "both whole-file and new window sessions verify before calling native pipeline construction; probe stays file-presence only; CPU unchanged",
+    "ownership": "models supplies catalog-derived declarations and checksum IO; backend does not download modify or delete models"
+  },
+  "redGreen": {
+    "metadataRed": "missing manifest reached SDK instead of early ModelIncompatible",
+    "compiledMilRed": "the complete 76-file declared reference still SIGSEGVed with a copied four-byte invalid MIL before this gate",
+    "compiledMilGreen": "whole-file and windowed initialization return checksum mismatch and the process exits normally",
+    "permissionGreen": "both paths reject unreadable MIL using an IO verification error before native loading",
+    "positive": "76-source-checksum reprobe and short CoreML whole/window plus CPU baseline pass; missing lazy asset category and restored 180s inference pass"
+  },
+  "cost": {
+    "protocol": {
+      "schema": "meetnote.coreml-integrity-cost.v1",
+      "baseCommit": "42111424c9be4577be2d7ec03f35e3d03630f5a2",
+      "sourcePatchSha256": "0aa31285fabd218ac924a8a0b929d353448570e1090705e3e38332de55e1ce00",
+      "runnerSha256": "3ce92459eb0ad21d55e4d35222415995c88c43fc4851b63bbf597d0e2ee8b3f6",
+      "catalogSha256": "2260c6f808c7a4b8992ef03a591aa20e3156ba1f958895134e929a60ebb4baca",
+      "modelRoot": "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-10-27/coreml-managed-profile-final/acceptance-1/managed-models",
+      "files": 76,
+      "bytesPerCall": 419482724,
+      "repetitions": 5,
+      "inference": false,
+      "cache": "warm, no OS cache purge",
+      "gates": {
+        "medianSecondsMax": 0.75,
+        "checksumProcessFootprintBytesMax": 104857600
+      },
+      "controllerSha256": "fd8e0d5cd5cce9434752e83adc90be9b722ba3c8221b597e11579ee2324b5c31"
+    },
+    "result": {
+      "exitCode": 0,
+      "seconds": [
+        0.262034958,
+        0.21213875,
+        0.212924959,
+        0.208938709,
+        0.210086958
+      ],
+      "medianSeconds": 0.21213875,
+      "peakFootprintBytes": 3244560,
+      "logSha256": "d20f911148c8282df21e4b4b2c04fc4419141fb266b4b0c958895048c7e18676",
+      "protocolSha256": "3035fd850577e5f8956d0048b73fcc9acb233bd463c535b03c35025570a74eaa",
+      "passed": true
+    },
+    "scope": "five warm release hash-only calls, 76 actual files totaling 419482724 bytes each; no total processing-time claim"
+  },
+  "review": {
+    "method": "independent source/diff authority-path and raw receipt review",
+    "checks": [
+      "artifact names come from the SDK offline manifest instead of a duplicated list",
+      "all declaration validation completes before any checksum IO",
+      "no digest caching by timestamps or across tasks",
+      "both actual SDK entry points are guarded",
+      "quick probes and models download/install ownership remain separate",
+      "only the new fixed CoreML profile requires the complete execution manifest",
+      "models dependency was already present transitively; no new package versions or online speakrs feature",
+      "original assets remain unchanged, all destructive mutations were copied bundles",
+      "no signal handler or exception suppression pretends to recover SIGSEGV"
+    ],
+    "limits": [
+      "verifies declared values, not authenticity of caller-forged manifests; use catalog/ModelManager references",
+      "model cache must remain stable during the session; no transactional filesystem snapshot",
+      "not process isolation or containment of arbitrary native faults",
+      "current 32GiB M2 Pro timing only, not low-memory device acceptance"
+    ]
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed",
+    "testWorkspace": {
+      "mainPassed": 982,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 22
+    },
+    "nativeWithoutCoreml": {
+      "passed": 35,
+      "failed": 0,
+      "ignored": 4
+    },
+    "buildWorkspace": "passed",
+    "explicitModelTests": "corrupt+unreadable guard, short positive and lazy-missing/restored long paths passed",
+    "logs": {
+      "manifest-red": {
+        "path": "/tmp/meetnote-loop40-manifest-red.log",
+        "sha256": "136ed7919eb0dcc958d857cbcbcb394c13e0728398c781083333de9dbe14054a"
+      },
+      "manifest-green": {
+        "path": "/tmp/meetnote-loop40-manifest-green.log",
+        "sha256": "2b45977bb6dfef5d9812ebe7b43d3ed4a4c5166842c6f87cb21d6d0a6195f804"
+      },
+      "real-red": {
+        "path": "/tmp/meetnote-loop40-real-red.log",
+        "sha256": "853a7e2f04f66d8124cf97eff700c1be74018d683690f7b0585fc78035986513"
+      },
+      "real-green": {
+        "path": "/tmp/meetnote-loop40-real-green.log",
+        "sha256": "3f59582064934cdf46a39a3287f13f3c5769905d15ea2495a8a61a297b313c1a"
+      },
+      "permission-green": {
+        "path": "/tmp/meetnote-loop40-permission-green.log",
+        "sha256": "73a1c29be684a3b421976300b11c033f3db3ac6a6f535aeabad5b85c9ea5ba5c"
+      },
+      "real-positive": {
+        "path": "/tmp/meetnote-loop40-real-positive.log",
+        "sha256": "89cff72addc247b035467ee8f77b471c49a4e8e06c23fb09bd49b05b033b38f7"
+      },
+      "lazy-positive": {
+        "path": "/tmp/meetnote-loop40-lazy-positive.log",
+        "sha256": "ff0417a92258a1eb9333a56b0ca928b13ad084843b2a4cce01281bdd20ce10ac"
+      },
+      "benchmark-build": {
+        "path": "/tmp/meetnote-loop40-benchmark-build.log",
+        "sha256": "d02faeb849afcc162dff6ef47980ea50de09e9b9df5faa2aef5fa827931c78d0"
+      },
+      "measure": {
+        "path": "/tmp/meetnote-loop40-measure.log",
+        "sha256": "f744722d6aaa5d82f194ca230cd6b8b1be65e2f82e0ead07f5beee3e3ebd01e9"
+      },
+      "final-fmt": {
+        "path": "/tmp/meetnote-loop40-final-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "final-native-no-coreml": {
+        "path": "/tmp/meetnote-loop40-final-native-no-coreml.log",
+        "sha256": "accb87d4119a592d7ec91f7ac79786a5ebc3040ec21680c3054deddb0458535e"
+      },
+      "final-check": {
+        "path": "/tmp/meetnote-loop40-final-check.log",
+        "sha256": "2c7ca6cdd7af1fa95e5f332963afa28bcbe86fbadc052831d2e99cf7328d211d"
+      },
+      "final-tests": {
+        "path": "/tmp/meetnote-loop40-final-tests.log",
+        "sha256": "14fb510a5851beba79b4978ad9e041db7498d1c728dfeb11907dbfc6ad3bdd45"
+      },
+      "final-build": {
+        "path": "/tmp/meetnote-loop40-final-build.log",
+        "sha256": "fa6c5c154e85b604990bcdc3d44538b0012ae5ffd64058ef0e38f85123c90d24"
+      },
+      "cleanup-fmt": {
+        "path": "/tmp/meetnote-loop40-cleanup-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "baselineCrash": {
+    "receipt": "eval-data/optimization-2026-11-01/coreml-integrity/baseline-crash-receipt.json",
+    "sha256": "ca67ce47eaa5fd077119aa593298066d1df7197ace6f2b577f12cdea80e8c5dc",
+    "ownedCopy": "removed after preserving proof"
+  },
+  "modelRevision": "5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f",
+  "rawRoot": "eval-data/optimization-2026-11-01/coreml-integrity"
+}

@@ -200,6 +200,29 @@ mod tests {
     use contracts::{AlgorithmRef, DiarizationStageConfiguration};
 
     #[test]
+    #[ignore = "requires explicit MEETNOTE_COREML_MODEL_ROOT; hashes actual installed files only, no inference"]
+    fn benchmark_coreml_integrity_gate_with_explicit_installed_assets() {
+        let root = std::env::var("MEETNOTE_COREML_MODEL_ROOT").expect("explicit model root");
+        let catalog = models::ModelCatalog::from_path(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/models/catalog.json"),
+        )
+        .unwrap();
+        let manager = models::ModelManager::new(catalog, root);
+        let model = manager
+            .model_ref(crate::SPEAKRS_COREML_MODEL_ID, "diarization-native")
+            .unwrap();
+        assert_eq!(model.artifacts.len(), 76);
+        for index in 0..5 {
+            let started = std::time::Instant::now();
+            verify_coreml_execution_assets(&model, Path::new(&model.artifact_path)).unwrap();
+            println!(
+                "integrity-gate: sample={index} seconds={:.9}",
+                started.elapsed().as_secs_f64()
+            );
+        }
+    }
+
+    #[test]
     fn probe_reports_the_first_missing_artifact() {
         let root = std::env::temp_dir().join(format!("meetnote-model-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
@@ -290,4 +313,67 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
         std::fs::remove_dir_all(alternate).unwrap();
     }
+}
+
+/// Fixed compiled graphs must match their complete declared manifest before native loading.
+/// File-presence probes remain separate; this executes once per new pipeline/session.
+pub(crate) fn verify_coreml_execution_assets(
+    model: &ModelRef,
+    root: &Path,
+) -> Result<(), NativeDiarizationError> {
+    if model.model_id != crate::SPEAKRS_COREML_MODEL_ID {
+        return Ok(());
+    }
+    let required = speakrs::ModelBundle::required_files(speakrs::ExecutionMode::CoreMl);
+    let names = required
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let incompatible = |detail: &str| {
+        NativeDiarizationError::ModelIncompatible(format!(
+            "CoreML execution requires a complete direct-file SHA-256 manifest: {detail}"
+        ))
+    };
+    if model.artifacts.len() != required.len() {
+        return Err(incompatible("resolve the model through ModelManager"));
+    }
+    let mut expected = std::collections::BTreeMap::new();
+    for artifact in &model.artifacts {
+        let Some(checksum) = artifact.expected_sha256.as_deref() else {
+            return Err(incompatible("an artifact is missing its SHA-256"));
+        };
+        if artifact.archive_member.is_some()
+            || checksum.len() != 64
+            || !checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !names.contains(artifact.filename.as_str())
+        {
+            return Err(incompatible(
+                "unexpected artifact, archive checksum or invalid SHA-256",
+            ));
+        }
+        if expected
+            .insert(artifact.filename.as_str(), checksum)
+            .is_some()
+        {
+            return Err(incompatible("duplicate artifact names"));
+        }
+    }
+    for (filename, checksum) in expected {
+        let path = root.join(filename);
+        let observed = models::probe::file_sha256(&path).map_err(|error| {
+            let message = format!("cannot verify model artifact {}: {error}", path.display());
+            if error.kind() == std::io::ErrorKind::NotFound {
+                NativeDiarizationError::ModelMissing(message)
+            } else {
+                NativeDiarizationError::ModelLoadFailed(message)
+            }
+        })?;
+        if !observed.eq_ignore_ascii_case(checksum) {
+            return Err(NativeDiarizationError::ModelLoadFailed(format!(
+                "model artifact checksum mismatch: {} (expected {checksum}, observed {observed})",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
 }

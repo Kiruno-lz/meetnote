@@ -8,6 +8,7 @@ default = []
 coreml = ["speakrs/coreml"]
 
 [dependencies]
+models = { path = "../models" }
 application = { path = "../application" }
 audio = { path = "../audio" }
 contracts = { path = "../contracts" }
@@ -20,7 +21,6 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-models = { path = "../models" }
 futures.workspace = true
 hound.workspace = true
 kodama = "=0.3.0"

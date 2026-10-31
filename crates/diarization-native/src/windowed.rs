@@ -59,6 +59,7 @@ impl SpeakrsWindowSession {
         }
         let mode = execution_mode(&request.model, request.device)?;
         let prepared_bundle = prepare_speakrs_bundle(&request.model, &request.stage_configuration)?;
+        crate::model::verify_coreml_execution_assets(&request.model, prepared_bundle.root())?;
         let pipeline = OwnedDiarizationPipeline::from_dir(prepared_bundle.root(), mode)
             .map_err(NativeDiarizationError::loading_pipeline)?;
         let pipeline_config = pipeline.pipeline_config();

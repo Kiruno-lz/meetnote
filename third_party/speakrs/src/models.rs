@@ -40,10 +40,15 @@ impl ModelBundle {
         Ok(Self::from_dir(dir))
     }
 
+    /// Relative artifact names for an offline execution mode; no runtime initialization.
+    pub fn required_files(mode: ExecutionMode) -> Vec<String> {
+        required_files(mode)
+    }
+
     /// Check the local per-mode file manifest without initializing an inference runtime.
     pub fn validate_files(&self, mode: ExecutionMode) -> Result<(), ModelLoadError> {
         mode.validate()?;
-        for filename in required_files(mode) {
+        for filename in Self::required_files(mode) {
             let path = self.plda_dir.join(filename);
             if !path.is_file() {
                 return Err(ModelLoadError::MissingNativeAsset { mode, path });

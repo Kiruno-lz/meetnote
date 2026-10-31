@@ -313,9 +313,21 @@ fn lazy_coreml_missing_asset_keeps_the_model_category() {
     let graph = "wespeaker-chunk-emb-s12-w116.mlmodelc/model.mil";
     let original = std::fs::read(source.join(graph)).unwrap();
     let backend = NativeDiarizationBackend::default();
+    let mut model = fixture.model(COREML_ID);
+    model.artifacts = catalog
+        .find(COREML_ID)
+        .unwrap()
+        .artifacts
+        .iter()
+        .map(|a| ModelArtifactRef {
+            filename: a.filename.clone(),
+            expected_sha256: a.sha256.clone(),
+            archive_member: None,
+        })
+        .collect();
     let request = DiarizationRequest {
         audio_path,
-        model: fixture.model(COREML_ID),
+        model,
         device: ComputeDevice::Auto,
         expected_speakers: None,
         speaker_library_path: None,
@@ -363,4 +375,149 @@ fn lazy_coreml_missing_asset_keeps_the_model_category() {
         .segments
         .iter()
         .all(|s| s.start_ms < s.end_ms && s.end_ms <= total * 1000 / 16_000));
+}
+
+#[test]
+#[cfg(feature = "coreml")]
+fn coreml_execution_requires_a_complete_direct_file_checksum_manifest() {
+    let fixture = Fixture::new();
+    let catalog = catalog();
+    let entry = catalog.find(COREML_ID).unwrap();
+    for filename in &entry.artifact_files {
+        fixture.put(filename);
+    }
+    let mut model = fixture.model(COREML_ID);
+    let error = SpeakrsEngine
+        .run(&[0.0; 160], &model, ComputeDevice::Auto, None)
+        .unwrap_err();
+    assert!(
+        matches!(error, NativeDiarizationError::ModelIncompatible(_)),
+        "execution must reject missing metadata before entering SDK: {error:?}"
+    );
+    model.artifacts = entry
+        .artifacts
+        .iter()
+        .map(|a| ModelArtifactRef {
+            filename: a.filename.clone(),
+            expected_sha256: a.sha256.clone(),
+            archive_member: None,
+        })
+        .collect();
+    let error = SpeakrsEngine
+        .run(&[0.0; 160], &model, ComputeDevice::Auto, None)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("checksum mismatch"),
+        "fixture bytes must fail content checks before loading: {error:?}"
+    );
+    for malformed in [
+        "missing-sha",
+        "duplicate",
+        "archive",
+        "unknown-name",
+        "invalid-sha",
+    ] {
+        let mut invalid = model.clone();
+        match malformed {
+            "missing-sha" => invalid.artifacts[0].expected_sha256 = None,
+            "duplicate" => invalid.artifacts[1] = invalid.artifacts[0].clone(),
+            "archive" => invalid.artifacts[0].archive_member = Some("member".into()),
+            "unknown-name" => invalid.artifacts[0].filename = "../outside".into(),
+            _ => invalid.artifacts[0].expected_sha256 = Some("x".repeat(64)),
+        }
+        let error = SpeakrsEngine
+            .run(&[0.0; 160], &invalid, ComputeDevice::Auto, None)
+            .unwrap_err();
+        assert!(
+            matches!(error, NativeDiarizationError::ModelIncompatible(_)),
+            "{malformed}: {error:?}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "coreml")]
+#[ignore = "requires explicit MEETNOTE_COREML_MODEL_ROOT and 150-300s MEETNOTE_DIARIZATION_AUDIO; damages only a complete copied bundle"]
+fn corrupt_managed_coreml_is_rejected_before_native_loading() {
+    let managed =
+        PathBuf::from(std::env::var("MEETNOTE_COREML_MODEL_ROOT").expect("explicit managed root"));
+    let audio_path =
+        std::env::var("MEETNOTE_DIARIZATION_AUDIO").expect("explicit valid long audio");
+    let decoded = audio::read_audio_mono_16k(&audio_path).unwrap();
+    assert!((150 * 16_000..=300 * 16_000).contains(&decoded.samples.len()));
+    let catalog = catalog();
+    let manager = models::ModelManager::new(catalog.clone(), &managed);
+    let mut model = manager.model_ref(COREML_ID, "diarization-native").unwrap();
+    let source = PathBuf::from(&model.artifact_path);
+    let fixture = Fixture::new();
+    for filename in &catalog.find(COREML_ID).unwrap().artifact_files {
+        let target = fixture.0.join(filename);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::copy(source.join(filename), target).unwrap();
+    }
+    let graph = "wespeaker-chunk-emb-s12-w116.mlmodelc/model.mil";
+    let original = std::fs::read(source.join(graph)).unwrap();
+    std::fs::write(fixture.0.join(graph), [0xffu8; 4]).unwrap();
+    model.artifact_path = fixture.0.display().to_string();
+    assert_eq!(model.artifacts.len(), 76);
+    let request = DiarizationRequest {
+        audio_path,
+        model,
+        device: ComputeDevice::Auto,
+        expected_speakers: None,
+        speaker_library_path: None,
+        stage_configuration: Default::default(),
+    };
+    let backend = NativeDiarizationBackend::default();
+    backend.probe(&request.model).unwrap();
+    eprintln!(
+        "integrity regression: copied_root={} manifest=76 damaged={graph}",
+        fixture.0.display()
+    );
+    let (context, _) = runtime::JobRuntime::default().create_job();
+    let whole = futures::executor::block_on(backend.diarize(request.clone(), context))
+        .err()
+        .expect("corrupt managed bundle must be rejected");
+    let windowed = backend
+        .create_window_session(request.clone())
+        .err()
+        .expect("window session must reject corrupt bundle");
+    assert_eq!(std::fs::read(source.join(graph)).unwrap(), original);
+    for (name, error) in [("whole", whole), ("windowed", windowed)] {
+        eprintln!("integrity {name}: {:?}: {}", error.code, error.message);
+        assert_eq!(error.code, contracts::BackendErrorCode::ModelLoadFailed);
+        assert!(
+            error.message.contains("checksum mismatch") && error.message.contains(graph),
+            "{error:?}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(fixture.0.join(graph), &original).unwrap();
+        let permissions = std::fs::metadata(fixture.0.join(graph))
+            .unwrap()
+            .permissions();
+        std::fs::set_permissions(fixture.0.join(graph), std::fs::Permissions::from_mode(0))
+            .unwrap();
+        assert_eq!(
+            std::fs::read(fixture.0.join(graph)).unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        let (context, _) = runtime::JobRuntime::default().create_job();
+        let whole = futures::executor::block_on(backend.diarize(request.clone(), context))
+            .err()
+            .unwrap();
+        let windowed = backend.create_window_session(request).err().unwrap();
+        std::fs::set_permissions(fixture.0.join(graph), permissions).unwrap();
+        for error in [whole, windowed] {
+            assert_eq!(error.code, contracts::BackendErrorCode::ModelLoadFailed);
+            assert!(
+                error.message.contains("cannot verify model artifact")
+                    && error.message.contains(graph),
+                "{error:?}"
+            );
+            eprintln!("integrity unreadable: {:?}: {}", error.code, error.message);
+        }
+    }
 }

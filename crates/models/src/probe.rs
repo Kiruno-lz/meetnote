@@ -293,7 +293,8 @@ pub(crate) fn write_record(
     })
 }
 
-pub(crate) fn file_sha256(path: &Path) -> std::io::Result<String> {
+/// Stream a file checksum without caching or trusting declared metadata.
+pub fn file_sha256(path: &Path) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let mut hash = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
