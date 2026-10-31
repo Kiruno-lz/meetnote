@@ -1,0 +1,70 @@
+{
+  "schema": "meetnote.reprobe-checksum-boundary-validation.v1",
+  "date": "2026-11-01",
+  "implementationCommit": "e306530c6491e43298547c28d531f001a9c3ffe4",
+  "decision": "skip every backend probe after an observed checksum mismatch or checksum IO failure; keep the reason and allow a later healthy reprobe",
+  "redGreen": {
+    "entry": "manager::tests::corrupt_artifacts_never_reach_backend_probes_and_recovery_probes_all_candidates",
+    "red": "real public reprobe of tampered fixture invoked both candidate probes; assertion observed 2 calls instead of 0",
+    "green": "same public reprobe invokes 0; persists skipped-checksum-failure per candidate; preserves artifact bytes and original checksum reason",
+    "ioFailure": "shared probe_model helper on a removed fixture file reports actual Unreadable and invokes 0 backend probes; public reprobe rejects a missing install before starting",
+    "recovery": "restore declared bytes and public reprobe calls both candidates; results pass and previous failure clears",
+    "ui": "existing GPUI test with real ModelManager and actual temporary files checks passed -> mismatch with skipped backend -> restored passed, preserving installed state",
+    "localization": "both Chinese and English skipped state are distinct from pass, failure and unregistered"
+  },
+  "review": {
+    "method": "separate read-only review of authority, persistence, branch behavior and UI projection after green tests",
+    "checks": [
+      "complete checksum list collected before backend callbacks; no early omission of artifact evidence",
+      "capture checksum failure before backend loop so one backend rejection does not suppress other candidates",
+      "retain first checksum or IO failure as overall reason; skipped callback is not a backend rejection",
+      "new explicit enum value round-trips through persisted record and availability; existing v1 records still load",
+      "archive-not-rechecked and not-declared remain unknown rather than observed failures",
+      "normal download probes, CPU/CoreML execution policies and installed-model selection unchanged",
+      "no new dependencies, signal handling, model mutation or cross-task checksum cache"
+    ],
+    "scope": "file fixture and UI integration evidence, not a native model precision/performance or general crash-containment test"
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed --locked",
+    "testWorkspace": {
+      "mainPassed": 983,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 22
+    },
+    "buildWorkspace": "passed --locked",
+    "models": {
+      "passed": 38,
+      "failed": 0
+    },
+    "logs": {
+      "red": {
+        "path": "/tmp/meetnote-loop42-red.log",
+        "sha256": "4aec213dd8fddd51af149d06daa7e6da5cf62b6a42dde0af8b57ed757402340f"
+      },
+      "models-green": {
+        "path": "/tmp/meetnote-loop42-models-green.log",
+        "sha256": "9508635032ab83761257e0828520197270a1d1838800af35ae2c781ad0ac019c"
+      },
+      "check": {
+        "path": "/tmp/meetnote-loop42-check.log",
+        "sha256": "58f9fd41625d15cff274d8a2be6d2cac20c3be955fea7ecb9540c89c382ded5c"
+      },
+      "tests": {
+        "path": "/tmp/meetnote-loop42-tests.log",
+        "sha256": "721a22b827b3c2f6fa36869b03f8dff6d66d951b570174c07318930c4e78cc55"
+      },
+      "build": {
+        "path": "/tmp/meetnote-loop42-build.log",
+        "sha256": "45df0719bf6e416b294147863a50ceb072839286eae3d96cc9cbc73224f5d38d"
+      },
+      "fmt": {
+        "path": "/tmp/meetnote-loop42-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "temporaryFixtures": "removed owned failing fixture after preserving red log; passing fixtures clean themselves"
+}
