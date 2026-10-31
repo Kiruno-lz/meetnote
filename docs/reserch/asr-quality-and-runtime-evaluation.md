@@ -451,6 +451,21 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 复现核心：镜像只替换 clone catalog 的下载 URL，保留 revision/license/SHA；由真实 ModelManager 下载到全新目录后，切回原 catalog 逐项 reprobe。固定 `ProcessingOptions { device: Auto, language: Some("en"), speaker_library_path: None, diarization_stages: Default::default(), .. }`，以注册的 Whisper/native backend 经 `WorkspaceService::process_project` 保存四次完整 state；独立评分读取 state，不复用被测实现计算聚合 SHA。短路径永久入口为 `cargo test --locked -p diarization-native --features coreml --test coreml_profile real_managed_coreml_profile_reprobes_and_preserves_the_short_baseline -- --ignored --exact --nocapture`，必须显式提供 `MEETNOTE_COREML_MODEL_ROOT` 与 `MEETNOTE_DIARIZATION_AUDIO`，根目录同时安装 CPU/CoreML profiles。
 
+### 完整处理链路复核
+
+2026-11-01 在校验复用、SHA-256 原生加速和 CoreML 加载前完整性拦截均完成后，复测同一 180 s 训练裁片。沿用已安装的固定版本模型，先经原 catalog 对 87 个 artifact 逐项 reprobe；再以全新项目按 CPU / CoreML / CoreML / CPU 执行真实 `WorkspaceService::process_project`。计时包含 ASR、分离、来源校验和 repository 保存，不含此前的 reprobe 与 import。协议在运行前固定输出等价、逐 collar DER、速度和资源门槛，不把阶段计时相加。
+
+| Profile | 逐次完整处理 s | 中位数 s | 原接入中位数 s | DER 无 collar / 500 ms full collar |
+| --- | --- | ---: | ---: | --- |
+| CPU | 49.3730 / 42.3024 | 45.8377 | 49.2363 | 27.9787% / 26.6073% |
+| 普通 CoreML | 4.4714 / 4.3848 | 4.4281 | 11.3548 | 27.0834% / 26.2154% |
+
+本轮 CoreML 中位耗时为当前 CPU 的 9.66%、原接入记录的 39.00%；这确认当前完整链路达到预设门槛，不把跨日差异全部归因于某一项改动。四次 ASR 的 18 段文本及时间戳与原记录完全相同，各 profile 的分离时间线、阶段来源和重复结果相同；独立重算模型逐项与整包 SHA，全部吻合。标准 DER 未变；已知训练裁片不构成新的文本或分离质量验收。
+
+四任务及 reprobe 所在进程峰值 RSS 745,095,168 B、macOS footprint 2,673,772,368 B（2.4901 GiB），通过当前 32 GiB 设备 ≤8 GiB 门，不作为单 profile 或全机内存。保留普通 CoreML 可选、CPU 默认；未清理系统文件和编译缓存，未验收冷启动、低内存设备、UI 帧率或 20 小时会议。
+
+独立 review 复核计时边界、持久化输出、原始指纹和冻结门槛，见[整链复核回执](../quality/host-consolidation-validation.json)。本轮没有生产 Rust 改动，沿用上一完整性切口的工作区 fmt/check/test/build；临时 release harness 构建及四次真实执行通过，随后删除临时代码。复现核心为上一节的真实 Workspace 入口和相同 options，只以原 catalog reprobe 已安装模型，避免再下载；从保存的 state 独立核对文本/时间线、原模型来源与聚合 checksum，再用既有 `scripts/audio-eval/metrics.py` 的 pyannote DER 按 0/500 ms 完整 collar 评分。原始协议、四份 state、runner、资源和评分结果保留在忽略目录 `eval-data/optimization-2026-11-01/host-consolidation/`。
+
 ### 模型加载错误与 CoreML 非法编译输入
 
 2026-11-01 复核发现 native 后端把 `OwnedDiarizationPipeline::from_dir` 的失败统一当作推理失败；外部 Agent 得到错误层级不准确的反馈。探索目标是区分初始化、运行计算、缺失资产和设备不支持，并验证原生 SDK 是否总能以 Result 返回坏模型错误；不能用字符串猜测阶段，也不能修改原模型。
