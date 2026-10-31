@@ -645,11 +645,16 @@ impl ModelManager {
                 }
             })
             .collect();
+        let checksum_failed = failure.is_some();
         let backends = model
             .candidate_backends
             .iter()
             .map(|backend_id| {
-                let result = self.probe_backend(model, backend_id);
+                let result = if checksum_failed {
+                    BackendCheck::SkippedChecksumFailure
+                } else {
+                    self.probe_backend(model, backend_id)
+                };
                 if let (None, BackendCheck::Failed { message }) = (&failure, &result) {
                     failure = Some(ModelFailure::BackendProbe {
                         backend_id: backend_id.clone(),
@@ -2040,6 +2045,59 @@ mod tests {
             }
         );
         assert!(artifact.is_file(), "a re-probe never deletes files");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn corrupt_artifacts_never_reach_backend_probes_and_recovery_probes_all_candidates() {
+        let mut catalog = fixture_catalog();
+        catalog.models[0].sha256 = Some(sha256_hex(b"fixture"));
+        catalog.models[0].candidate_backends.push("other".into());
+        let root = temp_root("reprobe-corrupt-backend-boundary");
+        let probe = Arc::new(SwitchProbe::default());
+        let manager = ModelManager::with_backend_probe(catalog, &root, Some(probe.clone()));
+        let artifact = install(&manager, b"tampered");
+
+        let failed = finished_within(manager.reprobe("fixture").unwrap()).unwrap();
+        assert!(!failed.passed());
+        assert_eq!(
+            probe.threads.lock().unwrap().len(),
+            0,
+            "a known-invalid artifact must not enter any backend probe"
+        );
+        assert!(failed
+            .backends
+            .iter()
+            .all(|check| check.result == BackendCheck::SkippedChecksumFailure));
+        assert_eq!(availability(&manager).probe, Some(failed));
+        assert_eq!(std::fs::read(&artifact).unwrap(), b"tampered");
+
+        // Exercise the shared checksum gate with an actual IO failure.
+        // Missing files are rejected by public reprobe before starting it.
+        std::fs::remove_file(&artifact).unwrap();
+        let unreadable = manager.probe_model(
+            manager.catalog.find("fixture").unwrap(),
+            ModelOperation::Reprobe,
+        );
+        assert!(matches!(
+            unreadable.checksums[0].result,
+            ChecksumResult::Unreadable { .. }
+        ));
+        assert!(unreadable
+            .backends
+            .iter()
+            .all(|check| check.result == BackendCheck::SkippedChecksumFailure));
+        assert_eq!(probe.threads.lock().unwrap().len(), 0);
+
+        std::fs::write(&artifact, b"fixture").unwrap();
+        let recovered = finished_within(manager.reprobe("fixture").unwrap()).unwrap();
+        assert!(recovered.passed());
+        assert_eq!(probe.threads.lock().unwrap().len(), 2);
+        assert!(recovered
+            .backends
+            .iter()
+            .all(|check| check.result == BackendCheck::Passed));
+        assert!(availability(&manager).failure.is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 

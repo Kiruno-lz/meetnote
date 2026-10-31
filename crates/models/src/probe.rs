@@ -159,6 +159,8 @@ pub enum BackendCheck {
     },
     /// The manager has no `BackendProbe`, so no backend looked at the files.
     NotRegistered,
+    /// File checks failed, so no backend was allowed to inspect the artifacts.
+    SkippedChecksumFailure,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
