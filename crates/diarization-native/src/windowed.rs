@@ -60,7 +60,7 @@ impl SpeakrsWindowSession {
         let mode = execution_mode(&request.model, request.device)?;
         let prepared_bundle = prepare_speakrs_bundle(&request.model, &request.stage_configuration)?;
         let pipeline = OwnedDiarizationPipeline::from_dir(prepared_bundle.root(), mode)
-            .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
+            .map_err(NativeDiarizationError::loading_pipeline)?;
         let pipeline_config = pipeline.pipeline_config();
         Ok(Self {
             request,
@@ -83,7 +83,7 @@ impl SpeakrsWindowSession {
         let artifacts = self
             .pipeline
             .run_inference(&window.samples)
-            .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
+            .map_err(NativeDiarizationError::from)?;
         let timeline = WindowTimeline {
             sequence: window.sequence,
             global_start_sample: window.global_start_sample,
@@ -136,7 +136,7 @@ impl SpeakrsWindowSession {
                     &clustering,
                     &self.pipeline_config,
                 )
-                .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
+                .map_err(NativeDiarizationError::from)?;
             if !validate_cluster_layout(
                 result.hard_clusters.shape(),
                 result.embeddings.shape(),
