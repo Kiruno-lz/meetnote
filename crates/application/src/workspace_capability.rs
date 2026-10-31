@@ -1961,7 +1961,11 @@ fn mutation_fingerprint(
             transaction_error(format!("cannot fingerprint tool request: {error}"))
         })?,
     );
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
 }
 
 fn validate_create_document_arguments(
@@ -2315,7 +2319,10 @@ fn document_projection_snapshot(
         );
     }
     bytes.push(b'}');
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
 }
 
 fn enforce_result_size_bytes(
