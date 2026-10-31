@@ -335,6 +335,7 @@ impl NativeDiarizationEngine for SpeakrsEngine {
         }
         let mode = execution_mode(model, device)?;
         let bundle = prepare_speakrs_bundle(model, configuration)?;
+        crate::model::verify_coreml_execution_assets(model, bundle.root())?;
         let mut pipeline = OwnedDiarizationPipeline::from_dir(bundle.root(), mode)
             .map_err(NativeDiarizationError::loading_pipeline)?;
         let result = pipeline
