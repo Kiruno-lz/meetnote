@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use ndarray::Array2;
 
+use crate::inference::ModelLoadError;
 use crate::inference::coreml::{CoreMlModel, SharedCoreMlModel};
 
 use super::{
@@ -73,7 +74,7 @@ impl EmbeddingModel {
 
     pub(crate) fn prepare_chunk_resources(
         &mut self,
-    ) -> Result<Option<ChunkResourceBundle>, ort::Error> {
+    ) -> Result<Option<ChunkResourceBundle>, ModelLoadError> {
         let Some(capacity) = self.chunk_window_capacity() else {
             return Ok(None);
         };
@@ -177,7 +178,7 @@ impl EmbeddingModel {
             .map(|spec| spec.num_windows)
     }
 
-    fn ensure_chunk_session_loaded(&mut self, num_windows: usize) -> Result<bool, ort::Error> {
+    fn ensure_chunk_session_loaded(&mut self, num_windows: usize) -> Result<bool, ModelLoadError> {
         let Some(spec) = self
             .coreml
             .native_chunk_specs
@@ -197,9 +198,19 @@ impl EmbeddingModel {
             return Ok(true);
         }
 
+        if !spec.coreml_path.is_dir() {
+            return Err(ModelLoadError::MissingNativeAsset {
+                mode: self.meta.mode,
+                path: spec.coreml_path,
+            });
+        }
         let start = std::time::Instant::now();
         let session = Self::load_chunk_session(&spec, self.coreml.native_chunk_compute_units)
-            .map_err(|error| ort::Error::new(error.to_string()))?;
+            .map_err(|error| ModelLoadError::NativeAssetLoad {
+                mode: self.meta.mode,
+                path: spec.coreml_path.clone(),
+                message: error.to_string(),
+            })?;
         tracing::trace!(
             num_windows = spec.num_windows,
             ms = start.elapsed().as_millis(),
@@ -239,7 +250,7 @@ impl EmbeddingModel {
     pub(crate) fn chunk_session_for_windows(
         &mut self,
         num_windows: usize,
-    ) -> Result<Option<&ChunkEmbeddingSession>, ort::Error> {
+    ) -> Result<Option<&ChunkEmbeddingSession>, ModelLoadError> {
         if !self.ensure_chunk_session_loaded(num_windows)? {
             return Ok(None);
         }

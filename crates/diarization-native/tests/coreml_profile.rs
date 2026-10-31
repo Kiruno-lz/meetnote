@@ -287,3 +287,80 @@ fn real_managed_coreml_profile_reprobes_and_preserves_the_short_baseline() {
     assert!(across_devices >= application::IdentityResolverConfig::default().default_threshold);
     eprintln!("managed coreml: checksums=76 whole/window speakers=1 within-mode-cosine={within_mode} cpu-cosine={across_devices}");
 }
+
+#[test]
+#[cfg(feature = "coreml")]
+#[ignore = "requires explicit MEETNOTE_COREML_MODEL_ROOT and MEETNOTE_DIARIZATION_AUDIO; corrupts only an isolated copy"]
+fn lazy_coreml_missing_asset_keeps_the_model_category() {
+    let managed = PathBuf::from(
+        std::env::var("MEETNOTE_COREML_MODEL_ROOT").expect("explicit managed model root"),
+    );
+    let audio_path =
+        std::env::var("MEETNOTE_DIARIZATION_AUDIO").expect("explicit valid 150-300s audio");
+    let decoded = audio::read_audio_mono_16k(&audio_path).unwrap();
+    assert!(
+        (150 * 16_000..=300 * 16_000).contains(&decoded.samples.len()),
+        "use a 150-300s source to enter pipelined chunk loading"
+    );
+    let source = managed.join("diarization").join(COREML_ID);
+    let fixture = Fixture::new();
+    let catalog = catalog();
+    for filename in &catalog.find(COREML_ID).unwrap().artifact_files {
+        let target = fixture.0.join(filename);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::copy(source.join(filename), target).unwrap();
+    }
+    let graph = "wespeaker-chunk-emb-s12-w116.mlmodelc/model.mil";
+    let original = std::fs::read(source.join(graph)).unwrap();
+    let backend = NativeDiarizationBackend::default();
+    let request = DiarizationRequest {
+        audio_path,
+        model: fixture.model(COREML_ID),
+        device: ComputeDevice::Auto,
+        expected_speakers: None,
+        speaker_library_path: None,
+        stage_configuration: Default::default(),
+    };
+    backend.probe(&request.model).unwrap();
+    let mut session = backend
+        .create_window_session(request.clone())
+        .expect("all original model assets must load initially");
+    let directory = fixture.0.join("wespeaker-chunk-emb-s12-w116.mlmodelc");
+    std::fs::rename(&directory, fixture.0.join("unavailable-chunk.mlmodelc")).unwrap();
+    let total = decoded.samples.len() as u64;
+    let (context, _) = runtime::JobRuntime::default().create_job();
+    let window = std::sync::Arc::new(audio::AudioWindow {
+        sequence: 0,
+        sample_rate: 16_000,
+        samples: decoded.samples.into(),
+        global_start_sample: 0,
+        global_end_sample: total,
+        valid_core_start_sample: 0,
+        valid_core_end_sample: total,
+        source_total_samples: Some(total),
+        is_final: true,
+    });
+    let error = session
+        .process_window(window.clone(), &context)
+        .err()
+        .expect("missing lazy model must fail before inference");
+    assert_eq!(std::fs::read(source.join(graph)).unwrap(), original);
+    eprintln!(
+        "lazy coreml missing graph: {:?}: {}",
+        error.code, error.message
+    );
+    assert_eq!(error.code, contracts::BackendErrorCode::ModelMissing);
+    drop(session);
+    std::fs::rename(fixture.0.join("unavailable-chunk.mlmodelc"), &directory).unwrap();
+    let mut restored = backend.create_window_session(request).unwrap();
+    let (context, _) = runtime::JobRuntime::default().create_job();
+    restored
+        .process_window(window, &context)
+        .expect("valid restored chunk resources must still run");
+    let output = restored.finish().unwrap();
+    assert!(!output.segments.is_empty());
+    assert!(output
+        .segments
+        .iter()
+        .all(|s| s.start_ms < s.end_ms && s.end_ms <= total * 1000 / 16_000));
+}

@@ -143,3 +143,74 @@ fn real_silent_model_returns_no_speakers_without_panicking() {
     assert!(windowed.embedding_observations.is_empty());
     assert_eq!(windowed.speaker_count, Some(0));
 }
+
+#[test]
+#[ignore = "requires explicit MEETNOTE_DIARIZATION_MODEL_DIR and MEETNOTE_DIARIZATION_AUDIO; corrupts only an isolated copy"]
+fn corrupt_model_is_a_load_failure_in_whole_and_windowed_paths() {
+    use std::path::PathBuf;
+    struct CopiedBundle(PathBuf);
+    impl Drop for CopiedBundle {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let source = PathBuf::from(
+        std::env::var("MEETNOTE_DIARIZATION_MODEL_DIR").expect("explicit model directory"),
+    );
+    let audio = std::env::var("MEETNOTE_DIARIZATION_AUDIO").expect("explicit valid audio");
+    assert!(!audio::read_audio_mono_16k(&audio)
+        .unwrap()
+        .samples
+        .is_empty());
+    let original_graph = std::fs::read(source.join("segmentation-3.0.onnx")).unwrap();
+    let copied = CopiedBundle(
+        std::env::temp_dir().join(format!("meetnote-corrupt-model-{}", uuid::Uuid::new_v4())),
+    );
+    std::fs::create_dir_all(&copied.0).unwrap();
+    for filename in diarization_native::REQUIRED_CPU_ARTIFACTS {
+        std::fs::copy(source.join(filename), copied.0.join(filename)).unwrap();
+    }
+    std::fs::write(copied.0.join("segmentation-3.0.onnx"), [0xffu8; 4]).unwrap();
+    let backend = NativeDiarizationBackend::default();
+    let request = DiarizationRequest {
+        audio_path: audio,
+        model: ModelRef {
+            backend_id: "diarization-native".into(),
+            model_id: "speakrs-community-1-cpu".into(),
+            revision: Some(diarization_native::SPEAKRS_MODEL_REVISION.into()),
+            artifact_path: copied.0.display().to_string(),
+            artifacts: Vec::new(),
+        },
+        device: ComputeDevice::Cpu,
+        expected_speakers: None,
+        speaker_library_path: None,
+        stage_configuration: Default::default(),
+    };
+    // Fast probe checks file presence; this test actually initializes the SDK.
+    backend.probe(&request.model).unwrap();
+    let (context, _) = JobRuntime::default().create_job();
+    let whole = futures::executor::block_on(backend.diarize(request.clone(), context))
+        .err()
+        .expect("corrupt graph must fail loading");
+    let windowed = backend
+        .create_window_session(request)
+        .err()
+        .expect("corrupt graph must fail session creation");
+    assert_eq!(
+        std::fs::read(source.join("segmentation-3.0.onnx")).unwrap(),
+        original_graph
+    );
+    for (path, error) in [("whole", whole), ("windowed", windowed)] {
+        eprintln!("corrupt-model {path}: {:?}: {}", error.code, error.message);
+        assert!(error.message.contains("segmentation-3.0.onnx"), "{error:?}");
+        assert!(
+            error.message.to_lowercase().contains("protobuf"),
+            "must reach the actual graph parser: {error:?}"
+        );
+        assert_eq!(
+            error.code,
+            contracts::BackendErrorCode::ModelLoadFailed,
+            "{path}: {error:?}"
+        );
+    }
+}

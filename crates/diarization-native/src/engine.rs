@@ -336,10 +336,10 @@ impl NativeDiarizationEngine for SpeakrsEngine {
         let mode = execution_mode(model, device)?;
         let bundle = prepare_speakrs_bundle(model, configuration)?;
         let mut pipeline = OwnedDiarizationPipeline::from_dir(bundle.root(), mode)
-            .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
+            .map_err(NativeDiarizationError::loading_pipeline)?;
         let result = pipeline
             .run(samples)
-            .map_err(|error| NativeDiarizationError::Inference(error.to_string()))?;
+            .map_err(NativeDiarizationError::from)?;
         if !validate_cluster_layout(
             result.hard_clusters.shape(),
             result.embeddings.shape(),

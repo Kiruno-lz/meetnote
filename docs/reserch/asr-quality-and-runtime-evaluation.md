@@ -451,6 +451,18 @@ collar 敏感性很大，差值同时包含粗段内近似与参考误差，不�
 
 复现核心：镜像只替换 clone catalog 的下载 URL，保留 revision/license/SHA；由真实 ModelManager 下载到全新目录后，切回原 catalog 逐项 reprobe。固定 `ProcessingOptions { device: Auto, language: Some("en"), speaker_library_path: None, diarization_stages: Default::default(), .. }`，以注册的 Whisper/native backend 经 `WorkspaceService::process_project` 保存四次完整 state；独立评分读取 state，不复用被测实现计算聚合 SHA。短路径永久入口为 `cargo test --locked -p diarization-native --features coreml --test coreml_profile real_managed_coreml_profile_reprobes_and_preserves_the_short_baseline -- --ignored --exact --nocapture`，必须显式提供 `MEETNOTE_COREML_MODEL_ROOT` 与 `MEETNOTE_DIARIZATION_AUDIO`，根目录同时安装 CPU/CoreML profiles。
 
+### 模型加载错误与 CoreML 非法编译输入
+
+2026-11-01 复核发现 native 后端把 `OwnedDiarizationPipeline::from_dir` 的失败统一当作推理失败；外部 Agent 得到错误层级不准确的反馈。探索目标是区分初始化、运行计算、缺失资产和设备不支持，并验证原生 SDK 是否总能以 Result 返回坏模型错误；不能用字符串猜测阶段，也不能修改原模型。
+
+显式指定真实 CPU 模型和音频，复制 10 个文件后仅破坏副本的 ONNX 图，整文件和窗口构造均实际到达 Protobuf parser。红线为 `InferenceFailed`；修复后均为 `ModelLoadFailed`。CoreML 的 chunk session 在运行时加载，原 SDK 又把这一加载错误转成普通 ORT 错误。相应三个内部返回类型保留已有 `ModelLoadError`，加载前检查缺失目录；对 76 文件副本先成功创建 session，再移走 w116 chunk 目录，实际 180 s 窗口从 `InferenceFailed` 转为 `ModelMissing`。恢复目录后正常推理完成，输出正时长且不越源边界。短控制另经 76 项 reprobe、CoreML whole/window 和 CPU 执行，原有时间线与向量对照通过；这些结果不构成新的精度评分。
+
+另一组独立子进程试验把副本 `wespeaker-chunk-emb-s12-w116.mlmodelc/model.mil` 改成四个 `0xff`，或改为不可读。8.67 s 不进入 chunk 加载，最初预检因此没有得到预期失败；改用 180 s 才进入目标路径。两种输入均触发 SIGSEGV，faulting stack 位于 CoreML 的 `makeProgramWithMemoryLayout` / `MLE5ProgramLibrary...`，没有 Rust Result 返回。这证明普通错误映射不能处理该原生进程故障，不据闭源栈推断更细的框架实现原因。两份原始 crash report 和日志保留在忽略目录 `eval-data/optimization-2026-11-01/coreml-invalid-input/`，两份拥有明确损坏标记的临时模型副本已清理；原安装文件未改动。
+
+//TODO - 在受管理 CoreML profile 进入原生运行时前校验完整声明 checksum，拒绝缺少完整 manifest 的执行。用同一隔离损坏编译文件验证返回可观察错误且测试进程正常退出；该完整性拦截单独实施，不把本节错误分类修复声称为进程隔离或任意原生故障恢复。
+
+复现入口为 `native_pipeline::corrupt_model_is_a_load_failure_in_whole_and_windowed_paths` 和 `coreml_profile::lazy_coreml_missing_asset_keeps_the_model_category` 两个 ignored 测试；前者必须给 `MEETNOTE_DIARIZATION_MODEL_DIR`/`MEETNOTE_DIARIZATION_AUDIO`，后者给 `MEETNOTE_COREML_MODEL_ROOT` 和 150–300 s 音频。核心方法是复制完整资产、让健康构造先成功、只在副本移走惰性目录，再验证失败分类、恢复后的正常运行和源文件未变；不提交权重或音频。故障边界、真实执行和类型 fixture 分别记录在[加载错误验证](../quality/native-load-error-validation.json)。
+
 ### Native 分离窗口的整数毫秒范围
 
 2026-10-27 重新审查资源链路，确认 session 已只保留 `WindowTimeline` 和 inference 数组，没有保留输入 `Arc<AudioWindow>` PCM；没有按假设修改所有权。审查导出时发现另一处确定性范围问题：speaker segment 的 15 秒 context 尾窗、embedding observation 的 5 秒 context 尾窗，在有效 core 只剩一个采样时，都可从正 sample 范围变成 `60000..60000 ms`。两个直接生产导出 helper 的回归先红；它们是 typed projection fixture，不作为实际模型输出这种尾段的证据。

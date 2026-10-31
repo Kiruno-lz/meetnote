@@ -155,6 +155,7 @@ NativeDiarizationBackend
 - embedding：`wespeaker-voxceleb-resnet34`，含 external data 和最短样本配置；ONNX CPU session 的 intra-op 预算按 `available_parallelism` 估计值计算：一/二线程设备使用全部可用量，其余使用 `N - ceil(N/3)`，查询失败回退一线程；不设固定线程上限。该预算作用于每个 embedding session，不是全应用总预算；accelerator session 保持一个 host 线程。
 - clustering：`speakrs-ahc-plda-vbx` 与配套参数。
 - 设备：`speakrs-community-1-cpu` 的 `Auto`/`Cpu` 固定为 CPU；`speakrs-community-1-coreml` 的 `Auto`/`CoreMl`/`Metal` 使用普通 native CoreML，由框架分配运算设备，不保证 ANE/GPU 驻留。macOS ARM64 桌面启用 Cargo `coreml` feature，其他构建明确报不支持；CoreML profile 的 `Cpu`、CPU profile 的 accelerator 请求均提前报 `DeviceUnavailable`，不静默换模型或模式。
+- 错误：初始化中的模型/PLDA 加载失败返回 `ModelLoadFailed`；SDK 携带的加载错误在运行阶段也保留该分类，缺失编译资产返回 `ModelMissing`，设备不支持返回 `DeviceUnavailable`，实际运算失败才归 `InferenceFailed`。CoreML chunk 惰性加载保留 SDK 类型和路径，不将其抹平为普通 ORT 错误。
 - stage override：只接受 descriptor 声明且与 `speakrs-community-1-cpu` bundle 兼容的三阶段配置。CoreML profile 固定 revision 和完整 76 文件 manifest，仅接受 bundle 默认阶段；快速 probe 检查全部本地文件，真实加载在 session 创建时完成。
 - provenance：基础 bundle 记入 `diarization.base_model`；CoreML segmentation/embedding 记实际编译图及权重文件的期望/实际 SHA，PLDA 和 ONNX external data 保留在完整 bundle 记录中，不能只用原 CPU 单图冒充实际来源。
 - whole-file：speakrs 完整 inference、聚类和重建。 分割 producer 与并发 embedding consumer 的窗口数必须一致：空音频为零，非空且不超过一个完整窗口为一，长音频保留原有重叠尾窗。
