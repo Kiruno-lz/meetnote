@@ -223,13 +223,13 @@ struct AudioJobEntry {
     asr_context: Option<JobContext>,
     diarization_context: Option<JobContext>,
     terminal: BTreeMap<JobId, JobSnapshot>,
-    result: Option<domain::DocumentState>,
+    result: Option<Result<domain::DocumentState, BackendError>>,
 }
 
 struct AudioJobCompletion {
     handle: AudioJobHandle,
     snapshots: [JobSnapshot; 2],
-    result: Option<domain::DocumentState>,
+    result: Result<domain::DocumentState, BackendError>,
 }
 
 #[derive(Clone)]
@@ -275,7 +275,7 @@ impl AudioJobRegistry {
                     completion.snapshots[1].job_id,
                     completion.snapshots[1].clone(),
                 );
-                entry.result = completion.result;
+                entry.result = Some(completion.result);
             }
         }
         Ok(())
@@ -337,7 +337,7 @@ impl AudioJobRegistry {
         &self,
         handle: AudioJobHandle,
         snapshots: [JobSnapshot; 2],
-        result: Option<domain::DocumentState>,
+        result: Result<domain::DocumentState, BackendError>,
     ) {
         let _ = self.completion_sender.send(AudioJobCompletion {
             handle,
@@ -428,10 +428,11 @@ impl AudioJobRegistry {
             .jobs
             .lock()
             .map_err(|_| storage_error("audio job registry lock poisoned".into()))?;
-        jobs.get(&handle)
+        let entry = jobs
+            .get(&handle)
             .filter(|entry| entry.project_id == *project_id)
-            .map(|entry| entry.result.clone())
-            .ok_or_else(|| access_denied("audio job is not owned by this project"))
+            .ok_or_else(|| access_denied("audio job is not owned by this project"))?;
+        entry.result.clone().transpose()
     }
 
     fn release(&self, project_id: &ProjectId, handle: AudioJobHandle) -> Result<(), BackendError> {
@@ -738,7 +739,7 @@ impl AudioCapabilityPort {
                         error: Some("diarization terminal snapshot unavailable".into()),
                     }),
             ];
-            registry.complete(handle, snapshots, result.as_ref().ok().cloned());
+            registry.complete(handle, snapshots, result.clone());
             workspace.discard_processing_job_ids(handle.job_ids());
             result
         });
@@ -1540,12 +1541,13 @@ mod tests {
             "assistant.credentials".into(),
             "assistant.writePolicy".into(),
         ];
+        let audio = AudioCapabilityPort::new(workspace, [ProjectId::new("allowed")]);
         let host = crate::AgentHost::new(
             crate::WorkspaceCapabilityPort::new(
                 documents,
                 crate::WorkspaceAccessPolicy::AllDocuments,
             ),
-            AudioCapabilityPort::new(workspace, [ProjectId::new("allowed")]),
+            audio.clone(),
             SettingsCapabilityPort::new(settings_service, all_settings.clone()),
             all_settings.clone(),
         );
@@ -1654,6 +1656,17 @@ mod tests {
             operation_schema("audio.processing", "cancel"),
             cancelled.result.as_ref().unwrap(),
         );
+        let pending = audio
+            .start_job(
+                ProjectId::new("allowed"),
+                model("noop-asr"),
+                model("noop-diarization"),
+            )
+            .unwrap();
+        let pending_handle = job_handle(
+            pending.asr_context.job_id(),
+            pending.diarization_context.job_id(),
+        );
         let result = host.dispatch(contracts::CapabilityCallRequest::new(
             "wire-result",
             "wire-result",
@@ -1666,8 +1679,8 @@ mod tests {
             },
             serde_json::json!({
                 "projectId": "allowed",
-                "asrJobId": asr_job_id,
-                "diarizationJobId": diarization_job_id
+                "asrJobId": pending_handle.asr_job_id.0,
+                "diarizationJobId": pending_handle.diarization_job_id.0
             }),
         ));
         assert!(result.ok, "{result:?}");
@@ -1675,6 +1688,12 @@ mod tests {
             operation_schema("audio.processing", "result"),
             result.result.as_ref().unwrap(),
         );
+
+        pending.cancel();
+        let _ = futures::executor::block_on(pending.future);
+        audio
+            .release(&ProjectId::new("allowed"), pending_handle)
+            .unwrap();
 
         let settings_snapshot = host.dispatch(contracts::CapabilityCallRequest::new(
             "wire-settings",
@@ -2670,7 +2689,13 @@ mod tests {
             .save(domain::DocumentState::new(
                 ProjectId::new("allowed"),
                 "Allowed",
-                "a.wav",
+                std::env::temp_dir()
+                    .join(format!(
+                        "meetnote-missing-source-{}.wav",
+                        uuid::Uuid::new_v4()
+                    ))
+                    .display()
+                    .to_string(),
             ))
             .unwrap();
         let workspace = crate::WorkspaceService::new(
@@ -2740,9 +2765,30 @@ mod tests {
         assert!(queried.ok, "{queried:?}");
         let cancelled = host.dispatch(request("cancel", "cancel", handle_arguments.clone()));
         assert!(cancelled.ok, "{cancelled:?}");
-        let result = host.dispatch(request("result", "result", handle_arguments));
-        assert!(result.ok, "{result:?}");
-        assert_eq!(result.result.unwrap()["ready"], false);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let result = loop {
+            let result = host.dispatch(request("result", "result", handle_arguments.clone()));
+            if !result.ok {
+                break result;
+            }
+            assert_eq!(result.result.as_ref().unwrap()["ready"], false);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "failed job remained pending: {result:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(result.error.as_ref().unwrap().code, "AUDIO_INVALID_AUDIO");
+        let repeated = host.dispatch(request("result-again", "result", handle_arguments));
+        assert!(!repeated.ok);
+        assert_eq!(
+            repeated.error.as_ref().unwrap().code,
+            result.error.as_ref().unwrap().code
+        );
+        assert_eq!(
+            repeated.error.unwrap().message,
+            result.error.unwrap().message
+        );
     }
 
     #[test]
@@ -2896,6 +2942,13 @@ mod tests {
             )
             .unwrap();
         let (asr_job, diarization_job) = job.job_ids();
+        assert!(port
+            .result_for(
+                &ProjectId::new("processable"),
+                job_handle(asr_job, diarization_job)
+            )
+            .unwrap()
+            .is_none());
         assert_eq!(
             port.snapshot_for(&ProjectId::new("processable"), asr_job)
                 .unwrap()
@@ -2919,10 +2972,54 @@ mod tests {
                 .state,
             runtime::JobState::Cancelled
         );
-        let result = futures::executor::block_on(job.future);
+        let failure = futures::executor::block_on(job.future).unwrap_err();
+        assert_eq!(failure.code, contracts::BackendErrorCode::NotImplemented);
+        let settings =
+            SettingsService::open(Arc::new(MemorySettings(Mutex::new(AppSettings::default()))))
+                .unwrap();
+        let host = crate::AgentHost::new(
+            crate::WorkspaceCapabilityPort::new(
+                workspace.documents(),
+                crate::WorkspaceAccessPolicy::AllDocuments,
+            ),
+            port.clone(),
+            SettingsCapabilityPort::new(settings, std::iter::empty::<String>()),
+            std::iter::empty::<String>(),
+        );
+        for _ in 0..2 {
+            let wire = host.dispatch(contracts::CapabilityCallRequest::new(
+                "failed-audio-result", "failed-audio-result", "audio.processing", 1, "result",
+                contracts::CapabilityAuthorization { project_ids: vec!["processable".into()], ..Default::default() },
+                serde_json::json!({"projectId":"processable","asrJobId":asr_job.0,"diarizationJobId":diarization_job.0}),
+            ));
+            assert!(
+                !wire.ok,
+                "failed job must cross Host as an error, not pending: {wire:?}"
+            );
+            let error = wire.error.unwrap();
+            assert_eq!(error.code, "AUDIO_NOT_IMPLEMENTED");
+            assert_eq!(error.message, failure.message);
+            assert_eq!(error.context.unwrap().operation.as_deref(), Some("result"));
+        }
+        // Once complete, errors must remain observable rather than look pending.
+        for _ in 0..2 {
+            let observed = port
+                .result_for(
+                    &ProjectId::new("processable"),
+                    job_handle(asr_job, diarization_job),
+                )
+                .unwrap_err();
+            assert_eq!(observed.code, failure.code);
+            assert_eq!(observed.message, failure.message);
+        }
         assert_eq!(
-            result.unwrap_err().code,
-            contracts::BackendErrorCode::NotImplemented
+            port.result_for(
+                &ProjectId::new("other"),
+                job_handle(asr_job, diarization_job)
+            )
+            .unwrap_err()
+            .code,
+            contracts::BackendErrorCode::AccessDenied
         );
         let terminal = port
             .snapshot_for(&ProjectId::new("processable"), asr_job)
