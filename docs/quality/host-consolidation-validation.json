@@ -1,0 +1,289 @@
+{
+  "schema": "meetnote.host-consolidation-validation.v1",
+  "date": "2026-11-01",
+  "sourceCommit": "a064edbda361f09574d6660c37070ceaa37be999",
+  "decision": "retain optional normal CoreML profile and CPU default; confirm complete-processing warm regression after checksum and integrity changes",
+  "protocol": {
+    "schema": "meetnote.host-consolidation-protocol.v1",
+    "date": "2026-11-01",
+    "sourceCommit": "a064edbda361f09574d6660c37070ceaa37be999",
+    "runnerSha256": "a7fafb726a1ad6756768ae375647db389bcfd39e855c65b7b3202a321680dcee",
+    "harnessSha256": "2e2e5660fce1c2a4165914c102acfd48d24797a37c6835f55cc6b17a90099f3b",
+    "catalogSha256": "2260c6f808c7a4b8992ef03a591aa20e3156ba1f958895134e929a60ebb4baca",
+    "audioSha256": "bd705284d4d2b1f945874361e6d9ecca8c484d10f203d25287bef62987f5f493",
+    "previousRecordsSha256": "67c94a3703a02ba4548ff72848fe85f8cfe69eefb14c53fa00b43264f66c9bbc",
+    "referenceSha256": "66100d9e2c94bfa068512056a27a3306926544ba38b419ad4fc8d5f09ec8e835",
+    "previousCoremlMedianSeconds": 11.354790167,
+    "profiles": [
+      "cpu",
+      "coreml",
+      "coreml",
+      "cpu"
+    ],
+    "device": "Auto",
+    "asr": "whisper-base-en-ggml",
+    "language": "en",
+    "stageOverrides": "none",
+    "speakerLibrary": null,
+    "download": false,
+    "gates": {
+      "facts": "all ASR and per-profile DIA canonical output matches the original saved host records; complete model hashes valid",
+      "quality": "each collar 0/500ms CoreML DER <= CPU+0.01 absolute",
+      "speed": "CoreML median <=0.6 CPU and <=0.8 original CoreML host median",
+      "resource": "whole harness peak macOS footprint <=8GiB"
+    },
+    "scope": "actual four-job Audio Host and Workspace processing after source checksum reprobe; current Mac and known train crop; no UI FPS or cold-cache acceptance",
+    "controllerSha256": "0245e1d491185f656c88c66b8f202b53ad26b517eb9747d34df8f8dfb3774847"
+  },
+  "result": {
+    "schema": "meetnote.host-consolidation-result.v1",
+    "protocolSha256": "a6f70a3c33de8bfb61ce8961de120e3e55ca4ceadcf67c9fa18e7874ef7d47a7",
+    "scorerSha256": "1b61018e6ee3e3058b95efbfe1334a80e4c9bf07726f10e03af7a07fba1eb6d3",
+    "metricSha256": "5c9d82d039f1c185920dbec3d6d42f2891099ff986b6bee0225b1128b946385d",
+    "resource": {
+      "exitCode": 0,
+      "wallSeconds": 102.00587037485093,
+      "hostLogSha256": "9e9fba61cfb5418b66955354936ebbd8eca94c385a299e6b5288fe2574cc1110",
+      "processingSha256": "c4c45a852b430ecd6342715e241a650f37b7492448bc61a07a7b80a67f25faad",
+      "peakRssBytes": 745095168,
+      "peakFootprintBytes": 2673772368
+    },
+    "profiles": {
+      "speakrs-community-1-cpu": {
+        "medianSeconds": 45.8376571665,
+        "calls": [
+          {
+            "seconds": 49.372957792,
+            "segments": 45,
+            "speakers": 3,
+            "scores": [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 113.49000000000001,
+                "missedSpeakerSeconds": 5.560999999999993,
+                "falseAlarmSpeakerSeconds": 22.02399999999999,
+                "confusedSpeakerSeconds": 4.168000000000006,
+                "der": 0.27978676535377556,
+                "missRate": 0.048999911886509755,
+                "falseAlarmRate": 0.19406115076218158,
+                "confusionRate": 0.0367257027050842
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 94.91000000000007,
+                "missedSpeakerSeconds": 2.787000000000006,
+                "falseAlarmSpeakerSeconds": 20.27,
+                "confusedSpeakerSeconds": 2.1959999999999837,
+                "der": 0.2660731219049623,
+                "missRate": 0.02936466125803397,
+                "falseAlarmRate": 0.2135707512380148,
+                "confusionRate": 0.02313770940891352
+              }
+            ]
+          },
+          {
+            "seconds": 42.302356541,
+            "segments": 45,
+            "speakers": 3,
+            "scores": [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 113.49000000000001,
+                "missedSpeakerSeconds": 5.560999999999993,
+                "falseAlarmSpeakerSeconds": 22.02399999999999,
+                "confusedSpeakerSeconds": 4.168000000000006,
+                "der": 0.27978676535377556,
+                "missRate": 0.048999911886509755,
+                "falseAlarmRate": 0.19406115076218158,
+                "confusionRate": 0.0367257027050842
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 94.91000000000007,
+                "missedSpeakerSeconds": 2.787000000000006,
+                "falseAlarmSpeakerSeconds": 20.27,
+                "confusedSpeakerSeconds": 2.1959999999999837,
+                "der": 0.2660731219049623,
+                "missRate": 0.02936466125803397,
+                "falseAlarmRate": 0.2135707512380148,
+                "confusionRate": 0.02313770940891352
+              }
+            ]
+          }
+        ]
+      },
+      "speakrs-community-1-coreml": {
+        "medianSeconds": 4.42811,
+        "calls": [
+          {
+            "seconds": 4.471429417,
+            "segments": 43,
+            "speakers": 3,
+            "scores": [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 113.49000000000001,
+                "missedSpeakerSeconds": 5.241000000000028,
+                "falseAlarmSpeakerSeconds": 22.31099999999999,
+                "confusedSpeakerSeconds": 3.184999999999988,
+                "der": 0.27083443475196056,
+                "missRate": 0.046180280200899,
+                "falseAlarmRate": 0.196590007930214,
+                "confusionRate": 0.028064146620847545
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 94.91000000000007,
+                "missedSpeakerSeconds": 2.372,
+                "falseAlarmSpeakerSeconds": 20.502,
+                "confusedSpeakerSeconds": 2.006999999999991,
+                "der": 0.2621536192182064,
+                "missRate": 0.0249920977768412,
+                "falseAlarmRate": 0.2160151722684647,
+                "confusionRate": 0.02114634917290053
+              }
+            ]
+          },
+          {
+            "seconds": 4.384790583,
+            "segments": 43,
+            "speakers": 3,
+            "scores": [
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 0,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 113.49000000000001,
+                "missedSpeakerSeconds": 5.241000000000028,
+                "falseAlarmSpeakerSeconds": 22.31099999999999,
+                "confusedSpeakerSeconds": 3.184999999999988,
+                "der": 0.27083443475196056,
+                "missRate": 0.046180280200899,
+                "falseAlarmRate": 0.196590007930214,
+                "confusionRate": 0.028064146620847545
+              },
+              {
+                "status": "measured",
+                "method": "pyannote.metrics-4.0.0-hungarian",
+                "collarMs": 500,
+                "collarConvention": "full_duration_centered_on_reference_boundaries",
+                "overlap": "included",
+                "scoringRegion": "source_duration",
+                "scoredSpeakerSeconds": 94.91000000000007,
+                "missedSpeakerSeconds": 2.372,
+                "falseAlarmSpeakerSeconds": 20.502,
+                "confusedSpeakerSeconds": 2.006999999999991,
+                "der": 0.2621536192182064,
+                "missRate": 0.0249920977768412,
+                "falseAlarmRate": 0.2160151722684647,
+                "confusionRate": 0.02114634917290053
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "installChecks": {
+      "whisper-base-en-ggml": {
+        "checksums": 1,
+        "sha256": "6ea758b55b5e92e5d041936c33489ecfc828aa7d375a7ff3081ad2dc133d5033"
+      },
+      "speakrs-community-1-cpu": {
+        "checksums": 10,
+        "sha256": "8748d03dd42927b3f08dc7484dbb5a85f375f928ba777454aad7da6a1fd8338d"
+      },
+      "speakrs-community-1-coreml": {
+        "checksums": 76,
+        "sha256": "218f942c033f49ecff78359d38f11ea9e2dfca2e347b6d235ae9261f9ab1d527"
+      }
+    },
+    "qualityDeltas": [
+      -0.008952330601814995,
+      -0.0039195026867558935
+    ],
+    "ratios": {
+      "coremlVsCpu": 0.09660419562708891,
+      "coremlVsOriginal": 0.38997726376919317
+    },
+    "gates": {
+      "factsExactToOriginal": true,
+      "repeatsExact": true,
+      "quality": true,
+      "speedVsCpu": true,
+      "speedVsOriginalCoreml": true,
+      "footprint": true
+    },
+    "passed": true,
+    "qualityAcceptance": "not_assessed; unchanged known train-crop facts and DER only, no general text or diarization acceptance"
+  },
+  "summarySha256": "ddf49a46b42e057cca90aeb6d24ed24a28a59632d7e51389763381ea1258159a",
+  "previous": {
+    "source": "coreml-managed-profile-validation.json",
+    "cpuMedianSeconds": 49.236292313,
+    "coremlMedianSeconds": 11.354790167
+  },
+  "review": {
+    "method": "separate read-only review of timing boundaries, saved documents, frozen gates, artifact identities and standard DER scoring",
+    "checks": [
+      "timer encloses real Workspace process_project completion including ASR, diarization, provenance and repository save",
+      "model reprobes and import are outside per-job timer and present in whole-harness resource accounting",
+      "fresh project per job; actual registered Whisper/native managers and original versioned catalog",
+      "four saved ASR timelines equal original 18-segment baseline; each profile diarization timeline and stage provenance equal original and repeat",
+      "independently recompute input, individual artifact and base bundle SHA256 from actual installed files",
+      "verify raw-log, runner, harness, controller, reference and baseline fingerprints",
+      "all six protocol gates remain fixed; no inferred sum of stage timings or attribution of all gain to a single change"
+    ],
+    "limits": [
+      "one known 180s AMI train crop on this 32GiB M2 Pro, not new heldout quality or WER acceptance",
+      "warm existing file/compiler caches; original profile measurement was on an earlier run, not a contemporary isolated A/B causal comparison",
+      "whole-harness footprint covers four sequential jobs and reprobes, not per-profile or whole-machine consumption",
+      "no UI FPS, cold startup, low-memory, 20-hour or production release acceptance"
+    ]
+  },
+  "validation": {
+    "releaseHarnessBuild": "passed --locked",
+    "actualJobs": 4,
+    "reprobeChecksums": 87,
+    "scorer": "passed after independent fingerprint and stage-provenance review",
+    "productionCodeChanged": false,
+    "workspaceRustChecks": "reuse immediately preceding coreml-integrity-validation.json full checks; no runtime changes in this evaluation round",
+    "temporaryCode": "removed after retaining core reproduction method and receipt fingerprints",
+    "fmt": "passed",
+    "documentLinks": "passed",
+    "diffCheck": "passed"
+  },
+  "rawRoot": "eval-data/optimization-2026-11-01/host-consolidation"
+}
