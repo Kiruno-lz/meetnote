@@ -1,0 +1,87 @@
+{
+  "schema": "meetnote.audio-result-error-validation.v1",
+  "date": "2026-11-01",
+  "decision": "retain terminal failures and return their original backend errors through the existing result API",
+  "implementationCommit": "fe84f76cdc96eb85714350d84df4b4c9b01f6717",
+  "problem": "wrapped audio futures converted Result into Option and discarded errors; Host result calls returned successful ready:false forever after a failed task",
+  "fix": "registry stores None before completion and Some(Result) afterwards; project ownership is checked before transposing the stored outcome; return type and wire schemas remain unchanged",
+  "review": {
+    "method": "separate source/diff and lifecycle review plus Host dispatch regression",
+    "checks": [
+      "pending remains ready:false; successful completed documents still return ready:true",
+      "completed error code and message survive repeated port and Host result queries",
+      "wrong project handles return AccessDenied before accessing stored errors",
+      "completion publication and runtime job cleanup preserve their order",
+      "release still rejects active handles and can free completed outcomes",
+      "no new public status enum schema scheduler or persistent store",
+      "failure retryability and AUDIO_* mapping stay owned by the existing Host adapter",
+      "result-schema coverage uses a real registered unpolled future instead of racing a failed worker",
+      "async lifecycle test waits for an actual terminal error within a deadline and then repeats the query"
+    ],
+    "scope": "in-memory outcomes until handle release or shared registry destruction; Workspace remains authoritative for document facts"
+  },
+  "redGreen": {
+    "portRed": "completed backend error observed as Ok(None)",
+    "hostRed": "completed backend error observed as ok:true with ready:false",
+    "green": "18 capability tests pass, including precise AUDIO_NOT_IMPLEMENTED envelope/message/context and cross-project denial",
+    "fullFirstFailure": "an older async lifecycle fixture expected failed invalid-audio work to remain ready:false; updated to assert eventual AUDIO_INVALID_AUDIO and stable repeated reads"
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed",
+    "testWorkspace": {
+      "mainPassed": 980,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 18
+    },
+    "buildWorkspace": "passed",
+    "hostSuccess": "existing persistent Host / MoonBit audio success test still returns ready:true with a document",
+    "logs": {
+      "red": {
+        "path": "/tmp/meetnote-loop38-red.log",
+        "sha256": "39404f083f298d46d277504b49de334b99de9be75599fd946e1c38d23fae3cdc"
+      },
+      "green": {
+        "path": "/tmp/meetnote-loop38-green.log",
+        "sha256": "484a7893136ca1ae6e020163138861c50612febb363e0d11bc56df205943fb1a"
+      },
+      "host-red": {
+        "path": "/tmp/meetnote-loop38-host-red.log",
+        "sha256": "ad703264b2877f335c915a41c1b381b344e6ab859a40c2fa3cdfbdbe391f65e3"
+      },
+      "host-green": {
+        "path": "/tmp/meetnote-loop38-host-green.log",
+        "sha256": "171ef4db8399eb3554b54a652a76e90b986c8ccae446db4034c8a459623f428e"
+      },
+      "lifecycle-green": {
+        "path": "/tmp/meetnote-loop38-lifecycle-green.log",
+        "sha256": "f2938a49bce1ee64d5c6026b9eca2dce2702dc52e765fc0638405df886adcc1f"
+      },
+      "tests-before-lifecycle-update": {
+        "path": "/tmp/meetnote-loop38-tests-before-lifecycle-update.log",
+        "sha256": "637edb55e735b524f53b8e54252ccff5e0abce5ec9a292f28ff2393bfef00df9"
+      },
+      "final-fmt": {
+        "path": "/tmp/meetnote-loop38-final-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "final-check": {
+        "path": "/tmp/meetnote-loop38-final-check.log",
+        "sha256": "361f5476fea1dd67f082aa3e1911e67f4d21c74a73ecaf6550627a02a01a8d02"
+      },
+      "final-tests": {
+        "path": "/tmp/meetnote-loop38-final-tests.log",
+        "sha256": "44c42fba8a76adbd48023b24616817cae47f65c6f24daadc92d056cc5ed61332"
+      },
+      "final-build": {
+        "path": "/tmp/meetnote-loop38-final-build.log",
+        "sha256": "d35f5090d3891be87ec1547082c0ba5df101ff2e44310cb0730daeabf135f71d"
+      }
+    }
+  },
+  "limits": [
+    "fake backend and missing-audio fixtures validate lifecycle and error delivery, not inference or model quality",
+    "outcomes do not survive application restart; no new persistence contract"
+  ]
+}

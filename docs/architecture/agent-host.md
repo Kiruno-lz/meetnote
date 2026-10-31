@@ -14,6 +14,8 @@ Workspace、Audio、Settings 分别拥有具体操作、typed contract、validat
 
 服务错误保持所属 contract 的固定 code：Workspace 使用 Rust `AgentErrorCode`，Audio/Settings adapter 分别使用 `AUDIO_*`/`SETTINGS_*` code（包括 Audio 授权拒绝 `AUDIO_ACCESS_DENIED`），并只在明确可重试的 revision、锁或运行时失败上标记 retryable；Host 不通过解析自然语言 message 判断修正策略。Audio/Settings descriptor 暴露 operation、side effect、long-running 和输入 schema 元数据。
 
+Audio `result` 在完成消息尚未发布时返回 `ready:false`，成功时返回该任务的文档快照；失败保留原始 backend code/message，经 Host 返回固定 `AUDIO_*` 错误，不能把已失败任务继续表示为待完成。结果和错误可重复查询，均受同一项目/handle 所有权校验，保留到 handle 释放或共享 registry 被销毁；该状态只在内存中，不替代 Workspace 的处理事实。回归穿过 Host 分发边界，见[音频失败结果验证](../quality/audio-result-error-validation.json)。
+
 Workspace port 已归一化的事件直接复用，Agent Host 不再转换成第二份业务事件格式。CLI/MCP 等 adapter 只做 wire 映射；LLM adapter 只归一化模型消息与 tool call。首版可以返回完整文本，不伪造 token streaming，也不为接工具而解析外部 Agent 的完整事件流。
 
 授权由 Host 授予，Skill 和请求只能收窄能力。取消阻止后续调用，已经提交的 receipt 必须独立保留；失败、超时、解释生成失败都不能隐藏副作用。confirm/reject/undo 的校验与执行归所属服务。
