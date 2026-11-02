@@ -42,6 +42,8 @@ Workspace Host 负责工作区关联、文档读写、结构校验、资产定�
 
 ## 索引与搜索
 
+侧栏 `DocumentService::search` 对已保存事实做字面文本搜索，采用 Unicode 简单大小写折叠，统一匹配希腊 sigma 的 σ/ς/Σ 等形式。复用锁定的 `regex 1.13.1`，检索与证据定位共用应用层 `DocumentSearchQuery`，输入先转义；检索每次构建一次，定位在打开结果时构建并保存，不在渲染循环重复编译。匹配位置直接取原文 UTF-8 边界，片段保留原文。规则不依赖系统 locale，不做 Unicode 规范化或多字符折叠（如 ß/ss）；`i` 与 `İ` 按简单折叠规则区分。查询长度、50 项结果上限、取消与外部编辑刷新流程保持原有约束。回归与依赖变动见[Unicode 字面搜索回执](../quality/unicode-literal-search-validation.json)。
+
 当前代码已有目录扫描和 watcher，但还没有独立的全文、embedding 或搜索索引服务。后续 Workspace Host 可以维护以下派生能力：
 
 - 基于 Markdown、transcript、tags 和结构元数据的全文索引。

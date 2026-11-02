@@ -149,6 +149,42 @@ fn search_unicode_snippet_keeps_the_actual_match_and_bounds_its_length() {
 }
 
 #[test]
+fn search_matches_unicode_case_variants_as_literal_text() {
+    let repository = Arc::new(InMemoryDocumentRepository::default());
+    for (id, title) in [
+        ("upper", "ΟΣ"),
+        ("final", "ος"),
+        ("normal", "οσ"),
+        ("long-s", "ſ"),
+        ("literal", "[a].*"),
+        ("wildcard", "arbitrary"),
+    ] {
+        repository
+            .save(document(id, title), Some(String::new()))
+            .unwrap();
+    }
+    let service = DocumentService::new(repository);
+    for query in ["ΟΣ", "ος", "οσ"] {
+        let result = service
+            .search(query, 50, &CancellationToken::new())
+            .unwrap();
+        assert_eq!(result.hits.len(), 3, "Greek case variants for {query}");
+        assert!(result
+            .hits
+            .iter()
+            .all(|hit| hit.source == SearchSource::Title));
+    }
+    let result = service.search("S", 50, &CancellationToken::new()).unwrap();
+    assert_eq!(result.hits.len(), 1);
+    assert_eq!(result.hits[0].document_id.as_str(), "long-s");
+    let result = service
+        .search("[a].*", 50, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(result.hits.len(), 1);
+    assert_eq!(result.hits[0].document_id.as_str(), "literal");
+}
+
+#[test]
 fn search_limits_matches_and_reads_external_changes_again() {
     let repository = Arc::new(InMemoryDocumentRepository::default());
     for id in ["a", "b", "c"] {

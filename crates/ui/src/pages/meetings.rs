@@ -895,12 +895,13 @@ fn transcript(
         {
             return None;
         }
+        let query = opened.query.as_ref()?;
         turns.iter().enumerate().find_map(|(turn_index, turn)| {
             turn.paragraphs
                 .iter()
                 .position(|paragraph| {
                     Some(&paragraph.target) == opened.hit.transcript_target.as_ref()
-                        && paragraph.text.to_lowercase().contains(&opened.query)
+                        && query.is_match(&paragraph.text)
                 })
                 .map(|paragraph| (turn_index, paragraph))
         })

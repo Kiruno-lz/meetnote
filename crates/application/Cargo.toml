@@ -12,6 +12,7 @@ models = { path = "../models" }
 runtime = { path = "../runtime" }
 settings = { path = "../settings" }
 futures.workspace = true
+regex.workspace = true
 schemars.workspace = true
 sha2.workspace = true
 serde.workspace = true
