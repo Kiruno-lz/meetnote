@@ -142,6 +142,16 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 
 34 次调用成功，重复文本与识别语种全部相同；中文为 80/512、英文原生 10/220、AMI 26/200 错误单位。峰值 RSS 3,844,472,832 B，footprint 3,837,480,272 B，各项冻结门通过。英文原生仍略差于 SenseVoice；只能说该固定 Metal 配置值得继续验证，不能据此更换默认模型。首次 11.85 s 的速度失败仍成立，未被这组已知短样本的 warm 结果抵消。独立 review 重新计算每例评分和组分子/分母、核对所有 34 个独立结果、日志、manifest/scorer 及模型指纹；见[扩展 Candle 回执](../quality/qwen-candle-matrix-validation.json)。临时 controller 删除，固定 executable 和原始证据仍在忽略目录 `eval-data/optimization-2026-11-02/qwen-candle-matrix/` 及上一节准备目录；本轮产品代码未变。
 
+精度格式另作固定对照：同一源码、相同 harness 和 17-case manifest，按 BF16 → FP16 → FP16 → BF16 共 68 次真实调用。候选仅在 Metal 上通过 Candle `to_dtype(F16)` 转换全部 612 个 BF16 权重，磁盘权重不变，转换成本计入每次加载；不引入自制 kernel。预设各组错误率不得上升、各组 RTF 中位数至少下降 10%、每次候选 RTF ≤1、RSS ≤基线最大值的 110%。
+
+| 分组 | BF16 / FP16 错误率 | BF16 / FP16 RTF 中位数 |
+| --- | --- | --- |
+| 中文原生 CER | 15.6250% / 15.6250% | 0.2086 / 0.2031 |
+| 英文原生 normalized WER | 4.5455% / 4.5455% | 0.2612 / 0.2553 |
+| AMI normalized WER | 13.0000% / 12.0000% | 0.2836 / 0.2752 |
+
+68 次成功，各精度内重复文本/语种一致，新 BF16 文本与前轮逐项相同。速度仅改善约 2–3%，未达 10% 门；质量和 RSS 门通过，但 footprint 峰值由 3,835,710,776 B 增至 4,995,124,728 B，RSS 分别为 3,842,686,976/3,838,590,976 B，不能以 RSS 接近掩盖 footprint 增长。首个新 BF16 executable 的中文调用耗时 11.3337 s，首个 FP16 为 3.0286 s；慢因未定位，不用于宣称冷启动收益。本轮拒绝推进 FP16，清理隔离的 library 补丁、example 与 workspace 配置，上游源码恢复干净，产品代码和默认值未变。独立 review 重新计算 68 份评分、分组单位、612 项转换、source/lock/harness 指纹，完整门槛、复现方法及数据见[精度格式回执](../quality/qwen-candle-dtype-validation.json)。
+
 独立 review 核对冻结协议、原失败、重复文本、模型与 runner 指纹、进程资源和源码 diff。临时 workspace 隔离及两个 example 已清理，上游 library 未改动。复现方法为固定源码的离线 tokenizer builder + `AsrInference::load`/`transcribe`，设备同步前后计时，外层 `time -l` 测资源；完整 hash、门槛和结果见 [Candle 回执](../quality/qwen-candle-validation.json)，模型、原预测及日志保留在忽略目录 `eval-data/optimization-2026-11-02/qwen-candle/`。
 
 ### 优化次序与边界
