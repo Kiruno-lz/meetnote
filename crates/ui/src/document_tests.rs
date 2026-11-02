@@ -545,6 +545,155 @@ fn saved_markdown_refreshes_external_changes_and_retries_failed_reads(cx: &mut T
 }
 
 #[gpui::test]
+fn copying_the_visible_transcript_preserves_turns_text_and_saved_facts(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let mut document = DocumentState::new(ProjectId::new("meeting"), "Review", "audio.wav");
+    document.results.transcript = vec![
+        TranscriptSegment {
+            id: "a".into(),
+            start_ms: 1000,
+            end_ms: 2000,
+            text: "第一段\r\nSecond line".into(),
+        },
+        TranscriptSegment {
+            id: "a2".into(),
+            start_ms: 2000,
+            end_ms: 3000,
+            text: "同一位继续".into(),
+        },
+        TranscriptSegment {
+            id: "b".into(),
+            start_ms: 3_723_000,
+            end_ms: 3_724_000,
+            text: "End 🎉".into(),
+        },
+        TranscriptSegment {
+            id: "c".into(),
+            start_ms: 3_780_000,
+            end_ms: 3_781_000,
+            text: "没有归属的原文".into(),
+        },
+    ];
+    document.results.speaker_segments = document
+        .results
+        .transcript
+        .iter()
+        .take(3)
+        .enumerate()
+        .map(|(index, raw)| domain::SpeakerTaggedSegment {
+            transcript_segment_id: raw.id.clone(),
+            start_ms: raw.start_ms,
+            end_ms: raw.end_ms,
+            speaker_id: format!("speaker-{}", usize::from(index >= 2)),
+            speaker_profile_id: None,
+            speaker_label: (index < 2).then(|| "李明".into()),
+            text: raw.text.clone(),
+        })
+        .collect();
+    documents.put(document, "Saved notes");
+    let before = documents.package_bytes("meeting");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    open_editor(cx, &view, "meeting");
+    let body = view.read_with(cx, |root, _| root.editor.body.clone());
+    retype_area(cx, &body, "未保存草稿");
+    click_selector(cx, "content-mode-original");
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    for (locale, unnamed, unattributed) in [
+        (i18n::Locale::ZhCn, "说话人 2", "未标注说话人"),
+        (i18n::Locale::EnUs, "Speaker 2", "Unattributed speech"),
+    ] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let button = rendered(cx, "copy-transcript");
+        assert!(within(button, rendered(cx, "meeting-content")));
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()));
+        if locale == i18n::Locale::ZhCn {
+            click_selector(cx, "copy-transcript");
+        } else {
+            for _ in 0..40 {
+                cx.simulate_keystrokes("tab");
+                if cx
+                    .debug_bounds("focus-ring")
+                    .is_some_and(|ring| within(ring, button))
+                {
+                    break;
+                }
+            }
+            assert!(cx
+                .debug_bounds("focus-ring")
+                .is_some_and(|ring| within(ring, button)));
+            cx.simulate_keystrokes("enter");
+            cx.simulate_event(gpui::KeyUpEvent {
+                keystroke: gpui::Keystroke::parse("enter").unwrap(),
+            });
+            cx.run_until_parked();
+        }
+        assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()).as_deref(),
+            Some(format!("[0:01] 李明\n第一段\r\nSecond line\n同一位继续\n\n[1:02:03] {unnamed}\nEnd 🎉\n\n[1:03:00] {unattributed}\n没有归属的原文\n").as_str()));
+        assert_eq!(
+            view.read_with(cx, |root, _| root.ui.notice.clone()),
+            i18n::text(locale, "transcript_copied")
+        );
+    }
+    click_selector(cx, "content-mode-edit");
+    assert_eq!(area_value(cx, &body), "未保存草稿");
+    assert_eq!(documents.package_bytes("meeting"), before);
+}
+
+#[gpui::test]
+fn transcript_copy_preserves_the_clipboard_when_its_view_is_unavailable(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    documents.put(processed("meeting", "Review"), "Saved notes");
+    let record = documents.read("meeting");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    for scenario in [
+        "empty",
+        "whitespace",
+        "other-document",
+        "other-view",
+        "other-route",
+        "switching",
+        "removed",
+    ] {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("sentinel".into()));
+        view.update(cx, |root, cx| {
+            root.ui.route = Route::Meetings;
+            root.ui.content_mode = crate::state::ContentMode::Original;
+            root.ui.selected_project = Some(record.state.id().clone());
+            root.projects = vec![record.state.clone()];
+            root.documents_root_switch.switching = false;
+            match scenario {
+                "empty" => {
+                    root.projects[0].results.transcript.clear();
+                    root.projects[0].results.speaker_segments.clear();
+                }
+                "whitespace" => {
+                    root.projects[0].results.transcript[0].text = " \r\n".into();
+                    root.projects[0].results.speaker_segments[0].text = " \r\n".into();
+                }
+                "other-document" => root.ui.selected_project = Some(ProjectId::new("other")),
+                "other-view" => root.ui.content_mode = crate::state::ContentMode::Edit,
+                "other-route" => root.ui.route = Route::Settings,
+                "switching" => root.documents_root_switch.switching = true,
+                "removed" => root.projects.clear(),
+                _ => unreachable!(),
+            }
+            root.copy_transcript(cx);
+        });
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("sentinel"),
+            "{scenario}"
+        );
+    }
+}
+
+#[gpui::test]
 fn workspace_search_opens_raw_transcripts_without_processing_metadata(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
     let mut document = DocumentState::new(ProjectId::new("meeting"), "Review", "audio.wav");

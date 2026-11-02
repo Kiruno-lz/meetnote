@@ -162,6 +162,32 @@ pub(crate) struct SavedDocument {
 }
 
 impl RootView {
+    /// Copy the currently displayed transcript facts, without reading files or drafts.
+    pub(crate) fn copy_transcript(&mut self, cx: &mut Context<Self>) {
+        if self.ui.route != Route::Meetings
+            || self.ui.content_mode != ContentMode::Original
+            || self.documents_root_switch.switching
+        {
+            return;
+        }
+        let Some(project) = self
+            .projects
+            .iter()
+            .find(|project| self.ui.selected_project.as_ref() == Some(project.id()))
+        else {
+            return;
+        };
+        let Some(text) = crate::speakers::transcript_text(project, self.ui.locale) else {
+            return;
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+        self.ui.set_notice(
+            NoticeTone::Success,
+            i18n::text(self.ui.locale, "transcript_copied").into(),
+        );
+        cx.notify();
+    }
+
     /// Copy exactly the saved snapshot being read, keeping editing drafts separate.
     pub(crate) fn copy_saved_markdown(&mut self, cx: &mut Context<Self>) {
         if self.ui.route != Route::Meetings

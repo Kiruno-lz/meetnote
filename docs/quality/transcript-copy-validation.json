@@ -1,0 +1,117 @@
+{
+  "schema": "meetnote.transcript-copy-validation.v1",
+  "date": "2026-11-02",
+  "baseCommit": "131d2b15871e386d99af20d1a62f31db45ec988c",
+  "implementationCommit": "4ea57c4ee9ced97fb4be9bdac5a2c5207fac18d8",
+  "decision": "copy the complete currently loaded Original view as readable plain text using its existing projection",
+  "format": {
+    "headers": "[turn start time] displayed speaker name; use existing second-resolution clock and hour format",
+    "paragraphs": "retain original text bytes including Unicode and internal CRLF; add newline between paragraphs and blank line between turns",
+    "source": "same transcript_turns as Original, including raw/unattributed fallback; loaded UI snapshot, not a new disk read",
+    "scope": "view clipboard presentation; formal TXT/Markdown/SRT file export stays with future Workspace/application work"
+  },
+  "redGreen": {
+    "red": "copy-transcript control was not rendered before implementation",
+    "green": "mouse/Tab/Enter copy exact expected Chinese/English text; consecutive turn paragraphs, emoji, CRLF, hour rollover and partial alignment/raw fallback verified",
+    "preservation": "original package bytes and dirty editor body unchanged",
+    "unavailable": "empty/whitespace, missing selection/document, other route/view, root switch preserve prior clipboard"
+  },
+  "review": {
+    "phase": "separate read-only final diff and source/call-site review plus actual image inspection",
+    "checks": [
+      "copy and view share projection and speaker naming",
+      "route selection and root switching guarded synchronously",
+      "no file IO, inference, semantic decisions, new runtime task or library",
+      "format only on activation, render checks only text availability",
+      "all twelve changed full-resolution captures reviewed against UI checklist"
+    ],
+    "remainingFindings": []
+  },
+  "validation": {
+    "workspaceMainPassed": 996,
+    "childProcessPassed": 3,
+    "rawPassed": 999,
+    "failed": 0,
+    "ignored": 26,
+    "uiUnitPassed": 460,
+    "routePassed": 47,
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exitCode": 0,
+        "seconds": 0.8965163328684866,
+        "log": "/tmp/meetnote-loop53-check-0.log",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 1.8929219581186771,
+        "log": "/tmp/meetnote-loop53-check-1.log",
+        "logSha256": "0314af77b2cb488b12dfd0fbee8f512e3e864605a53397cab87c621c59e9bb02"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 120.2345175826922,
+        "log": "/tmp/meetnote-loop53-check-2.log",
+        "logSha256": "75e8baa6a88b765dacf4ad9fe8e66a2f3dd5427342514987c048086b96fa9743"
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 11.169275583233684,
+        "log": "/tmp/meetnote-loop53-check-3.log",
+        "logSha256": "b772d37284a1adab68603974d4d5ff51cf88f2c3dc6e5d6696aea170ef819ac5"
+      }
+    ],
+    "visual": {
+      "scenes": 27,
+      "appearances": 4,
+      "captures": 108,
+      "differingPixels": 0,
+      "initialExpectedDifferences": 12,
+      "copyControlScenes": 8,
+      "previouslyMergedCoremlCatalogScenes": 4,
+      "catalogSourceCommit": "597faed",
+      "unchangedBaselinePngFiles": 96,
+      "metadataUnchanged": true,
+      "updateReceiptSha256": "62f92f881bdb484e70acce5404d5e886bb2047dd61708522986aaee501f2dafb",
+      "noResourceFrameRateOrAccessibilityInspectorAcceptance": true
+    },
+    "rawEvidence": "eval-data/optimization-2026-11-02/transcript-copy",
+    "logs": {
+      "meetnote-loop53-check-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "meetnote-loop53-check-1.log": "0314af77b2cb488b12dfd0fbee8f512e3e864605a53397cab87c621c59e9bb02",
+      "meetnote-loop53-check-2.log": "75e8baa6a88b765dacf4ad9fe8e66a2f3dd5427342514987c048086b96fa9743",
+      "meetnote-loop53-check-3.log": "b772d37284a1adab68603974d4d5ff51cf88f2c3dc6e5d6696aea170ef819ac5",
+      "meetnote-loop53-red.log": "b9c8b393c1ed6fdb23f36d1d0c8d93c7fef797404ca1256106a00c43010b6c75",
+      "meetnote-loop53-green-final.log": "6a6dc0e742ea0c6d02d52c515231f0831de3af650374593079aa4510b49d95aa",
+      "meetnote-loop53-guards.log": "05f0a4e0e555503a563b2a4d21cb26f29787b1c1ec6a8b3202d758ccca32c971",
+      "meetnote-loop53-visual-red.log": "050855bad4cb6ddcd05c4359dbe963076f53b4f29c534f5396556e8c2fd71703",
+      "meetnote-loop53-visual-green.log": "6205dee67993ccf650a8ce96095663eaea2c6a793c5853a870e0c58c310a386c"
+    }
+  },
+  "primarySource": "https://support.notta.ai/hc/en-us/articles/18646448413083-Intro-to-data-export-sharing"
+}

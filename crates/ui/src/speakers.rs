@@ -138,6 +138,43 @@ pub(crate) fn transcript_turns(state: &DocumentState, locale: Locale) -> Vec<Tra
     turns.into_iter().map(|(_, turn)| turn).collect()
 }
 
+pub(crate) fn has_transcript_text(state: &DocumentState) -> bool {
+    state
+        .results
+        .transcript
+        .iter()
+        .any(|row| !row.text.trim().is_empty())
+        || state
+            .results
+            .speaker_segments
+            .iter()
+            .any(|row| !row.text.trim().is_empty())
+}
+
+/// Plain text of the same turns shown in Original, including raw fallback
+/// paragraphs. Keep paragraph bytes unchanged; add only view headers/separators.
+pub(crate) fn transcript_text(state: &DocumentState, locale: Locale) -> Option<String> {
+    if !has_transcript_text(state) {
+        return None;
+    }
+    let mut output = String::new();
+    for (index, turn) in transcript_turns(state, locale).into_iter().enumerate() {
+        if index > 0 {
+            output.push('\n');
+        }
+        output.push_str(&format!(
+            "[{}] {}\n",
+            crate::components::timestamp(turn.start_ms),
+            turn.name
+        ));
+        for paragraph in turn.paragraphs {
+            output.push_str(&paragraph.text);
+            output.push('\n');
+        }
+    }
+    Some(output)
+}
+
 /// The speakers of `state` in the order they first speak, then those only
 /// the diarization turns name. A speaker's label is the first one its
 /// segments carry; corrections label every segment of a speaker alike.
