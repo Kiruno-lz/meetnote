@@ -1,0 +1,295 @@
+{
+  "schema": "meetnote.download-publication-validation.v1",
+  "date": "2026-11-02",
+  "implementationCommit": "3e76c9c62a78bb9139405c7a8538fca70c269070",
+  "artifactIndexFixCommit": "4d1f405d1d03ec07549101b613bc1085516ce97c",
+  "decision": "sample continuing transfer byte progress at the Models owner while publishing every control/artifact boundary",
+  "behavior": {
+    "sampling": "one private pending snapshot per task; continuing Downloading bytes publish at most once per 100ms when another update arrives",
+    "boundaries": "state, artifact index/count, retry, total-byte change or byte reset bypass sampling; pending latest bytes merge before publication",
+    "subscribers": "new subscribers see the published snapshot matching the task file, not a pending sample; existing write-failure behavior is unchanged",
+    "runtime": "reuse existing per-task serialization mutex, no timer, worker, dependency or public schema field added",
+    "recovery": "resume offsets still come from actual .part length; no reliance on sampled byte counters",
+    "artifactIndex": "chunk callback index is zero-based, completed marker index is one-based; display each current artifact correctly while retaining zero-byte completion markers"
+  },
+  "redGreen": {
+    "rate": "4MiB real transfer emitted 516 events in 0.218016292s; rate regression failed before sampling",
+    "durability": "new subscribers match persisted state, pause/cancel flush latest bytes, single/bundle installed bytes and terminal task file verified",
+    "reviewFinding": "second bundle file still reported index 1; separate real two-file red/green fix committed before sampling",
+    "noInference": "accepting fixture backend only; tests verify actual HTTP/download/hash/atomic file install and state, not real model loading"
+  },
+  "protocol": {
+    "schema": "meetnote.download-publication-protocol.v1",
+    "date": "2026-11-02",
+    "baseCommit": "a0e66b2baad95b90fe6538dcc3fc8a9dc4dec15a",
+    "baselineTestSha256": "7482ed52a60ba2918a397d845b4782f92234d9813103410eb244534aedad76ce",
+    "benchmarkPatchSha256": "34747d1c1e453aaabde3208ab3187028b4d78d828aafb138f50d1502ab5fb0b1",
+    "payload": "32MiB of byte 0x6d per case; single file or two 16MiB direct files",
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "entry": "manager::tests::benchmark_download_publication_overhead",
+    "scope": "real ModelManager, loopback HTTP, file writes, fake accepting backend probe; no model inference or UI frame measurement",
+    "gates": {
+      "events": "candidate median events per case <=20% of baseline and <=ceil(elapsed/0.1)+12",
+      "speed": "candidate median total download time per case <=1.1 baseline",
+      "rss": "each candidate process peak RSS <=1.2 max baseline",
+      "facts": "all installed bytes, terminal progress/task-file state and successful probe remain correct"
+    },
+    "control": "no parallel builds or tests during timing"
+  },
+  "result": {
+    "schema": "meetnote.download-publication-result.v1",
+    "protocolSha256": "7c9460c6f267b214638b73d6c9e846fb460340ddc4ab0bae90c119e2f64e5a6e",
+    "controllerSha256": "614a49b2f96f986249d831ab821f2d71852fc2badd61bd08a384b6bb171203ce",
+    "candidate": {
+      "baseCommit": "4d1f405d1d03ec07549101b613bc1085516ce97c",
+      "sha256": "aa079db469c0c3aaebc409b70aab5d686451931a66e2c39f842d0795aabdb53c",
+      "sourcePatchSha256": "353267f0360323eddaff68acae80d769821b13c212e8f496fa33d634db9dade7"
+    },
+    "rows": [
+      {
+        "index": 0,
+        "profile": "baseline",
+        "cases": [
+          {
+            "bundle": false,
+            "bytes": 33554432,
+            "events": 4100,
+            "rateLimit": 19,
+            "seconds": 0.687792334
+          },
+          {
+            "bundle": true,
+            "bytes": 33554432,
+            "events": 4103,
+            "rateLimit": 19,
+            "seconds": 0.687460792
+          }
+        ],
+        "peakRssBytes": 89374720,
+        "peakFootprintBytes": 87278024,
+        "logSha256": "50c374047bd3af7b3db67651e3cc7bfafad5111748b59b8cebf61682fe62bb8f"
+      },
+      {
+        "index": 1,
+        "profile": "candidate",
+        "cases": [
+          {
+            "bundle": false,
+            "bytes": 33554432,
+            "events": 5,
+            "rateLimit": 13,
+            "seconds": 0.05612725
+          },
+          {
+            "bundle": true,
+            "bytes": 33554432,
+            "events": 8,
+            "rateLimit": 13,
+            "seconds": 0.047198625
+          }
+        ],
+        "peakRssBytes": 87932928,
+        "peakFootprintBytes": 85803464,
+        "logSha256": "a4154a301940ebcf3a5811c3f80afdfb71517099b701e8dcae9edbdbeae038f4"
+      },
+      {
+        "index": 2,
+        "profile": "candidate",
+        "cases": [
+          {
+            "bundle": false,
+            "bytes": 33554432,
+            "events": 5,
+            "rateLimit": 13,
+            "seconds": 0.045640458
+          },
+          {
+            "bundle": true,
+            "bytes": 33554432,
+            "events": 8,
+            "rateLimit": 13,
+            "seconds": 0.067955583
+          }
+        ],
+        "peakRssBytes": 87834624,
+        "peakFootprintBytes": 85705160,
+        "logSha256": "c05124bc9fd6d6d52e2f6fe2cb983908095b08e03ccdad69f052f0e70661836e"
+      },
+      {
+        "index": 3,
+        "profile": "baseline",
+        "cases": [
+          {
+            "bundle": false,
+            "bytes": 33554432,
+            "events": 4100,
+            "rateLimit": 20,
+            "seconds": 0.710680875
+          },
+          {
+            "bundle": true,
+            "bytes": 33554432,
+            "events": 4103,
+            "rateLimit": 20,
+            "seconds": 0.721818542
+          }
+        ],
+        "peakRssBytes": 89374720,
+        "peakFootprintBytes": 87278024,
+        "logSha256": "07b2c369c91bfd429a5187d0cf7e03430c73341c1ae983636b8d869441e5cc00"
+      }
+    ],
+    "comparison": {
+      "single": {
+        "baseline": {
+          "medianSeconds": 0.6992366045,
+          "medianEvents": 4100.0
+        },
+        "candidate": {
+          "medianSeconds": 0.050883854,
+          "medianEvents": 5.0
+        },
+        "gates": {
+          "events": true,
+          "speed": true
+        }
+      },
+      "bundle": {
+        "baseline": {
+          "medianSeconds": 0.7046396669999999,
+          "medianEvents": 4103.0
+        },
+        "candidate": {
+          "medianSeconds": 0.057577104000000004,
+          "medianEvents": 8.0
+        },
+        "gates": {
+          "events": true,
+          "speed": true
+        }
+      }
+    },
+    "rssPassed": true,
+    "passed": true,
+    "scope": "real ModelManager, loopback HTTP, file writes, fake accepting backend probe; no model inference or UI frame measurement"
+  },
+  "summarySha256": "4ca7f152875992054a721b44b25ba6c99955753af0a01c08a85a531244d9b7c8",
+  "alternatives": {
+    "consumerBatching": {
+      "source": "https://docs.rs/futures/latest/futures/stream/trait.StreamExt.html#method.ready_chunks",
+      "decision": "consumer-side batching would leave producer-side task persistence and queue creation costs; local call-graph inference"
+    },
+    "watchChannel": {
+      "source": "https://docs.rs/tokio/latest/tokio/sync/watch/index.html",
+      "decision": "watch retains only the last value; replacing ordered control notifications would change semantics and require broader runtime integration"
+    },
+    "chosen": "reuse the Models-owned update gate, sample only data progress and keep ordered control edges"
+  },
+  "review": {
+    "method": "independent read-only publication, subscriber, recovery and raw-metric review",
+    "checks": [
+      "one pending snapshot, never an unbounded pending queue",
+      "subscriber registration and task mutation retain the same serialization gate",
+      "pending samples are not written into published state before publication",
+      "control changes and successful completion flush latest bytes before notifications",
+      "failure/cancel terminal updates remain final; no publishing after terminal state",
+      "sampling does not rely on a timer to complete, and does not promise a 100ms heartbeat while network is idle",
+      "final candidate remeasured after fixing artifact indexing; pre-review measurements retained separately",
+      "same 32MiB fixture/case, B/C/C/B order, actual byte and state equality; no parallel compilation or tests during timing"
+    ],
+    "limits": [
+      "current warm filesystem and loopback HTTP, not public-network throughput or UI frame acceptance",
+      "per-process benchmark RSS includes fixture allocation; not full-app or real-model resource acceptance",
+      "on filesystem write failure, previous error/publication behavior remains; no new crash-durability or fsync guarantee"
+    ],
+    "temporaryValidationCorrection": "isolated index snapshot first used the vendor Rust 2024 formatter; workspace check rejected style; retried with project Rust 2021 and staged only index/test hunks"
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed --locked",
+    "testWorkspace": {
+      "mainPassed": 989,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 25
+    },
+    "buildWorkspace": "passed --locked",
+    "modelsFinal": {
+      "passed": 42,
+      "ignored": 1,
+      "failed": 0
+    },
+    "indexFixInIsolation": "40 model tests, workspace check and project fmt passed",
+    "logs": {
+      "red": {
+        "path": "/tmp/meetnote-loop46-red.log",
+        "sha256": "13a1b5da7de0da1b3966ac9c66731b064779dbeb940c47792e5810c40babc572"
+      },
+      "green": {
+        "path": "/tmp/meetnote-loop46-green.log",
+        "sha256": "5abd004d0ce785647c12424d869e974ade4545fe44e55d30571c03d8244b661d"
+      },
+      "final-models": {
+        "path": "/tmp/meetnote-loop46-final-models.log",
+        "sha256": "8d7f76ba917b1cb7bdf5ffad04a857b22cfab905bfa84df77d259f0cca337049"
+      },
+      "index-red": {
+        "path": "/tmp/meetnote-loop46-index-red.log",
+        "sha256": "e9cf1b1f2533738acf715463531c836adc2b75a13be656d1b372c357ccd64637"
+      },
+      "index-green": {
+        "path": "/tmp/meetnote-loop46-index-green.log",
+        "sha256": "6c23b24a819dd599cddf4e7beefe40c47b4f61c89261a0b7e83d6049db3a59f3"
+      },
+      "index-only-models": {
+        "path": "/tmp/meetnote-loop46-index-only-models.log",
+        "sha256": "56f4702461bc46b1397192692458010487d6bbad455a4d7a891082cd6e71b2db"
+      },
+      "index-only-check": {
+        "path": "/tmp/meetnote-loop46-index-only-check.log",
+        "sha256": "f018cb6dcc9dadb6b77d7217f4432ec836da2ebce5c8a72e996a619dd5b0e5c0"
+      },
+      "index-only-fmt-first": {
+        "path": "/tmp/meetnote-loop46-index-only-fmt-first.log",
+        "sha256": "e0cc2927be9a9e0f9fa00baf85343e1970f2216b873a91dde70641e9a462b914"
+      },
+      "index-only-fmt": {
+        "path": "/tmp/meetnote-loop46-index-only-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "final-candidate-build": {
+        "path": "/tmp/meetnote-loop46-final-candidate-build.log",
+        "sha256": "fa53e47fe7919a1491d70bbc2fceda7b0e7b5fcb8424ae58b1ce9fd5dd7c9607"
+      },
+      "final-measure": {
+        "path": "/tmp/meetnote-loop46-final-measure.log",
+        "sha256": "38c86ad5493703031ae72b4b295948d69005107e3cc4387b3aae7314b81f79fb"
+      },
+      "check": {
+        "path": "/tmp/meetnote-loop46-check.log",
+        "sha256": "af478c77e1c7ca01393dee629923f45842eeacdbe8b6a3d63a8f3b03cb4c421d"
+      },
+      "tests": {
+        "path": "/tmp/meetnote-loop46-tests.log",
+        "sha256": "4493a2779c4d92de8d21a447eeab9c7e3eb6798d90ac2c3edb33e4dca6547727"
+      },
+      "build": {
+        "path": "/tmp/meetnote-loop46-build.log",
+        "sha256": "bcea1df9e39d17fc5ef4bd32d6cb24cf014269cf87f7ea6f16509b8e1603e73e"
+      },
+      "fmt": {
+        "path": "/tmp/meetnote-loop46-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  },
+  "rawRoot": "eval-data/optimization-2026-11-02/download-publication",
+  "temporaryControllerSha256": "614a49b2f96f986249d831ab821f2d71852fc2badd61bd08a384b6bb171203ce",
+  "temporaryCode": "measurement controller removed; permanent ignored benchmark retains core reproduction",
+  "failedFixtures": "only owned byte-marked fixtures removed after saving logs"
+}
