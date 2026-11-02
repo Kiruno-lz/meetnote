@@ -21,6 +21,8 @@ pub use crate::route::Route;
 pub enum Overlay {
     /// On Meetings: the persisted Markdown reader, separate from edit drafts.
     SavedMarkdown,
+    /// On Models: the installed ASR profile selected for new requests.
+    SelectedModel,
     /// On Meetings: real workspace text search on the shared fixture.
     WorkspaceSearch,
     /// On Meetings: the first search result opened at its marked paragraph.
@@ -280,6 +282,29 @@ impl MainWindow {
         }
         self.view.update(cx, |root, cx| match overlay {
             Overlay::SavedMarkdown => root.set_content_mode(ContentMode::Markdown, cx),
+            Overlay::SelectedModel => {
+                // Visual projection only: keep the Settings service untouched.
+                let entry = root
+                    .installation
+                    .catalog
+                    .iter()
+                    .find(|entry| entry.model.id == "paraformer-zh")
+                    .expect("the visual fixture includes Paraformer");
+                let directory = entry
+                    .artifact_paths
+                    .first()
+                    .and_then(|path| path.parent())
+                    .expect("the fixture bundle has flat artifact paths");
+                root.settings_draft.asr_backend_id = Some("sherpa-onnx".into());
+                root.settings_draft.asr_model = Some(contracts::ModelRef {
+                    backend_id: "sherpa-onnx".into(),
+                    model_id: entry.model.id.clone(),
+                    revision: entry.model.revision.clone(),
+                    artifact_path: directory.display().to_string(),
+                    artifacts: vec![],
+                });
+                cx.notify();
+            }
             Overlay::WorkspaceSearch | Overlay::TranscriptSearchMatch => {
                 root.search.input.update(cx, |input, cx| {
                     input.set_value(
@@ -497,6 +522,16 @@ impl MainWindow {
         }
         self.view.update(cx, |root, cx| match overlay {
             Overlay::SavedMarkdown => root.set_content_mode(ContentMode::Summary, cx),
+            Overlay::SelectedModel => {
+                let saved = root
+                    .services
+                    .settings
+                    .snapshot()
+                    .expect("the cached fixture settings");
+                root.settings_draft.asr_backend_id = saved.asr_backend_id;
+                root.settings_draft.asr_model = saved.asr_model;
+                cx.notify();
+            }
             Overlay::WorkspaceSearch | Overlay::TranscriptSearchMatch => {
                 root.clear_workspace_search(cx)
             }

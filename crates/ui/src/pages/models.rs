@@ -173,7 +173,7 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
                         .debug_selector(|| "models-readiness".into())
                         .text_sm()
                         .text_color(tokens.text_muted)
-                        .child(readiness_text(&root.installation, root.ui.locale)),
+                        .child(readiness_text(root, root.ui.locale)),
                 ),
         )
         // The scrollbar stays outside the fade.
@@ -190,18 +190,16 @@ pub(crate) fn render(root: &mut RootView, cx: &mut Context<RootView>) -> impl In
         )
 }
 
-/// Whether the default models can process audio, and if not which are
-/// missing and where to get them.
-pub(crate) fn readiness_text(
-    installation: &application::InstallationState,
-    locale: Locale,
-) -> &'static str {
+/// The same configured-model prerequisites the desktop processing entry uses.
+pub(crate) fn readiness_text(root: &RootView, locale: Locale) -> &'static str {
+    let missing = crate::state::missing_models(
+        &root.installation,
+        &root.settings_draft,
+        (&root.services.asr_model, &root.services.diarization_model),
+    );
     tr(
         locale,
-        readiness_key(
-            installation.default_asr_ready,
-            installation.default_diarization_ready,
-        ),
+        readiness_key(!missing.transcription, !missing.diarization),
     )
 }
 
@@ -240,6 +238,11 @@ fn model_card(
     let tokens = *theme::tokens(cx);
     let locale = root.ui.locale;
     let model_id = entry.model.id.clone();
+    let selected = crate::state::catalog_model_selected(
+        &entry,
+        &root.settings_draft,
+        (&root.services.asr_model, &root.services.diarization_model),
+    );
     let progress = progress.filter(|progress| {
         matches!(
             progress.state,
@@ -343,6 +346,17 @@ fn model_card(
                     tokens.raised,
                 )),
         )
+        .children(selected.then(|| {
+            div()
+                .debug_selector(marked("selected"))
+                .flex_shrink_0()
+                .px(tokens.spacing.sm)
+                .py_0p5()
+                .rounded(tokens.radius.sm)
+                .bg(tokens.selection)
+                .text_xs()
+                .child(tr(locale, "model_current_selection"))
+        }))
         .child(
             div()
                 .debug_selector(marked("status"))
@@ -1108,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn the_readiness_line_names_the_default_models_that_are_not_ready() {
+    fn the_readiness_line_names_the_tasks_that_are_not_ready() {
         let mut sentences = std::collections::BTreeSet::new();
         for (asr, diarization, chinese) in [
             (true, true, "语音识别和说话人分离模型均已就绪"),
@@ -1128,13 +1142,8 @@ mod tests {
                 "语音识别和说话人分离模型尚未就绪，可在下方下载或到设置中选择",
             ),
         ] {
-            let installation = application::InstallationState {
-                default_asr_ready: asr,
-                default_diarization_ready: diarization,
-                ..Default::default()
-            };
-            assert_eq!(readiness_text(&installation, Locale::ZhCn), chinese);
-            let english = readiness_text(&installation, Locale::EnUs);
+            assert_eq!(tr(Locale::ZhCn, readiness_key(asr, diarization)), chinese);
+            let english = tr(Locale::EnUs, readiness_key(asr, diarization));
             assert!(english.is_ascii() && sentences.insert(english), "{english}");
         }
     }

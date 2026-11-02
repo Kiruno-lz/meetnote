@@ -617,6 +617,35 @@ fn catalog_artifacts_match(entry: &models::ModelAvailability, model: &contracts:
     }
 }
 
+/// The configured profile for new processing requests; selection is separate
+/// from installation and probe health. External copies do not select a card.
+pub(crate) fn catalog_model_selected(
+    entry: &models::ModelAvailability,
+    settings: &settings::AppSettings,
+    defaults: (&contracts::ModelRef, &contracts::ModelRef),
+) -> bool {
+    let (backend, chosen, default) = match entry.model.task.as_str() {
+        "asr" => (
+            settings.asr_backend_id.as_ref(),
+            settings.asr_model.as_ref(),
+            defaults.0,
+        ),
+        "diarization" => (
+            settings.diarization_backend_id.as_ref(),
+            settings.diarization_model.as_ref(),
+            defaults.1,
+        ),
+        _ => return false,
+    };
+    if backend.is_some() && chosen.is_none() {
+        return false;
+    }
+    let model = chosen.unwrap_or(default);
+    entry.model.id == model.model_id
+        && entry.model.supports_backend(&model.backend_id)
+        && catalog_artifacts_match(entry, model)
+}
+
 /// Match the references processing uses to published installation facts.
 /// References outside the catalog's artifact paths remain the backend
 /// preflight's responsibility; a matching id alone does not prove readiness.
@@ -862,6 +891,11 @@ mod tests {
             (models::ModelInstallState::Installed, false),
         ] {
             installation.catalog[0].install_state = state;
+            assert!(catalog_model_selected(
+                &installation.catalog[0],
+                &settings,
+                (&external, &external)
+            ));
             assert_eq!(
                 missing_models(&installation, &settings, (&external, &external)).diarization,
                 missing,
