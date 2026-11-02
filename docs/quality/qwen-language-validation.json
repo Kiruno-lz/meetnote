@@ -1,0 +1,229 @@
+{
+  "schema": "meetnote.qwen-language-validation.v1",
+  "date": "2026-11-02",
+  "implementationCommit": "e389761de8954ea7d2093e2376392904892a57f1",
+  "decision": "honor explicit Qwen language requests, preserve automatic output and retain candidate-only model status",
+  "semantics": {
+    "languageNames": "30 official canonical names and corresponding language codes; existing UI en-US/zh-CN aliases; case-insensitive, whitespace trimmed",
+    "automatic": "None or auto omit the SDK language option",
+    "unsupported": "typed NotImplemented before native recognizer construction; only validated static names cross the C-string boundary",
+    "paths": "whole-file and every window create streams through the same helper; Paraformer/SenseVoice unchanged"
+  },
+  "redGreen": {
+    "red": "actual SDK stream held an empty option for request en",
+    "green": "SDK option English/Chinese/French and absent None/auto verified on a real loaded model",
+    "actualInference": "explicit en and zh-CN each pass whole-file and single-window inference with equal text and positive source-bounded times",
+    "automatic": "34 full-case predictions exactly equal original Qwen baseline",
+    "explicit": "34 successful full-case predictions, repeated facts exact; seven cases differ from automatic"
+  },
+  "protocol": {
+    "schema": "meetnote.qwen-language-protocol.v1",
+    "date": "2026-11-02",
+    "baseCommit": "9cf751a87ed0567ea5c7f2185db5a0c69e5f58f3",
+    "sourcePatchSha256": "aed721162b59af40cd662a007bd304b40c34626fb1ff4b75b37f56d3436d67d6",
+    "runnerSha256": "1287e406fb4d639df77c582e73f98184b6fbc2184b1179df12e80d4c85818e12",
+    "harnessSha256": "e93904b478140a0fd68cb6cf56d11805b6c54fc627211c456c18852d68a24dba",
+    "casesSha256": "52b1364967a8837acacaf4a1dcd1b14e99130cef837de13d24c467f70e6a8589",
+    "configs": {
+      "automatic": "3527ff9f7bf88118c70b17637c44501db8c92f3d26ee7e3b7653342a94e7418e",
+      "explicit": "51061ee86743a5286e1efd99bbec4afd824acdd580e5ce14edde08d598f9d474"
+    },
+    "baselinePredictionSha256": "c09b6d6ccd4a10c08e3576d6a5fd4f503be3b7989a25d5cf1d403d77d6aaec1f",
+    "assetsSha256": "de84acda6ad4d69321fe9e71c36815d783350b76f0daa2e1c4fc4c485a034b8a",
+    "order": [
+      "automatic",
+      "explicit"
+    ],
+    "repeats": 2,
+    "cases": 17,
+    "mode": "whole file, CPU four threads, reload per call",
+    "gates": {
+      "automatic": "all 34 canonical transcripts equal original unforced Qwen baseline",
+      "explicit": "all 34 calls succeed with positive source-bounded integer times and exact repeat facts",
+      "stream": "actual SDK options receive canonical English, Chinese and French names; None/auto omit option",
+      "unsupported": "return typed NotImplemented for unsupported language before passing a C string"
+    },
+    "quality": "recompute corpus CER/raw+normalized WER diagnostically; no model promotion or gate relaxation based on this used regression data",
+    "resources": "retain per-run RSS and timing observations; no performance claim or new speed threshold"
+  },
+  "result": {
+    "schema": "meetnote.qwen-language-result.v1",
+    "protocolSha256": "3422edf91891864351efa765707968a81d65e2d5540d90a57ffcfbe5b85a1a4a",
+    "scorerSha256": "05c4219fe3fa9efd8205a2fe116504bacf9a32aa049d3bdffe5001573e062029",
+    "profiles": {
+      "automatic": {
+        "groups": {
+          "zh/native": {
+            "metric": "cer",
+            "errorRate": 0.15625,
+            "rawErrorRate": 0.15625,
+            "medianRtf": 0.27209502451819667,
+            "calls": 12
+          },
+          "en/native": {
+            "metric": "normalized_wer",
+            "errorRate": 0.07272727272727272,
+            "rawErrorRate": 0.10810810810810811,
+            "medianRtf": 0.3500147860230697,
+            "calls": 12
+          },
+          "en/ami-oracle-nonoverlap": {
+            "metric": "normalized_wer",
+            "errorRate": 0.14,
+            "rawErrorRate": 0.22105263157894736,
+            "medianRtf": 0.4444845046042003,
+            "calls": 10
+          }
+        },
+        "reportSha256": "5ea86ffbe7e8525e12fdc857349c62d6bc93be849d41240f4ff803db4a5651f9",
+        "predictionSha256": "efa9028b5ebf63156354853d968bbd65a9787670762a8121f79f8495165882df",
+        "peakRssBytes": 2308718592
+      },
+      "explicit": {
+        "groups": {
+          "zh/native": {
+            "metric": "cer",
+            "errorRate": 0.15625,
+            "rawErrorRate": 0.15625,
+            "medianRtf": 0.26466781733308953,
+            "calls": 12
+          },
+          "en/native": {
+            "metric": "normalized_wer",
+            "errorRate": 0.08181818181818182,
+            "rawErrorRate": 0.12612612612612611,
+            "medianRtf": 0.35349678824536546,
+            "calls": 12
+          },
+          "en/ami-oracle-nonoverlap": {
+            "metric": "normalized_wer",
+            "errorRate": 0.15,
+            "rawErrorRate": 0.23157894736842105,
+            "medianRtf": 0.4455073634008663,
+            "calls": 10
+          }
+        },
+        "reportSha256": "9b50c301df8ad17739fac7c9bf310b3e75d112d3599d54da07466e66f2bd5109",
+        "predictionSha256": "b96980591c020e266c7190203837e869087a88e2c22f06d832eb730dfbf46020",
+        "peakRssBytes": 2463891456
+      }
+    },
+    "gates": {
+      "automaticExactToOriginal": true,
+      "completeSuccessfulCoverage": true,
+      "positiveSourceBoundedTimes": true,
+      "repeatFactsExact": true
+    },
+    "changedCasesWithExplicitLanguage": [
+      "fleurs-zh-1847",
+      "fleurs-en-1980",
+      "fleurs-en-1914",
+      "ami-ES2002a-0",
+      "ami-ES2002a-1",
+      "ami-ES2002a-3",
+      "ami-ES2002a-4"
+    ],
+    "qualityAcceptance": "not_assessed; diagnostic scores on previously used clips, no model promotion",
+    "performanceAcceptance": "not_assessed"
+  },
+  "summarySha256": "8d2a425d59f1d595b9731938392591f620a9decb26af3cc2eaf91aa081ac46d2",
+  "sourceNames": {
+    "date": "2026-11-02",
+    "upstreamSha256": "b37fb4140e6d9be85f2ecb1552ed16136eb98a57f44b402f8b0b213cb6df2a82",
+    "canonicalNames": 30,
+    "exactSetMatch": true
+  },
+  "review": {
+    "method": "independent source/call-site and receipt review after tests",
+    "checks": [
+      "both production create_stream call sites use the shared helper",
+      "language strings are canonical validated constants, not untrusted strings passed to CString::new",
+      "unsupported language validation occurs in config creation before constructing a native recognizer",
+      "30 canonical names exactly match the recorded official source snapshot",
+      "only known UI regional aliases are accepted; no guessed language-prefix truncation",
+      "automatic output and all six source model hashes match earlier verified assets",
+      "case/config/runner snapshots, coverage and repeated canonical facts checked independently",
+      "no new public settings, dependencies or session scheduler; catalog/default unchanged"
+    ],
+    "quality": "explicit input may change recognition: native English normalized WER 7.2727% ->8.1818%, AMI 14% ->15%, Chinese CER unchanged 15.625%; diagnostic only, no promotion or quality-improvement claim",
+    "harnessCorrection": "first Chinese functional invocation guessed a nonexistent sample path and failed before inference; retry uses the hash-verified manifest path with unchanged test"
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed --locked",
+    "testWorkspace": {
+      "mainPassed": 986,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 24
+    },
+    "buildWorkspace": "passed --locked",
+    "sdkOptionTest": "passed separately on verified model and explicit audio path; option configuration, not French inference",
+    "realInference": "four explicit whole/window calls plus 68 benchmark calls passed",
+    "logs": {
+      "language-red": {
+        "path": "/tmp/meetnote-loop45-language-red.log",
+        "sha256": "a6d489f862bdff2d55ab99d933a5cdb723f827e1d0bac8d9256c8888ba601af8"
+      },
+      "final-unit": {
+        "path": "/tmp/meetnote-loop45-final-unit.log",
+        "sha256": "41a15353742166fc1fb107c0679b50a2404257fbe27bbf0fbf6f71456e8403b7"
+      },
+      "final-stream-green": {
+        "path": "/tmp/meetnote-loop45-final-stream-green.log",
+        "sha256": "fb874b5db662cd23bb70900a5de4615bba95e3849c46d62fd80cc5459bc9ce37"
+      },
+      "real-english": {
+        "path": "/tmp/meetnote-loop45-real-english.log",
+        "sha256": "3e367a51b139472a63d9efdf54e34402b3d6a1bb5fd063b5dc086a9ec6d64454"
+      },
+      "real-chinese": {
+        "path": "/tmp/meetnote-loop45-real-chinese.log",
+        "sha256": "e290635ed1287ce2d3b1dcd38220e59ab4c634a6d39671798374ba275b5b8af8"
+      },
+      "real-chinese-retry": {
+        "path": "/tmp/meetnote-loop45-real-chinese-retry.log",
+        "sha256": "c19ed18e700c9ff78f90ff615a31e66bf10d43c0adb9ac81bd90d736077ac2a1"
+      },
+      "check": {
+        "path": "/tmp/meetnote-loop45-check.log",
+        "sha256": "157c345157aa3e4e760cf2e756d2dd67961fcbe65857e1d2c70144d40b79bda3"
+      },
+      "tests": {
+        "path": "/tmp/meetnote-loop45-tests.log",
+        "sha256": "2e118815c505bd873e969dc78629f77b647da106440ec184892038800cae0dd7"
+      },
+      "build": {
+        "path": "/tmp/meetnote-loop45-build.log",
+        "sha256": "d2cbcc4c37eead2c5a3ff3bbc28d0c0ef77f1ec6b1fc0d6c696cd69f2ea6b905"
+      },
+      "fmt": {
+        "path": "/tmp/meetnote-loop45-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "cleanup-fmt": {
+        "path": "/tmp/meetnote-loop45-cleanup-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "runner-build": {
+        "path": "/tmp/meetnote-loop45-runner-build.log",
+        "sha256": "9e79a1121cf8f623191fb1629afc92b41b849bacd6a296b83c048d6c8fdddb63"
+      },
+      "auto": {
+        "path": "/tmp/meetnote-loop45-auto.log",
+        "sha256": "46873f0bc387dea57860305f24cc539f50583a6b36183bf74e86bd038d18a941"
+      },
+      "explicit": {
+        "path": "/tmp/meetnote-loop45-explicit.log",
+        "sha256": "2e3dd0bf6f8e5ead83d04843beb50a3d838448a9f83d319bf0e75a227b469d40"
+      },
+      "score": {
+        "path": "/tmp/meetnote-loop45-score.log",
+        "sha256": "8d2a425d59f1d595b9731938392591f620a9decb26af3cc2eaf91aa081ac46d2"
+      }
+    }
+  },
+  "temporaryScorerSha256": "05c4219fe3fa9efd8205a2fe116504bacf9a32aa049d3bdffe5001573e062029",
+  "rawRoot": "eval-data/optimization-2026-11-02/qwen-language",
+  "temporaryCode": "runner example and scorer removed; core method retained in research guide"
+}

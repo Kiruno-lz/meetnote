@@ -173,7 +173,7 @@ impl AsrWindowSession for SherpaWindowSession {
             }
             return Ok(());
         }
-        let stream = self.recognizer.create_stream();
+        let stream = recognition_stream(&self.recognizer, &self.request)?;
         stream.accept_waveform(window.sample_rate as i32, &window.samples);
         self.recognizer.decode(&stream);
         if context.is_cancelled() {
@@ -503,7 +503,7 @@ fn transcribe_sync(
             request.model.model_id
         ),
     })?;
-    let stream = recognizer.create_stream();
+    let stream = recognition_stream(&recognizer, &request)?;
     stream.accept_waveform(audio.sample_rate as i32, &audio.samples);
     recognizer.decode(&stream);
     if context.is_cancelled() {
@@ -538,6 +538,81 @@ fn transcribe_sync(
             text,
         }],
     })
+}
+
+fn recognition_stream(
+    recognizer: &OfflineRecognizer,
+    request: &AsrRequest,
+) -> Result<sherpa_onnx::OfflineStream, BackendError> {
+    let language = if model_family(&request.model) == ModelFamily::Qwen3Asr {
+        qwen_language(request.language.as_deref())?
+    } else {
+        None
+    };
+    let stream = recognizer.create_stream();
+    if let Some(language) = language {
+        stream.set_option("language", language);
+    }
+    Ok(stream)
+}
+
+fn qwen_language(language: Option<&str>) -> Result<Option<&'static str>, BackendError> {
+    let Some(language) = language else {
+        return Ok(None);
+    };
+    let language = language.trim();
+    if language.eq_ignore_ascii_case("auto") {
+        return Ok(None);
+    }
+    let language_code = if language.eq_ignore_ascii_case("en-US") {
+        "en"
+    } else if language.eq_ignore_ascii_case("zh-CN") {
+        "zh"
+    } else {
+        language
+    };
+    // Qwen prompts use canonical English names, while Workspace stores language codes.
+    let supported = [
+        ("zh", "Chinese"),
+        ("en", "English"),
+        ("yue", "Cantonese"),
+        ("ar", "Arabic"),
+        ("de", "German"),
+        ("fr", "French"),
+        ("es", "Spanish"),
+        ("pt", "Portuguese"),
+        ("id", "Indonesian"),
+        ("it", "Italian"),
+        ("ko", "Korean"),
+        ("ru", "Russian"),
+        ("th", "Thai"),
+        ("vi", "Vietnamese"),
+        ("ja", "Japanese"),
+        ("tr", "Turkish"),
+        ("hi", "Hindi"),
+        ("ms", "Malay"),
+        ("nl", "Dutch"),
+        ("sv", "Swedish"),
+        ("da", "Danish"),
+        ("fi", "Finnish"),
+        ("pl", "Polish"),
+        ("cs", "Czech"),
+        ("fil", "Filipino"),
+        ("fa", "Persian"),
+        ("el", "Greek"),
+        ("ro", "Romanian"),
+        ("hu", "Hungarian"),
+        ("mk", "Macedonian"),
+    ];
+    supported
+        .into_iter()
+        .find(|(code, name)| {
+            code.eq_ignore_ascii_case(language_code) || name.eq_ignore_ascii_case(language)
+        })
+        .map(|(_, name)| Some(name))
+        .ok_or_else(|| {
+            BackendError::not_implemented(format!("unsupported Qwen3-ASR language: {language:?}"))
+        })
 }
 
 fn build_config(
@@ -578,6 +653,7 @@ fn build_config(
             };
         }
         ModelFamily::Qwen3Asr => {
+            qwen_language(request.language.as_deref())?;
             let encoder = require_any_file(&directory, QWEN3_ENCODER_FILES)?;
             let decoder = require_any_file(&directory, QWEN3_DECODER_FILES)?;
             config.model_config.qwen3_asr = OfflineQwen3ASRModelConfig {
@@ -866,6 +942,59 @@ mod tests {
             fs::write(path, b"layout-fixture").unwrap();
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn qwen_languages_preserve_explicit_requests_and_reject_unknown_values() {
+        for (input, expected) in [
+            ("en-US", "English"),
+            ("zh-CN", "Chinese"),
+            ("yue", "Cantonese"),
+            ("ja", "Japanese"),
+            ("fil", "Filipino"),
+            (" eNgLiSh ", "English"),
+        ] {
+            assert_eq!(qwen_language(Some(input)).unwrap(), Some(expected));
+        }
+        assert_eq!(qwen_language(None).unwrap(), None);
+        assert_eq!(qwen_language(Some("AUTO")).unwrap(), None);
+        for unsupported in ["", "xx", "en\0", "en-US\0", "not-a-language"] {
+            assert_eq!(
+                qwen_language(Some(unsupported)).unwrap_err().code,
+                BackendErrorCode::NotImplemented
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires MEETNOTE_QWEN3_ONNX_MODEL_DIR and MEETNOTE_QWEN3_ONNX_AUDIO"]
+    fn real_qwen_stream_receives_the_requested_language() {
+        let root = std::env::var("MEETNOTE_QWEN3_ONNX_MODEL_DIR").unwrap();
+        let audio = std::env::var("MEETNOTE_QWEN3_ONNX_AUDIO").unwrap();
+        assert!(!read_audio_mono_16k(&audio).unwrap().samples.is_empty());
+        let request = AsrRequest {
+            audio_path: audio,
+            model: model_ref("qwen3-asr-0.6b", Path::new(&root)),
+            language: Some("en".into()),
+            device: ComputeDevice::Cpu,
+        };
+        let config = build_config(&request, 4).unwrap();
+        let recognizer = OfflineRecognizer::create(&config).unwrap();
+        for (language, expected) in [
+            (Some("en"), Some("English")),
+            (Some("zh-CN"), Some("Chinese")),
+            (Some("fr"), Some("French")),
+            (Some("auto"), None),
+            (None, None),
+        ] {
+            let request = AsrRequest {
+                language: language.map(Into::into),
+                ..request.clone()
+            };
+            let stream = recognition_stream(&recognizer, &request).unwrap();
+            assert_eq!(stream.has_option("language"), expected.is_some());
+            assert_eq!(stream.get_option("language"), expected.unwrap_or_default());
+        }
     }
 
     #[test]
