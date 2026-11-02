@@ -170,6 +170,22 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 
 32 次成功，各配置内重复文本一致；绝对速度和内存门通过，质量门失败，不推进该自动语种配置。逐例检查发现 `ami-TS3003b-5` 的英文 gold 被 Candle 两次识别为 `Dutch` 并输出荷兰语，产生 25/32 错误词；Whisper 为 6/32。该观察支持下一步单独测试库已有显式英文选项，不证明错误由口音、权重或框架引起，也不把本轮配置对照扩张为模型整体优劣。独立 review 重算 32 份评分、组分子/分母、RTF 与重复一致性，逐字节比较裁剪 PCM 与原录音范围，复核全部结果、日志、模型与 executable 指纹。见[新会议筛查回执](../quality/fresh-ami-screen-validation.json)；临时编排删除，原始证据保留于 `eval-data/optimization-2026-11-02/fresh-ami-screen/`。这些片段此后属于已知数据，不能再作独立验收样本。
 
+### 显式语种的诊断对照
+
+针对上述荷兰语误识别，仅使用同一固定源码已有的 `TranscribeOptions::with_language("english")`，不修改 library 或权重。一个隔离 executable 在 BF16/Metal 上按自动 → 英文 → 英文 → 自动执行相同 8 段，共 32 次独立进程。推理前冻结：自动文本须逐项重现前轮；每轮英文 WER 不高于自动模式，且不高于冻结 Whisper WER 加 1 个百分点；英文 RTF 中位数 ≤0.5、每次 RTF ≤1、RSS ≤4 GiB。此处已经使用已知失败定位，只是诊断，不增加独立样本数。
+
+| 指标 | 自动语种 | 显式英文 |
+| --- | ---: | ---: |
+| normalized WER（两轮相同） | 45/227 = 19.8238% | 25/227 = 11.0132% |
+| 加载加推理 RTF 中位数 | 0.2548 | 0.2449 |
+| 最大单次 RTF | 0.6471 | 0.3432 |
+| 峰值 RSS | 3,842,523,136 B | 3,840,835,584 B |
+| 峰值 footprint | 3,903,851,856 B | 3,902,115,128 B |
+
+32 次成功，自动文本与前轮完全相同，模式内重复文本一致，各项冻结门通过。误识别片段由 25/32 降为 5/32 错误词；强制选项返回的 `language` 为库内部标记 `forced`，并非检测出的语言代码，未来 adapter 必须依据已验证请求归一化。新 executable 的首次自动调用 12.8714 秒，未定位慢因，不能从中宣称预热或冷启动改进。
+
+显式英文在这些已知片段上的 WER 优于前轮 Whisper 的 14.0969%，但 RTF 中位数约为其 2.35 倍、峰值 RSS 约 5 倍。保留该选项作为后续候选配置，不更改产品 provider、catalog 或默认值；新增会议样本的质量、资源与 contract 验证仍须另做。独立 review 重算 32 份编辑距离、corpus 分子/分母与 RTF，核对重复文本、逐文件 hash、同 executable 对照及源码恢复，见[显式语种回执](../quality/qwen-candle-language-validation.json)。临时 example、workspace 配置和 controller 已删除，上游源码恢复干净；原始结果保留于 `eval-data/optimization-2026-11-02/qwen-candle-language/`。
+
 ### 优化次序与边界
 
 先修复崩溃、词拼接和设备标识，再依据同一输入的质量/速度选择模型。推理窗口属于 backend 技术状态，不能生成文档树节点或语义边界。输入 sample 连续性、context 与 valid core 分开验证；文本无可靠时间戳时不能承诺精确 speaker 归属。
@@ -651,6 +667,8 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 ignored 资源测试未被常规 suite 自动执行；真实推理由独立 runner 显式提供模型与音频完成。此次不据单元测试或短样本宣称 DER、词时间、20 小时资源或发布质量通过。
 
 ### 附录：核心核对方法
+
+显式语种对照固定同一个 runner，只在调用前选择 `TranscribeOptions::default()` 或 `.with_language("english")`；`Device::new_metal(0)` 后同步，`AsrInference::load(model_dir, device.clone())` 和 `transcribe(audio_path, options)` 后分别同步，记录加载、推理和总耗时。每次独立进程只处理一个显式模型路径和音频路径，JSON 保存 requested/detected language、文本与原始输出；外层 `time -l` 记录 RSS/footprint。推理前恢复上游源文件并保留编译后的 runner 与 harness SHA，SIGINT/SIGTERM/超时均结束子进程组并回收；本轮未将取消路径的源码检查声称为取消验收。
 
 新会议筛查复用 `scripts/audio-eval/prepare_ami_asr.py`，仅替换 meeting ID 与实测源 WAV SHA-256；源音频与 manual 1.6.2 仍先校验。每个裁剪保存原 sample 范围、词 ID 和 PCM hash；每次独立进程由 `time -l` 测资源，超时终止进程组并回收，结果逐次落盘。推理前保存 cases、配置、评分器、模型与 executable 指纹，推理后重算归一化词编辑距离并比较原 PCM；prepared patch 与冻结协议保留在对应忽略目录。
 

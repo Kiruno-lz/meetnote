@@ -1,0 +1,124 @@
+{
+  "schema": "meetnote.qwen-candle-language-validation.v1",
+  "date": "2026-11-02",
+  "protocol": {
+    "date": "2026-11-02",
+    "scope": "diagnostic on the eight now-known TS3003b crops from loop55; not independent acceptance",
+    "sourceCommit": "ec175bb997b2dcc40f272d2db6821fabf983fd42",
+    "upstream": "c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc",
+    "runnerSha256": "9df66c96fd6d68d79a012378e4cf9b91c52b87e59d5ecac0986ec91b0be16c91",
+    "harnessSha256": "881944a96ebd2c75c36d05da7f661444f54958080cca7e0650fd3228db01adf2",
+    "casesSha256": "d7a3cfe1303f47dffc513d16b8a598bb5bb349f17df616cf4aed08d8eb62bb9f",
+    "previousResultSha256": "3fd8e7ffd1487d3a1d48d975d75a3e910e407a8bf8040e5ebe33bfb6c640e366",
+    "order": [
+      "auto",
+      "english",
+      "english",
+      "auto"
+    ],
+    "change": "only TranscribeOptions::default().with_language(\"english\") versus default automatic detection; same executable and original BF16 library",
+    "modelFingerprints": {
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/runner": "5e1d911376c45322a73ea2c82e78d2d86781dda376658188047d3b214cfd41e6",
+      "/Users/kiruno/Documents/_code/vibe/meetnote/target/release/examples/asr_benchmark": "af1cda6594596d32041832835a92f829c5d2acc9990fca97a743a25c116deae4",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/models/asr/whisper-large-v3-turbo-q5/ggml-large-v3-turbo-q5_0.bin": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/config.json": "76d3ae4601ce939830b2517f4a6cadb86cc51316c3900af6b020b051c21a478c",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/merges.txt": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/model.safetensors": "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/preprocessor_config.json": "45e120a4eda2c20c5d7f2ea9354e63536bf35e27aa573fb7cdf78017b378770d",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/tokenizer.json": "fd7afaac73d4df2caafa7657606d8a031295c85bb89f48850bf34ccc4e72faf4",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/tokenizer_config.json": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    },
+    "gates": {
+      "reproduction": "automatic predictions must equal prior loop55 predictions",
+      "quality": "each English pass normalized WER <= automatic corpus WER and <= frozen Whisper reference WER+1pp",
+      "speed": "English median load+infer RTF <=0.5 and every call RTF<=1",
+      "memory": "English peak RSS <=4GiB"
+    },
+    "runtime": "fresh process/model per call; explicit Metal/synchronize,512 token cap; serialized, first call retained, no purge; SIGINT/SIGTERM/timeout kill child process group and wait"
+  },
+  "protocolSha256": "8e0751a82f3573b462717b7d82fb6038c2c14c843308e554db7d8195169d0c33",
+  "summary": {
+    "auto": {
+      "errors": 90,
+      "referenceUnits": 454,
+      "normalizedWER": 0.19823788546255505,
+      "medianRTF": 0.25476389022770396,
+      "maxRTF": 0.6471185624937154,
+      "maxRssBytes": 3842523136,
+      "maxFootprintBytes": 3903851856,
+      "repeatedTextEqual": true
+    },
+    "english": {
+      "errors": 50,
+      "referenceUnits": 454,
+      "normalizedWER": 0.11013215859030837,
+      "medianRTF": 0.24492917954766402,
+      "maxRTF": 0.34317853053097347,
+      "maxRssBytes": 3840835584,
+      "maxFootprintBytes": 3902115128,
+      "repeatedTextEqual": true
+    }
+  },
+  "gates": {
+    "reproduction": true,
+    "quality": true,
+    "speed": true,
+    "memory": true
+  },
+  "passed": true,
+  "calls": 32,
+  "uniqueCases": 8,
+  "uniqueReferenceWords": 227,
+  "comparison": "automatic versus explicit English in one newly compiled executable, BF16 weights unchanged; automatic text exactly equals previous screen",
+  "languageSentinel": "forced means requested language was forced; do not publish it as an actual language code",
+  "slowFirstAutomaticCallSeconds": 12.871188208,
+  "slowFirstCallCause": "not localized; preserve original measured value below",
+  "firstCall": {
+    "block": 0,
+    "mode": "auto",
+    "caseId": "ami-TS3003b-0",
+    "text": "Now we're going, into the functional design. Important thing of this phase is that we're going to. Try to get an agreement about the user requirements, technical, function design, and the working design.",
+    "language": "English",
+    "seconds": 12.871188208,
+    "rtf": 0.6471185624937154,
+    "rssBytes": 3840425984,
+    "footprintBytes": 3833449784,
+    "quality": {
+      "errors": 0,
+      "referenceUnits": 35,
+      "method": "levenshtein",
+      "metric": "normalized_wer",
+      "normalizer": "whisper-normalizer-0.1.15"
+    },
+    "outputSha256": "242fbb665cbf96c9c0f3c56f0deabfcf0d0b9b22ea6db1e6cb00c4c352e946e7",
+    "logSha256": "6b07af45e52061a9c27d2e324f52c5cb76d3d86bc69579e58bd49ce35fc92ea7"
+  },
+  "decision": "retain positive explicit-language diagnostic; no provider/default change; evaluate new meeting samples before advancing",
+  "limitations": [
+    "these eight crops were selected for diagnosis after observing a failure; not independent heldout evidence",
+    "Whisper comparison uses frozen immediately preceding screen, not concurrent remeasurement",
+    "explicit English remains about 2.35x slower and 5x peak RSS than that Whisper configuration on these crops",
+    "no timestamp, long audio, diarization, cancellation acceptance or production provider test"
+  ],
+  "review": {
+    "phase": "separate read-only post-trial review",
+    "checks": [
+      "recompute all 32 normalized word edit distances and denominators",
+      "verify unique block/case keys and every output/log hash",
+      "recompute corpus weighted scores and median RTF",
+      "verify both automatic passes reproduce loop55 text exactly",
+      "verify all model fingerprints and same runner for both modes",
+      "confirm forced output language sentinel, not a detected language code",
+      "retain first new-runner slow call without inferring cause",
+      "verify upstream source restored clean before inference"
+    ],
+    "remainingFindings": [],
+    "decision": "retain explicit-language diagnostic as positive; no provider/default promotion or independent heldout claim"
+  },
+  "rawEvidence": "eval-data/optimization-2026-11-02/qwen-candle-language",
+  "resultSha256": "7b0af66a3dd807497bdd2bc6e6ed2bf91fde4967f310a27c0c53b1e89d411810",
+  "reviewSha256": "42593d0d0f97179e5f870bdc6ec45ac4d6b33811b2c30e9c798041a0930fe969",
+  "upstreamSourceRestoredClean": true,
+  "productCodeChanged": false
+}
