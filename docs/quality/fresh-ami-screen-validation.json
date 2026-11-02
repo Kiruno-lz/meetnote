@@ -1,0 +1,169 @@
+{
+  "schema": "meetnote.fresh-ami-screen-validation.v1",
+  "date": "2026-11-02",
+  "sourceCommit": "85dcb1a35d19bdf89d4ceb162d8d28dc8ed53397",
+  "decision": "Reject advancement of this automatic-language Candle configuration; the explicit-English Whisper configuration is better on these eight crops. Evaluate an explicit-English Candle hint separately before drawing model-wide conclusions.",
+  "protocol": {
+    "date": "2026-11-02",
+    "sourceCommit": "85dcb1a35d19bdf89d4ceb162d8d28dc8ed53397",
+    "scope": "new-to-project TS3003b, official AMI scenario-only evaluation set, 8 oracle nonoverlap crops/101.12s; not hidden from model pretraining",
+    "selection": "unchanged prepare_ami_asr.py algorithm, first two eligible original segments per speaker; 3-20s >=6 words,100ms padding, no other lexical overlap; TS3003a preparation failed for speaker B before inference, retain failure",
+    "casesSha256": "d7a3cfe1303f47dffc513d16b8a598bb5bb349f17df616cf4aed08d8eb62bb9f",
+    "preparationSourceSha256": "7b262f937de8b3da2b26ca98348d7b55d1c24454d09e25e216d990563c13d37b",
+    "order": [
+      "whisper",
+      "candle",
+      "candle",
+      "whisper"
+    ],
+    "perCall": "fresh process and model load; serialized; no compiles during timing; no cache purge; retain first call",
+    "configurations": {
+      "whisper": "existing production whisper-rs turbo-q5, Metal,4 threads, explicit en",
+      "candle": "pinned qwen3-asr-rs c5ef096 BF16,Metal,auto-language,512 tokens, synchronized load+infer; no provider"
+    },
+    "gates": {
+      "quality": "corpus-weighted normalized English WER candle <= whisper + 1 percentage point each repeated pass",
+      "speed": "candidate median load+infer RTF <=0.5 and every candidate call RTF<=1",
+      "memory": "every candidate process peak RSS <=4GiB"
+    },
+    "fingerprints": {
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/runner": "5e1d911376c45322a73ea2c82e78d2d86781dda376658188047d3b214cfd41e6",
+      "/Users/kiruno/Documents/_code/vibe/meetnote/target/release/examples/asr_benchmark": "af1cda6594596d32041832835a92f829c5d2acc9990fca97a743a25c116deae4",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/models/asr/whisper-large-v3-turbo-q5/ggml-large-v3-turbo-q5_0.bin": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/config.json": "76d3ae4601ce939830b2517f4a6cadb86cc51316c3900af6b020b051c21a478c",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/merges.txt": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/model.safetensors": "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/preprocessor_config.json": "45e120a4eda2c20c5d7f2ea9354e63536bf35e27aa573fb7cdf78017b378770d",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/tokenizer.json": "fd7afaac73d4df2caafa7657606d8a031295c85bb89f48850bf34ccc4e72faf4",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/tokenizer_config.json": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+    },
+    "normalizer": "existing asr_benchmark.speech_normalized_score,whisper-normalizer0.1.15",
+    "limitations": [
+      "single meeting, 8 non-overlap oracle crops, no Chinese, word timestamp, long-audio or diarization acceptance",
+      "route configuration comparison, not isolated tensor/backend comparison",
+      "first exposure in this project only; becomes known data after this run"
+    ],
+    "sources": [
+      "https://groups.inf.ed.ac.uk/ami/corpus/datasets.shtml",
+      "https://groups.inf.ed.ac.uk/ami/corpus/",
+      "https://groups.inf.ed.ac.uk/ami/"
+    ]
+  },
+  "protocolSha256": "58563e09639800a32f952ea3a2c7ffef16c05da323bc3ef50c818f8339887ce5",
+  "summary": {
+    "whisper": {
+      "errors": 64,
+      "referenceUnits": 454,
+      "normalizedWER": 0.14096916299559473,
+      "medianRTF": 0.10414788572681272,
+      "maxRTF": 0.3083089692477876,
+      "maxRssBytes": 765296640,
+      "maxFootprintBytes": 744932696,
+      "repeatedTextEqual": true
+    },
+    "candle": {
+      "errors": 90,
+      "referenceUnits": 454,
+      "normalizedWER": 0.19823788546255505,
+      "medianRTF": 0.2500250643692403,
+      "maxRTF": 0.34946626106194695,
+      "maxRssBytes": 3842359296,
+      "maxFootprintBytes": 3902082336,
+      "repeatedTextEqual": true
+    }
+  },
+  "gates": {
+    "quality": false,
+    "speed": true,
+    "memory": true
+  },
+  "passed": false,
+  "calls": 32,
+  "uniqueCases": 8,
+  "uniqueReferenceWords": 227,
+  "uniqueAudioSeconds": 101.12,
+  "perCaseErrorsPerPass": [
+    {
+      "caseId": "ami-TS3003b-0",
+      "whisper": 1,
+      "candle": 0
+    },
+    {
+      "caseId": "ami-TS3003b-1",
+      "whisper": 6,
+      "candle": 4
+    },
+    {
+      "caseId": "ami-TS3003b-2",
+      "whisper": 3,
+      "candle": 4
+    },
+    {
+      "caseId": "ami-TS3003b-3",
+      "whisper": 3,
+      "candle": 2
+    },
+    {
+      "caseId": "ami-TS3003b-4",
+      "whisper": 3,
+      "candle": 0
+    },
+    {
+      "caseId": "ami-TS3003b-5",
+      "whisper": 6,
+      "candle": 25
+    },
+    {
+      "caseId": "ami-TS3003b-6",
+      "whisper": 0,
+      "candle": 4
+    },
+    {
+      "caseId": "ami-TS3003b-7",
+      "whisper": 10,
+      "candle": 6
+    }
+  ],
+  "review": {
+    "phase": "separate read-only post-trial recomputation",
+    "checks": [
+      "32 unique block/case calls and every prediction/log hash",
+      "independently instantiate pinned normalizer and recompute Levenshtein units",
+      "every cropped PCM byte equals original source range",
+      "corpus weighted scores and median RTF recomputed",
+      "both repeats have identical text for each mode/case",
+      "all runner and model fingerprints unchanged",
+      "quality gate fails; absolute speed and memory gates passing do not overturn rejection"
+    ],
+    "remainingFindings": [],
+    "decision": "Reject advancement of this automatic-language Candle configuration; the explicit-English Whisper configuration is better on these eight crops. Evaluate an explicit-English Candle hint separately before drawing model-wide conclusions.",
+    "observation": {
+      "caseId": "ami-TS3003b-5",
+      "referenceLanguage": "English",
+      "candleDetectedLanguage": "Dutch",
+      "whisperErrors": 6,
+      "candleErrors": 25,
+      "normalizedReferenceWords": 32,
+      "bothRepeatsEqual": true,
+      "cause": "not localized; do not attribute to accent or model architecture"
+    }
+  },
+  "data": {
+    "audioSource": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/TS3003b/audio/TS3003b.Mix-Headset.wav",
+    "annotationSource": "https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip",
+    "license": "CC-BY-4.0",
+    "audioSha256": "0c94f3a09ab747caa7714efe8852f5ff37d36cf272b75709344991df1aa266ca",
+    "annotationsSha256": "b56e5babb2496b8795deeeda7e71178d7fbc9963f94276cf2a3f4b56ebbc9f9d",
+    "scope": "up to first two eligible original segments per speaker, at least one per speaker; 3-20s, >=6 lexical words, 100ms padding, no other speaker lexical overlap",
+    "diarizationQualityStatus": "not_assessed",
+    "wordTimingSource": "official forced alignment; not manually verified word boundaries",
+    "casesSha256": "d7a3cfe1303f47dffc513d16b8a598bb5bb349f17df616cf4aed08d8eb62bb9f"
+  },
+  "validationScope": "real native short-crop quality/timing screen; product Rust code unchanged; no full workspace retest required for this documentation-only round",
+  "rawEvidence": "eval-data/optimization-2026-11-02/fresh-ami-screen",
+  "resultSha256": "3fd8e7ffd1487d3a1d48d975d75a3e910e407a8bf8040e5ebe33bfb6c640e366",
+  "reviewSha256": "2102d3e115f11ffa621a1488e6f3ac9596693b8abb868ba10e7a26e5de08dbf9",
+  "noProductProviderOrDefaultChange": true,
+  "scorerSourceSha256": "20b0d559af0d534e8d39f400e8d59d00388435ed3183d821b9ba8b4eef78f5f3"
+}
