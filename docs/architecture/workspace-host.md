@@ -76,7 +76,8 @@ revision 只能保护遵守版本协议的客户端。直接编辑 Markdown 不�
 
 已有 child-process 锁与恢复测试；metadata 扫描限制单包 16 MiB、校验 schema 版本并支持提前停止。完整读取也对 `state.json` 与 `document.md` 各限制 16 MiB，并在读取过程中执行上限；超限报告路径且保留原文件。普通保存和事务暂存先验证 Markdown 与序列化 JSON 均未超限，再写入任一文件；repository 保存传播现有包加载错误，不将损坏包当作不存在覆盖。不能把任意外部编辑器纳入事务，也不能据此标记所有写入口已完成。
 
-- //TODO - 在 repository 持锁提交中重验 source Markdown hash；当前 DocumentService 预验与 repository revision 检查之间仍存在内容变化窗口，补屏障式冲突测试。
+Agent batch 提供 `source_markdown_sha256` 时，文件与内存 repository 在提交锁内读取当前正文，复用服务预检的同一 SHA-256 比较规则。正文变化即返回 `ContentConflict`；所有写入预验完成前不写 journal、不应用任何文档。重新读取后的匹配校验值可提交，已提交批次仍按幂等记录重放。确定性回归先完成服务预检，再保持 revision 不变修改正文，验证整个双文档批次被拒绝且正文、同批其他文档和历史均未变，见[提交正文校验回执](../quality/mutation-source-recheck-validation.json)。这只是提交时的内容前置条件；OS advisory lock 仍不排除不遵守锁的外部编辑器在校验后写入。
+
 - //TODO - 普通 save/save_versioned 共用 CAS 与双文件恢复；不能仅增加锁后接受旧内容，JSON/Markdown 替换间失败须可恢复。
 - //TODO - 扩展跨进程写入、确认与 undo 的外部无效文件冲突测试，验证所有写入口保留加载/解析错误。
 - //TODO - 在逐文件输入上限之外验证解析后对象、文档总数与扫描峰值内存，不能将单文件读取有界视为工作区整体内存有界。
