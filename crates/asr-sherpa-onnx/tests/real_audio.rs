@@ -170,7 +170,7 @@ fn qwen_official_bundle_transcribes_without_a_tokens_file() {
             artifact_path: root,
             artifacts: Vec::new(),
         },
-        language: None,
+        language: std::env::var("MEETNOTE_QWEN3_ONNX_LANGUAGE").ok(),
         device: ComputeDevice::Cpu,
     };
     let backend = SherpaOnnxAsrBackend::default();
