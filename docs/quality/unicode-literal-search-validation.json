@@ -1,0 +1,107 @@
+{
+  "schema": "meetnote.unicode-literal-search-validation.v1",
+  "date": "2026-11-02",
+  "implementationCommit": "e07dac68c10fcc5ff23cf1d1893dc1f3e820d2b4",
+  "decision": "use one literal Unicode simple-fold query type for sidebar search and transcript evidence validation",
+  "semantics": {
+    "matching": "locale-independent Unicode simple case folding, no normalization or multi-character expansion",
+    "intentionalChange": "sigma variants and long s now match; dotted capital I and i follow simple folding and remain distinct",
+    "literal": "escape user input before compilation; no regular-expression syntax in UI",
+    "ownership": "application owns DocumentSearchQuery; search compiles once, opened evidence retains its own compiled query across renders",
+    "positions": "original UTF-8 byte boundary from matcher, then original-character excerpt; no folded offset mapping",
+    "dependencies": "add application direct edge to existing locked regex 1.13.1; no new package/version in Cargo.lock",
+    "unchanged": "160-character query cap, 50-document result cap, worker admission, cancellation, original saved facts, revision/target identity checks"
+  },
+  "redGreen": {
+    "service": "Greek query returned two rather than three case-equivalent documents before fix",
+    "reviewFinding": "search-only fix found Unicode text but UI lowercase recheck falsely marked evidence stale",
+    "uiRed": "transcript-search-match was not rendered for uppercase sigma evidence",
+    "green": "7 service tests and 14 targeted GPUI search tests passed; new evidence interaction preserves original package bytes"
+  },
+  "review": {
+    "phase": "separate call-site review after initial implementation, followed by final diff and focused validation",
+    "checks": [
+      "follow result from service to original transcript and stale check",
+      "share exact query construction and matching rule across both paths",
+      "escape metacharacters and preserve source offsets",
+      "compile outside document/paragraph iteration and rendering loops",
+      "keep root switching, cancellation and stale revision checks",
+      "verify Cargo.lock adds only application regex dependency edge"
+    ],
+    "scope": "sidebar search and its evidence view; Agent search not changed",
+    "performance": "remove per-field lowercase allocation by inspection; no measured latency or UI frame-rate claim"
+  },
+  "validation": {
+    "workspaceMainPassed": 994,
+    "childProcessPassed": 3,
+    "rawPassed": 997,
+    "failed": 0,
+    "ignored": 26,
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exitCode": 0,
+        "seconds": 0.8559902077540755,
+        "log": "/tmp/meetnote-loop52-final-check-0.log",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 3.4186603748239577,
+        "log": "/tmp/meetnote-loop52-final-check-1.log",
+        "logSha256": "c8ec7ecbbaf604c5b39961fcf52fca2be066b09dbd70633b34e53cd0941e58a8"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 152.95864112488925,
+        "log": "/tmp/meetnote-loop52-final-check-2.log",
+        "logSha256": "8a54f16db03cea454efd947770caf914a462695a4a0e3075f044dfc0db72cef8"
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 17.172372166998684,
+        "log": "/tmp/meetnote-loop52-final-check-3.log",
+        "logSha256": "4bf3231db88bbf79a49b586f2e999b2fdc6e6887c34b9e744c732d4dc128fb4f"
+      }
+    ],
+    "rawEvidence": "eval-data/optimization-2026-11-02/unicode-literal-search",
+    "logs": {
+      "meetnote-loop52-final-check-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "meetnote-loop52-final-check-1.log": "c8ec7ecbbaf604c5b39961fcf52fca2be066b09dbd70633b34e53cd0941e58a8",
+      "meetnote-loop52-final-check-2.log": "8a54f16db03cea454efd947770caf914a462695a4a0e3075f044dfc0db72cef8",
+      "meetnote-loop52-final-check-3.log": "4bf3231db88bbf79a49b586f2e999b2fdc6e6887c34b9e744c732d4dc128fb4f",
+      "meetnote-loop52-red.log": "828bf6d080e656ba9f9627fde6afdf534f34cd6b730860f4e3ad04d71ff8c040",
+      "meetnote-loop52-ui-red.log": "6bfe6d49556720d979ad90a63c728df994cd86d91716dd699a5028ebeb408c4c",
+      "meetnote-loop52-ui-green.log": "ef153ab4c80817d88c051168a0e156322bf0bed4dbb7279ea04068e05a410d60",
+      "meetnote-loop52-search-green-final.log": "2fd7b2e1b40f22e95a56fd893c335743b9bb1c7e0bce06e3db4bf25a50a3a2bf"
+    }
+  },
+  "primarySources": [
+    "https://docs.rs/regex/latest/regex/",
+    "https://docs.rs/regex/latest/regex/fn.escape.html"
+  ]
+}
