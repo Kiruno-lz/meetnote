@@ -103,9 +103,19 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 
 136 次全部成功，每病例四次 transcript 与时间逐项一致。Qwen 两进程峰值 RSS 为 2.2231/2.2016 GiB，SenseVoice 为 1.0247/1.0234 GiB；macOS footprint 另记在回执，不用较低指标替代 RSS 门。中文与 AMI 改善、速度与资源门通过，但英文原生退步 3.6364 个百分点，质量门失败，拒绝推进默认接入，catalog 保持 `candidate-source`。逐轮英文错误数为 SenseVoice 4/110、Qwen 8/110；原样 WER 同样变差，独立 review 确认不是归一化或均值加权错误。没有改参数迁就结果，也不把模型名或其他 backend 的旧分数当作本配置的质量保证。
 
-Qwen 当前 adapter 使用自动语言识别，未实现请求语言强制；SenseVoice 使用请求语言。本轮仅为已知回归样本，不验收新留出质量、词时间、长输入、取消或模型驻留。常规工作区 985 项主测试和 3 项子进程测试通过，0 failed、23 ignored；fmt/check/build 通过，真实 ignored 单独运行。来源、冻结协议、逐组结果和 review 见[原生 Qwen 回执](../quality/qwen-native-validation.json)。
+该轮 Qwen adapter 使用自动语言识别，SenseVoice 使用请求语言；显式语种问题见下一节。本轮仅为已知回归样本，不验收新留出质量、词时间、长输入、取消或模型驻留。常规工作区 985 项主测试和 3 项子进程测试通过，0 failed、23 ignored；fmt/check/build 通过，真实 ignored 单独运行。来源、冻结协议、逐组结果和 review 见[原生 Qwen 回执](../quality/qwen-native-validation.json)。
 
 复现核心：先对官方 archive 的发布 checksum 校验，只取三个 ONNX 图和 `tokenizer/{vocab.json,merges.txt,tokenizer_config.json}`，通过原有 release `asr_benchmark` 和 `asr_benchmark.py` 运行相同 17-case manifest；用固定原样/normalized 评分，按参考单位汇总，逐项核对输入、runner、模型与预测 hash。真实测试为 `qwen_official_bundle_transcribes_without_a_tokens_file`，必须给 `MEETNOTE_QWEN3_ONNX_MODEL_DIR` 和 ≤30 s 的 `MEETNOTE_QWEN3_ONNX_AUDIO`。临时 extractor/scorer 删除，核心方法与指纹保留；原模型、音频、预测和资源数据位于忽略目录 `eval-data/optimization-2026-11-02/qwen-native/`。
+
+### Qwen 显式语种请求
+
+2026-11-02 修复 adapter 忽略 `AsrRequest.language` 的行为。真实加载模型后，请求 `en` 的 stream 选项为空，先红；整文件和窗口共用 stream 创建函数后，实际 SDK 分别收到 `English`、`Chinese`、`French`，None/auto 不写选项。30 个 canonical 名称与官方源码快照逐项一致，支持语言代码及现有 UI 的 `en-US`/`zh-CN` 别名；未知值在 native recognizer 构造前返回类型化 `NotImplemented`，不将任意字符串传给 C-string 接口。英语/中文各自整文件和单窗口真实推理通过，法语仅验证选项传递。
+
+固定上一节 17 个已用病例、相同权重和 CPU 四线程，每模式两轮：自动模式 34 份完整 transcript 与旧未强制基线逐项相同；显式模式 34 次成功，七个病例改变，两轮文本/时间一致且不越源范围。中文 CER 均为 15.6250%；英文原生 normalized WER 自动 7.2727%、显式 8.1818%，AMI 分别 14%/15%。这证明请求被执行，不代表强制语言改善质量；不调参数或改变模型候选结论，也不把本轮计时作为提速验收。
+
+常规工作区 986 个主测试和 3 个子进程测试通过、0 failed、24 ignored，fmt/check/build 通过；真实 SDK 选项和中英推理另外显式执行。独立 review 核对两个调用点、输入映射、原始指纹与自动输出等价，见[语种回执](../quality/qwen-language-validation.json)。首个中文测试命令猜错音频路径，在推理前失败；随后使用 manifest 的原路径和 SHA 重跑，保留失败记录。
+
+复现核心：临时复制已有 `asr_benchmark`，仅加配置布尔值 `automaticLanguage` 控制 request 使用 None 或病例 language；配置快照和 runner/source SHA 均固定，继续使用既有 Python runner 和精确评分器。自动输出逐字段对旧预测核对，显式输出单独评分，不要求与自动文本相同。永久 `real_qwen_stream_receives_the_requested_language` 用实际 SDK `get_option`/`has_option` 核验，须显式提供 `MEETNOTE_QWEN3_ONNX_MODEL_DIR`/`MEETNOTE_QWEN3_ONNX_AUDIO`；整文件/窗口测试可加 `MEETNOTE_QWEN3_ONNX_LANGUAGE`。临时 example/scorer 删除，原始证据保留在忽略目录 `eval-data/optimization-2026-11-02/qwen-language/`。
 
 ### 优化次序与边界
 
