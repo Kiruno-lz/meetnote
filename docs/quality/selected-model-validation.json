@@ -1,0 +1,196 @@
+{
+  "schema": "meetnote.selected-model-validation.v1",
+  "date": "2026-11-02",
+  "baseCommit": "22e2c361edf6af342e34cf135fb40ed4ecd613cc",
+  "repairCommit": "b90b2d40d7a65cd7b3209848ef7c0e51da7dee8b",
+  "implementationCommit": "cc679c52384184071e9e4b30826545173016c9ef",
+  "decision": "Show the managed profile selected for new desktop jobs separately from installation/probe health; share current-config readiness with processing entry",
+  "redGreen": [
+    {
+      "red": "CoreML nested missing/partial bundle escaped managed installation diagnosis",
+      "green": "full 76-artifact catalogue fixture preserves missing/partial and installed distinctions"
+    },
+    {
+      "red": "selected managed card had no marker",
+      "green": "Chinese/English minimum-window badge, external copies/other ID/unsupported backend/no model/default fallback covered"
+    },
+    {
+      "red": "top readiness line still used default-file flags after selecting an installed model",
+      "green": "top line shares processing missing_models and reports only unready task"
+    }
+  ],
+  "review": {
+    "phase": "separate read-only final source/call-site review and four full-resolution screenshot inspections",
+    "checks": [
+      "desktop processing resolves the same draft/default ModelRef choices as the marker",
+      "selected status is independent from installation/probe status",
+      "nested CoreML paths compare complete catalogue artifact filenames without file IO",
+      "top summary reuses desktop missing_models and external references retain backend preflight responsibility",
+      "fixture overlay restores cached settings without disk reads",
+      "Chinese/English minimum window marker fits header, unavailable selections are not marked",
+      "all four selected scene images show DIA-only missing and selected Paraformer; no clipping of marker or action"
+    ],
+    "remainingFindings": []
+  },
+  "validation": {
+    "workspaceMainPassed": 999,
+    "childProcessPassed": 3,
+    "rawPassed": 1002,
+    "failed": 0,
+    "ignored": 26,
+    "uiUnitPassed": 463,
+    "routePassed": 47,
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exitCode": 0,
+        "seconds": 0.8624946670606732,
+        "log": "/tmp/meetnote-loop54-feature-check-0.log",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 1.7537440829910338,
+        "log": "/tmp/meetnote-loop54-feature-check-1.log",
+        "logSha256": "ca8d2f35278248bbbb30bb8a366337b751561e390dcfb81026886c24fa47169f"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 116.40151320816949,
+        "log": "/tmp/meetnote-loop54-feature-check-2.log",
+        "logSha256": "d8bcae357775bfafab7143bc87733d5b9b798e1e930d4a5823ccd185225db78a"
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 11.132992333266884,
+        "log": "/tmp/meetnote-loop54-feature-check-3.log",
+        "logSha256": "f7ad9a0c1724fddbf60436d1b39a5b33d9f09a57c39f67e0b279335d478d14d8"
+      }
+    ],
+    "isolatedRepairChecks": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exitCode": 0,
+        "seconds": 0.8615470421500504,
+        "log": "/tmp/meetnote-loop54-repair-check-0.log",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 1.744731250219047,
+        "log": "/tmp/meetnote-loop54-repair-check-1.log",
+        "logSha256": "e20b9c77cb3e61b10499322f8406d9972664f61cdb34488f8860411b3af1a7d4"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 115.87360116560012,
+        "log": "/tmp/meetnote-loop54-repair-check-2.log",
+        "logSha256": "8d8014011b8941cbc56d8630bebe3f22bc7f0565e9ea15735f002207db74315b"
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 10.988142083864659,
+        "log": "/tmp/meetnote-loop54-repair-check-3.log",
+        "logSha256": "32275346f695d9fc79aea2cc2185934c88f99e133d9ab8a0ef609c8d92380302"
+      }
+    ],
+    "visual": {
+      "scenes": 28,
+      "appearances": 4,
+      "captures": 112,
+      "differingPixels": 0,
+      "newSelectedSceneCaptures": 4,
+      "originalBaselinePngFilesByteUnchanged": 108,
+      "fullResolutionNewCapturesInspected": 4,
+      "initialFourWrongSummaryCapturesPreserved": true
+    },
+    "rawEvidence": "eval-data/optimization-2026-11-02/selected-model",
+    "logs": {
+      "meetnote-loop54-visual-green.log": "43c526bfefd032b54339fe4d7607e50c1bde68e0989afd2d92e86267902dc683",
+      "meetnote-loop54-summary-green.log": "5cdec5bc0de19ba1886918b78254a5df8315b631a1bccc7a39e565fd9657b242",
+      "meetnote-loop54-nested-red.log": "39b651c963e437fe1ee5d9e7860e66d0d85d42900eb7067e08f9c38b4c3f2132",
+      "meetnote-loop54-final-check-1.log": "0009a49e44d418d0a1d9b2de338253b2f38af773607c1f3d14ee67c4dd46b41f",
+      "meetnote-loop54-final-check-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "meetnote-loop54-summary-red.log": "ac9af96466dd9e27cd346f52f4f324bbd6baecdf8fad114d14f054c5c9b4c868",
+      "meetnote-loop54-layout-green.log": "f5ce18e0098a182c5692855f53468e7d3312b5f2c14cae7e9d6e2422ba4de93d",
+      "meetnote-loop54-red.log": "86febfc3232611842e40a4dd3e7e29817f19be9c41705670ae0016d3fa754b46",
+      "meetnote-loop54-visual-regenerate.log": "650a3021da94da479dffe0ce94281e06f9b426467d4217ed2e448bcd0a0d9103",
+      "meetnote-loop54-guidance-green.log": "6752b3a4d617c5b2cab9eac5535026b5880367882cff6e870d636cf07409269a",
+      "meetnote-loop54-repair-check-2.log": "8d8014011b8941cbc56d8630bebe3f22bc7f0565e9ea15735f002207db74315b",
+      "meetnote-loop54-repair-check-3.log": "32275346f695d9fc79aea2cc2185934c88f99e133d9ab8a0ef609c8d92380302",
+      "meetnote-loop54-repair-check-1.log": "e20b9c77cb3e61b10499322f8406d9972664f61cdb34488f8860411b3af1a7d4",
+      "meetnote-loop54-check-1.log": "1252cfeeb98f76ae18f82ff1ec5504e41ce5bc87a855751c553259bdbd9fbcad",
+      "meetnote-loop54-check-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "meetnote-loop54-repair-check-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "meetnote-loop54-green.log": "7227b4e7f0e21ad765f977119235390c44f5624d11c0b8fec69a81cb88fbc42f",
+      "meetnote-loop54-feature-check-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "meetnote-loop54-nested-green.log": "9b294aa070d8c0db906069d7c6aec900031170e0707f281494b9647a0949877c",
+      "meetnote-loop54-feature-check-1.log": "ca8d2f35278248bbbb30bb8a366337b751561e390dcfb81026886c24fa47169f",
+      "meetnote-loop54-feature-check-3.log": "f7ad9a0c1724fddbf60436d1b39a5b33d9f09a57c39f67e0b279335d478d14d8",
+      "meetnote-loop54-visual-generate.log": "66a4e9f68b0b0b1679fa3446a0706b5b56feb5e338e888279bb6e3b8ea607198",
+      "meetnote-loop54-feature-check-2.log": "d8bcae357775bfafab7143bc87733d5b9b798e1e930d4a5823ccd185225db78a",
+      "meetnote-loop54-verified-check-1.log": "0c7bf120fbeae4bd1c7249ee234ea361dbcf93a53f53f5f63b456c11b4018997",
+      "meetnote-loop54-verified-check-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "meetnote-loop54-verified-check-2.log": "9cb80f977bb73f766e51faca22a3373ba7e00707cb3939436afa0f398d8f39c4",
+      "meetnote-loop54-verified-check-3.log": "ba5338bd7b6ba7bc7b98af4e7635bcbf6833366c9d93aa5effa60286ce4178ce"
+    }
+  },
+  "limitations": [
+    "No native model, quality, loading, frame rate or resource acceptance in this UI round",
+    "Selection is not installation/probe success or the frozen choice of an existing job",
+    "External references retain backend preflight validation",
+    "No filesystem canonicalization or IO in selection matching"
+  ],
+  "fixtureCorrections": [
+    "Compiler caught missing SelectedModel close-overlay arm, then private settings field use before commits; restore now reads existing cached settings snapshot",
+    "Initial selected scene exposed stale default-file summary; genuine regression added before correction"
+  ]
+}
