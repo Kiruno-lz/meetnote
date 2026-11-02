@@ -2,7 +2,7 @@
 
 ## 判断与边界
 
-更新日期：2026-10-26；实施分支：`codex/workspace-discovery`。竞品调研基于 2026-10-24 至 2026-10-26 可访问的官方页面，页面更新时间不等于功能首次发布日期，未实际购买或逐项试用竞品。
+更新日期：2026-11-02；实施分支：`codex/workspace-discovery`。竞品调研基于 2026-10-24 至 2026-11-02 可访问的官方页面，页面更新时间不等于功能首次发布日期，未实际购买或逐项试用竞品。
 
 MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模型管理和受控 Agent 工具。下一步应把已有事实变成易查找、可核对、可带走的资料。产品优势在于本地文件、音频证据和外部 Agent 能力边界；继续增加 backend 或扩成通用 Agent Runtime，不能直接解决资料积累后的使用成本。
 
@@ -13,7 +13,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 | P0：全量读取缺少资源上限 | `crates/persistence/src/lib.rs` 的 `load_metadata` 有 16 MiB 限制，原 `DocumentPackage::load` 对 JSON/Markdown 直接全量读取 | 异常大文件影响扫描、编辑和搜索。本分支将每个完整输入文件限制为 16 MiB，同时在读取过程中执行上限；超限报告文件路径，保留资产 |
 | P0：长音频全局聚类内存随观察数增长 | `crates/diarization-native/src/windowed.rs` 累积 `clustering_vectors` 与窗口 artifacts；`third_party/speakrs/src/clustering/ahc.rs` 分配 `n*(n-1)/2` 个距离 | 分窗解码不代表整条 pipeline 内存有界。仅距离数组在 5 万个 observation 时约 4.66 GiB，还未计其他对象。须先定义可接受的输入规模、质量门槛与资源策略，再修改聚类；本分支不改变聚类算法 |
 | P1：检索后的原文核对成本 | `document_search.rs` 返回已保存文本命中；`meetings.rs` 将连续同 speaker 的段落归为一个回合 | 只打开文档不能解决长转写内的翻找。本分支让结果携带 segment ID、时间范围、speaker 来源和文档 revision，打开后定位并标记实际段落；不拆散现有发言分组 |
-| P1：复用出口不足 | 笔记页已可复制已保存的 Markdown；`apps/meetnote/examples/audio_host_export.rs` 仍是评测导出入口 | 文件本身可读，笔记复制已形成最小复用出口；TXT/Markdown/SRT 文件导出及转写复制仍需沿用现有时间戳和 speaker label |
+| P1：复用出口不足 | 笔记页可复制已保存 Markdown，原文页可复制完整转写视图；`apps/meetnote/examples/audio_host_export.rs` 仍是评测导出入口 | 复制入口保留当前已加载事实；TXT/Markdown/SRT 文件导出仍需沿用时间戳与 speaker label，并单独完成文件选择和写入验证 |
 | P1：模型速度不是整条链路速度 | 独立 ASR benchmark 与 `diarization_benchmark`；native observation/AHC 路径 | 已测固定 FLEURS/AMI 的 ASR 质量、RTF 与 RSS，修复回调崩溃、子词与推理长度；CPU embedding 单线程是本机分离延迟主因；按设备可用并行度保留约三分之一余量后，本机使用六线程，同一 180 秒样本的分离中位耗时为 35.23 秒（单线程 164.91 秒，四线程 47.52 秒），输出时间线与 embedding 通过 baseline 一致性门。AHC 内存和精确时间对齐仍需分别治理。分段切口已修复 Unicode 词边界并保留真实文本 baseline；Silero VAD 裁剪虽将已知静音覆盖从 9.8 秒降至零，却导致英文和低音量中文识别退化，拒绝默认集成，见[边界回执](../quality/asr-boundary-evaluation.json)。模型选择见[研究记录](../reserch/asr-quality-and-runtime-evaluation.md) |
 | P2：维护集中度偏高 | `crates/ui/src/controller.rs` 同时编排设置、文档、模型、Speaker Library 与 Assistant；已有 editor/audio 等独立模块 | 新能力继续在所属模块实现，controller 只保留装配和跨模块调用。本分支把搜索生命周期与展示集中于 `crates/ui/src/search.rs`，不做一次性全局重构 |
 
@@ -45,11 +45,13 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 
 该切口借鉴 [Fathom 的搜索结果直达证据](https://help.fathom.video/en/articles/449856)（官方页面标注 2025-09-08 编辑，2026-10-25 核对）。比较后采用现有 GPUI 布局与 ScrollHandle 定位嵌套段落，无新增依赖：持久索引改善查询耗时，不能代替命中后的阅读定位；播放跳转还需要音频播放生命周期，因此当前只交付段落定位，不做段内词级定位或音频 seek。搜索仍需遍历文档，不能据此承诺大型资料库的查询延迟；持久派生索引应在真实规模测量后引入，并单独验证 stale、重建和外部编辑一致性。
 
-### 已保存笔记复制
+### 已保存内容复制
 
 笔记页提供“复制笔记”，直接复制当前已加载的保存快照，保留 Markdown、Unicode 与原换行。复制不读取磁盘、不保存或替换编辑草稿；现有 Workspace 后台读取负责内容来源。加载中、读取失败、空正文、文档已移除或选择不匹配、非笔记视图和工作区切换期间均不能复制。成功后用现有通知反馈，中英文入口在最小窗口内可见，可通过 Tab 与 Enter 激活。
 
-该切口借鉴 [Notta 的复制复用入口](https://support.notta.ai/hc/en-us/articles/18646448413083-Intro-to-data-export-sharing)（2026-10-26 再次核对），复用 GPUI 剪贴板与已保存笔记读取，不新增导出服务或外部同步。测试逐字核对复制文本、文件原字节与未保存草稿，并在同 ID 工作区切换后释放旧读取，确认复制仍来自新目录。TXT/SRT 格式生成和文件导出由后续独立切口完成。
+原文页提供“复制转写”，复制当前已加载文档的完整发言视图快照。复用同一 `transcript_turns` 投影：每回合以 `[起始时间] 说话人` 开头，段落之间换行、回合之间空一行；时间沿用界面的秒级时钟和跨小时格式，段内原字符与换行保持不变。未标注说话人的原始段落仍保留，不从笔记或未保存草稿生成文本。空/纯空白转写、文档未选中或已移除、离开原文视图和工作区切换期间不修改剪贴板。复制是当前显示快照，不另行读取磁盘；鼠标与 Tab/Enter 使用同一入口。
+
+该切口借鉴 [Notta 的复制复用入口](https://support.notta.ai/hc/en-us/articles/18646448413083-Intro-to-data-export-sharing)（2026-11-02 再次核对），复用 GPUI 剪贴板与现有视图投影。逐字测试覆盖中英、emoji、CRLF、连续发言、跨小时、部分说话人对齐与原文补全，核对原文件字节和未保存草稿；方法与独立 review 见[转写复制回执](../quality/transcript-copy-validation.json)。TXT/SRT 文件格式和文件导出仍由 Workspace/application 后续独立实现。
 
 ### 文档包读写上限
 
@@ -57,7 +59,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 
 ## 后续顺序与验证方法
 
-1. **文件导出与转写复制**：//TODO - 在 Workspace/application 生成 TXT/Markdown/SRT，桌面只负责选择目标和反馈；测试中英文、多 speaker、跨小时时间、空转写与覆盖取消，回读导出文件。
+1. **文件导出**：//TODO - 在 Workspace/application 生成 TXT/Markdown/SRT，桌面只负责选择目标和反馈；测试中英文、多 speaker、跨小时时间、空转写与覆盖取消，回读导出文件。
 2. **原文定位扩展**：//TODO - 独立验证段内词级定位与真实音频播放/seek；覆盖长段落、时间边界、取消与文档切换后迟到回调，不以段落定位测试替代播放验收。
 3. **模板与有依据的行动项**：//TODO - 复用现有 Skill/profile 与 capability；输出保留 document/segment 来源，区分 AI 推断、人工确认与已执行状态，使用固定真实 provider 数据集验证遗漏和无依据生成。
 4. **长音频与真实模型质量**：已有[ASR 模型比较](../quality/model-comparison.md)；//TODO - 扩展自然中文会议与重叠场景，补 DER、身份误匹配、词时间、取消/故障及小时级 RSS；资源约束与精度取舍达标后再承诺长录音生产支持。
@@ -70,12 +72,12 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 | 检查 | 结果 |
 |---|---|
 | `cargo fmt --all -- --check`、`git diff --check` | 通过 |
-| `cargo check --workspace --all-targets --locked` | 通过 |
-| `cargo build --locked -p meetnote` | 开发构建通过 |
-| `cargo test --workspace --locked` | 主测试 933 passed、0 failed、11 ignored；另有 3 次锁与读写子进程测试通过；UI 单元/交互 454 passed，route 47 passed |
-| 搜索与读写回归 | 搜索服务 6 项、桌面搜索 13 项回归通过；共享 worker 全占用时，清除、输入变化与重复提交均释放过时的 frozen repository，后续查询仍可完成，原文件字节不变；覆盖真实文件/异步 GPUI、段落定位与失效保护；16 MiB 边界与超限保存、无效现有包保护、多文档暂存失败、原始转写补全通过；route Tab 顺序覆盖搜索和笔记入口 |
-| 笔记复制回归 | 7 项相关回归通过；覆盖中英文、最小窗口、键盘松键激活、草稿与原文件保留、空正文和不可用快照保护、工作区迟到读取 |
-| 全量离屏图像 | 27 个场景 × 深/浅 × 玻璃/不透明共 108 张复比均为 0 像素差异；笔记复制的 4 张原图已逐张查看并更新对应基线，其余 104 张基线字节保持不变；原文命中场景的 4 张原图已核对标记与文字 |
+| `cargo check --workspace --locked` | 通过 |
+| `cargo build --workspace --locked` | 开发构建通过 |
+| `cargo test --workspace --locked` | 主测试 996 passed、0 failed、26 ignored；另有 3 次锁与读写子进程测试通过；UI 单元/交互 460 passed，route 47 passed |
+| 搜索与读写回归 | 搜索服务 7 项、桌面搜索 14 项回归通过；共享 worker 全占用时，清除、输入变化与重复提交均释放过时的 frozen repository，后续查询仍可完成，原文件字节不变；覆盖真实文件/异步 GPUI、段落定位与失效保护；16 MiB 边界与超限保存、无效现有包保护、多文档暂存失败、原始转写补全通过；route Tab 顺序覆盖搜索和笔记入口 |
+| 内容复制回归 | 已有笔记复制与新增 2 项转写复制交互通过；覆盖中英文、最小窗口、键盘松键激活、草稿与原文件保留、空正文和不可用快照保护、跨小时时间与原始段落 |
+| 全量离屏图像 | 27 个场景 × 深/浅 × 玻璃/不透明，共 108 张；本轮逐张核对新增复制入口涉及的 8 张原文/定位图，以及已合并 CoreML catalog 影响的 4 张模型图，只更新这 12 张，其余 96 张基线字节保持不变；完整复比结果见转写复制回执 |
 | 修改文档的相对链接 | 通过 |
 
 全量截图可用 `MEETNOTE_VISUAL=1 MEETNOTE_VISUAL_UPDATE=1 cargo test --locked -p ui --test visual` 重建，去掉 `MEETNOTE_VISUAL_UPDATE=1` 后执行复比；`MEETNOTE_VISUAL_FILTER=meetings-search` 仅验证搜索场景。静态截图固定使用“减少动态效果”模式并在 baseline 元数据中记录，防止循环动画影响稳定帧；常规动画时序由交互测试覆盖，资源探测前恢复常规动态效果。图像与 baseline 是本地派生产物，不提交到仓库。
