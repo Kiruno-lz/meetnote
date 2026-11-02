@@ -860,7 +860,7 @@ impl ModelManager {
                             progress.completed_bytes = completed;
                             progress.speed_bytes_per_second = speed;
                             progress.total_bytes = total;
-                            progress.artifact_index = index.max(1);
+                            progress.artifact_index = index + usize::from(completed > 0);
                             progress.artifact_count = count;
                             progress.eta_seconds = eta_seconds(completed, total, speed);
                         });
@@ -2234,5 +2234,39 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         )
+    }
+
+    #[test]
+    fn bundle_progress_names_each_current_artifact() {
+        let source = serve_sequence(vec![b"fixture", b"second"]);
+        let mut catalog = fixture_catalog();
+        catalog.models[0].size_bytes = Some(13);
+        catalog.models[0].artifacts = [("one.bin", &b"fixture"[..]), ("two.bin", &b"second"[..])]
+            .into_iter()
+            .map(|(filename, payload)| crate::CatalogArtifact {
+                filename: filename.into(),
+                source: source.clone(),
+                sha256: Some(sha256_hex(payload)),
+                archive_member: None,
+            })
+            .collect();
+        let root = temp_root("artifact-progress-index");
+        let manager = ModelManager::with_backend_probe(
+            catalog,
+            &root,
+            Some(Arc::new(SwitchProbe::default())),
+        );
+        let task = manager.start("fixture").unwrap();
+        let events = collect_within(task.updates, std::time::Duration::from_secs(5));
+        assert_eq!(events.last().unwrap().state, DownloadState::Completed);
+        for index in [1, 2] {
+            assert!(
+                events.iter().any(|p| p.state == DownloadState::Downloading
+                    && p.artifact_index == index
+                    && p.completed_bytes > 0),
+                "missing current artifact {index}: {events:?}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
