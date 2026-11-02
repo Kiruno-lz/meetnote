@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct DownloadId(pub u64);
@@ -147,11 +147,18 @@ fn ensure_supported_platform(model: &ModelCatalogEntry) -> Result<(), ModelManag
     }
 }
 
+const TRANSFER_PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+
+struct ProgressPublication {
+    last_published: Instant,
+    pending: Option<DownloadProgress>,
+}
+
 struct TaskRecord {
     control: DownloadControl,
     /// Held while an update is applied, written to the task file and
     /// published, and while a subscriber joins.
-    updating: Mutex<()>,
+    updating: Mutex<ProgressPublication>,
     progress: Mutex<DownloadProgress>,
     subscribers: Mutex<Vec<Sender<DownloadEvent>>>,
     /// Dropped once the task reaches a terminal state.
@@ -163,7 +170,10 @@ impl TaskRecord {
     fn new(progress: DownloadProgress) -> Self {
         Self {
             control: DownloadControl::default(),
-            updating: Mutex::new(()),
+            updating: Mutex::new(ProgressPublication {
+                last_published: Instant::now(),
+                pending: None,
+            }),
             progress: Mutex::new(progress),
             subscribers: Mutex::new(Vec::new()),
             async_subscribers: Mutex::new(Vec::new()),
@@ -860,7 +870,7 @@ impl ModelManager {
                             progress.completed_bytes = completed;
                             progress.speed_bytes_per_second = speed;
                             progress.total_bytes = total;
-                            progress.artifact_index = index.max(1);
+                            progress.artifact_index = index + usize::from(completed > 0);
                             progress.artifact_count = count;
                             progress.eta_seconds = eta_seconds(completed, total, speed);
                         });
@@ -871,28 +881,45 @@ impl ModelManager {
         Ok(())
     }
 
-    /// Applies `change` unless the task already ended, writes the task file,
-    /// then publishes the update to every subscriber, all under `updating`.
+    /// Keeps at most one pending byte sample; control/artifact boundaries flush it.
+    /// Published snapshots are written before notifying subscribers under `updating`.
     fn update<F>(&self, id: DownloadId, change: F) -> Result<(), ModelManagerError>
     where
         F: FnOnce(&mut DownloadProgress),
     {
         let record = self.record(id)?;
-        let _updating = record
+        let mut publication = record
             .updating
             .lock()
             .map_err(|_| ModelManagerError::LockPoisoned)?;
         let progress = {
-            let mut progress = record
+            let mut published = record
                 .progress
                 .lock()
                 .map_err(|_| ModelManagerError::LockPoisoned)?;
-            if progress.state.is_terminal() {
+            if published.state.is_terminal() {
                 return Ok(());
             }
-            change(&mut progress);
-            progress.clone()
+            let mut next = publication
+                .pending
+                .take()
+                .unwrap_or_else(|| published.clone());
+            change(&mut next);
+            let boundary = next.state != published.state
+                || !matches!(next.state, DownloadState::Downloading)
+                || next.artifact_index != published.artifact_index
+                || next.artifact_count != published.artifact_count
+                || next.retry_count != published.retry_count
+                || next.total_bytes != published.total_bytes
+                || next.completed_bytes < published.completed_bytes;
+            if !boundary && publication.last_published.elapsed() < TRANSFER_PROGRESS_INTERVAL {
+                publication.pending = Some(next);
+                return Ok(());
+            }
+            *published = next.clone();
+            next
         };
+        publication.last_published = Instant::now();
         // Published even when the write fails: the task changed in memory.
         let persisted = self.persist_tasks();
         let terminal = progress.state.is_terminal();
@@ -1364,6 +1391,146 @@ mod tests {
             }]
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn measure_download_publication(bundle: bool, bytes: usize, enforce_rate: bool) {
+        let payload: &'static [u8] = Box::leak(vec![0x6d; bytes].into_boxed_slice());
+        let mut catalog = if bundle {
+            let source = serve_sequence(vec![&payload[..bytes / 2], &payload[bytes / 2..]]);
+            let mut catalog = fixture_catalog();
+            catalog.models[0].artifacts = ["one.bin", "two.bin"]
+                .into_iter()
+                .map(|filename| crate::CatalogArtifact {
+                    filename: filename.into(),
+                    source: source.clone(),
+                    sha256: Some(sha256_hex(&payload[..bytes / 2])),
+                    archive_member: None,
+                })
+                .collect();
+            catalog
+        } else {
+            served_catalog(payload, vec![payload])
+        };
+        catalog.models[0].size_bytes = Some(bytes as u64);
+        let root = temp_root("download-publication");
+        let manager = ModelManager::with_backend_probe(
+            catalog,
+            &root,
+            Some(Arc::new(SwitchProbe::default())),
+        );
+        let started = Instant::now();
+        let task = manager.start("fixture").unwrap();
+        let mut events = Vec::new();
+        loop {
+            let DownloadEvent::Updated(progress) = task
+                .events
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            let terminal = progress.state.is_terminal();
+            events.push(progress);
+            if terminal {
+                break;
+            }
+        }
+        let seconds = started.elapsed().as_secs_f64();
+        let final_progress = events.last().unwrap();
+        assert_eq!(final_progress.state, DownloadState::Completed);
+        assert_eq!(
+            load_task_progress(&root.join(".download-tasks.json")),
+            vec![final_progress.clone()]
+        );
+        let model = manager.catalog.find("fixture").unwrap();
+        for file in model.artifact_paths(&root) {
+            let expected = if bundle {
+                &payload[..bytes / 2]
+            } else {
+                payload
+            };
+            assert_eq!(std::fs::read(file).unwrap(), expected);
+        }
+        if !bundle {
+            assert_eq!(final_progress.completed_bytes, bytes as u64);
+        }
+        let limit = (seconds / 0.1).ceil() as usize + 12;
+        eprintln!(
+            "download-publication: {}",
+            serde_json::json!({"bundle":bundle,"bytes":bytes,"seconds":seconds,"events":events.len(),"rateLimit":limit})
+        );
+        if enforce_rate {
+            assert!(
+                events.len() <= limit,
+                "transfer progress flooded subscribers: {} events in {seconds}s, limit {limit}",
+                events.len()
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fast_downloads_publish_sampled_progress_and_keep_terminal_state_durable() {
+        for bundle in [false, true] {
+            measure_download_publication(bundle, 4 * 1024 * 1024, true);
+        }
+    }
+
+    #[test]
+    fn sampled_bytes_do_not_escape_persistence_and_control_changes_flush_them() {
+        let root = temp_root("progress-publication-control");
+        let id = write_interrupted_task(&root);
+        let manager = ModelManager::new(fixture_catalog(), &root);
+        manager
+            .update(id, |p| p.state = DownloadState::Downloading)
+            .unwrap();
+        manager.update(id, |p| p.completed_bytes = 40).unwrap();
+        let recorded = load_task_progress(&root.join(".download-tasks.json")).remove(0);
+        let events = manager.subscribe(id).unwrap();
+        let mut updates = manager.subscribe_async(id).unwrap();
+        assert_eq!(
+            events.recv().unwrap(),
+            DownloadEvent::Updated(recorded.clone())
+        );
+        assert_eq!(
+            updates.try_recv().unwrap(),
+            DownloadEvent::Updated(recorded)
+        );
+
+        manager
+            .update(id, |p| p.state = DownloadState::Paused)
+            .unwrap();
+        let DownloadEvent::Updated(paused) = events.recv().unwrap();
+        assert_eq!(
+            (paused.state.clone(), paused.completed_bytes),
+            (DownloadState::Paused, 40)
+        );
+        assert_eq!(
+            load_task_progress(&root.join(".download-tasks.json")),
+            vec![paused]
+        );
+        manager
+            .update(id, |p| p.state = DownloadState::Downloading)
+            .unwrap();
+        manager.update(id, |p| p.completed_bytes = 80).unwrap();
+        manager.cancel(id).unwrap();
+        let last = collect_within(updates, std::time::Duration::from_secs(5))
+            .pop()
+            .unwrap();
+        assert_eq!(
+            (last.state.clone(), last.completed_bytes),
+            (DownloadState::Cancelled, 80)
+        );
+        assert_eq!(
+            load_task_progress(&root.join(".download-tasks.json")),
+            vec![last]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "measures real loopback HTTP and filesystem publication, no model inference"]
+    fn benchmark_download_publication_overhead() {
+        for bundle in [false, true] {
+            measure_download_publication(bundle, 32 * 1024 * 1024, false);
+        }
     }
 
     #[test]
@@ -2234,5 +2401,38 @@ mod tests {
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         )
+    }
+    #[test]
+    fn bundle_progress_names_each_current_artifact() {
+        let source = serve_sequence(vec![b"fixture", b"second"]);
+        let mut catalog = fixture_catalog();
+        catalog.models[0].size_bytes = Some(13);
+        catalog.models[0].artifacts = [("one.bin", &b"fixture"[..]), ("two.bin", &b"second"[..])]
+            .into_iter()
+            .map(|(filename, payload)| crate::CatalogArtifact {
+                filename: filename.into(),
+                source: source.clone(),
+                sha256: Some(sha256_hex(payload)),
+                archive_member: None,
+            })
+            .collect();
+        let root = temp_root("artifact-progress-index");
+        let manager = ModelManager::with_backend_probe(
+            catalog,
+            &root,
+            Some(Arc::new(SwitchProbe::default())),
+        );
+        let task = manager.start("fixture").unwrap();
+        let events = collect_within(task.updates, std::time::Duration::from_secs(5));
+        assert_eq!(events.last().unwrap().state, DownloadState::Completed);
+        for index in [1, 2] {
+            assert!(
+                events.iter().any(|p| p.state == DownloadState::Downloading
+                    && p.artifact_index == index
+                    && p.completed_bytes > 0),
+                "missing current artifact {index}: {events:?}"
+            );
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
