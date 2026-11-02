@@ -63,7 +63,7 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 | [sherpa-onnx SenseVoice](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html) | 复用已有 Rust binding 与模型管理，新增模型族 adapter，测中英文与窗口链路。模型权重采用其上游声明的模型许可，不能把 toolkit 的许可证当作权重许可 |
 | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) large-v3 / Turbo Q5 | 使用现有 `whisper-rs` 与 Metal；修复 FFI 后再评分。Turbo 提供更小的可安装候选，保留 Whisper 段时间戳路径；不把量化收益当作无损保证 |
 | [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) + [MLX 实现](https://github.com/moona3k/mlx-qwen3-asr) | 测 0.6B 8-bit 与 1.7B 4-bit。独立 venv、固定权重 revision、离线加载；不启动 diarization、forced aligner 或服务。驻留 session 的 wall 与逐次加载后端分别标注，暂不作为桌面 provider |
-| [Rust/Candle Qwen3-ASR](https://github.com/alan890104/qwen3-asr-rs/tree/c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc) | 有 Metal 与量化接口，但仍需独立验证输出一致性、取消、词时间、模型 checksum 与长音频。此次只核对固定源码，不以 README 的其他机器速度替代本机测量 |
+| [Rust/Candle Qwen3-ASR](https://github.com/alan890104/qwen3-asr-rs/tree/c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc) | 已在固定源码上隔离执行 BF16/Metal 短样本，首次速度门失败，重复调用明显更快，见下方可行性试接。不据 README 推断 GGUF 已可用，也不据短样本推进 provider |
 | [Faster-Whisper / CTranslate2](https://opennmt.net/CTranslate2/hardware_support.html) | 官方预编译 GPU 路径列为 NVIDIA；在本机不能直接沿用 CUDA 排名。CPU INT8 可作为跨平台候选，本轮未运行，不作性能结论 |
 | [FluidAudio](https://github.com/FluidInference/FluidAudio)、[WhisperKit](https://github.com/argmaxinc/argmax-oss-swift)、[SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer) | 可作为 Apple 平台执行载体候选，需另验系统版本、原生桥接、模型生命周期、取消与资源。此次没有测其速度；不据此更换 Rust/GPUI 或 Host contract |
 | [Parakeet TDT v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) | 官方语言范围是欧洲语言；可以补英文高吞吐路线，不能承担当前中文默认能力，本轮未测 |
@@ -116,6 +116,23 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 常规工作区 986 个主测试和 3 个子进程测试通过、0 failed、24 ignored，fmt/check/build 通过；真实 SDK 选项和中英推理另外显式执行。独立 review 核对两个调用点、输入映射、原始指纹与自动输出等价，见[语种回执](../quality/qwen-language-validation.json)。首个中文测试命令猜错音频路径，在推理前失败；随后使用 manifest 的原路径和 SHA 重跑，保留失败记录。
 
 复现核心：临时复制已有 `asr_benchmark`，仅加配置布尔值 `automaticLanguage` 控制 request 使用 None 或病例 language；配置快照和 runner/source SHA 均固定，继续使用既有 Python runner 和精确评分器。自动输出逐字段对旧预测核对，显式输出单独评分，不要求与自动文本相同。永久 `real_qwen_stream_receives_the_requested_language` 用实际 SDK `get_option`/`has_option` 核验，须显式提供 `MEETNOTE_QWEN3_ONNX_MODEL_DIR`/`MEETNOTE_QWEN3_ONNX_AUDIO`；整文件/窗口测试可加 `MEETNOTE_QWEN3_ONNX_LANGUAGE`。临时 example/scorer 删除，原始证据保留在忽略目录 `eval-data/optimization-2026-11-02/qwen-language/`。
+
+### Candle/Metal 可行性试接
+
+2026-11-02 在 M2 Pro 上固定 `qwen3-asr-rs c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc`（MIT）、Candle 0.9.2 和官方 Qwen3-ASR-0.6B revision `5eb144179a02acc5e5ba31e748d22b0cf3e303b0`（Apache-2.0）。1,876,091,704 B safetensors 校验发布 SHA；五个 tokenizer/config 文件校验固定 revision 的大小与 Git blob，`tokenizer.json` 复用同一源码的 builder。独立 locked release 使用 BF16、自动语种和默认 512 token 上限，显式创建 Metal 设备并同步计时，没有 CPU fallback；不改变产品依赖、catalog 或默认值。
+
+运行前固定 8.67 s 已知英语片段：正常退出且有文本、normalized WER ≤50%、加载加推理 ≤音频长度、全进程 footprint ≤8 GiB，180 s 超时终止并回收进程组。首次速度门失败后，另行冻结两次相同英语和一次已知中文的诊断协议，不修改参数、不清缓存、不用重复结果替换原失败。
+
+| 调用 | 音频 / 加载加推理（秒） | 错误率 | RSS / footprint（字节） |
+| --- | --- | --- | --- |
+| 英语首次 | 8.67 / 11.8476 | normalized WER 1/25 | 3,840,458,752 / 3,833,449,784 |
+| 英语重复一 | 8.67 / 2.1736 | normalized WER 1/25 | 3,840,458,752 / 3,833,433,376 |
+| 英语重复二 | 8.67 / 2.1780 | normalized WER 1/25 | 3,840,884,736 / 3,868,298,552 |
+| 中文检查 | 15.16 / 2.4093 | CER 18/45 | 3,840,442,368 / 3,833,416,992 |
+
+两次英语文本与首次逐字相同，四次调用后模型 hash 未变。重复调用显示原生 Metal 路线可执行；首次慢因尚未隔离，不能断言为 shader 编译，也不作冷启动验收。中文 40% CER 只通过粗略 smoke 门，不代表产品质量可接受。设备选择不证明每个算子都在 GPU；没有执行量化、长录音、取消、并发或词时间验证，暂不增加正式 provider。上游内部单测 63 passed、0 failed、0 ignored，与工作区及真实模型证据分别记录。
+
+独立 review 核对冻结协议、原失败、重复文本、模型与 runner 指纹、进程资源和源码 diff。临时 workspace 隔离及两个 example 已清理，上游 library 未改动。复现方法为固定源码的离线 tokenizer builder + `AsrInference::load`/`transcribe`，设备同步前后计时，外层 `time -l` 测资源；完整 hash、门槛和结果见 [Candle 回执](../quality/qwen-candle-validation.json)，模型、原预测及日志保留在忽略目录 `eval-data/optimization-2026-11-02/qwen-candle/`。
 
 ### 优化次序与边界
 
