@@ -88,7 +88,7 @@ queued -> downloading <-> paused -> verifying -> completed
 - 终态（`completed`、`failed`、`cancelled`）在任务最后一次写入（安装文件、probe 记录、任务文件）之后才发布，此后状态不再变化；取消运行中的下载时由 worker 在下一个检查点（下一数据块、backend probe 结束或重试等待）发布 `cancelled`。
 - 校验失败删除临时文件；backend probe 失败删除本次模型安装目录。
 - `requiresAuth` 且没有认证接入的模型拒绝下载，token 不进入 catalog、日志或命令行。
-- bundle 按 artifact 下载；`archiveMember` 先校验来源 archive，再提取目标成员。
+- bundle 按 artifact 下载；`archiveMember` 先校验来源 archive，再提取目标成员。已有文件只有在直接文件 SHA-256 重新匹配后才能复用；不匹配的文件重新下载并校验后原子替换。没有 checksum 或仅有 archive checksum 的已有成员不能证明内容有效，须重新下载；下载/校验失败保留原目标文件，见[bundle 续传校验回执](../quality/bundle-resume-integrity-validation.json)。
 
 当前 catalog v1 的 `artifacts[].sha256` 对直接文件表示文件 checksum；对 `archiveMember` 表示下载 archive 的 checksum。需要同时校验 archive 与成员时，应升级 catalog schema 后分别建模。
 

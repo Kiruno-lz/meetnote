@@ -254,6 +254,16 @@ pub mod download {
         )
     }
 
+    fn can_reuse_artifact(artifact: &BundleArtifact, target: &Path) -> Result<bool, DownloadError> {
+        if !target.is_file() || artifact.archive_member.is_some() {
+            return Ok(false);
+        }
+        let Some(expected) = &artifact.expected_sha256 else {
+            return Ok(false);
+        };
+        Ok(crate::probe::file_sha256(target)?.eq_ignore_ascii_case(expected))
+    }
+
     pub fn download_bundle_controlled(
         artifacts: &[BundleArtifact],
         destination: impl AsRef<Path>,
@@ -265,7 +275,7 @@ pub mod download {
         for (index, artifact) in artifacts.iter().enumerate() {
             control.checkpoint()?;
             let target = destination.join(&artifact.filename);
-            if target.is_file() {
+            if can_reuse_artifact(artifact, &target)? {
                 on_progress(index + 1, artifacts.len());
                 continue;
             }
@@ -305,7 +315,7 @@ pub mod download {
         for (index, artifact) in artifacts.iter().enumerate() {
             control.checkpoint()?;
             let target = destination.join(&artifact.filename);
-            if target.is_file() {
+            if can_reuse_artifact(artifact, &target)? {
                 on_progress(index + 1, artifacts.len(), 0, None);
                 continue;
             }
@@ -401,6 +411,98 @@ pub mod download {
             extract_archive_member(&archive_path, "model.onnx", &destination).unwrap();
             assert_eq!(fs::read(&destination).unwrap(), payload);
             fs::remove_dir_all(root).unwrap();
+        }
+
+        #[test]
+        fn bundle_resume_rechecks_existing_files_before_reusing_them() {
+            for (progress_api, archive_member) in [false, true]
+                .into_iter()
+                .flat_map(|p| [false, true].into_iter().map(move |a| (p, a)))
+            {
+                let root = std::env::temp_dir().join(format!(
+                    "meetnote-resume-integrity-{}-{progress_api}-{archive_member}",
+                    std::process::id()
+                ));
+                fs::create_dir_all(&root).unwrap();
+                let target = root.join("model.bin");
+                fs::write(&target, b"corrupt").unwrap();
+                let payload = if archive_member {
+                    let encoder =
+                        bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
+                    let mut archive = tar::Builder::new(encoder);
+                    let mut header = tar::Header::new_gnu();
+                    header.set_size(7);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    archive
+                        .append_data(&mut header, "member.bin", &b"healthy"[..])
+                        .unwrap();
+                    archive.into_inner().unwrap().finish().unwrap()
+                } else {
+                    b"healthy".to_vec()
+                };
+                let expected_sha256 = Some(
+                    Sha256::digest(&payload)
+                        .iter()
+                        .map(|byte| format!("{byte:02x}"))
+                        .collect(),
+                );
+                let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                let address = listener.local_addr().unwrap();
+                let worker = std::thread::spawn(move || {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .unwrap();
+                    let mut request = [0; 4096];
+                    assert!(stream.read(&mut request).unwrap() > 0);
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        payload.len()
+                    )
+                    .unwrap();
+                    stream.write_all(&payload).unwrap();
+                });
+                let artifacts = [BundleArtifact {
+                    filename: "model.bin".into(),
+                    source: format!("http://{address}/model"),
+                    expected_sha256,
+                    archive_member: archive_member.then(|| "member.bin".into()),
+                }];
+                let run = || {
+                    if progress_api {
+                        download_bundle_with_progress(
+                            &artifacts,
+                            &root,
+                            &DownloadControl::default(),
+                            |_, _, _, _| {},
+                        )
+                    } else {
+                        download_bundle_controlled(
+                            &artifacts,
+                            &root,
+                            &DownloadControl::default(),
+                            |_, _| {},
+                        )
+                    }
+                };
+                run().unwrap();
+                assert_eq!(
+                    fs::read(&target).unwrap(),
+                    b"healthy",
+                    "existing files must match the declared digest"
+                );
+                worker.join().unwrap();
+                // The listener is gone. Only independently verifiable direct files can be reused.
+                if archive_member {
+                    assert!(matches!(run(), Err(DownloadError::Request(_))));
+                    assert_eq!(fs::read(&target).unwrap(), b"healthy");
+                } else {
+                    run().unwrap();
+                }
+                fs::remove_dir_all(root).unwrap();
+            }
         }
 
         #[test]

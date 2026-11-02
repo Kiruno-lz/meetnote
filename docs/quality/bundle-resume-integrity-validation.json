@@ -1,0 +1,73 @@
+{
+  "schema": "meetnote.bundle-resume-integrity-validation.v1",
+  "date": "2026-11-02",
+  "regressionDate": "2026-11-01",
+  "implementationCommit": "35affc2c98122e4f21530478fd80b9e9f9e458f3",
+  "decision": "reuse existing bundle files only after a direct-file digest match; otherwise use the existing verified download and replacement path",
+  "redGreen": {
+    "test": "download::tests::bundle_resume_rechecks_existing_files_before_reusing_them",
+    "red": "existing corrupt bytes were skipped and returned as successful instead of being replaced by the declared healthy bytes",
+    "green": "controlled and progress APIs each replace corrupt direct-file and archive-member fixtures through actual loopback HTTP; four successful transfers",
+    "reuse": "second direct-file call succeeds offline after rehash; archive member cannot be verified with archive digest, so a second call attempts download and reports the closed-server request error without changing healthy member bytes",
+    "unknown": "files without a declared direct digest are downloaded rather than reused",
+    "fixtures": "red fixture removed by exact owned name and corrupt-byte marker; passing fixtures clean themselves"
+  },
+  "review": {
+    "method": "separate read-only review of both download entry points, model-manager caller and atomic replacement boundary",
+    "checks": [
+      "both APIs share one reuse predicate and existing streaming SHA implementation",
+      "archive SHA is never compared to extracted member bytes or treated as its proof",
+      "known-valid direct files avoid network; uppercase expected digests retain case-insensitive comparison",
+      "unreadable existing direct files propagate actual IO failure rather than a guessed digest result",
+      "mismatch leaves old bytes present until the existing download validates and renames its temporary file",
+      "cancellation checkpoints and source/checksum failure propagation remain in the existing download path",
+      "no new dependency, global digest cache, force-install UI or overwrite of active installed profiles"
+    ],
+    "limits": [
+      "real small HTTP/archive fixtures, not a new model-quality or throughput acceptance run",
+      "archive members may download again during a partial-install retry because schema v1 stores only the archive digest",
+      "does not add repair/reinstall for a fully installed model or guarantee runtime file immutability"
+    ]
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed --locked",
+    "testWorkspace": {
+      "mainPassed": 984,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 22
+    },
+    "buildWorkspace": "passed --locked",
+    "models": {
+      "passed": 39,
+      "failed": 0
+    },
+    "logs": {
+      "red": {
+        "path": "/tmp/meetnote-loop43-red.log",
+        "sha256": "a05d5a0d734e7261d4c9ed57bfac8a9b89bad2eb864fe0cbefe54a33cb86c9dc"
+      },
+      "models-final-green": {
+        "path": "/tmp/meetnote-loop43-models-final-green.log",
+        "sha256": "5446792411ed5406a12884919f96da44dbf7645aa338182a0a991a5878285bc4"
+      },
+      "check": {
+        "path": "/tmp/meetnote-loop43-check.log",
+        "sha256": "3dcce4268d7d53439b3af0f3c574a349ddb24a142096900b233521756f9d9287"
+      },
+      "tests": {
+        "path": "/tmp/meetnote-loop43-tests.log",
+        "sha256": "e68b444f1b9353a3e01db4cd67609ab0ade1dd5f5e496ba1ae19c3f258b3d4f7"
+      },
+      "build": {
+        "path": "/tmp/meetnote-loop43-build.log",
+        "sha256": "1beca44bdc4db371a9def1a9567a639d9177ad8b60418c8d79bb57ba9e95c403"
+      },
+      "fmt": {
+        "path": "/tmp/meetnote-loop43-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  }
+}
