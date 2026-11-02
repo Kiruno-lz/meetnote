@@ -1,0 +1,319 @@
+{
+  "schema": "meetnote.qwen-native-validation.v1",
+  "date": "2026-11-02",
+  "implementationCommit": "fe7a74d8cdbf0148c93eba620a975db1ada513f7",
+  "decision": {
+    "compatibilityFix": "accept official tokenizer layout and retain real SDK regression",
+    "modelPromotion": "reject; native English quality exceeds the frozen regression allowance; keep candidate-source and current defaults"
+  },
+  "source": {
+    "release": {
+      "name": "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+      "downloadUrl": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2",
+      "sizeBytes": 878702423,
+      "publishedSha256": [
+        "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96"
+      ],
+      "metadata": "https://github.com/k2-fsa/sherpa-onnx/releases/expanded_assets/asr-models",
+      "apiMetadata": "unavailable: public GitHub API returned 403 rate limit"
+    },
+    "assets": {
+      "sourceArchiveSha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+      "artifacts": [
+        {
+          "filename": "conv_frontend.onnx",
+          "bytes": 44148281,
+          "sha256": "d22dc4423e0940e49884e903d2ea2f7e5567c14fc1aed97e4e26d6b8f208ef9e"
+        },
+        {
+          "filename": "decoder.int8.onnx",
+          "bytes": 755914231,
+          "sha256": "4f6885be5959ae26af3089d38ee7972c5fafbeeb1cf8d5e76eab6d8b61ca5771"
+        },
+        {
+          "filename": "encoder.int8.onnx",
+          "bytes": 182491662,
+          "sha256": "60748d3e6744a57c9c91e1b17424a6c2990567e8adceb0783940c03ed98fa9d9"
+        },
+        {
+          "filename": "tokenizer/merges.txt",
+          "bytes": 1671853,
+          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
+        },
+        {
+          "filename": "tokenizer/tokenizer_config.json",
+          "bytes": 12487,
+          "sha256": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c"
+        },
+        {
+          "filename": "tokenizer/vocab.json",
+          "bytes": 2776833,
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        }
+      ],
+      "uncompressedRequiredBytes": 987015347
+    },
+    "assetReceiptSha256": "de84acda6ad4d69321fe9e71c36815d783350b76f0daa2e1c4fc4c485a034b8a",
+    "sourceCpp": {
+      "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v1.13.6/sherpa-onnx/csrc/offline-qwen3-asr-model-config.cc",
+      "sha256": "ecf7af948f6eeb4b534fff300ea87832aeca20a955b1a71bba1c24f65e9f78ee"
+    },
+    "modelLicenseSource": "https://huggingface.co/Qwen/Qwen3-ASR-0.6B"
+  },
+  "protocol": {
+    "schema": "meetnote.qwen-native-protocol.v1",
+    "date": "2026-11-02",
+    "baseCommit": "6a5d0895ecfa65839de7e45a486cee92f0c8155c",
+    "patchSha256": "5562bc969ef4982e9ce3faa656b2fff8d6e05059053a36cb65b9c40e096d2367",
+    "runnerSha256": "1cdc1548cfc52d9d326d44a3f853923d3617683064d67e74bda64826f444fd47",
+    "casesSha256": "52b1364967a8837acacaf4a1dcd1b14e99130cef837de13d24c467f70e6a8589",
+    "configSha256": {
+      "qwen": "466a1014c7fe5a3897eae3a5265181fb259e19af3c8680fc2883e90374bb6229",
+      "sense": "e5067556c42ee524662293852c295fc79f13b3949998bdd13a77072ab66066b3"
+    },
+    "sourceSha256": "393f8a14e2f5fb96746aaab342997a40641001fbd5bf9592a080a8329178ee96",
+    "nativeVersion": "sherpa-onnx 1.13.6",
+    "order": [
+      "sense-1",
+      "qwen-1",
+      "qwen-2",
+      "sense-2"
+    ],
+    "repeatsPerProcess": 2,
+    "cases": 17,
+    "loading": "per call, actual production adapter",
+    "inferenceDevice": "Cpu",
+    "threads": 4,
+    "cache": "warm by file hashing; no OS purge",
+    "groups": [
+      "zh/native",
+      "en/native",
+      "en/ami-oracle-nonoverlap"
+    ],
+    "gates": {
+      "function": "all expected rows succeed, repeat outputs stable, nonempty transcripts and integer source-bounded times",
+      "quality": "each group Qwen corpus CER or normalized WER <= SenseVoice +0.01 absolute, and >=10% relative reduction in at least one group",
+      "speed": "each group median per-call Qwen RTF <=0.5",
+      "memory": "each Qwen process peak RSS <=4GiB"
+    },
+    "scope": "known regression samples; exploration of native compatibility/quality-speed tradeoff, not new heldout/general quality acceptance or catalog activation"
+  },
+  "result": {
+    "schema": "meetnote.qwen-native-result.v1",
+    "protocolSha256": "c474fb4680f087c2f6bd30bc4483e772819b719c3720d5f0b4ddec642e39a67a",
+    "scorerSha256": "56a0dba28d022a59e41373a7932c28c389b621da9223183ea7b748176cc47258",
+    "scoringSourceSha256": "20b0d559af0d534e8d39f400e8d59d00388435ed3183d821b9ba8b4eef78f5f3",
+    "profiles": {
+      "sense": {
+        "zh/native": {
+          "calls": 24,
+          "metric": "cer",
+          "errorRate": 0.17578125,
+          "rawErrorRate": 0.17578125,
+          "medianRtf": 0.07148042477515637,
+          "medianSeconds": 0.901561396,
+          "maxSeconds": 1.074049917,
+          "errors": 180,
+          "referenceUnits": 1024
+        },
+        "en/native": {
+          "calls": 24,
+          "metric": "normalized_wer",
+          "errorRate": 0.03636363636363636,
+          "rawErrorRate": 0.07207207207207207,
+          "medianRtf": 0.08298545259803994,
+          "medianSeconds": 0.7500321455,
+          "maxSeconds": 0.88637575,
+          "errors": 16,
+          "referenceUnits": 440
+        },
+        "en/ami-oracle-nonoverlap": {
+          "calls": 20,
+          "metric": "normalized_wer",
+          "errorRate": 0.2,
+          "rawErrorRate": 0.2631578947368421,
+          "medianRtf": 0.10540578546042002,
+          "medianSeconds": 0.652461812,
+          "maxSeconds": 0.887674875,
+          "errors": 80,
+          "referenceUnits": 400
+        }
+      },
+      "qwen": {
+        "zh/native": {
+          "calls": 24,
+          "metric": "cer",
+          "errorRate": 0.15625,
+          "rawErrorRate": 0.15625,
+          "medianRtf": 0.27025992895695317,
+          "medianSeconds": 3.446365896,
+          "maxSeconds": 3.9262963749999997,
+          "errors": 160,
+          "referenceUnits": 1024
+        },
+        "en/native": {
+          "calls": 24,
+          "metric": "normalized_wer",
+          "errorRate": 0.07272727272727272,
+          "rawErrorRate": 0.10810810810810811,
+          "medianRtf": 0.3466101480122773,
+          "medianSeconds": 3.131673083,
+          "maxSeconds": 3.342892625,
+          "errors": 32,
+          "referenceUnits": 440
+        },
+        "en/ami-oracle-nonoverlap": {
+          "calls": 20,
+          "metric": "normalized_wer",
+          "errorRate": 0.14,
+          "rawErrorRate": 0.22105263157894736,
+          "medianRtf": 0.44424408651050074,
+          "medianSeconds": 2.7498708955,
+          "maxSeconds": 3.809517792,
+          "errors": 56,
+          "referenceUnits": 400
+        }
+      }
+    },
+    "qualityDeltas": {
+      "zh/native": -0.01953125,
+      "en/native": 0.03636363636363636,
+      "en/ami-oracle-nonoverlap": -0.06
+    },
+    "runs": [
+      {
+        "name": "sense-1",
+        "reportSha256": "c6c17d4a25ec92d2135b62830637d5233e8946185e0518196b8863dc1592d72c",
+        "predictionSha256": "b32fa63d45616e01d9c01ebd0b6f72cadc1a9a528861b791413ae6e7d48a8632",
+        "peakRssBytes": 1100234752,
+        "peakFootprintBytes": 697517112,
+        "calls": 34
+      },
+      {
+        "name": "qwen-1",
+        "reportSha256": "f122501350aae866d76f396abe6234caef2498e47875e15a4684e322be89472d",
+        "predictionSha256": "c09b6d6ccd4a10c08e3576d6a5fd4f503be3b7989a25d5cf1d403d77d6aaec1f",
+        "peakRssBytes": 2387066880,
+        "peakFootprintBytes": 2167474768,
+        "calls": 34
+      },
+      {
+        "name": "qwen-2",
+        "reportSha256": "9b0b9fea0c1acdf08568970880cac5836c095f1e022cf68aacd7483eed5b6310",
+        "predictionSha256": "1ec002748abc5ea74634f6bd91bcabaa9102f046aae39fc7731dcb1fd489bef6",
+        "peakRssBytes": 2363998208,
+        "peakFootprintBytes": 2089699896,
+        "calls": 34
+      },
+      {
+        "name": "sense-2",
+        "reportSha256": "e84442416b6cc3768769acf14fddc49d1a07c7c084183a61573c65a3fb786047",
+        "predictionSha256": "57175eab779d06ccf8db827036c0bd30751af05ecd73578351119796f94cf018",
+        "peakRssBytes": 1098874880,
+        "peakFootprintBytes": 717177912,
+        "calls": 34
+      }
+    ],
+    "gates": {
+      "function": true,
+      "qualityNoGroupRegresses": false,
+      "qualityImprovesOneGroup": true,
+      "speed": true,
+      "rss": true
+    },
+    "passed": false,
+    "qualityAcceptance": "not_assessed; previously used regression data, no heldout, word-time, long-input or production acceptance"
+  },
+  "summarySha256": "9e9261998ad6454507b02de7bb265c5a10f14183ed6867c7edd4645b9a102d29",
+  "redGreen": {
+    "red": "official six-file layout rejected for absent unrelated tokens.txt",
+    "green": "Qwen requires three graphs and tokenizer/vocab.json, merges.txt, tokenizer_config.json; no global tokens path",
+    "existingFamilies": "Paraformer/SenseVoice retain tokens.txt; actual SenseVoice baseline and workspace tests pass",
+    "realIgnored": "explicit verified bundle + AMI 8.67s audio; actual SDK whole-file and single-window output text equal and source-bounded, no tokens.txt",
+    "benchmark": "136 calls, 68 per model; four stable outputs per case across two processes; no inference failures"
+  },
+  "review": {
+    "method": "independent read-only source and raw-receipt review after functional tests and frozen protocol execution",
+    "checks": [
+      "pinned v1.13.6 C++ validation confirms tokenizer requirements, not latest README alone",
+      "original GitHub archive matches published SHA256; six source files and SenseVoice catalog values rechecked after all runs",
+      "both configs and case bytes bind to report snapshots and runner SHA; all four reports have full coverage",
+      "corpus error rates weight reference units, not mean per-case percentages; raw English WER also regresses",
+      "per-round normalized native English errors rise from 4/110 to 8/110; one improved case does not offset two worsened cases",
+      "per-case integer ranges and exact repeat transcripts checked independently; original source patch unchanged",
+      "no artifact download or Python runtime added to product backend; catalog/default untouched"
+    ],
+    "limits": [
+      "known regression clips, no new meeting/speaker heldout or general quality acceptance",
+      "Qwen current adapter uses automatic language detection; SenseVoice receives requested language; forced Qwen language not validated",
+      "Qwen native defaults including max_new_tokens=128 retained; no post-result parameter tuning",
+      "short source-bounded coarse ranges do not establish word timing, long-input, cancellation or model-residency acceptance",
+      "RSS and macOS footprint recorded separately per process; no whole-machine resource claim"
+    ],
+    "scorerCorrection": "first temporary scorer passed a string to the Path-based hash helper and failed before publishing; retry wraps Path, scoring rules and frozen gates unchanged"
+  },
+  "validation": {
+    "fmt": "passed",
+    "checkWorkspace": "passed --locked",
+    "testWorkspace": {
+      "mainPassed": 985,
+      "childPassed": 3,
+      "failed": 0,
+      "ignored": 23
+    },
+    "buildWorkspace": "passed --locked",
+    "explicitModelTest": "passed separately, two actual SDK calls",
+    "logs": {
+      "layout-red": {
+        "path": "/tmp/meetnote-loop44-layout-red.log",
+        "sha256": "a16a4a84daf4dc71ef38812fb27b7a111d3b0c7b3528074b6fec6d4e91152fe6"
+      },
+      "layout-green": {
+        "path": "/tmp/meetnote-loop44-layout-green.log",
+        "sha256": "536d6133423f445a7b1555b56ec78ac76e6ad069fb8b239fc93f397db617d3d4"
+      },
+      "native-green": {
+        "path": "/tmp/meetnote-loop44-native-green.log",
+        "sha256": "009169ff37c07b9bd629403c5653e5c8657e63fd8dae6ecf620fc0fb62cc74b9"
+      },
+      "check": {
+        "path": "/tmp/meetnote-loop44-check.log",
+        "sha256": "aca02ad888565af89d58775bb5b39db3f72baa357f5a5f21fe71cc890b2561b0"
+      },
+      "tests": {
+        "path": "/tmp/meetnote-loop44-tests.log",
+        "sha256": "aa71a7affc9d6fe687905616f2000ae3ddf5849195395b7789da3b98088357da"
+      },
+      "build": {
+        "path": "/tmp/meetnote-loop44-build.log",
+        "sha256": "f78612336b2fc740c3252c9076f2128f054538ed0be1dd0fbfae19f29d007fd6"
+      },
+      "fmt": {
+        "path": "/tmp/meetnote-loop44-fmt.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "real": {
+        "path": "/tmp/meetnote-loop44-real.log",
+        "sha256": "3da09167a8eb7de6c9380e83ccc7b8c21dc4bed22f4f02e001e7a67f6927a53a"
+      },
+      "release-build": {
+        "path": "/tmp/meetnote-loop44-release-build.log",
+        "sha256": "ae74e0eee0af644ae0fcec87480c0028019530e89c2a754ad1e991c95fc90154"
+      },
+      "score": {
+        "path": "/tmp/meetnote-loop44-score.log",
+        "sha256": "be5f0729507f3bc2689a3d27e23211c17d49ee7e5b0c94aaa7f73dfba38f1a5c"
+      },
+      "score-retry": {
+        "path": "/tmp/meetnote-loop44-score-retry.log",
+        "sha256": "ba1027901d260da8d9df785d65891e9998bc2828caf44ca3768aae0820b9dc2c"
+      }
+    }
+  },
+  "rawRoot": "eval-data/optimization-2026-11-02/qwen-native",
+  "temporaryCode": "extractor/scorer removed after preserving fingerprints and core method",
+  "temporaryTools": {
+    "meetnote-loop44-extract.py": "e69654de717e822a70ea9daf91ce936458b26e08051edd9ddc5adb179ebca43a",
+    "meetnote-loop44-score.py": "56a0dba28d022a59e41373a7932c28c389b621da9223183ea7b748176cc47258"
+  }
+}

@@ -116,7 +116,7 @@ pub trait DiarizationBackend: Send + Sync {
 - 模型族：Paraformer、SenseVoice 与 Qwen3-ASR。
 - 设备：CPU；默认线程数为可用 CPU 数与四的较小值。固定发行包不能保证 Core ML provider，显式 Core ML/Metal 请求返回 `DeviceUnavailable`，避免静默 CPU 回退。
 - Paraformer/SenseVoice：要求 `model.int8.onnx` 或 `model.onnx`，以及 `tokens.txt`；SenseVoice 传递请求语言并启用 ITN。
-- Qwen3-ASR：要求 `conv_frontend.onnx`、encoder、decoder、`tokenizer/` 和 `tokens.txt`。
+- Qwen3-ASR：要求 `conv_frontend.onnx`、encoder、decoder，以及 `tokenizer/{vocab.json,merges.txt,tokenizer_config.json}`；不设置 Paraformer/SenseVoice 使用的 `tokens.txt`。
 - whole-file：30 秒以内保留完整文本 baseline；更长的 Paraformer/SenseVoice 输入改用同一个 recognizer 的有界推理与拼接。
 - windowed：复用 recognizer；优先按 token timestamp 与 valid core 拼接，SentencePiece 的显式词边界、独立边界 token 和 `@@` 词内连续标记分别处理；`▁` 只表示空白，不等于所有词边界；复用锁定的 `unicode-segmentation` 1.13.3 按完整还原文本的 UAX #29 词起点识别延续，单次前向遍历保留 UTF-8 偏移。明确的词内连续优先于停顿、句末标点和段长限制，中文词起点仍受这些时间与句界约束，避免把单词或缩写拆开，也不把跨长静音的中文整段吞并；没有时间戳时使用近似文本边界去重，无法可靠匹配时保留文本。
 - probe：检查 backend ID、模型目录和模型族必需文件；真实 recognizer 创建属于加载验证。
