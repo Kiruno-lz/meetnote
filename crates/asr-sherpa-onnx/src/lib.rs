@@ -64,8 +64,11 @@ impl AsrBackend for SherpaOnnxAsrBackend {
                 require_file(&directory, "conv_frontend.onnx")?;
                 require_any_file(&directory, QWEN3_ENCODER_FILES)?;
                 require_any_file(&directory, QWEN3_DECODER_FILES)?;
-                require_directory(&directory.join("tokenizer"))?;
-                require_file(&directory, "tokens.txt")?;
+                let tokenizer = directory.join("tokenizer");
+                require_directory(&tokenizer)?;
+                for name in ["vocab.json", "merges.txt", "tokenizer_config.json"] {
+                    require_file(&tokenizer, name)?;
+                }
             }
             ModelFamily::Unsupported => {
                 return Err(BackendError {
@@ -542,7 +545,6 @@ fn build_config(
     num_threads: i32,
 ) -> Result<OfflineRecognizerConfig, BackendError> {
     let directory = model_directory(&request.model);
-    let tokens = directory.join("tokens.txt");
     let provider = match request.device {
         ComputeDevice::Auto | ComputeDevice::Cpu => "cpu",
         // The pinned sherpa runtime has no provider-discovery/effective-provider
@@ -564,12 +566,12 @@ fn build_config(
         }
     };
     let mut config = OfflineRecognizerConfig::default();
-    config.model_config.tokens = Some(tokens.display().to_string());
     config.model_config.num_threads = num_threads;
     config.model_config.provider = Some(provider.into());
 
     match model_family(&request.model) {
         ModelFamily::Paraformer => {
+            config.model_config.tokens = Some(directory.join("tokens.txt").display().to_string());
             let model = require_any_file(&directory, SINGLE_GRAPH_MODEL_FILES)?;
             config.model_config.paraformer = OfflineParaformerModelConfig {
                 model: Some(model.display().to_string()),
@@ -587,6 +589,7 @@ fn build_config(
             };
         }
         ModelFamily::SenseVoice => {
+            config.model_config.tokens = Some(directory.join("tokens.txt").display().to_string());
             let model = require_any_file(&directory, SINGLE_GRAPH_MODEL_FILES)?;
             config.model_config.sense_voice = OfflineSenseVoiceModelConfig {
                 model: Some(model.display().to_string()),
@@ -820,6 +823,48 @@ mod tests {
         ));
         fs::write(root.join("tokens.txt"), b"<blk> 0\n").unwrap();
         assert!(backend.probe(&model_ref("paraformer-zh", &root)).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn qwen_uses_its_tokenizer_bundle_without_an_unrelated_tokens_file() {
+        let root =
+            std::env::temp_dir().join(format!("meetnote-qwen-layout-{}", std::process::id()));
+        fs::create_dir_all(root.join("tokenizer")).unwrap();
+        for file in [
+            "conv_frontend.onnx",
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "tokenizer/vocab.json",
+            "tokenizer/merges.txt",
+            "tokenizer/tokenizer_config.json",
+        ] {
+            fs::write(root.join(file), b"layout-fixture").unwrap();
+        }
+        let backend = SherpaOnnxAsrBackend::default();
+        let model = model_ref("qwen3-asr-0.6b", &root);
+        backend
+            .probe(&model)
+            .expect("the official Qwen bundle has no tokens.txt");
+        let config = build_config(
+            &AsrRequest {
+                audio_path: "unused.wav".into(),
+                model: model.clone(),
+                language: None,
+                device: ComputeDevice::Cpu,
+            },
+            4,
+        )
+        .unwrap();
+        assert!(config.model_config.tokens.is_none());
+        for file in ["vocab.json", "merges.txt", "tokenizer_config.json"] {
+            let path = root.join("tokenizer").join(file);
+            fs::remove_file(&path).unwrap();
+            let error = backend.probe(&model).unwrap_err();
+            assert_eq!(error.code, BackendErrorCode::ModelMissing);
+            assert!(error.message.contains(file));
+            fs::write(path, b"layout-fixture").unwrap();
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

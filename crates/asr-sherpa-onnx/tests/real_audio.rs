@@ -152,3 +152,60 @@ fn paraformer_rejects_silence_without_hallucinated_transcripts() {
         contracts::BackendErrorCode::OutputValidationFailed
     );
 }
+
+#[test]
+#[ignore = "requires MEETNOTE_QWEN3_ONNX_MODEL_DIR and MEETNOTE_QWEN3_ONNX_AUDIO (short mono 16k WAV)"]
+fn qwen_official_bundle_transcribes_without_a_tokens_file() {
+    let root = std::env::var("MEETNOTE_QWEN3_ONNX_MODEL_DIR").unwrap();
+    let audio_path = std::env::var("MEETNOTE_QWEN3_ONNX_AUDIO").unwrap();
+    assert!(!Path::new(&root).join("tokens.txt").exists());
+    let audio = audio::read_audio_mono_16k(&audio_path).unwrap();
+    assert!(!audio.samples.is_empty() && audio.samples.len() <= 30 * 16000);
+    let request = AsrRequest {
+        audio_path,
+        model: ModelRef {
+            backend_id: "sherpa-onnx".into(),
+            model_id: "qwen3-asr-0.6b".into(),
+            revision: Some("2026-03-25".into()),
+            artifact_path: root,
+            artifacts: Vec::new(),
+        },
+        language: None,
+        device: ComputeDevice::Cpu,
+    };
+    let backend = SherpaOnnxAsrBackend::default();
+    let (context, _) = JobRuntime::default().create_job();
+    let whole = futures::executor::block_on(backend.transcribe(request.clone(), context)).unwrap();
+    let mut session = backend.create_window_session(request).unwrap();
+    let total = audio.samples.len() as u64;
+    let (context, _) = JobRuntime::default().create_job();
+    session
+        .process_window(
+            Arc::new(audio::AudioWindow {
+                sequence: 0,
+                sample_rate: 16000,
+                samples: audio.samples.into(),
+                global_start_sample: 0,
+                global_end_sample: total,
+                valid_core_start_sample: 0,
+                valid_core_end_sample: total,
+                source_total_samples: Some(total),
+                is_final: true,
+            }),
+            &context,
+        )
+        .unwrap();
+    let window = session.finish().unwrap();
+    let text = |result: &contracts::AsrResult| {
+        result
+            .segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<String>()
+    };
+    assert!(!text(&whole).trim().is_empty());
+    assert_eq!(text(&whole), text(&window));
+    for segment in whole.segments.iter().chain(&window.segments) {
+        assert!(segment.start_ms < segment.end_ms && segment.end_ms <= total * 1000 / 16000);
+    }
+}
