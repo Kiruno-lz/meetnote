@@ -149,8 +149,9 @@ mod screenshots {
         (Route::Settings, "settings"),
     ];
     /// Overlays captured over a route, with their baseline file name prefix.
-    const OVERLAYS: [(Route, Overlay, &str); 23] = [
+    const OVERLAYS: [(Route, Overlay, &str); 24] = [
         (Route::Meetings, Overlay::SavedMarkdown, "meetings-notes"),
+        (Route::Models, Overlay::SelectedModel, "models-selected"),
         (Route::Meetings, Overlay::WorkspaceSearch, "meetings-search"),
         (
             Route::Meetings,

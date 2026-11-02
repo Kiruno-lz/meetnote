@@ -100,6 +100,10 @@ queued -> downloading <-> paused -> verifying -> completed
 
 加载 catalog 时校验 schema、ID 唯一性、来源和 license。安装状态只根据声明的 artifact 是否齐全划分为 `missing`、`partial` 或 `installed`，不加载模型。
 
+模型卡片的“当前选择”只标记桌面新处理请求将使用的 profile，独立于下载、安装和 probe 状态；不表示已有任务的冻结选择或模型加载成功。按任务、模型 ID、支持的 backend 和完整托管路径匹配：单文件比较实际文件路径，bundle 对照 catalog 的每个相对文件名匹配根目录，支持 CoreML 多层路径，不将同 ID 的外部副本标成托管模型。显式 backend 尚未选择模型时不沿用默认标记；没有显式 backend/model 时遵循桌面注入的默认引用。匹配仅使用已发布安装快照，不在界面执行文件检查、规范化路径或推理。
+
+Models 顶部提示与桌面处理入口使用相同的当前配置缺模型判断，不再只读取默认模型的文件状态；外部引用仍由后端 preflight 验证。处理入口的缺模型提示复用同一托管路径比较；嵌套 bundle 的 `missing/partial` 仍须阻止启动，不能因 artifact 的直接父目录不同而绕过提示。参考[模型选择与嵌套包回执](../quality/selected-model-validation.json)。
+
 ### 2. 下载后快速 probe
 
 下载完成并通过大小/checksum 后，`ModelManager` 为条目中的每个 `candidateBackend` 构造 `ModelRef` 并调用 backend probe。失败时模型不能进入 `completed`。

@@ -139,14 +139,14 @@ MeetNote  透明标题栏 + 玻璃侧栏 + 不透明内容平面
 | 内容复制 | 笔记页复制当前已加载的保存快照，保留 Markdown、Unicode 与换行；原文页按同一发言投影复制完整转写，保留回合起始时间、说话人与段落原文，包含未标注原始段落；成功后通知，草稿与文件字节保持不变；空正文、不可用快照、视图不匹配和工作区切换不复制；中英文、最小窗口及 Tab/Enter 覆盖 | TXT/SRT 等文件导出 |
 | Documents | 目录数据源、三层树、展开、拖动重排、Summary/Original/编辑、处理与取消；内容平面顶部列出 scanner issue（路径与原因）；标题、标签、状态、摘要与正文按文档保存草稿，经一次带 revision 的 `Update` 提交；树移动经 `Reparent`/`Reorder` 命令；revision 冲突显示通知并保留草稿，用户重新加载后才丢弃；Original 视图的 speaker 列表支持改名与确认后合并；scanner issue 按 `DocumentIssueKind` 本地化；选中文档的音频在后台检查，缺失或 checksum 不符时在树、标题栏与 Detail 标记并禁止处理，经文件选择按 revision 重新关联；列表读取与处理启动在后台执行；整个处理 future 由 GPUI 后台执行器轮询，包含推理后来源校验和保存，等待恢复后也不回到界面线程；界面只接收进度与最终结果，启动完成前的取消在启动返回后生效 | — |
 | Detail | 内容平面内右侧不透明面板：identity、audio source、层级、document status、revision、processing provenance、最近错误、结果统计与缺失的 provenance 项、transcript | 单文档的 Agent 变更来源（mutation journal 尚无按文档查询） |
-| Models | catalog 分组、下载、暂停、继续、取消和进度，安装状态来自 `InstallationService`；卡片显示 license、来源与短 checksum，展开后显示完整 checksum、逐 backend 与逐文件 probe 结果；probe 结果、类型与 UTC 时间；本地化的失败原因与不可读记录；`ready` 且缺失/部分安装的模型可下载或重试，已安装模型可重新 probe | — |
+| Models | catalog 分组、下载、暂停、继续、取消和进度，安装状态来自 `InstallationService`；卡片按新任务的有效引用标记“当前选择”，与已安装或 probe 通过分别展示；托管路径比较支持嵌套 bundle，外部副本不误标；卡片显示 license、来源与短 checksum，展开后显示完整 checksum、逐 backend 与逐文件 probe 结果；probe 结果、类型与 UTC 时间；本地化的失败原因与不可读记录；`ready` 且缺失/部分安装的模型可下载或重试，已安装模型可重新 probe | — |
 | Settings | 外观（主题、材质）、文档工作区（后台切换并按 revision 保存；切换失败保持原目录，保存失败则切回；切换后重新订阅并清理旧目录的草稿、选择与 Assistant 待确认项）、locale、ASR/DIA backend/model、语言、设备、speaker 数、stage、Speaker Library 路径与管理（profile 列表、改名、确认后合并与删除；删除后焦点移到下一 profile 名称，没有下一项时移到声纹库标题，异步写入期间用户已移动的焦点保持不变；路径变化时重建服务并同步处理参数）；即时保存项经 `update_if_equal` 在后台逐项提交，Assistant 连接区为草稿并以 typed patch 保存（新建连接为一次 `patch_if_equal`）；revision 冲突后从 repository 重新加载再重试 | 能力联动说明和完整校验反馈 |
 
 当前 GPUI 上的测试基线：
 
 - L1：i18n key、颜色字面量、渲染路径文件探测，以及 `controller.rs` 中文件探测与线程创建的源码扫描；对比度、`effective_material` 与 token 纯函数；
 - L2：路由结构与交互测试（`crates/ui/tests/routes.rs`、`crates/ui/src/lib.rs`、`crates/ui/src/document_tests.rs`、`crates/ui/src/speaker_tests.rs`），其中阻塞的 fake repository/model manager 断言文件 IO 不占用 UI 线程；树快捷键覆盖 revision、层级拒绝与焦点，Speaker Library 删除覆盖下一项、空库与异步焦点保持；真实 worker 等待使用 20 s deadline，挂起的 fake 调用必须显式放行，pending timer 用固定时间验证过期边界；
-- L3：四个 route、键盘焦点态、打开的下拉与对话框、Detail 与 issue、编辑与冲突、speaker 列表与 Speaker Library、缺失音频与工作区设置、Assistant 部分结果与 review 队列在四种外观下的 108 张基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN），以及 release 构建的资源探测。
+- L3：四个 route、键盘焦点态、打开的下拉与对话框、Detail 与 issue、编辑与冲突、speaker 列表与 Speaker Library、缺失音频与工作区设置、Assistant 部分结果与 review 队列在四种外观下的 112 张基线（`crates/ui/tests/visual/`，scale factor 2.0，zh-CN），以及 release 构建的资源探测。
 
 处理执行位置与保存前取消检查的红绿回归、独立 review 见[处理执行器验证](../quality/ui-processing-executor-validation.json)。该验证覆盖执行上下文与写入边界，不代表实测帧率或音频质量。
 

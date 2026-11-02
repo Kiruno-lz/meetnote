@@ -379,6 +379,122 @@ fn open_on_models(
     (view, cx)
 }
 
+#[gpui::test]
+fn model_cards_mark_the_selected_managed_reference_without_claiming_readiness(
+    cx: &mut TestAppContext,
+) {
+    let model = bundle_asr();
+    let mut item = availability(model.clone(), ModelInstallState::Missing);
+    item.artifact_paths = model.artifact_paths("managed");
+    let reference = ModelRef {
+        backend_id: "sherpa-onnx".into(),
+        model_id: model.id.clone(),
+        revision: model.revision.clone(),
+        artifact_path: model.install_directory("managed").display().to_string(),
+        artifacts: vec![],
+    };
+    let published = published(vec![item]);
+    let (view, cx) = open_models(
+        cx,
+        FakeModels::new(catalog(vec![model])),
+        &published,
+        test_settings(),
+    );
+    cx.simulate_resize(crate::pages::chrome::MIN_WINDOW_SIZE);
+    view.update(cx, |root, cx| {
+        root.settings_draft.asr_backend_id = Some(reference.backend_id.clone());
+        root.settings_draft.asr_model = Some(reference.clone());
+        cx.notify();
+    });
+    for locale in [crate::i18n::Locale::ZhCn, crate::i18n::Locale::EnUs] {
+        view.update(cx, |root, cx| {
+            root.ui.locale = locale;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let marker = rendered(cx, selector("selected", "bundle-asr"));
+        assert!(within(
+            marker,
+            rendered(cx, selector("header", "bundle-asr"))
+        ));
+        assert!(
+            shown(cx, "download", "bundle-asr"),
+            "selection does not imply installed"
+        );
+    }
+    for scenario in [
+        "external-path",
+        "other-id",
+        "unsupported-backend",
+        "backend-without-model",
+    ] {
+        view.update(cx, |root, cx| {
+            root.settings_draft.asr_model = Some(reference.clone());
+            match scenario {
+                "external-path" => {
+                    root.settings_draft
+                        .asr_model
+                        .as_mut()
+                        .unwrap()
+                        .artifact_path = "external-copy".into()
+                }
+                "other-id" => {
+                    root.settings_draft.asr_model.as_mut().unwrap().model_id = "other".into()
+                }
+                "unsupported-backend" => {
+                    root.settings_draft.asr_model.as_mut().unwrap().backend_id =
+                        "unsupported".into()
+                }
+                "backend-without-model" => root.settings_draft.asr_model = None,
+                _ => unreachable!(),
+            }
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(!shown(cx, "selected", "bundle-asr"), "{scenario}");
+    }
+    view.update(cx, |root, cx| {
+        root.settings_draft.asr_backend_id = None;
+        root.settings_draft.asr_model = None;
+        root.services.asr_model = reference;
+        cx.notify();
+    });
+    cx.run_until_parked();
+    rendered(cx, selector("selected", "bundle-asr"));
+}
+
+#[gpui::test]
+fn model_page_readiness_follows_the_selected_profile_instead_of_default_files(
+    cx: &mut TestAppContext,
+) {
+    let model = bundle_asr();
+    let reference = ModelRef {
+        backend_id: "sherpa-onnx".into(),
+        model_id: model.id.clone(),
+        revision: model.revision.clone(),
+        artifact_path: model.install_directory("managed").display().to_string(),
+        artifacts: vec![],
+    };
+    let mut item = availability(model.clone(), ModelInstallState::Installed);
+    item.artifact_paths = model.artifact_paths("managed");
+    let state = published(vec![item]);
+    let (view, cx) = open_models(
+        cx,
+        FakeModels::new(catalog(vec![model])),
+        &state,
+        test_settings(),
+    );
+    view.update(cx, |root, cx| {
+        root.settings_draft.asr_backend_id = Some(reference.backend_id.clone());
+        root.settings_draft.asr_model = Some(reference);
+        cx.notify();
+    });
+    assert_eq!(
+        view.read_with(cx, |root, _| readiness_text(root, root.ui.locale)),
+        "说话人分离模型尚未就绪，可在下方下载或到设置中选择"
+    );
+}
+
 /// What the card of `model_id` shows, from the state the view holds.
 fn facts(cx: &mut VisualTestContext, view: &View, model_id: &str) -> ModelFacts {
     view.read_with(cx, |root, _| {
@@ -772,7 +888,7 @@ fn a_retry_after_terminal_tasks_keeps_its_progress_and_controls_visible(cx: &mut
 }
 
 #[gpui::test]
-fn the_page_says_whether_the_default_models_are_ready_and_each_family_what_is_downloaded(
+fn the_page_says_whether_configured_models_are_ready_and_each_family_what_is_downloaded(
     cx: &mut TestAppContext,
 ) {
     let models = FakeModels::new(catalog(vec![
@@ -785,6 +901,7 @@ fn the_page_says_whether_the_default_models_are_ready_and_each_family_what_is_do
         availability(native_diarization(), ModelInstallState::Partial),
         availability(candidate_asr(), ModelInstallState::Missing),
     ]);
+    // Existing default files cannot replace an explicit backend's missing choice.
     state.lock().unwrap().default_asr_ready = true;
     let (view, cx) = open_models(cx, models, &state, test_settings());
 
@@ -793,11 +910,8 @@ fn the_page_says_whether_the_default_models_are_ready_and_each_family_what_is_do
     let readiness = rendered(cx, "models-readiness");
     assert!(within(readiness, page));
     assert_eq!(
-        view.read_with(cx, |root, _| readiness_text(
-            &root.installation,
-            root.ui.locale
-        )),
-        "说话人分离模型尚未就绪，可在下方下载或到设置中选择"
+        view.read_with(cx, |root, _| readiness_text(root, root.ui.locale)),
+        "语音识别和说话人分离模型尚未就绪，可在下方下载或到设置中选择"
     );
 
     // The page keeps one rhythm of spacing tokens: the title and its

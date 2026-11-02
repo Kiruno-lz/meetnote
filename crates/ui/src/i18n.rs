@@ -38,6 +38,8 @@ pub fn text(locale: Locale, key: &str) -> &'static str {
         (Locale::EnUs, "saved_markdown") => "Notes",
         (Locale::ZhCn, "saved_markdown_hint") => "已保存的 Markdown；未保存的修改保留在编辑器中。",
         (Locale::EnUs, "saved_markdown_hint") => "Saved Markdown. Unsaved changes remain in the editor.",
+        (Locale::ZhCn, "model_current_selection") => "当前选择",
+        (Locale::EnUs, "model_current_selection") => "Selected",
         (Locale::ZhCn, "copy_transcript") => "复制转写",
         (Locale::EnUs, "copy_transcript") => "Copy transcript",
         (Locale::ZhCn, "transcript_copied") => "转写已复制。",
