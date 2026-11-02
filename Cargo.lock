@@ -188,6 +188,7 @@ dependencies = [
  "hound",
  "llm",
  "models",
+ "regex",
  "runtime",
  "schemars",
  "serde",

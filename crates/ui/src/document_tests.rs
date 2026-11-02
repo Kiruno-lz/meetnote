@@ -566,6 +566,26 @@ fn workspace_search_opens_raw_transcripts_without_processing_metadata(cx: &mut T
 }
 
 #[gpui::test]
+fn workspace_search_uses_the_same_unicode_match_when_opening_evidence(cx: &mut TestAppContext) {
+    let documents = DocumentsRoot::new();
+    let mut document = DocumentState::new(ProjectId::new("meeting"), "Review", "audio.wav");
+    document.results.transcript.push(TranscriptSegment {
+        id: "raw-1".into(),
+        start_ms: 1000,
+        end_ms: 2000,
+        text: "ΟΣ".into(),
+    });
+    documents.put(document, "Notes");
+    let before = documents.package_bytes("meeting");
+    let (view, cx, _changes) = open_on(cx, &documents);
+    search(cx, &view, "οσ");
+    click_selector(cx, "search-open-meeting");
+    rendered(cx, "transcript-search-match");
+    assert!(cx.debug_bounds("transcript-search-stale").is_none());
+    assert_eq!(documents.package_bytes("meeting"), before);
+}
+
+#[gpui::test]
 fn workspace_search_reveals_keyboard_results_in_a_minimum_window(cx: &mut TestAppContext) {
     let documents = DocumentsRoot::new();
     for index in 0..40 {

@@ -50,7 +50,8 @@ pub use contracts::BackendDescriptor;
 pub use document_commands::{DocumentCommandError, DocumentCommandService};
 pub use document_issues::DocumentIssueKind;
 pub use document_search::{
-    DocumentSearchHit, DocumentSearchResults, SearchSource, TranscriptSearchTarget,
+    DocumentSearchHit, DocumentSearchQuery, DocumentSearchResults, SearchSource,
+    TranscriptSearchTarget,
 };
 pub use documents_root::{
     validate_documents_root, DocumentRepositoryFactory, DocumentsRoot, DocumentsRootError,

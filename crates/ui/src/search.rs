@@ -8,7 +8,7 @@ use crate::{
     state::ContentMode,
     theme,
 };
-use application::{DocumentSearchHit, DocumentSearchResults, SearchSource};
+use application::{DocumentSearchHit, DocumentSearchQuery, DocumentSearchResults, SearchSource};
 use gpui::{div, prelude::*, Context, Entity, Focusable, IntoElement, ScrollHandle, Window};
 use runtime::CancellationToken;
 
@@ -28,7 +28,7 @@ pub(crate) struct WorkspaceSearch {
 
 pub(crate) struct OpenedTranscript {
     pub(crate) hit: DocumentSearchHit,
-    pub(crate) query: String,
+    pub(crate) query: Option<DocumentSearchQuery>,
     pub(crate) pending: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
@@ -159,7 +159,7 @@ impl RootView {
         self.select_project(hit.document_id.clone(), cx);
         self.search.opened_transcript = hit.transcript_target.as_ref().map(|_| OpenedTranscript {
             hit: hit.clone(),
-            query: self.search.query.trim().to_lowercase(),
+            query: DocumentSearchQuery::new(&self.search.query).ok(),
             pending: std::rc::Rc::new(std::cell::Cell::new(true)),
         });
         // Reopening a result is an explicit request to return to its evidence.

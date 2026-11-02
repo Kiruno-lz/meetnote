@@ -1,7 +1,33 @@
 use crate::DocumentService;
 use contracts::DocumentRecord;
 use domain::ProjectId;
+use regex::{Regex, RegexBuilder};
 use runtime::CancellationToken;
+
+/// A bounded literal query shared by search and evidence validation.
+#[derive(Debug, Clone)]
+pub struct DocumentSearchQuery(Regex);
+
+impl DocumentSearchQuery {
+    pub fn new(query: &str) -> Result<Self, String> {
+        let query = query.trim();
+        if query.is_empty() {
+            return Err("Search text must not be empty".into());
+        }
+        if query.chars().count() > 160 {
+            return Err("Search text must contain at most 160 characters".into());
+        }
+        RegexBuilder::new(&regex::escape(query))
+            .case_insensitive(true)
+            .build()
+            .map(Self)
+            .map_err(|error| format!("Cannot prepare search text: {error}"))
+    }
+
+    pub fn is_match(&self, text: &str) -> bool {
+        self.0.is_match(text)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SearchSource {
@@ -66,7 +92,7 @@ pub struct DocumentSearchResults {
 }
 
 impl DocumentService {
-    /// Literal, case-insensitive search of persisted workspace facts.
+    /// Literal search of persisted facts using Unicode simple case folding.
     /// Call off the UI thread; no index or model is required.
     pub fn search(
         &self,
@@ -79,10 +105,7 @@ impl DocumentService {
         if query.is_empty() || limit == 0 || cancellation.is_cancelled() {
             return Ok(result);
         }
-        if query.chars().count() > 160 {
-            return Err("Search text must contain at most 160 characters".into());
-        }
-        let query = query.to_lowercase();
+        let query = DocumentSearchQuery::new(query)?;
         let documents = self.frozen();
         // Metadata scanning holds repository locks. Read records only after
         // the scan returns, never recursively inside its visitor.
@@ -122,7 +145,7 @@ impl DocumentService {
     }
 }
 
-fn find_hit(record: &DocumentRecord, query: &str) -> Option<DocumentSearchHit> {
+fn find_hit(record: &DocumentRecord, query: &DocumentSearchQuery) -> Option<DocumentSearchHit> {
     let state = &record.state;
     let hit = |text: &str, source, start_ms| {
         snippet(text, query).map(|snippet| DocumentSearchHit {
@@ -179,21 +202,11 @@ fn find_hit(record: &DocumentRecord, query: &str) -> Option<DocumentSearchHit> {
         .or_else(|| hit(&record.markdown, SearchSource::Markdown, None))
 }
 
-fn snippet(text: &str, query: &str) -> Option<String> {
-    let lowered = text.to_lowercase();
-    let at = lowered.find(query)?;
-    // Lowercasing can change UTF-8 lengths (for example İ -> i + dot).
-    // Locate the original character rather than slicing by a folded offset.
-    let mut folded_bytes = 0;
-    let position = text
-        .chars()
-        .position(|character| {
-            let contains =
-                folded_bytes + character.to_lowercase().map(char::len_utf8).sum::<usize>() > at;
-            folded_bytes += character.to_lowercase().map(char::len_utf8).sum::<usize>();
-            contains
-        })
-        .unwrap_or_default();
+fn snippet(text: &str, query: &DocumentSearchQuery) -> Option<String> {
+    // The matcher returns a UTF-8 boundary in the original text, so the
+    // excerpt does not need a second representation or folded-offset mapping.
+    let at = query.0.find(text)?.start();
+    let position = text[..at].chars().count();
     let start = position.saturating_sub(20);
     let mut characters = text.chars().skip(start);
     let excerpt: String = characters
