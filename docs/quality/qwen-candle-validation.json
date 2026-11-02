@@ -1,0 +1,220 @@
+{
+  "schema": "meetnote.qwen-candle-validation.v1",
+  "date": "2026-11-02",
+  "decision": "retain failed initial speed gate; isolated Metal feasibility only, no provider/dependency/default changes",
+  "source": {
+    "url": "https://github.com/alan890104/qwen3-asr-rs",
+    "revision": "c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc",
+    "license": "MIT",
+    "candleVersion": "0.9.2",
+    "sourceChanges": "temporary workspace isolation and two examples only; library source unchanged and clone restored clean",
+    "upstreamUnitTests": {
+      "passed": 63,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "model": {
+    "repository": "Qwen/Qwen3-ASR-0.6B",
+    "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+    "license": "Apache-2.0",
+    "weightBytes": 1876091704,
+    "weightSha256": "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea",
+    "tokenizer": "exact pinned upstream hub.rs builder; fixed official vocab, merges and tokenizer config",
+    "assetsSha256": "cd999406c23dd3ea2f8bc72d7f86e0d6142b798dc2475ebc3c0c1086be6174fc"
+  },
+  "protocolSummary": {
+    "schema": "meetnote.qwen-candle-smoke.v1",
+    "date": "2026-11-02",
+    "sourceRevision": "c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc",
+    "sourcePatchSha256": "4c2452d495c467f7ce9f2b830df4f89fef416a4cb7adbadd5bcea762e91c3341",
+    "lockSha256": "996054cb61b32ea5e0dabf08453764ee3041b4f3893e9f28f72511459b2c00a1",
+    "harnessSha256": "7ebcb0cd21c8912e83d6806504b226e21833a1af4aad5a2e4d969017c812db79",
+    "tokenizerPreparationSha256": "0413e3b72fba7baecdde60afc71b3e68ef0170dc8389e30615efd94ef3158069",
+    "tokenizerSha256": "fd7afaac73d4df2caafa7657606d8a031295c85bb89f48850bf34ccc4e72faf4",
+    "runnerSha256": "5e1d911376c45322a73ea2c82e78d2d86781dda376658188047d3b214cfd41e6",
+    "modelSourceSha256": "20c94f69fd31f741819eaa0e90ffbde5ce72321cd50a266335d90bac7513c370",
+    "gates": {
+      "function": "explicit Metal, normal exit, nonempty text, finite positive timing",
+      "quality": "single known English clip normalized WER <=0.5 for gross smoke only",
+      "speed": "complete model-load+inference <=audio duration",
+      "memory": "whole native process peak macOS footprint <=8GiB"
+    },
+    "timeoutSeconds": 180,
+    "scope": "offline single-clip feasibility on current M2 Pro; no default/provider promotion, no general quality or real-time streaming acceptance",
+    "configuration": "upstream BF16 and default automatic language, max_new_tokens=512; hub feature off",
+    "case": {
+      "id": "ami-ES2002a-4",
+      "language": "en",
+      "durationSeconds": 8.67,
+      "audioSha256": "5ab60058843644c12f757a0a0d333b7141714efdb89e72bf325b385fdd0f816a",
+      "referenceSha256": "afe85de41a74b2fb6b9bcf0ab38a37e8bbef6b96092156277c708d8a6ff63392"
+    }
+  },
+  "originalProtocolSha256": "0ee7531a2cf1178c32b0530a6a2dabdec5a0288fcf2c7be99d589918177614e7",
+  "initial": {
+    "schema": "meetnote.qwen-candle-smoke-result.v1",
+    "protocolSha256": "0ee7531a2cf1178c32b0530a6a2dabdec5a0288fcf2c7be99d589918177614e7",
+    "controllerSha256": "a36df3f7397b1b3dc18ac912d12442ec62affd05e964792f72b249a657259531",
+    "exitCode": 0,
+    "timeout": false,
+    "processWallSeconds": 12.439826167188585,
+    "peakRssBytes": 3840458752,
+    "peakFootprintBytes": 3833449784,
+    "quality": {
+      "errors": 1,
+      "referenceUnits": 25,
+      "method": "levenshtein",
+      "metric": "normalized_wer",
+      "normalizer": "whisper-normalizer-0.1.15"
+    },
+    "gates": {
+      "function": true,
+      "quality": true,
+      "speed": false,
+      "memory": true
+    },
+    "passed": false,
+    "logSha256": "e06b404cfad9bfb10866a31ae7c6fb2fa3115502459790c86494e6877aeef8b8",
+    "assetsSha256": "cd999406c23dd3ea2f8bc72d7f86e0d6142b798dc2475ebc3c0c1086be6174fc",
+    "prediction": {
+      "device": "Metal",
+      "inferenceSeconds": 11.230556209,
+      "language": "English",
+      "loadSeconds": 0.617053291,
+      "modelLoading": "per-call",
+      "totalSeconds": 11.847611333
+    }
+  },
+  "repetition": {
+    "protocolSha256": "8c47fbf515e4b1e662d29bf4841909ffc751f64f60cf6bfe74780e906436db23",
+    "originalSpeedFailureRetained": true,
+    "additionalChineseCase": {
+      "id": "fleurs-zh-1779",
+      "language": "zh",
+      "durationSeconds": 15.16,
+      "audioSha256": "2e3e43bee6e9c514e6113455eb70c6655628634422b5c88ab99d8ec9644d8846",
+      "referenceSha256": "b0bbe00c4cefe0de79b009a604794a14e5f69e84eb68eeed5cc83312f1e723aa"
+    },
+    "rows": [
+      {
+        "name": "english-repeat-1",
+        "caseId": "ami-ES2002a-4",
+        "exitCode": 0,
+        "quality": {
+          "errors": 1,
+          "referenceUnits": 25,
+          "method": "levenshtein",
+          "metric": "normalized_wer",
+          "normalizer": "whisper-normalizer-0.1.15"
+        },
+        "peakRssBytes": 3840458752,
+        "peakFootprintBytes": 3833433376,
+        "gates": {
+          "function": true,
+          "speed": true,
+          "quality": true,
+          "memory": true
+        },
+        "passed": true,
+        "logSha256": "4953c082dc278eccf79ed742724658e0f0f1f849397da8cb3ee97f27757c9acb",
+        "prediction": {
+          "device": "Metal",
+          "inferenceSeconds": 1.648373625,
+          "language": "English",
+          "loadSeconds": 0.525184958,
+          "modelLoading": "per-call",
+          "totalSeconds": 2.173560666
+        }
+      },
+      {
+        "name": "english-repeat-2",
+        "caseId": "ami-ES2002a-4",
+        "exitCode": 0,
+        "quality": {
+          "errors": 1,
+          "referenceUnits": 25,
+          "method": "levenshtein",
+          "metric": "normalized_wer",
+          "normalizer": "whisper-normalizer-0.1.15"
+        },
+        "peakRssBytes": 3840884736,
+        "peakFootprintBytes": 3868298552,
+        "gates": {
+          "function": true,
+          "speed": true,
+          "quality": true,
+          "memory": true
+        },
+        "passed": true,
+        "logSha256": "da2d0bd8dee1adab7e02ca3db615d0a143959719b9ff9735246ab46e0d9f4099",
+        "prediction": {
+          "device": "Metal",
+          "inferenceSeconds": 1.657483292,
+          "language": "English",
+          "loadSeconds": 0.52052025,
+          "modelLoading": "per-call",
+          "totalSeconds": 2.1780053329999998
+        }
+      },
+      {
+        "name": "chinese-check",
+        "caseId": "fleurs-zh-1779",
+        "exitCode": 0,
+        "quality": {
+          "errors": 18,
+          "referenceUnits": 45,
+          "method": "levenshtein",
+          "metric": "cer"
+        },
+        "peakRssBytes": 3840442368,
+        "peakFootprintBytes": 3833416992,
+        "gates": {
+          "function": true,
+          "speed": true,
+          "quality": true,
+          "memory": true
+        },
+        "passed": true,
+        "logSha256": "be11e26dd3991b46f2019d202b0e2c9f17b4447ad8e8ded9c4454e66afa454c7",
+        "prediction": {
+          "device": "Metal",
+          "inferenceSeconds": 1.862605375,
+          "language": "Chinese",
+          "loadSeconds": 0.546697083,
+          "modelLoading": "per-call",
+          "totalSeconds": 2.409304333
+        }
+      }
+    ],
+    "englishRepeatedTextAndQualityExactlyMatchInitial": true
+  },
+  "review": {
+    "phase": "separate read-only review after all measurements",
+    "checks": [
+      "original failed result retained independently of repeats",
+      "each English repeat text and score equal initial",
+      "all model asset hashes unchanged after runs",
+      "upstream library diff empty and temporary examples removed",
+      "explicit Metal device with synchronization; no CPU fallback",
+      "whole-process RSS and footprint reported separately"
+    ],
+    "limitations": [
+      "two known short clips; no held-out/general quality acceptance",
+      "initial slowdown cause unproven; no cache reset or cold-start acceptance",
+      "Chinese CER 40 percent is a gross smoke result, not a quality pass for product use",
+      "Metal selection is not proof every operation ran on GPU",
+      "no long-audio, cancellation, concurrency, word-time or streaming validation",
+      "no quantized loader tested; dense BF16 only"
+    ]
+  },
+  "cleanup": {
+    "temporaryControllersSha256": {
+      "meetnote-loop47-smoke.py": "a36df3f7397b1b3dc18ac912d12442ec62affd05e964792f72b249a657259531",
+      "meetnote-loop47-repeat.py": "580266c65569bd47bb1759dedf5b6a23cd33da04d20c0c2791784c50b1412c92"
+    },
+    "method": "isolated --locked release build; explicit Metal; load and infer with synchronization; time -l per process; 180-second timeout with process-group cleanup; existing exact CER/normalized-WER scorer",
+    "rawEvidence": "eval-data/optimization-2026-11-02/qwen-candle/",
+    "productionWorkspaceSourceUnchanged": true
+  }
+}
