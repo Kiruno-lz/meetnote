@@ -1,0 +1,103 @@
+{
+  "schema": "meetnote.english-meeting-check-validation.v1",
+  "date": "2026-11-02",
+  "decision": "retain explicit-English Candle as a quality-priority candidate; no product provider/default change; larger memory and latency remain a tradeoff",
+  "protocol": {
+    "date": "2026-11-02",
+    "sourceCommit": "947f57a059ff3a5bd4c409f702ac42c5825f3432",
+    "scope": "TS3003c new meeting session not previously used for project tuning; same participant series as TS3003b, not speaker-heldout or pretrained-unseen",
+    "change": "both configurations explicit English; Whisper production TurboQ5 Metal4threads versus existing isolated Candle BF16 Metal with_language(english),512tokens",
+    "casesSha256": "4cda3a75175dacde60807382e461f5d81191c87a0d88a2da2b5dc2060c09762c",
+    "order": [
+      "whisper",
+      "candle",
+      "candle",
+      "whisper"
+    ],
+    "gates": {
+      "quality": "each candidate pass normalized WER <= aggregate fresh Whisper WER+1pp",
+      "speed": "candidate median load+infer RTF<=0.5 and every candidate RTF<=1",
+      "memory": "candidate peak RSS<=4GiB"
+    },
+    "perCall": "fresh process and load; serialized, no compilation/cache purge, first call retained",
+    "fingerprints": {
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/runner": "5e1d911376c45322a73ea2c82e78d2d86781dda376658188047d3b214cfd41e6",
+      "/Users/kiruno/Documents/_code/vibe/meetnote/target/release/examples/asr_benchmark": "af1cda6594596d32041832835a92f829c5d2acc9990fca97a743a25c116deae4",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/models/asr/whisper-large-v3-turbo-q5/ggml-large-v3-turbo-q5_0.bin": "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/config.json": "76d3ae4601ce939830b2517f4a6cadb86cc51316c3900af6b020b051c21a478c",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/merges.txt": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/model.safetensors": "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/preprocessor_config.json": "45e120a4eda2c20c5d7f2ea9354e63536bf35e27aa573fb7cdf78017b378770d",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/tokenizer.json": "fd7afaac73d4df2caafa7657606d8a031295c85bb89f48850bf34ccc4e72faf4",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/tokenizer_config.json": "4942d005604266809309cabc9f4e9cb89ce855d59b14681fdc0e1cc62ea26c4c",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle/model/vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+      "/Users/kiruno/.codex/worktrees/03ba/meetnote/eval-data/optimization-2026-11-02/qwen-candle-language/runner": "9df66c96fd6d68d79a012378e4cf9b91c52b87e59d5ecac0986ec91b0be16c91"
+    },
+    "scorerSha256": "20b0d559af0d534e8d39f400e8d59d00388435ed3183d821b9ba8b4eef78f5f3"
+  },
+  "protocolSha256": "247be68a599a9db86110ecd906c5e63e2806001bbfc3a5cdae9991e0d7506b2a",
+  "summary": {
+    "whisper": {
+      "errors": 44,
+      "referenceUnits": 444,
+      "normalizedWER": 0.0990990990990991,
+      "medianRTF": 0.09949628407864206,
+      "maxRTF": 0.18999869265687583,
+      "maxRssBytes": 764919808,
+      "maxFootprintBytes": 744555912,
+      "repeatedTextEqual": true
+    },
+    "candle": {
+      "errors": 30,
+      "referenceUnits": 444,
+      "normalizedWER": 0.06756756756756757,
+      "medianRTF": 0.2035236526293382,
+      "maxRTF": 0.2274829939919893,
+      "maxRssBytes": 3842621440,
+      "maxFootprintBytes": 3901951312,
+      "repeatedTextEqual": true
+    }
+  },
+  "gates": {
+    "quality": true,
+    "speed": true,
+    "memory": true
+  },
+  "passed": true,
+  "calls": 32,
+  "uniqueCases": 8,
+  "uniqueReferenceWords": 222,
+  "uniqueAudioSeconds": 110.88,
+  "review": {
+    "phase": "separate read-only recomputation after frozen trial",
+    "checks": [
+      "32 unique calls and every output/log hash",
+      "independent normalized Levenshtein counts and corpus denominators",
+      "median RTF and all frozen gate conditions",
+      "each crop PCM equals original source range",
+      "all executable/model hashes unchanged and repeat text equal",
+      "new meeting session shares participants with diagnostic meeting; no speaker/pretraining-heldout claim"
+    ],
+    "remainingFindings": []
+  },
+  "data": {
+    "audioSource": "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus/TS3003c/audio/TS3003c.Mix-Headset.wav",
+    "annotationSource": "https://groups.inf.ed.ac.uk/ami/AMICorpusAnnotations/ami_public_manual_1.6.2.zip",
+    "license": "CC-BY-4.0",
+    "audioSha256": "b9f455870e8cb0ba765523a1767cc366775ab7e5e3eabf37d9c91289e5a1a70a",
+    "annotationsSha256": "b56e5babb2496b8795deeeda7e71178d7fbc9963f94276cf2a3f4b56ebbc9f9d",
+    "scope": "up to first two eligible original segments per speaker, at least one per speaker; 3-20s, >=6 lexical words, 100ms padding, no other speaker lexical overlap",
+    "diarizationQualityStatus": "not_assessed",
+    "wordTimingSource": "official forced alignment; not manually verified word boundaries",
+    "casesSha256": "4cda3a75175dacde60807382e461f5d81191c87a0d88a2da2b5dc2060c09762c"
+  },
+  "rawEvidence": "eval-data/optimization-2026-11-02/english-meeting-check",
+  "resultSha256": "5b89b11c8b6ce66884e1777e2dc3f0f8bc8ea6074b120f150c9992cba4fbf7df",
+  "reviewSha256": "2fe68745ede6bab36fe9b8d8f129f7d69806a62723119abcd0473c89b40006f1",
+  "limitations": [
+    "new meeting session shares participants with diagnostic TS3003b; not speaker-heldout or pretrained-unseen",
+    "8 official-boundary nonoverlap crops, not long meeting/Chinese/timestamp/diarization acceptance",
+    "both now-known sessions cannot be reused as future independent quality gates",
+    "no product source changes; no redundant full Rust suite for documentation-only round"
+  ]
+}
