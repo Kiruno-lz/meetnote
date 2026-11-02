@@ -7,7 +7,7 @@ use crate::{
     controls::{tree, Button, Collapsible, ProgressBar, RadioGroup, Scrollbar, Tree, TreeItem},
     i18n::{self, text as tr},
     route::Route,
-    speakers::{document_speakers, transcript_turns, DocumentSpeaker},
+    speakers::{document_speakers, has_transcript_text, transcript_turns, DocumentSpeaker},
     state::{self, ContentMode, MissingModels, ProcessingFeedback, ProcessingStage, StageFeedback},
     theme::{self, Tokens},
 };
@@ -432,6 +432,19 @@ fn main_panel(
                 None => reading(tr(locale, "no_summary")).text_color(tokens.text_muted),
             }),
             ContentMode::Original if original_available => content
+                .child(
+                    div().max_w(READING_WIDTH).flex().justify_end().child(
+                        Button::new("copy-transcript", tr(locale, "copy_transcript"))
+                            .debug_selector(|| "copy-transcript".into())
+                            .secondary()
+                            .compact()
+                            .disabled(
+                                root.documents_root_switch.switching
+                                    || !has_transcript_text(project),
+                            )
+                            .on_click(cx.listener(|root, _, _, cx| root.copy_transcript(cx))),
+                    ),
+                )
                 .child(speakers_panel(root, project, &tokens, cx))
                 .child(transcript(root, project, locale, &tokens)),
             _ => content,
