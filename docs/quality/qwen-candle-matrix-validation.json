@@ -1,0 +1,144 @@
+{
+  "schema": "meetnote.qwen-candle-matrix-validation.v1",
+  "date": "2026-11-02",
+  "decision": "continue investigating native Metal Qwen; pass known short-case trial only, retain initial speed failure and do not add product provider",
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "logicalCpus": 10,
+    "memoryBytes": 34359738368,
+    "macOS": "27.0.1"
+  },
+  "protocol": {
+    "schema": "meetnote.qwen-candle-matrix-protocol.v1",
+    "date": "2026-11-02",
+    "baseCommit": "3fe0e9cb5925ee1652c837ce8e54c7aa767b22a8",
+    "sourceRevision": "c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc",
+    "runnerSha256": "5e1d911376c45322a73ea2c82e78d2d86781dda376658188047d3b214cfd41e6",
+    "assetsSha256": "cd999406c23dd3ea2f8bc72d7f86e0d6142b798dc2475ebc3c0c1086be6174fc",
+    "casesSha256": "52b1364967a8837acacaf4a1dcd1b14e99130cef837de13d24c467f70e6a8589",
+    "scoringSourceSha256": "20b0d559af0d534e8d39f400e8d59d00388435ed3183d821b9ba8b4eef78f5f3",
+    "baselineResultSha256": "9e9261998ad6454507b02de7bb265c5a10f14183ed6867c7edd4645b9a102d29",
+    "originalSmokeProtocolSha256": "0ee7531a2cf1178c32b0530a6a2dabdec5a0288fcf2c7be99d589918177614e7",
+    "controllerSha256": "0ceb68033e441a0aaf437e078cc36b85914cdafa8d5e7d0f5b72b5016f9b1563",
+    "cases": 17,
+    "repeats": 2,
+    "order": "manifest order, complete repeat one then repeat two; one native process per case",
+    "configuration": "upstream BF16 and default automatic language, max_new_tokens=512; hub feature off",
+    "gates": {
+      "function": "34 normal Metal calls, nonempty text, finite positive load+inference; exact repeated text and language",
+      "quality": "each group CER/normalized WER <= frozen SenseVoice +0.01 and at least one group <=90% of SenseVoice error rate",
+      "speed": "each group median load+inference RTF <=0.5",
+      "memory": "each process peak RSS <=4GiB; report footprint separately"
+    },
+    "scope": "known regression only; prior compiler cache not reset, per-call model reload; no new heldout/cold/provider/long-audio/word-time acceptance",
+    "originalFirstSpeedFailureRetained": true,
+    "timeoutSecondsPerCall": 180
+  },
+  "result": {
+    "protocolSha256": "d5667fc8be89476583e3c95ab97f056098e4ae64fb45e74d08d8be65fca84b53",
+    "resultSha256": "687db78e99f117e07962950d2d98708fad87ebf0986cc73ca0d5c91a286c8dd5",
+    "groups": {
+      "en/ami-oracle-nonoverlap": {
+        "calls": 10,
+        "errors": 26,
+        "referenceUnits": 200,
+        "errorRate": 0.13,
+        "metric": "normalized_wer",
+        "medianRtf": 0.2831896491706161
+      },
+      "en/native": {
+        "calls": 12,
+        "errors": 10,
+        "referenceUnits": 220,
+        "errorRate": 0.045454545454545456,
+        "metric": "normalized_wer",
+        "medianRtf": 0.263017978245854
+      },
+      "zh/native": {
+        "calls": 12,
+        "errors": 80,
+        "referenceUnits": 512,
+        "errorRate": 0.15625,
+        "metric": "cer",
+        "medianRtf": 0.2082321672927234
+      }
+    },
+    "gates": {
+      "function": true,
+      "quality": true,
+      "speed": true,
+      "memory": true
+    },
+    "repeatTextAndLanguageExact": true,
+    "maxRssBytes": 3844472832,
+    "maxFootprintBytes": 3837480272,
+    "modelAssetsUnchanged": true,
+    "passed": true
+  },
+  "frozenSenseVoiceBaseline": {
+    "zh/native": {
+      "calls": 24,
+      "metric": "cer",
+      "errorRate": 0.17578125,
+      "rawErrorRate": 0.17578125,
+      "medianRtf": 0.07148042477515637,
+      "medianSeconds": 0.901561396,
+      "maxSeconds": 1.074049917,
+      "errors": 180,
+      "referenceUnits": 1024
+    },
+    "en/native": {
+      "calls": 24,
+      "metric": "normalized_wer",
+      "errorRate": 0.03636363636363636,
+      "rawErrorRate": 0.07207207207207207,
+      "medianRtf": 0.08298545259803994,
+      "medianSeconds": 0.7500321455,
+      "maxSeconds": 0.88637575,
+      "errors": 16,
+      "referenceUnits": 440
+    },
+    "en/ami-oracle-nonoverlap": {
+      "calls": 20,
+      "metric": "normalized_wer",
+      "errorRate": 0.2,
+      "rawErrorRate": 0.2631578947368421,
+      "medianRtf": 0.10540578546042002,
+      "medianSeconds": 0.652461812,
+      "maxSeconds": 0.887674875,
+      "errors": 80,
+      "referenceUnits": 400
+    }
+  },
+  "review": {
+    "phase": "separate read-only recomputation after all inference",
+    "completeUniqueCases": true,
+    "predictionsMatchRawFiles": true,
+    "perCaseScoresRecomputed": true,
+    "groupErrorsAndReferenceUnitsRecomputed": true,
+    "baselineManifestAndScorerMatch": true,
+    "upstreamSourceClean": true,
+    "productionSourceUnchanged": true,
+    "modelAssetsUnchanged": true,
+    "temporaryControllerSha256": "0ceb68033e441a0aaf437e078cc36b85914cdafa8d5e7d0f5b72b5016f9b1563",
+    "reviewEnvironmentCorrection": "system Python lacked rapidfuzz before scoring; rerun in pinned existing evaluation venv"
+  },
+  "limits": [
+    "same 17 previously used regression cases, not heldout quality",
+    "compiler/file cache state not reset; previous first-call speed failure retained",
+    "native process and model reload per call; not resident streaming throughput",
+    "baseline quality uses frozen exact same manifest/scorer; baseline timing not rerun, no formal cross-backend speed claim",
+    "no reliable word-time, long-audio, cancellation, native concurrency or provider lifecycle acceptance",
+    "Metal device selected; no every-operation GPU residency proof"
+  ],
+  "validation": {
+    "actualNativeCalls": 34,
+    "repeats": 2,
+    "modelAssetsUnchanged": true,
+    "workspaceCodeUnchanged": true,
+    "priorWorkspaceValidation": "round49: 992 main +3 child passed, 0 failed, 26 ignored; fmt/check/build passed, not rerun for this docs-only trial",
+    "rawEvidence": "eval-data/optimization-2026-11-02/qwen-candle-matrix",
+    "temporaryControllerRemoved": true,
+    "method": "reuse pinned round47 native executable and all seven verified model assets; manifest-order subprocess per case; synchronize measured load/inference, time -l resources, 180-second process-group timeout; reuse exact existing CER/normalized-WER scorer"
+  }
+}

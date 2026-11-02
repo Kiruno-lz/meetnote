@@ -132,6 +132,16 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 
 两次英语文本与首次逐字相同，四次调用后模型 hash 未变。重复调用显示原生 Metal 路线可执行；首次慢因尚未隔离，不能断言为 shader 编译，也不作冷启动验收。中文 40% CER 只通过粗略 smoke 门，不代表产品质量可接受。设备选择不证明每个算子都在 GPU；没有执行量化、长录音、取消、并发或词时间验证，暂不增加正式 provider。上游内部单测 63 passed、0 failed、0 ignored，与工作区及真实模型证据分别记录。
 
+随后固定同一 17-case 已知回归集、每例两次，继续使用相同 executable、BF16、自动语种和每次重新加载；没有清理 compiler/file cache。运行前冻结：各组错误率不比此前 SenseVoice 增加超过 1 个百分点、至少一组相对改善 10%，各组加载加推理 RTF 中位数 ≤0.5，每进程峰值 RSS ≤4 GiB。基线 manifest 和 scorer SHA 逐项相同；只比较冻结的质量事实，未重跑基线计时，不给跨 backend 提速验收。
+
+| 分组 | SenseVoice / Candle 错误率 | Candle 加载加推理 RTF 中位数 |
+| --- | --- | --- |
+| 中文原生 CER | 17.5781% / 15.6250% | 0.2082 |
+| 英文原生 normalized WER | 3.6364% / 4.5455% | 0.2630 |
+| AMI normalized WER | 20.0000% / 13.0000% | 0.2832 |
+
+34 次调用成功，重复文本与识别语种全部相同；中文为 80/512、英文原生 10/220、AMI 26/200 错误单位。峰值 RSS 3,844,472,832 B，footprint 3,837,480,272 B，各项冻结门通过。英文原生仍略差于 SenseVoice；只能说该固定 Metal 配置值得继续验证，不能据此更换默认模型。首次 11.85 s 的速度失败仍成立，未被这组已知短样本的 warm 结果抵消。独立 review 重新计算每例评分和组分子/分母、核对所有 34 个独立结果、日志、manifest/scorer 及模型指纹；见[扩展 Candle 回执](../quality/qwen-candle-matrix-validation.json)。临时 controller 删除，固定 executable 和原始证据仍在忽略目录 `eval-data/optimization-2026-11-02/qwen-candle-matrix/` 及上一节准备目录；本轮产品代码未变。
+
 独立 review 核对冻结协议、原失败、重复文本、模型与 runner 指纹、进程资源和源码 diff。临时 workspace 隔离及两个 example 已清理，上游 library 未改动。复现方法为固定源码的离线 tokenizer builder + `AsrInference::load`/`transcribe`，设备同步前后计时，外层 `time -l` 测资源；完整 hash、门槛和结果见 [Candle 回执](../quality/qwen-candle-validation.json)，模型、原预测及日志保留在忽略目录 `eval-data/optimization-2026-11-02/qwen-candle/`。
 
 ### 优化次序与边界
