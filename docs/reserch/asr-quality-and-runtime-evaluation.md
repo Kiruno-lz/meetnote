@@ -154,6 +154,22 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 
 独立 review 核对冻结协议、原失败、重复文本、模型与 runner 指纹、进程资源和源码 diff。临时 workspace 隔离及两个 example 已清理，上游 library 未改动。复现方法为固定源码的离线 tokenizer builder + `AsrInference::load`/`transcribe`，设备同步前后计时，外层 `time -l` 测资源；完整 hash、门槛和结果见 [Candle 回执](../quality/qwen-candle-validation.json)，模型、原预测及日志保留在忽略目录 `eval-data/optimization-2026-11-02/qwen-candle/`。
 
+### 新会议录音的独立筛查
+
+不再用前述 17 个已知病例增加接入信心。2026-11-02 按 [AMI 官方分区](https://groups.inf.ed.ac.uk/ami/corpus/datasets.shtml)选择此前未在项目文档或评测 manifest 中出现的 TS3003 系列（scenario-only evaluation）；这不证明预训练未见过数据。原 TS3003a 在推理前因 B 说话人无合格片段而被既有准备脚本拒绝，保留失败；TS3003b 沿用同一规则，仅替换 meeting ID 和源音频校验和：每位说话人前两个合格原始片段、3–20 秒、至少六词、100 ms padding、无其他词级重叠，共 8 段、101.12 秒、归一化后 227 个参考词。AMI 包含角色扮演会议，不能称为自然会议或完整官方测试集验收。
+
+推理前冻结 Whisper → Candle → Candle → Whisper 顺序，共 32 次独立进程，每次重新加载，保留首调用，不清系统缓存，不与编译并行。Whisper 使用现有 Turbo Q5/Metal/4 线程及显式英文，Candle 使用前述 BF16/Metal/自动语种配置；比较的是这两个完整配置。质量门为候选每轮 corpus-weighted normalized WER 不超过两轮 Whisper 汇总值加 1 个百分点；候选 RTF 中位数 ≤0.5、每次 RTF ≤1、每次 RSS ≤4 GiB。评分复用锁定的 `whisper-normalizer 0.1.15`。
+
+| 指标 | Whisper Turbo Q5 | Candle Qwen3-ASR-0.6B |
+| --- | ---: | ---: |
+| normalized WER（两轮相同） | 32/227 = 14.0969% | 45/227 = 19.8238% |
+| 加载加处理 RTF 中位数 | 0.1041 | 0.2500 |
+| 最大单次 RTF | 0.3083 | 0.3495 |
+| 进程峰值 RSS | 765,296,640 B | 3,842,359,296 B |
+| 进程峰值 footprint | 744,932,696 B | 3,902,082,336 B |
+
+32 次成功，各配置内重复文本一致；绝对速度和内存门通过，质量门失败，不推进该自动语种配置。逐例检查发现 `ami-TS3003b-5` 的英文 gold 被 Candle 两次识别为 `Dutch` 并输出荷兰语，产生 25/32 错误词；Whisper 为 6/32。该观察支持下一步单独测试库已有显式英文选项，不证明错误由口音、权重或框架引起，也不把本轮配置对照扩张为模型整体优劣。独立 review 重算 32 份评分、组分子/分母、RTF 与重复一致性，逐字节比较裁剪 PCM 与原录音范围，复核全部结果、日志、模型与 executable 指纹。见[新会议筛查回执](../quality/fresh-ami-screen-validation.json)；临时编排删除，原始证据保留于 `eval-data/optimization-2026-11-02/fresh-ami-screen/`。这些片段此后属于已知数据，不能再作独立验收样本。
+
 ### 优化次序与边界
 
 先修复崩溃、词拼接和设备标识，再依据同一输入的质量/速度选择模型。推理窗口属于 backend 技术状态，不能生成文档树节点或语义边界。输入 sample 连续性、context 与 valid core 分开验证；文本无可靠时间戳时不能承诺精确 speaker 归属。
@@ -635,6 +651,8 @@ FLEURS 与 AMI 使用 CC-BY-4.0；下载权重按其版本化来源保留许可�
 ignored 资源测试未被常规 suite 自动执行；真实推理由独立 runner 显式提供模型与音频完成。此次不据单元测试或短样本宣称 DER、词时间、20 小时资源或发布质量通过。
 
 ### 附录：核心核对方法
+
+新会议筛查复用 `scripts/audio-eval/prepare_ami_asr.py`，仅替换 meeting ID 与实测源 WAV SHA-256；源音频与 manual 1.6.2 仍先校验。每个裁剪保存原 sample 范围、词 ID 和 PCM hash；每次独立进程由 `time -l` 测资源，超时终止进程组并回收，结果逐次落盘。推理前保存 cases、配置、评分器、模型与 executable 指纹，推理后重算归一化词编辑距离并比较原 PCM；prepared patch 与冻结协议保留在对应忽略目录。
 
 Whisper 根因核对同时使用固定版本 binding 源码、macOS faulting-thread 栈和隔离真实推理，避免把进程退出码当作原因。窗口优化保留旧 executable 的 SHA，使用同一官方参考重跑；短输入与第二组中文分别核对，不能仅用文本长度接近原文件判断质量。
 
