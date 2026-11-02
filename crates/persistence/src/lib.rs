@@ -1717,11 +1717,8 @@ impl DocumentRepository for FileDocumentRepository {
             .transaction_lock
             .read()
             .map_err(|_| "mutation lock poisoned".to_string())?;
-        Ok(self
-            .snapshot_unlocked()?
-            .documents
-            .into_iter()
-            .find(|document| document.id() == document_id))
+        self.read_unlocked(document_id)
+            .map(|record| record.map(|record| record.state))
     }
 
     fn read(&self, document_id: &DocumentId) -> Result<Option<DocumentRecord>, String> {
@@ -3209,6 +3206,89 @@ mod tests {
     }
 
     #[test]
+    fn get_reports_the_requested_package_error_instead_of_missing() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-targeted-get-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        let id = DocumentId::new("target");
+        assert_eq!(repository.get(&id).unwrap(), None);
+        let state = DocumentState::new(id.clone(), "Target", "a.wav");
+        repository.save(state, Some("# Target\n".into())).unwrap();
+        assert_eq!(
+            repository.get(&id).unwrap().unwrap(),
+            repository.read(&id).unwrap().unwrap().state
+        );
+        let path = root.join("target").join(DOCUMENT_STATE_FILENAME);
+        let original = fs::read(&path).unwrap();
+        fs::write(&path, b"{ invalid JSON").unwrap();
+        let actual = repository.get(&id);
+        let expected = repository.read(&id).unwrap_err();
+        fs::write(&path, &original).unwrap();
+        assert_eq!(actual, Err(expected));
+        let markdown = root.join("target").join(DOCUMENT_MARKDOWN_FILENAME);
+        fs::remove_file(&markdown).unwrap();
+        assert_eq!(
+            repository.get(&id),
+            repository.read(&id).map(|r| r.map(|r| r.state))
+        );
+        assert!(repository
+            .get(&id)
+            .unwrap_err()
+            .contains(markdown.to_str().unwrap()));
+        assert!(repository.get(&DocumentId::new("../target")).is_err());
+        assert!(repository
+            .get(&DocumentId::new(".agent-mutations"))
+            .is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "measures real file repository lookups; run separately from build and tests"]
+    fn benchmark_targeted_document_lookup() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-get-bench-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = FileDocumentRepository::open(&root).unwrap();
+        let markdown = "x".repeat(256 * 1024);
+        for count in [1, 128] {
+            for index in if count == 1 { 0..1 } else { 1..128 } {
+                let id = format!("document-{index}");
+                DocumentPackage::new(
+                    root.join(&id),
+                    DocumentState::new(DocumentId::new(id), "Benchmark", "a.wav"),
+                    &markdown,
+                )
+                .unwrap()
+                .save()
+                .unwrap();
+            }
+            let id = DocumentId::new("document-0");
+            let expected = repository.read(&id).unwrap().unwrap().state;
+            assert_eq!(repository.get(&id).unwrap().unwrap(), expected);
+            let start = std::time::Instant::now();
+            for _ in 0..40 {
+                assert_eq!(
+                    std::hint::black_box(repository.get(&id).unwrap().unwrap()),
+                    expected
+                );
+            }
+            println!(
+                "lookup_benchmark {}",
+                serde_json::json!({
+                    "documents": count, "markdownBytesEach": markdown.len(),
+                    "iterations": 40, "seconds": start.elapsed().as_secs_f64()
+                })
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn file_repository_migrates_a_legacy_flat_state_when_loaded() {
         let root = std::env::temp_dir().join(format!(
             "meetnote-document-migration-{}-{}",
@@ -3249,6 +3329,20 @@ mod tests {
         std::fs::write(directory.join(DOCUMENT_MARKDOWN_FILENAME), "# Legacy\n").unwrap();
 
         let repository = FileDocumentRepository::open(&root).unwrap();
+        let legacy_path = directory.join(DOCUMENT_STATE_FILENAME);
+        let original_legacy = fs::read(&legacy_path).unwrap();
+        repository
+            .save(
+                DocumentState::new(DocumentId::new("other"), "Other", "a.wav"),
+                None,
+            )
+            .unwrap();
+        assert!(repository.get(&DocumentId::new("other")).unwrap().is_some());
+        assert_eq!(
+            fs::read(&legacy_path).unwrap(),
+            original_legacy,
+            "lookup must not migrate unrelated documents"
+        );
         let migrated = repository.get(&DocumentId::new("legacy")).unwrap().unwrap();
         let stored: serde_json::Value = serde_json::from_slice(
             &std::fs::read(directory.join(DOCUMENT_STATE_FILENAME)).unwrap(),

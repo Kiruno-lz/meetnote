@@ -1,0 +1,223 @@
+{
+  "schema": "meetnote.targeted-document-read-validation.v1",
+  "date": "2026-11-02",
+  "implementationCommit": "b24c7578230832119661e794ca74d09cf019d025",
+  "decision": "reuse existing bounded package loader for ID lookup; no workspace scan or new index/cache",
+  "redGreen": {
+    "damagedTarget": "before: Ok(None), after: exact same error as read with JSON path and reason",
+    "unrelatedLegacy": "before: get(other) rewrote legacy state, after: bytes unchanged; get(legacy) still migrates",
+    "otherChecks": "valid state equals full read, missing document None, missing Markdown error with path, unsafe and hidden IDs rejected"
+  },
+  "protocol": {
+    "schema": "meetnote.document-lookup-protocol.v1",
+    "baseCommit": "e1984d2639015d5e770b148049735814768ce3d8",
+    "baselineSha256": "aba0838c605e42f4a0b2b8003e6ad38786c7d26cca410e05821a379e638ad9d3",
+    "benchmarkPatchSha256": "5353c2ff3b917b555a64e5813a089fd717c41fa0a1e810ab7159d80e1bb84830",
+    "entry": "tests::benchmark_targeted_document_lookup",
+    "cases": [
+      {
+        "documents": 1,
+        "markdownBytesEach": 262144,
+        "iterations": 40
+      },
+      {
+        "documents": 128,
+        "markdownBytesEach": 262144,
+        "iterations": 40
+      }
+    ],
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "gates": {
+      "speed": "128-document candidate median <=0.2 baseline; single-document candidate <=1.5 baseline +0.002 seconds total",
+      "memory": "candidate RSS <=1.2 maximum baseline",
+      "facts": "each real lookup equals separately read state, damaged target reports same read error, unrelated legacy bytes unchanged, target legacy migration retained"
+    },
+    "scope": "warm local real-file lookup, no UI FPS or cold/network filesystem acceptance; no cache/index",
+    "measurement": "time -l, no concurrent build or tests"
+  },
+  "result": {
+    "protocolSha256": "eb18390b30e9a65fe0593970763ee202473237ccb20881bdaf25205585899812",
+    "candidate": {
+      "binarySha256": "40801cee70d7aef3c10474ee6a9a954e4601b31ca47e624fa37fe578590e76bb",
+      "sourcePatchSha256": "301ecd6bcc4f7488e0e8190a1ddad707fd33f00fb7e66df908e9b3658cdcc393"
+    },
+    "rows": [
+      {
+        "index": 0,
+        "profile": "baseline",
+        "cases": [
+          {
+            "documents": 1,
+            "iterations": 40,
+            "markdownBytesEach": 262144,
+            "seconds": 0.009352417
+          },
+          {
+            "documents": 128,
+            "iterations": 40,
+            "markdownBytesEach": 262144,
+            "seconds": 0.492079708
+          }
+        ],
+        "rssBytes": 79282176,
+        "logSha256": "78845a3337cd61dc0947582d98060ffdd8414b2b4001f93d68c5d9a087ef2932"
+      },
+      {
+        "index": 1,
+        "profile": "candidate",
+        "cases": [
+          {
+            "documents": 1,
+            "iterations": 40,
+            "markdownBytesEach": 262144,
+            "seconds": 0.007424167
+          },
+          {
+            "documents": 128,
+            "iterations": 40,
+            "markdownBytesEach": 262144,
+            "seconds": 0.005096917
+          }
+        ],
+        "rssBytes": 8519680,
+        "logSha256": "a5b369e1423fc9408b324f72f59f7e9ecd476043ef278ff44b7f0a98435a0aa5"
+      },
+      {
+        "index": 2,
+        "profile": "candidate",
+        "cases": [
+          {
+            "documents": 1,
+            "iterations": 40,
+            "markdownBytesEach": 262144,
+            "seconds": 0.003460084
+          },
+          {
+            "documents": 128,
+            "iterations": 40,
+            "markdownBytesEach": 262144,
+            "seconds": 0.00342675
+          }
+        ],
+        "rssBytes": 8126464,
+        "logSha256": "c77b6fa0f2c17579b10fea3167462c67d484ba32036250c938649cb6eefc55d4"
+      },
+      {
+        "index": 3,
+        "profile": "baseline",
+        "cases": [
+          {
+            "documents": 1,
+            "iterations": 40,
+            "markdownBytesEach": 262144,
+            "seconds": 0.00421775
+          },
+          {
+            "documents": 128,
+            "iterations": 40,
+            "markdownBytesEach": 262144,
+            "seconds": 0.481418416
+          }
+        ],
+        "rssBytes": 104792064,
+        "logSha256": "68519994d633645270bbdc3f644d98bb43fe0c7ef13a7572f7fee0b37264f025"
+      }
+    ],
+    "medians": {
+      "baseline": {
+        "1": 0.0067850835000000005,
+        "128": 0.486749062
+      },
+      "candidate": {
+        "1": 0.0054421255,
+        "128": 0.0042618335
+      }
+    },
+    "gates": {
+      "largeSpeed": true,
+      "smallSpeed": true,
+      "rss": true
+    }
+  },
+  "review": {
+    "phase": "separate read-only review of final diff, call sites and loader/scanner/locking semantics",
+    "conclusions": [
+      "repository and transaction lock order retained",
+      "package file size/schema/directory identity/ID validation reused",
+      "old snapshot reported relation issues without filtering those packages; get discarded issues, so no tree-validation promise removed",
+      "snapshot and mutation tree validation untouched",
+      "no cross-call cache or authoritative derived state",
+      "only requested legacy package may migrate"
+    ],
+    "limitations": [
+      "warm local filesystem fixture, not UI frame rate or cold/network storage acceptance",
+      "target Markdown still loaded and validated; not a metadata-only API",
+      "existing advisory locks do not exclude arbitrary external editors"
+    ]
+  },
+  "validation": {
+    "workspaceMainPassed": 990,
+    "childProcessPassed": 3,
+    "rawPassed": 993,
+    "failed": 0,
+    "ignored": 26,
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exitCode": 0,
+        "seconds": 0.8635728340595961,
+        "log": "/tmp/meetnote-loop48-check-0.log",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 1.583724666852504,
+        "log": "/tmp/meetnote-loop48-check-1.log",
+        "logSha256": "10f3d598e3b720d5ffb5f14472977af81be17b941d8f75ad026cef8bd83c21ec"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 119.89510912494734,
+        "log": "/tmp/meetnote-loop48-check-2.log",
+        "logSha256": "d6346cc1bf024de6268e96426eaefe256737ef3727fb5f65f22d55ecb046ff9d"
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 8.066028583329171,
+        "log": "/tmp/meetnote-loop48-check-3.log",
+        "logSha256": "0ec33083105e2f40e757abe0cd2db6f40a4efb4f2ee96e21743c860c1ce3567b"
+      }
+    ],
+    "ignoredBenchmark": "explicitly executed four times separately from builds and tests",
+    "rawEvidence": "eval-data/optimization-2026-11-02/document-lookup/"
+  }
+}

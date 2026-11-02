@@ -72,6 +72,8 @@ revision 只能保护遵守版本协议的客户端。直接编辑 Markdown 不�
 
 文档包已有逐文件原子保存；工作树已有 WorkspaceCapabilityPort 与 batch、journal、pending、幂等、undo。repository lock、跨进程 open/recovery、真实子进程故障恢复、trash restore/purge、普通附件、嵌套目录和 symlink 不跟随均已有回归证据；ExternalAgent update/semantic write 还会校验 read projection 提供的 Markdown hash。
 
+按 ID 的 `get/read` 在相同 repository/transaction 锁下只加载目标文档包，共用 ID、schema、目录身份与单文件大小校验；不存在返回 None，目标包损坏传播加载错误，不转成“不存在”，也不触发无关包迁移。全工作区 snapshot 继续负责收集扫描与关系问题，不由单文档读取隐式执行。 128 包、每包 256 KiB 正文的本机 warm fixture，40 次定向读取由 486.75 ms 降至 4.26 ms；这不代表 UI 帧率或冷盘表现，协议和回归见[定向读取回执](../quality/targeted-document-read-validation.json)。
+
 已有 child-process 锁与恢复测试；metadata 扫描限制单包 16 MiB、校验 schema 版本并支持提前停止。完整读取也对 `state.json` 与 `document.md` 各限制 16 MiB，并在读取过程中执行上限；超限报告路径且保留原文件。普通保存和事务暂存先验证 Markdown 与序列化 JSON 均未超限，再写入任一文件；repository 保存传播现有包加载错误，不将损坏包当作不存在覆盖。不能把任意外部编辑器纳入事务，也不能据此标记所有写入口已完成。
 
 - //TODO - 在 repository 持锁提交中重验 source Markdown hash；当前 DocumentService 预验与 repository revision 检查之间仍存在内容变化窗口，补屏障式冲突测试。
