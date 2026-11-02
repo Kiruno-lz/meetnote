@@ -63,7 +63,7 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 | [sherpa-onnx SenseVoice](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html) | 复用已有 Rust binding 与模型管理，新增模型族 adapter，测中英文与窗口链路。模型权重采用其上游声明的模型许可，不能把 toolkit 的许可证当作权重许可 |
 | [whisper.cpp](https://github.com/ggml-org/whisper.cpp) large-v3 / Turbo Q5 | 使用现有 `whisper-rs` 与 Metal；修复 FFI 后再评分。Turbo 提供更小的可安装候选，保留 Whisper 段时间戳路径；不把量化收益当作无损保证 |
 | [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) + [MLX 实现](https://github.com/moona3k/mlx-qwen3-asr) | 测 0.6B 8-bit 与 1.7B 4-bit。独立 venv、固定权重 revision、离线加载；不启动 diarization、forced aligner 或服务。驻留 session 的 wall 与逐次加载后端分别标注，暂不作为桌面 provider |
-| [Rust/Candle Qwen3-ASR](https://github.com/alan890104/qwen3-asr-rs/tree/c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc) | 已在固定源码上隔离执行 BF16/Metal 短样本，首次速度门失败，重复调用明显更快，见下方可行性试接。不据 README 推断 GGUF 已可用，也不据短样本推进 provider |
+| [Rust/Candle Qwen3-ASR](https://github.com/alan890104/qwen3-asr-rs/tree/c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc) | 已隔离执行 BF16/Metal：自动语种在新会议质量门失败，显式英文诊断及下一场同参与者会议的短片段门通过，内存和耗时仍高于 Whisper，见下方试接。不据 README 推断 GGUF 已可用，也不据短样本推进 provider |
 | [Faster-Whisper / CTranslate2](https://opennmt.net/CTranslate2/hardware_support.html) | 官方预编译 GPU 路径列为 NVIDIA；在本机不能直接沿用 CUDA 排名。CPU INT8 可作为跨平台候选，本轮未运行，不作性能结论 |
 | [FluidAudio](https://github.com/FluidInference/FluidAudio)、[WhisperKit](https://github.com/argmaxinc/argmax-oss-swift)、[SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer) | 可作为 Apple 平台执行载体候选，需另验系统版本、原生桥接、模型生命周期、取消与资源。此次没有测其速度；不据此更换 Rust/GPUI 或 Host contract |
 | [Parakeet TDT v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) | 官方语言范围是欧洲语言；可以补英文高吞吐路线，不能承担当前中文默认能力，本轮未测 |
@@ -185,6 +185,20 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 32 次成功，自动文本与前轮完全相同，模式内重复文本一致，各项冻结门通过。误识别片段由 25/32 降为 5/32 错误词；强制选项返回的 `language` 为库内部标记 `forced`，并非检测出的语言代码，未来 adapter 必须依据已验证请求归一化。新 executable 的首次自动调用 12.8714 秒，未定位慢因，不能从中宣称预热或冷启动改进。
 
 显式英文在这些已知片段上的 WER 优于前轮 Whisper 的 14.0969%，但 RTF 中位数约为其 2.35 倍、峰值 RSS 约 5 倍。保留该选项作为后续候选配置，不更改产品 provider、catalog 或默认值；新增会议样本的质量、资源与 contract 验证仍须另做。独立 review 重算 32 份编辑距离、corpus 分子/分母与 RTF，核对重复文本、逐文件 hash、同 executable 对照及源码恢复，见[显式语种回执](../quality/qwen-candle-language-validation.json)。临时 example、workspace 配置和 controller 已删除，上游源码恢复干净；原始结果保留于 `eval-data/optimization-2026-11-02/qwen-candle-language/`。
+
+### 显式英文在下一场会议的检查
+
+保持已选配置不变，在推理前选择此前未用于项目调参的 TS3003c，复用同一取样规则，得到四位说话人各两段、共 8 段、110.88 秒、222 个归一化参考词。它和 TS3003b 共享参与者，只是新会话检查，不是 speaker-heldout，也不证明预训练未见过数据。Whisper 与 Candle 本次均显式英文；按 Whisper → Candle → Candle → Whisper 共 32 次独立进程，每次重新加载，保留首次调用，不与编译并行。推理前冻结候选每轮 WER ≤本轮 Whisper 汇总值 +1 个百分点、RTF 中位数 ≤0.5、每次 RTF ≤1、RSS ≤4 GiB。
+
+| 指标 | Whisper Turbo Q5 | Candle 显式英文 |
+| --- | ---: | ---: |
+| normalized WER（两轮相同） | 22/222 = 9.9099% | 15/222 = 6.7568% |
+| 加载加处理 RTF 中位数 | 0.0995 | 0.2035 |
+| 最大单次 RTF | 0.1900 | 0.2275 |
+| 峰值 RSS | 764,919,808 B | 3,842,621,440 B |
+| 峰值 footprint | 744,555,912 B | 3,901,951,312 B |
+
+32 次成功，重复文本一致，质量、绝对速度和内存门通过；Candle 耗时约为 Whisper 的 2.05 倍、峰值 RSS 约 5 倍。保留为准确度优先的候选，不更换默认模型、不据这两场同参与者的短片段引入正式 provider。下一步须用不同参与者的未用录音检查，并验证长输入、时间戳和受控取消。独立 review 重算全部词编辑距离、corpus 分子/分母、RTF 和冻结门，逐字节比较裁剪 PCM、核对所有结果/日志及 executable/模型 hash，见[下一场英文会议回执](../quality/english-meeting-check-validation.json)。临时 controller 和准备代码删除，原始证据保留于 `eval-data/optimization-2026-11-02/english-meeting-check/`；这些片段此后也属于已知数据。
 
 ### 优化次序与边界
 
