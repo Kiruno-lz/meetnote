@@ -1,0 +1,158 @@
+{
+  "schema": "meetnote.qwen-candle-dtype-validation.v1",
+  "date": "2026-11-02",
+  "decision": "reject FP16 conversion; keep existing BF16 experiment and product defaults unchanged",
+  "protocol": {
+    "schema": "meetnote.qwen-candle-dtype-protocol.v1",
+    "date": "2026-11-02",
+    "baseCommit": "acd2ee981083eff96218f0af5181f6a185b946be",
+    "sourceRevision": "c5ef09646af6278d2ba8b8ceaf543ffb32d1a5dc",
+    "libraryPatchSha256": "a0875d2f633af11faac2e4c014c50d0d978757219d34b55f778f293425eda8c6",
+    "harnessSha256": "c3514644e86ddad6c5d603385849a9a97a80db601be40b9d511590b6acc4801b",
+    "binaries": {
+      "baseline": "16e194a1df1f9b1fbe02765a0097f49ce33fdec27c4a22c6a79a19dddb02dcd5",
+      "candidate": "4d3f0fecef0269a94786fa9aaee1664b8b15f19b2aa04f783ad47f610ba60ec9"
+    },
+    "assetsSha256": "cd999406c23dd3ea2f8bc72d7f86e0d6142b798dc2475ebc3c0c1086be6174fc",
+    "casesSha256": "52b1364967a8837acacaf4a1dcd1b14e99130cef837de13d24c467f70e6a8589",
+    "scoringSourceSha256": "20b0d559af0d534e8d39f400e8d59d00388435ed3183d821b9ba8b4eef78f5f3",
+    "controllerSha256": "7b402ff09aab6d8c000350e24015692d192dfb34b71ad34d85ed60e9a8805737",
+    "knownBf16ResultSha256": "687db78e99f117e07962950d2d98708fad87ebf0986cc73ca0d5c91a286c8dd5",
+    "tensorDtypes": {
+      "BF16": 612
+    },
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "cases": 17,
+    "calls": 68,
+    "configuration": "Metal, auto language, max_new_tokens=512, fresh process and model load per case; candidate converts all 612 BF16 weights with Candle to_dtype(F16), conversion included in load timing; no changed weights on disk",
+    "gates": {
+      "function": "all 68 successful Metal calls, exact per-mode repeated text and language; new BF16 text equals prior 17-case baseline; each FP16 call logs 612 converted weights",
+      "quality": "candidate corpus error rate <=current BF16 baseline in every group, using same exact scorer",
+      "speed": "candidate median load+inference RTF <=90% BF16 per group, every candidate call RTF <=1 including first conversion",
+      "memory": "each candidate process RSS <=1.1 maximum baseline RSS; report footprint too"
+    },
+    "timeoutSecondsPerCall": 180,
+    "scope": "known short regressions, prior cache not purged, no long-audio/cold-system/heldout/provider acceptance"
+  },
+  "result": {
+    "protocolSha256": "ff988b743263ff1d9862a0ad13fdc6c42d2a6b6fd1777b94bd8d8423cdb9d863",
+    "resultSha256": "9d33430ac00377698b8dc4447264e6ec72fe397495c1dc3a119872bf76f35fe8",
+    "groups": {
+      "baseline": {
+        "en/ami-oracle-nonoverlap": {
+          "calls": 10,
+          "errors": 26,
+          "referenceUnits": 200,
+          "errorRate": 0.13,
+          "metric": "normalized_wer",
+          "medianRtf": 0.2835717005529226
+        },
+        "en/native": {
+          "calls": 12,
+          "errors": 10,
+          "referenceUnits": 220,
+          "errorRate": 0.045454545454545456,
+          "metric": "normalized_wer",
+          "medianRtf": 0.26120627486452314
+        },
+        "zh/native": {
+          "calls": 12,
+          "errors": 80,
+          "referenceUnits": 512,
+          "errorRate": 0.15625,
+          "metric": "cer",
+          "medianRtf": 0.20863169268139922
+        }
+      },
+      "candidate": {
+        "en/ami-oracle-nonoverlap": {
+          "calls": 10,
+          "errors": 24,
+          "referenceUnits": 200,
+          "errorRate": 0.12,
+          "metric": "normalized_wer",
+          "medianRtf": 0.27520441848341237
+        },
+        "en/native": {
+          "calls": 12,
+          "errors": 10,
+          "referenceUnits": 220,
+          "errorRate": 0.045454545454545456,
+          "metric": "normalized_wer",
+          "medianRtf": 0.2553136642547481
+        },
+        "zh/native": {
+          "calls": 12,
+          "errors": 80,
+          "referenceUnits": 512,
+          "errorRate": 0.15625,
+          "metric": "cer",
+          "medianRtf": 0.20314512595983336
+        }
+      }
+    },
+    "gates": {
+      "function": true,
+      "quality": true,
+      "speed": false,
+      "memory": true
+    },
+    "repeatTextAndLanguageExact": true,
+    "baselineTextEqualsPrior": true,
+    "maxRssBytes": {
+      "baseline": 3842686976,
+      "candidate": 3838590976
+    },
+    "maxFootprintBytes": {
+      "baseline": 3835710776,
+      "candidate": 4995124728
+    },
+    "modelAssetsUnchanged": true,
+    "passed": false
+  },
+  "review": {
+    "phase": "separate read-only recomputation after trial",
+    "uniqueRows": 68,
+    "allScoresRecomputed": true,
+    "groupTotalsRecomputed": true,
+    "conversionCountsMatchAll612Bf16Weights": true,
+    "lockMatchesOriginalTrial": true,
+    "sourceAndHarnessFingerprintsMatch": true,
+    "upstreamSourceRestoredClean": true,
+    "temporaryControllerSha256": "7b402ff09aab6d8c000350e24015692d192dfb34b71ad34d85ed60e9a8805737",
+    "preparationGuard": "initial broad patch guard also matched test calls and aborted before library edit; exact load context used before measured builds",
+    "firstCalls": [
+      {
+        "profile": "baseline",
+        "caseId": "fleurs-zh-1779",
+        "seconds": 11.333676708
+      },
+      {
+        "profile": "candidate",
+        "caseId": "fleurs-zh-1779",
+        "seconds": 3.028648666
+      }
+    ]
+  },
+  "tradeoff": "each group improves median RTF only about 2-3 percent, below preset 10 percent; RSS gate passes but footprint grows by about 30 percent",
+  "validation": {
+    "actualModelCalls": 68,
+    "upstreamUnitTests": "63 passed, 0 failed, 0 ignored; CPU/internal tests separate from Metal calls",
+    "productCodeChanged": false,
+    "previousWorkspaceValidation": "round49 fmt/check/test/build passed: 992 main +3 child, 0 failed, 26 ignored; not rerun for docs-only result",
+    "rawEvidence": "eval-data/optimization-2026-11-02/qwen-candle-dtype",
+    "cleanup": "temporary example, library patch, workspace isolation and controller removed; fixed runners, patch fingerprint/method, logs and measurements retained ignored"
+  },
+  "limits": [
+    "known short clips only; no heldout/general accuracy acceptance",
+    "Metal and file/compiler cache state not purged",
+    "one-process peak metrics, not total system memory or resident-session retention",
+    "initial slow-call cause unproven; no cold-system claim",
+    "no provider, quantized weights, custom kernels or new product configuration"
+  ]
+}
