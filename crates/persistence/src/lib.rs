@@ -2408,7 +2408,16 @@ fn validate_mutation_batch(
                 "invalid document state for {id}: {error:?}"
             ))
         })?;
-        match (write.expected_revision, read(id)?) {
+        let current = read(id)?;
+        if write.source_markdown_sha256.is_some() {
+            let current = current
+                .as_ref()
+                .ok_or_else(|| DocumentMutationStoreError::NotFound {
+                    document_id: id.into(),
+                })?;
+            write.validate_source_markdown(&current.markdown)?;
+        }
+        match (write.expected_revision, current) {
             (Some(expected), Some(current)) => {
                 if current.state.revision() != expected {
                     return Err(DocumentMutationStoreError::RevisionConflict {
@@ -3397,6 +3406,129 @@ mod tests {
         assert_eq!(final_scan.packages[0].state.revision(), 1);
         assert_eq!(final_scan.packages[0].state.title(), "Renamed document");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn rejects_markdown_changed_after_preflight(
+        repository: Arc<dyn DocumentRepository>,
+        edit: impl FnOnce(&DocumentState),
+    ) {
+        const ORIGINAL_SHA: &str =
+            "a9a525098771c8da9ecf97e12f6799094bf1271472caeeabe8b8a1e2fbf0a7f3";
+        const EDITED_SHA: &str = "92a581231599b650e9d50d0d6c62bfda18f2306f9c31cfcce77e6f91978d9ed5";
+        let target = DocumentState::new(DocumentId::new("target"), "Original", "a.wav");
+        let peer = DocumentState::new(DocumentId::new("peer"), "Peer", "a.wav");
+        for state in [&target, &peer] {
+            repository
+                .save(state.clone(), Some("# Original\n".into()))
+                .unwrap();
+        }
+        let target = repository.read(target.id()).unwrap().unwrap().state;
+        let peer = repository.read(peer.id()).unwrap().unwrap().state;
+        let mut batch = mutation_batch(
+            "source-check",
+            "source-fingerprint",
+            "source-undo",
+            vec![
+                DocumentMutationWrite {
+                    record: updated_record(&peer, "Peer update"),
+                    expected_revision: Some(0),
+                    source_markdown_sha256: None,
+                },
+                DocumentMutationWrite {
+                    record: updated_record(&target, "Target update"),
+                    expected_revision: Some(0),
+                    source_markdown_sha256: Some(ORIGINAL_SHA.into()),
+                },
+            ],
+        );
+        let service = application::DocumentService::new(repository.clone());
+        service.validate_agent_mutation_sources(&batch).unwrap();
+        edit(&target);
+        assert_eq!(
+            repository
+                .read(target.id())
+                .unwrap()
+                .unwrap()
+                .state
+                .revision(),
+            0
+        );
+        let actual = repository.commit_agent_mutation(batch.clone());
+        assert_eq!(
+            actual,
+            Err(DocumentMutationStoreError::ContentConflict {
+                document_id: "target".into(),
+                expected: ORIGINAL_SHA.into(),
+                actual: EDITED_SHA.into(),
+            })
+        );
+        assert_eq!(repository.read(peer.id()).unwrap().unwrap().state, peer);
+        let preserved = repository.read(target.id()).unwrap().unwrap();
+        assert_eq!(preserved.state, target);
+        assert_eq!(preserved.markdown, "# External edit\n");
+        assert!(repository
+            .find_agent_mutation(&batch.mutation_id, &batch.fingerprint)
+            .unwrap()
+            .is_none());
+        batch.writes[1].source_markdown_sha256 = Some(EDITED_SHA.into());
+        let committed = repository.commit_agent_mutation(batch.clone()).unwrap();
+        assert!(!committed.replayed);
+        let replay = repository.commit_agent_mutation(batch).unwrap();
+        assert!(replay.replayed);
+        assert_eq!(replay.records, committed.records);
+        let missing = DocumentState::new(DocumentId::new("missing"), "Missing", "a.wav");
+        let create = mutation_batch(
+            "missing-source",
+            "missing-fingerprint",
+            "missing-undo",
+            vec![DocumentMutationWrite {
+                record: DocumentRecord {
+                    state: missing,
+                    markdown: "# New\n".into(),
+                },
+                expected_revision: None,
+                source_markdown_sha256: Some(ORIGINAL_SHA.into()),
+            }],
+        );
+        assert_eq!(
+            repository.commit_agent_mutation(create),
+            Err(DocumentMutationStoreError::NotFound {
+                document_id: "missing".into(),
+            })
+        );
+        assert!(repository
+            .read(&DocumentId::new("missing"))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn file_commit_rechecks_markdown_after_service_preflight() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-source-recheck-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = Arc::new(FileDocumentRepository::open(&root).unwrap());
+        rejects_markdown_changed_after_preflight(repository.clone(), |_| {
+            fs::write(
+                root.join("target").join(DOCUMENT_MARKDOWN_FILENAME),
+                "# External edit\n",
+            )
+            .unwrap();
+        });
+        assert_no_transaction_workspace(&repository);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn memory_commit_rechecks_markdown_after_service_preflight() {
+        let repository = Arc::new(InMemoryDocumentRepository::default());
+        rejects_markdown_changed_after_preflight(repository.clone(), |target| {
+            repository
+                .save(target.clone(), Some("# External edit\n".into()))
+                .unwrap();
+        });
     }
 
     #[test]

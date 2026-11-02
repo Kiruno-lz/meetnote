@@ -1,0 +1,101 @@
+{
+  "schema": "meetnote.mutation-source-recheck-validation.v1",
+  "date": "2026-11-02",
+  "implementationCommit": "184724fb2878f0b717eb59b55f7d711e7b99e240",
+  "decision": "enforce the existing source Markdown predicate under file and memory repository commit locks",
+  "redGreen": {
+    "red": "both repositories accepted and overwrote a two-document batch after service preflight succeeded and target body changed with unchanged revision",
+    "green": "ContentConflict includes expected/actual digests, edited body and peer state remain unchanged, failed batch has no commit record",
+    "retry": "fresh matching digest commits; same batch replays idempotently",
+    "missingSource": "supplied source predicate for missing document returns NotFound without creation",
+    "fixtureCorrection": "first green run compared pre-save timestamps; compare actual stored state instead, retaining failure log"
+  },
+  "review": {
+    "phase": "separate read-only review after targeted regression passed",
+    "checks": [
+      "shared content comparison preserves preflight hash/error semantics",
+      "both repositories call common batch validator after acquiring commit locks",
+      "all batch validation precedes first journal/write",
+      "no added repository read or recursive lock in source helper",
+      "idempotent replay remains before source validation",
+      "None predicate retains revision-based behavior; no new schema or dependency"
+    ],
+    "limits": [
+      "advisory locks serialize cooperating repository writers only",
+      "arbitrary external editor can still write after locked validation",
+      "ordinary save_versioned CAS and dual-file recovery remain separate documented work"
+    ]
+  },
+  "validation": {
+    "workspaceMainPassed": 992,
+    "childProcessPassed": 3,
+    "rawPassed": 995,
+    "failed": 0,
+    "ignored": 26,
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exitCode": 0,
+        "seconds": 0.8568032910116017,
+        "log": "/tmp/meetnote-loop49-check-0.log",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 3.2310192501172423,
+        "log": "/tmp/meetnote-loop49-check-1.log",
+        "logSha256": "548e77f04b4f386ec5e15fbc9312d63ffd543923d2d2b7bdebe6432073fcd2b2"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 142.58261708403006,
+        "log": "/tmp/meetnote-loop49-check-2.log",
+        "logSha256": "3b0849485c154cf325c22189db15e9407d5e46a42a6765794bcde4ec02e05f04"
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--workspace",
+          "--locked"
+        ],
+        "exitCode": 0,
+        "seconds": 13.815512541681528,
+        "log": "/tmp/meetnote-loop49-check-3.log",
+        "logSha256": "02fd2ff76e593c6470f7ec27c72460be41b8f64c4958140effa4253b7bcb1c3d"
+      }
+    ],
+    "evidence": {
+      "directory": "eval-data/optimization-2026-11-02/mutation-source-recheck",
+      "files": {
+        "meetnote-loop49-red.log": "78b0d5c4205f0f41bbf04a5e76286d54622d6f20d7146b465a8b41ec6c5036a9",
+        "meetnote-loop49-green.log": "db980f4fd7abc0ddda7ad24e03290694625aafcd24e4eda47bd0ec10b9461a43",
+        "meetnote-loop49-green-final.log": "996c74a458389f460aa44302365e440cd2e39c8e7cd63b627c5d3c2a54062815",
+        "meetnote-loop49-review-green.log": "dde5a874cad9a8425d535eb0b15c88f06a1171a0be8eb630b4387e54f7c25c59",
+        "meetnote-loop49-check-0.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "meetnote-loop49-check-1.log": "548e77f04b4f386ec5e15fbc9312d63ffd543923d2d2b7bdebe6432073fcd2b2",
+        "meetnote-loop49-check-2.log": "3b0849485c154cf325c22189db15e9407d5e46a42a6765794bcde4ec02e05f04",
+        "meetnote-loop49-check-3.log": "02fd2ff76e593c6470f7ec27c72460be41b8f64c4958140effa4253b7bcb1c3d"
+      },
+      "sourcePatchSha256": "afa8ce045daaab8b2a6b4fc6cb4a57870101c42b25af4bd28b3d13267c9ad4a6"
+    }
+  }
+}

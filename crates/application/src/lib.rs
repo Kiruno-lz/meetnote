@@ -424,6 +424,28 @@ pub struct DocumentMutationWrite {
     pub source_markdown_sha256: Option<String>,
 }
 
+impl DocumentMutationWrite {
+    /// Compare the source predicate with Markdown read under the repository's
+    /// commit lock. Service preflight uses the same predicate before admission.
+    pub fn validate_source_markdown(
+        &self,
+        markdown: &str,
+    ) -> Result<(), DocumentMutationStoreError> {
+        let Some(expected) = self.source_markdown_sha256.as_deref() else {
+            return Ok(());
+        };
+        let actual = markdown_sha256(markdown);
+        if actual != expected {
+            return Err(DocumentMutationStoreError::ContentConflict {
+                document_id: self.record.state.id().as_str().into(),
+                expected: expected.into(),
+                actual,
+            });
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentMutationBatch {
@@ -761,9 +783,9 @@ fn validate_agent_mutation_sources(
     batch: &DocumentMutationBatch,
 ) -> Result<(), DocumentMutationStoreError> {
     for write in &batch.writes {
-        let Some(expected) = write.source_markdown_sha256.as_deref() else {
+        if write.source_markdown_sha256.is_none() {
             continue;
-        };
+        }
         let document_id = write.record.state.id();
         let current = repository
             .read(document_id)
@@ -771,14 +793,7 @@ fn validate_agent_mutation_sources(
             .ok_or_else(|| DocumentMutationStoreError::NotFound {
                 document_id: document_id.as_str().into(),
             })?;
-        let actual = markdown_sha256(&current.markdown);
-        if actual != expected {
-            return Err(DocumentMutationStoreError::ContentConflict {
-                document_id: document_id.as_str().into(),
-                expected: expected.into(),
-                actual,
-            });
-        }
+        write.validate_source_markdown(&current.markdown)?;
     }
     Ok(())
 }
