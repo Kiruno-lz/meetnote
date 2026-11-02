@@ -598,6 +598,25 @@ impl MissingModels {
     }
 }
 
+/// Compare managed locations lexically, without filesystem access. Bundle
+/// filenames can have nested paths, as in a compiled CoreML model.
+fn catalog_artifacts_match(entry: &models::ModelAvailability, model: &contracts::ModelRef) -> bool {
+    let root = std::path::Path::new(&model.artifact_path);
+    if entry.model.artifacts.is_empty() {
+        entry.artifact_paths.len() == 1 && entry.artifact_paths[0] == root
+    } else {
+        entry.artifact_paths.len() == entry.model.artifacts.len()
+            && entry
+                .artifact_paths
+                .iter()
+                .zip(&entry.model.artifacts)
+                .all(|(path, artifact)| {
+                    path.strip_prefix(root)
+                        .is_ok_and(|relative| relative == std::path::Path::new(&artifact.filename))
+                })
+    }
+}
+
 /// Match the references processing uses to published installation facts.
 /// References outside the catalog's artifact paths remain the backend
 /// preflight's responsibility; a matching id alone does not prove readiness.
@@ -623,20 +642,7 @@ pub(crate) fn missing_models(
             if entry.model.task != task || !entry.model.supports_backend(&model.backend_id) {
                 return true;
             }
-            let path = std::path::Path::new(&model.artifact_path);
-            let same_artifacts = if entry.model.artifacts.is_empty() {
-                entry
-                    .artifact_paths
-                    .first()
-                    .is_some_and(|artifact| artifact == path)
-            } else {
-                !entry.artifact_paths.is_empty()
-                    && entry
-                        .artifact_paths
-                        .iter()
-                        .all(|artifact| artifact.parent() == Some(path))
-            };
-            if same_artifacts {
+            if catalog_artifacts_match(entry, model) {
                 return entry.install_state != models::ModelInstallState::Installed;
             }
         }
@@ -810,6 +816,58 @@ mod tests {
             !missing_models(&Default::default(), &settings, defaults).any(),
             "the initial snapshot has no installation diagnosis yet"
         );
+    }
+
+    #[test]
+    fn nested_model_bundles_keep_missing_and_partial_diagnoses_visible() {
+        let catalog =
+            models::ModelCatalog::parse(include_str!("../../../resources/models/catalog.json"))
+                .unwrap();
+        let model = catalog.find("speakrs-community-1-coreml").unwrap().clone();
+        let selected = contracts::ModelRef {
+            backend_id: "diarization-native".into(),
+            model_id: model.id.clone(),
+            revision: model.revision.clone(),
+            artifact_path: model.install_directory("models").display().to_string(),
+            artifacts: vec![],
+        };
+        let external = contracts::ModelRef {
+            backend_id: "external".into(),
+            model_id: "external".into(),
+            revision: None,
+            artifact_path: "external".into(),
+            artifacts: vec![],
+        };
+        let mut installation = application::InstallationState {
+            catalog: vec![models::ModelAvailability {
+                artifact_paths: model.artifact_paths("models"),
+                model,
+                install_state: models::ModelInstallState::Partial,
+                probe: None,
+                failure: None,
+                record_error: None,
+            }],
+            default_asr_ready: true,
+            default_diarization_ready: true,
+            ..Default::default()
+        };
+        let settings = settings::AppSettings {
+            diarization_backend_id: Some(selected.backend_id.clone()),
+            diarization_model: Some(selected),
+            ..Default::default()
+        };
+        for (state, missing) in [
+            (models::ModelInstallState::Partial, true),
+            (models::ModelInstallState::Missing, true),
+            (models::ModelInstallState::Installed, false),
+        ] {
+            installation.catalog[0].install_state = state;
+            assert_eq!(
+                missing_models(&installation, &settings, (&external, &external)).diarization,
+                missing,
+                "{state:?}"
+            );
+        }
     }
 
     #[test]
