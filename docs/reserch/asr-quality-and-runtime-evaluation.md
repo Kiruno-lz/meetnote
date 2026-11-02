@@ -89,6 +89,24 @@ MeetNote 的默认中文路径使用 Paraformer，另有 Whisper 与 Qwen3-ASR a
 - CPU 多语言备选：SenseVoice 复用现有 ONNX 生命周期，原生中文比 Paraformer 此小集略准；它在本机的调用速度没有超过修复后的 Paraformer，需要考虑上游权重许可。
 - 更值得继续验证的 Apple 路线：Qwen MLX 1.7B 的这组中英文原生文本最好，0.6B 更轻、更快。实验权重固定为 [0.6B 8-bit](https://huggingface.co/moona3k/mlx-qwen3-asr-0.6b-8bit/tree/83ce2a8ef9a382d2ba2209aab383bc51fff366f5) 与 [1.7B 4-bit](https://huggingface.co/moona3k/mlx-qwen3-asr-1.7b-4bit/tree/b2315a2537123353af98e37fc93eae078f1b7cf3)。正式 provider 前仍需可靠词时间、取消/进程退出、驻留资源上限与完整会议验证；当前只交付隔离测试入口。
 
+### 原生 Qwen3-ASR ONNX 候选复核
+
+2026-11-02 选择不增加产品运行时的 sherpa-onnx CPU 路线继续试接。固定上游 [INT8 archive](https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25.tar.bz2)，878,702,423 B 与发布 SHA-256 完全匹配；六个执行文件共 987,015,347 B。锁定 `sherpa-onnx 1.13.6` 的 C++ 配置校验确认，官方包需要三个图和三个 tokenizer 文件，没有 `tokens.txt`。原 adapter 的同布局 fixture 先红，修复后只为 Paraformer/SenseVoice 设置全局 tokens，Qwen 逐项检查实际 tokenizer；显式模型和 8.67 s WAV 的整文件/单窗口真实调用通过，文本相同且不越源范围。
+
+在运行前固定中英各前六个已知 FLEURS 病例、五个 AMI 裁剪，按 SenseVoice → Qwen → Qwen → SenseVoice 启动四个进程；每进程两轮，共 136 次调用。均使用 CPU 四线程、逐次加载模型，不与旧 MLX 驻留计时排名。门槛为每组中文 CER/英文 normalized WER 相对 SenseVoice 不增加超过 1 个百分点，至少一组相对减少 10%，每组候选单次 RTF 中位数 ≤0.5、每候选进程 RSS ≤4 GiB；全部样本必须成功、重复输出一致、时间有效。
+
+| 分组 | SenseVoice / Qwen 错误率 | SenseVoice / Qwen 单次 RTF 中位数 |
+| --- | --- | --- |
+| 中文原生 CER | 17.5781% / 15.6250% | 0.0715 / 0.2703 |
+| 英文原生 normalized WER | 3.6364% / 7.2727% | 0.0830 / 0.3466 |
+| AMI normalized WER | 20.0000% / 14.0000% | 0.1054 / 0.4442 |
+
+136 次全部成功，每病例四次 transcript 与时间逐项一致。Qwen 两进程峰值 RSS 为 2.2231/2.2016 GiB，SenseVoice 为 1.0247/1.0234 GiB；macOS footprint 另记在回执，不用较低指标替代 RSS 门。中文与 AMI 改善、速度与资源门通过，但英文原生退步 3.6364 个百分点，质量门失败，拒绝推进默认接入，catalog 保持 `candidate-source`。逐轮英文错误数为 SenseVoice 4/110、Qwen 8/110；原样 WER 同样变差，独立 review 确认不是归一化或均值加权错误。没有改参数迁就结果，也不把模型名或其他 backend 的旧分数当作本配置的质量保证。
+
+Qwen 当前 adapter 使用自动语言识别，未实现请求语言强制；SenseVoice 使用请求语言。本轮仅为已知回归样本，不验收新留出质量、词时间、长输入、取消或模型驻留。常规工作区 985 项主测试和 3 项子进程测试通过，0 failed、23 ignored；fmt/check/build 通过，真实 ignored 单独运行。来源、冻结协议、逐组结果和 review 见[原生 Qwen 回执](../quality/qwen-native-validation.json)。
+
+复现核心：先对官方 archive 的发布 checksum 校验，只取三个 ONNX 图和 `tokenizer/{vocab.json,merges.txt,tokenizer_config.json}`，通过原有 release `asr_benchmark` 和 `asr_benchmark.py` 运行相同 17-case manifest；用固定原样/normalized 评分，按参考单位汇总，逐项核对输入、runner、模型与预测 hash。真实测试为 `qwen_official_bundle_transcribes_without_a_tokens_file`，必须给 `MEETNOTE_QWEN3_ONNX_MODEL_DIR` 和 ≤30 s 的 `MEETNOTE_QWEN3_ONNX_AUDIO`。临时 extractor/scorer 删除，核心方法与指纹保留；原模型、音频、预测和资源数据位于忽略目录 `eval-data/optimization-2026-11-02/qwen-native/`。
+
 ### 优化次序与边界
 
 先修复崩溃、词拼接和设备标识，再依据同一输入的质量/速度选择模型。推理窗口属于 backend 技术状态，不能生成文档树节点或语义边界。输入 sample 连续性、context 与 valid core 分开验证；文本无可靠时间戳时不能承诺精确 speaker 归属。
