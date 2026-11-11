@@ -1,8 +1,8 @@
 use crate::documents_root::{same_location, validate_documents_root};
 use crate::{
     run_pipeline, run_windowed_pipeline, AsrBackend, AsrBackendProvider, BackendFuture,
-    DiarizationBackend, DiarizationBackendProvider, DocumentService, DocumentsRoot,
-    DocumentsRootError, LongAudioConfig, PipelineResult,
+    DiarizationBackend, DiarizationBackendProvider, DocumentCommandError, DocumentSaveBase,
+    DocumentService, DocumentsRoot, DocumentsRootError, LongAudioConfig, PipelineResult,
 };
 use contracts::{
     AsrRequest, ComputeDevice, DiarizationRequest, DiarizationStageConfiguration, ModelRef,
@@ -710,9 +710,12 @@ impl WorkspaceService {
             .get(&project_id)
             .map_err(persistence_error)?
             .ok_or_else(|| persistence_error("project does not exist"))?;
+        let revision = project.revision();
         self.processing.probe(&request).inspect_err(|error| {
             project.set_processing_error(error.message.clone());
-            let _ = self.documents.save(project.clone());
+            let _ = self
+                .documents
+                .save_expecting_revision(project.clone(), revision, None);
         })?;
 
         let contexts = self.processing.contexts();
@@ -750,14 +753,17 @@ impl WorkspaceService {
                         diarization_status_context.failed(error.message.clone());
                     }
                     project.set_processing_error(error.message.clone());
-                    let _ = workspace.documents.save(project);
+                    let _ = workspace
+                        .documents
+                        .save_expecting_revision(project, revision, None);
                     return Err(error);
                 }
             };
 
-            asr_status_context.completed();
-            diarization_status_context.completed();
-
+            let previous_markdown = render_markdown(
+                Path::new(project.audio_path()),
+                &project.results.speaker_segments,
+            );
             project.results.transcript = result.asr.segments.clone();
             project.results.diarization = result.diarization.segments.clone();
             project.results.speaker_segments = result.aligned.clone();
@@ -780,17 +786,21 @@ impl WorkspaceService {
                     message: "processing cancelled before saving results".into(),
                 });
             }
-            project = workspace
-                .documents
-                .save_with_markdown(
-                    project.clone(),
-                    render_markdown(
-                        Path::new(project.audio_path()),
-                        &project.results.speaker_segments,
-                    ),
-                )
-                .map_err(persistence_error)?;
-            Ok(project)
+            let saved =
+                persist_processing_result(&workspace.documents, project, &previous_markdown);
+            match saved {
+                Ok(project) => {
+                    asr_status_context.completed();
+                    diarization_status_context.completed();
+                    Ok(project)
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    asr_status_context.failed(message.clone());
+                    diarization_status_context.failed(message.clone());
+                    Err(persistence_error(message))
+                }
+            }
         });
         Ok(ProjectProcessingJob {
             future,
@@ -823,6 +833,34 @@ impl WorkspaceService {
             job.future.await
         })
     }
+}
+
+fn persist_processing_result(
+    documents: &DocumentService,
+    project: DocumentState,
+    previous_markdown: &str,
+) -> Result<DocumentState, DocumentCommandError> {
+    let current = documents
+        .read(project.id())
+        .map_err(DocumentCommandError::Service)?
+        .ok_or_else(|| DocumentCommandError::NotFound(project.id().clone()))?;
+    let revision = project.revision();
+    if current.markdown == previous_markdown {
+        let markdown = render_markdown(
+            Path::new(project.audio_path()),
+            &project.results.speaker_segments,
+        );
+        let base = DocumentSaveBase {
+            revision,
+            markdown: Some(previous_markdown),
+        };
+        match documents.save_checked(project.clone(), base, Some(markdown)) {
+            // A separate Markdown edit can coexist with new transcript data.
+            Err(DocumentCommandError::MarkdownConflict(_)) => {}
+            other => return other,
+        }
+    }
+    documents.save_expecting_revision(project, revision, None)
 }
 
 fn persistence_error(message: impl Into<String>) -> contracts::BackendError {
@@ -1131,6 +1169,7 @@ mod tests {
     #[derive(Default)]
     struct MemoryRepository {
         projects: RwLock<BTreeMap<String, DocumentState>>,
+        markdown: RwLock<BTreeMap<String, String>>,
     }
 
     impl DocumentRepository for MemoryRepository {
@@ -1141,7 +1180,13 @@ mod tests {
             })
         }
 
-        fn save(&self, project: DocumentState, _markdown: Option<String>) -> Result<(), String> {
+        fn save(&self, project: DocumentState, markdown: Option<String>) -> Result<(), String> {
+            if let Some(markdown) = markdown {
+                self.markdown
+                    .write()
+                    .unwrap()
+                    .insert(project.id().as_str().into(), markdown);
+            }
             self.projects
                 .write()
                 .unwrap()
@@ -1155,7 +1200,13 @@ mod tests {
 
         fn read(&self, id: &ProjectId) -> Result<Option<DocumentRecord>, String> {
             Ok(self.get(id)?.map(|state| DocumentRecord {
-                markdown: format!("# {}\n\n", state.title()),
+                markdown: self
+                    .markdown
+                    .read()
+                    .unwrap()
+                    .get(id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| format!("# {}\n\n", state.title())),
                 state,
             }))
         }
@@ -1697,7 +1748,76 @@ mod tests {
         assert_eq!(processing.runtime.expected_speakers, Some(2));
         assert_eq!(processing.runtime.windowing, None);
         assert_eq!(repository.get(project.id()).unwrap(), Some(result.clone()));
+        assert!(repository
+            .read(project.id())
+            .unwrap()
+            .unwrap()
+            .markdown
+            .contains("hello"));
         std::fs::remove_file(audio_path).unwrap();
+    }
+
+    #[test]
+    fn processing_keeps_an_external_markdown_edit_made_during_the_job() {
+        let repository = Arc::new(MemoryRepository::default());
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(repository.clone()),
+        );
+        let audio = write_test_wav();
+        let project = workspace.import_audio(audio.display().to_string()).unwrap();
+        let (asr, diarization) = fixture_models();
+        let job = workspace
+            .start_project_processing(project.id().clone(), asr, diarization)
+            .unwrap();
+        let external = "# Edited outside MeetNote\n";
+        repository
+            .save(project.clone(), Some(external.into()))
+            .unwrap();
+
+        let result = futures::executor::block_on(job.future);
+        std::fs::remove_file(audio).unwrap();
+        assert!(result.is_ok());
+        let stored = repository.read(project.id()).unwrap().unwrap();
+        assert!(stored.state.processing.latest.is_some());
+        assert_eq!(stored.markdown, external);
+    }
+
+    #[test]
+    fn processing_cannot_write_back_over_a_new_document_revision() {
+        let repository = Arc::new(MemoryRepository::default());
+        let workspace = WorkspaceService::new(
+            ProcessingService::new(Arc::new(FakeAsr), Arc::new(FakeDiarization)),
+            DocumentService::new(repository.clone()),
+        );
+        let audio = write_test_wav();
+        let project = workspace.import_audio(audio.display().to_string()).unwrap();
+        let (asr, diarization) = fixture_models();
+        let job = workspace
+            .start_project_processing(project.id().clone(), asr, diarization)
+            .unwrap();
+        let updated = workspace
+            .document_commands()
+            .update_document(
+                project.id(),
+                project.revision(),
+                contracts::DocumentPatch {
+                    title: Some("Updated title".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let result = futures::executor::block_on(job.future);
+        std::fs::remove_file(audio).unwrap();
+        assert!(matches!(
+            result,
+            Err(BackendError {
+                code: contracts::BackendErrorCode::PersistenceFailed,
+                ..
+            })
+        ));
+        assert_eq!(repository.read(project.id()).unwrap().unwrap(), updated);
     }
 
     #[test]
