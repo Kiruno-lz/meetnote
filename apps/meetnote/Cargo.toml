@@ -28,6 +28,7 @@ settings = { path = "../../crates/settings" }
 
 [dev-dependencies]
 audio = { path = "../../crates/audio" }
+tempfile = "3"
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 diarization-native = { path = "../../crates/diarization-native", features = ["coreml"] }

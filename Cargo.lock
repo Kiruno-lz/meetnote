@@ -3779,6 +3779,7 @@ dependencies = [
  "serde",
  "serde_json",
  "settings",
+ "tempfile",
  "ui",
 ]
 
