@@ -80,7 +80,25 @@ impl WorkspaceService {
     /// were computed from. Blocking: it hashes the whole file, so call it
     /// from a worker, not the UI thread.
     pub fn audio_status(&self, document_id: &DocumentId) -> Result<AudioStatus, AudioSourceError> {
-        let documents = self.list_projects().map_err(AudioSourceError::Service)?;
+        self.documents().audio_status(document_id)
+    }
+
+    /// Relinks the recording in the workspace current when this call starts.
+    pub fn relink_audio(
+        &self,
+        document_id: &DocumentId,
+        expected_revision: u64,
+        new_path: impl Into<String>,
+    ) -> Result<Vec<DocumentState>, AudioSourceError> {
+        self.documents()
+            .relink_audio(document_id, expected_revision, new_path)
+    }
+}
+
+impl DocumentService {
+    /// Checks the source file against the audio asset's recorded checksum on a worker.
+    pub fn audio_status(&self, document_id: &DocumentId) -> Result<AudioStatus, AudioSourceError> {
+        let documents = self.list().map_err(AudioSourceError::Service)?;
         let document = find(&documents, document_id)?;
         let path = document.audio_path().to_string();
         if !Path::new(&path).is_file() {
@@ -106,19 +124,6 @@ impl WorkspaceService {
         )
     }
 
-    /// Relinks the recording in the workspace current when this call starts.
-    pub fn relink_audio(
-        &self,
-        document_id: &DocumentId,
-        expected_revision: u64,
-        new_path: impl Into<String>,
-    ) -> Result<Vec<DocumentState>, AudioSourceError> {
-        self.documents()
-            .relink_audio(document_id, expected_revision, new_path)
-    }
-}
-
-impl DocumentService {
     /// Points every document sharing the document's audio asset (the root
     /// and its semantic children) at `new_path` and returns the documents it
     /// wrote.

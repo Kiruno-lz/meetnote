@@ -1,0 +1,50 @@
+[package]
+name = "meetnote"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+host-test-fake-audio = []
+
+[[bin]]
+name = "meetnote"
+path = "src/main.rs"
+
+[dependencies]
+application = { path = "../../crates/application" }
+asr = { path = "../../crates/asr" }
+asr-sherpa-onnx = { path = "../../crates/asr-sherpa-onnx" }
+asr-whisper-rs = { path = "../../crates/asr-whisper-rs" }
+contracts = { path = "../../crates/contracts" }
+diarization = { path = "../../crates/diarization" }
+diarization-native = { path = "../../crates/diarization-native" }
+diarization-sherpa-onnx = { path = "../../crates/diarization-sherpa-onnx" }
+domain = { path = "../../crates/domain" }
+futures = "0.3"
+llm = { path = "../../crates/llm" }
+runtime = { path = "../../crates/runtime" }
+serde = "1"
+serde_json = "1"
+persistence = { path = "../../crates/persistence" }
+models = { path = "../../crates/models" }
+settings = { path = "../../crates/settings" }
+ui-text = { path = "../../crates/ui-text" }
+rune = { git = "https://github.com/Kiruno-lz/rune", rev = "f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b", default-features = false, features = ["accessibility", "metal-backend", "native-file-dialog"] }
+rune-kit = { git = "https://github.com/Kiruno-lz/rune", rev = "f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b", features = ["markdown"] }
+
+[dev-dependencies]
+audio = { path = "../../crates/audio" }
+hound = "3.5"
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSAccessibility", "NSWorkspace"] }
+
+[target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
+diarization-native = { path = "../../crates/diarization-native", features = ["coreml"] }
+
+[workspace]
+resolver = "2"
+
+[patch.crates-io]
+speakrs = { path = "../../third_party/speakrs" }
