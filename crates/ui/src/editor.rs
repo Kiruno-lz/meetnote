@@ -20,7 +20,7 @@ use crate::{
     state::{ContentMode, NoticeTone},
 };
 use contracts::{DocumentPatch, DocumentRecord};
-use domain::{DocumentState, ProjectId};
+use domain::{parse_document_tags as parse_tags, DocumentState, ProjectId};
 use gpui::{prelude::*, App, Context, Entity, Window};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -70,18 +70,6 @@ impl DraftError {
             Self::TitleRequired => "title_required",
         }
     }
-}
-
-/// Tags typed as a list separated by commas (`,`, `，` or `、`): trimmed,
-/// without empty or repeated entries, in typed order.
-pub(crate) fn parse_tags(text: &str) -> Vec<String> {
-    let mut tags: Vec<String> = Vec::new();
-    for tag in text.split([',', '，', '、']).map(str::trim) {
-        if !tag.is_empty() && !tags.iter().any(|kept| kept == tag) {
-            tags.push(tag.to_string());
-        }
-    }
-    tags
 }
 
 /// The text a tag list is edited as.
