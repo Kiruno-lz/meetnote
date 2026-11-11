@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub use application::AgentCancellation as AssistantCancellation;
+pub use crate::AgentCancellation as AssistantCancellation;
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 

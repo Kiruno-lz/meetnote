@@ -19,6 +19,8 @@ mod assistant_skills;
 mod audio_source;
 mod backend_worker;
 mod capabilities;
+pub mod desktop_assistant;
+
 mod document_commands;
 mod document_issues;
 mod document_search;

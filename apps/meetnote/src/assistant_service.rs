@@ -1,3 +1,10 @@
+use application::desktop_assistant::{
+    AssistantDocumentChange, AssistantFieldDiff, AssistantJobEvent, AssistantMutationSummary,
+    AssistantPendingReview, AssistantProgress, AssistantProgressHandler, AssistantRangePreview,
+    AssistantRunDiagnostics, AssistantRunRequest, AssistantRunResult, AssistantSettingsSave,
+    AssistantTreeChange, AssistantUiError, AssistantUiService, AssistantUsage,
+    ConnectionDiagnostic, ConnectionProbeKind,
+};
 use application::{
     agent_error_from_llm, AgentCancellation, AgentProgress, AgentProgressStage, AgentRunResult,
     AgentRuntime, AgentRuntimeConfig, AgentTask, DocumentService, WorkspaceAccessPolicy,
@@ -20,13 +27,6 @@ use settings::{
 };
 use std::io::Read;
 use std::sync::{Arc, Mutex};
-use ui::assistant_ui::{
-    AssistantDocumentChange, AssistantFieldDiff, AssistantJobEvent, AssistantMutationSummary,
-    AssistantPendingReview, AssistantProgress, AssistantProgressHandler, AssistantRangePreview,
-    AssistantRunDiagnostics, AssistantRunRequest, AssistantRunResult, AssistantSettingsSave,
-    AssistantTreeChange, AssistantUiError, AssistantUiService, AssistantUsage,
-    ConnectionDiagnostic, ConnectionProbeKind,
-};
 
 #[derive(Clone)]
 pub struct DesktopAssistantService {
@@ -1057,11 +1057,13 @@ mod tests {
                     scene: contracts::AgentScene::Ask,
                     skill: contracts::AgentSkillSelector::for_scene(contracts::AgentScene::Ask),
                     prompt: "question".into(),
-                    authorized_documents: vec![ui::assistant_ui::AssistantDocumentContext {
-                        document_id: "doc".into(),
-                        title: "Document".into(),
-                        revision: 99,
-                    }],
+                    authorized_documents: vec![
+                        application::desktop_assistant::AssistantDocumentContext {
+                            document_id: "doc".into(),
+                            title: "Document".into(),
+                            revision: 99,
+                        },
+                    ],
                     projection: contracts::DocumentProjection::Metadata,
                     write_mode: contracts::AgentWriteMode::Automatic,
                     connection_id: "local".into(),
@@ -1180,7 +1182,7 @@ mod tests {
             scene: contracts::AgentScene::Ask,
             skill: contracts::AgentSkillSelector::for_scene(contracts::AgentScene::Ask),
             prompt: "question".into(),
-            authorized_documents: vec![ui::assistant_ui::AssistantDocumentContext {
+            authorized_documents: vec![application::desktop_assistant::AssistantDocumentContext {
                 document_id: "doc".into(),
                 title: "Document".into(),
                 revision: 1,
