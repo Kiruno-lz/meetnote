@@ -47,25 +47,27 @@ fn fixture_root(label: &str) -> PathBuf {
 }
 
 fn sentinel_settings() -> settings::AppSettings {
-    let mut settings = settings::AppSettings::default();
-    settings.asr_backend_id = Some("whisper-rs".into());
-    settings.asr_model = Some(contracts::ModelRef {
-        backend_id: "whisper-rs".into(),
-        model_id: "SENTINEL_ASR_MODEL".into(),
-        revision: None,
-        artifact_path: "models/SENTINEL_ASR_PATH".into(),
-        artifacts: Vec::new(),
-    });
-    settings.diarization_backend_id = Some("diarization-native".into());
-    settings.diarization_model = Some(contracts::ModelRef {
-        backend_id: "diarization-native".into(),
-        model_id: "SENTINEL_DIARIZATION_MODEL".into(),
-        revision: None,
-        artifact_path: "models/SENTINEL_DIARIZATION_PATH".into(),
-        artifacts: Vec::new(),
-    });
-    settings.language = Some("SENTINEL_LANGUAGE".into());
-    settings.speaker_library_path = "data/speakers/SENTINEL_LIBRARY.json".into();
+    let mut settings = settings::AppSettings {
+        asr_backend_id: Some("whisper-rs".into()),
+        asr_model: Some(contracts::ModelRef {
+            backend_id: "whisper-rs".into(),
+            model_id: "SENTINEL_ASR_MODEL".into(),
+            revision: None,
+            artifact_path: "models/SENTINEL_ASR_PATH".into(),
+            artifacts: Vec::new(),
+        }),
+        diarization_backend_id: Some("diarization-native".into()),
+        diarization_model: Some(contracts::ModelRef {
+            backend_id: "diarization-native".into(),
+            model_id: "SENTINEL_DIARIZATION_MODEL".into(),
+            revision: None,
+            artifact_path: "models/SENTINEL_DIARIZATION_PATH".into(),
+            artifacts: Vec::new(),
+        }),
+        language: Some("SENTINEL_LANGUAGE".into()),
+        speaker_library_path: "data/speakers/SENTINEL_LIBRARY.json".into(),
+        ..Default::default()
+    };
     let connection = |id: &str, api_key: Option<&str>, api_key_file: Option<&str>| {
         settings::AssistantConnectionProfile {
             id: id.into(),
@@ -321,9 +323,11 @@ fn run_settings_contract(
         patched["result"]["settings"]["assistant"]["maxToolRounds"],
         7
     );
-    assert!(patched["result"]["settings"]["assistant"]
-        .get("connections")
-        .is_none());
+    assert!(
+        patched["result"]["settings"]["assistant"]
+            .get("connections")
+            .is_none()
+    );
     let readback = scenario.call(
         &mut *entry,
         "policy-readback",

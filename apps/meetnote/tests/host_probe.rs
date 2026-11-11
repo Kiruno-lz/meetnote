@@ -343,10 +343,10 @@ fn stub_health_checks_do_not_consume_or_hide_provider_requests() {
         captured.authorization.is_none(),
         "credentialless provider requests must still be captured"
     );
-    assert!(send(
-        "HEAD /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
-    )
-    .starts_with("HTTP/1.1 200"));
+    assert!(
+        send("HEAD /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .starts_with("HTTP/1.1 200")
+    );
     assert_eq!(
         requests
             .recv_timeout(Duration::from_secs(5))

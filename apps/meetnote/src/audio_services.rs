@@ -9,7 +9,7 @@ use contracts::ModelRef;
 use diarization::{DiarizationBackendManager, DiarizationBackendRegistry};
 use diarization_native::{NativeDiarizationBackend, NativeDiarizationConfig};
 use diarization_sherpa_onnx::SherpaOnnxDiarizationBackend;
-use models::{manager::BackendProbe, ModelCatalog, ModelManager};
+use models::{ModelCatalog, ModelManager, manager::BackendProbe};
 use runtime::JobRuntime;
 use settings::AppSettings;
 

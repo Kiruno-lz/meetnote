@@ -6,8 +6,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
     OnceLock,
+    atomic::{AtomicU64, Ordering},
 };
 
 static FIXTURE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -477,11 +477,13 @@ fn host_keeps_trusted_grants_and_exposes_exact_descriptors() {
         cancel["inputSchema"]["required"],
         serde_json::json!(["projectId", "asrJobId", "diarizationJobId"])
     );
-    assert!(audio["operations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|value| value["name"] == "result"));
+    assert!(
+        audio["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value["name"] == "result")
+    );
     let workspace_capability = capabilities
         .iter()
         .find(|value| value["id"] == "workspace.documents")
@@ -886,10 +888,12 @@ fn assert_ok_mutation(response: &Value) {
     );
     assert_eq!(response["result"]["type"], "mutation");
     assert!(response["result"]["payload"]["undoToken"].is_string());
-    assert!(!response["result"]["payload"]["affectedDocuments"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        !response["result"]["payload"]["affectedDocuments"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]

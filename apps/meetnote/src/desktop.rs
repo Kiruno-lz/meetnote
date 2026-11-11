@@ -1,14 +1,14 @@
 use crate::assistant_service;
 use application::{
-    validate_documents_root, AgentHost, DocumentRepository, DocumentService, DocumentsRoot,
-    SettingsCapabilityPort, WorkspaceAccessPolicy, WorkspaceCapabilityPort, WorkspaceService,
+    AgentHost, DocumentRepository, DocumentService, DocumentsRoot, SettingsCapabilityPort,
+    WorkspaceAccessPolicy, WorkspaceCapabilityPort, WorkspaceService, validate_documents_root,
 };
 #[cfg(feature = "host-test-fake-audio")]
 use contracts::{AsrRequest, AsrResult, BackendError, DiarizationRequest, DiarizationResult};
 use contracts::{CapabilityCallRequest, CapabilityCallResponse, ModelRef};
 use llm::{LlmOutputBlock, LlmProvider};
 
-use crate::audio_services::{model_catalog, processing_options, AudioBackends};
+use crate::audio_services::{AudioBackends, model_catalog, processing_options};
 use models::ModelManager;
 use persistence::FileDocumentRepository;
 use runtime::JobRuntime;
@@ -177,25 +177,6 @@ pub fn run_command_line() -> bool {
         }
         _ => false,
     }
-}
-
-/// Opens the current desktop after headless command dispatch.
-pub fn run_legacy_desktop() {
-    let host = Host::open(false).unwrap_or_else(|error| panic!("{error}"));
-    let (model_manager, asr_model, diarization_model) = host.load_models();
-    ui::run(
-        host.audio.inventory(),
-        ui::DesktopServices {
-            workspace: host.workspace,
-            settings: host.settings,
-            installation: application::InstallationService::new(model_manager.clone()),
-            model_manager: Arc::new(model_manager),
-            asr_model,
-            diarization_model,
-            assistant: host.assistant,
-            speaker_library: ui::speaker_library_at(&host.snapshot.speaker_library_path),
-        },
-    );
 }
 
 fn prepare_data_directory(args: &[String]) -> std::io::Result<Option<PathBuf>> {
@@ -848,9 +829,8 @@ fn write_workspace_response(mut response: contracts::CapabilityResponse) {
 fn host_response_as_workspace(
     response: contracts::CapabilityCallResponse,
 ) -> contracts::CapabilityResponse {
-    if let Some(result) = response
-        .result
-        .and_then(|value| serde_json::from_value(value).ok())
+    if let Some(result) = response.result
+        && let Ok(result) = serde_json::from_value(result)
     {
         return contracts::CapabilityResponse::success(response.request_id, result);
     }
@@ -894,10 +874,11 @@ fn host_response_as_workspace(
 }
 
 fn ensure_markdown_trailing_newline(markdown: &mut Option<String>) {
-    if let Some(markdown) = markdown {
-        if !markdown.is_empty() && !markdown.ends_with('\n') {
-            markdown.push('\n');
-        }
+    if let Some(markdown) = markdown
+        && !markdown.is_empty()
+        && !markdown.ends_with('\n')
+    {
+        markdown.push('\n');
     }
 }
 

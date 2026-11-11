@@ -544,10 +544,12 @@ fn verify_gold_children(children: &[Value], gold: &Value, source: &Value, depth:
         assert_eq!(transcript.last().unwrap()["id"], expected["end_segment_id"]);
         for evidence in expected["evidence_segment_ids"].as_array().unwrap() {
             assert!(transcript.iter().any(|segment| segment["id"] == *evidence));
-            assert!(child["markdown"]
-                .as_str()
-                .unwrap()
-                .contains(evidence.as_str().unwrap()));
+            assert!(
+                child["markdown"]
+                    .as_str()
+                    .unwrap()
+                    .contains(evidence.as_str().unwrap())
+            );
         }
     }
 }
@@ -567,11 +569,13 @@ fn external_agent_describes_and_reads_through_json_cli() {
     assert!(describe.stderr.is_empty());
     let description: Value = serde_json::from_slice(&describe.stdout).unwrap();
     assert_eq!(description["schemaVersion"], 1);
-    assert!(description["tools"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|tool| tool["name"] == "read_document"));
+    assert!(
+        description["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|tool| tool["name"] == "read_document")
+    );
 
     let mut child = Command::new(binary)
         .args([

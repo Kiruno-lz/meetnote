@@ -1,4 +1,4 @@
-use application::{run_windowed_pipeline, LongAudioConfig};
+use application::{LongAudioConfig, run_windowed_pipeline};
 use asr_sherpa_onnx::SherpaOnnxAsrBackend;
 use audio::{AudioWindowPlan, TARGET_SAMPLE_RATE_HZ};
 use contracts::{AsrRequest, ComputeDevice, DiarizationRequest, ModelRef};
@@ -71,16 +71,20 @@ fn real_windowed_pipeline_keeps_asr_diarization_and_global_speakers() {
         .expect("window provenance should be present");
     assert_eq!(windowing.window_count, 4);
     assert!(windowing.source_samples > second * 180);
-    assert!(result
-        .asr
-        .segments
-        .windows(2)
-        .all(|pair| pair[0].start_ms <= pair[1].start_ms));
-    assert!(result
-        .diarization
-        .segments
-        .windows(2)
-        .all(|pair| pair[0].start_ms <= pair[1].start_ms));
+    assert!(
+        result
+            .asr
+            .segments
+            .windows(2)
+            .all(|pair| pair[0].start_ms <= pair[1].start_ms)
+    );
+    assert!(
+        result
+            .diarization
+            .segments
+            .windows(2)
+            .all(|pair| pair[0].start_ms <= pair[1].start_ms)
+    );
     let clusters = result
         .diarization
         .embedding_observations
@@ -94,7 +98,12 @@ fn real_windowed_pipeline_keeps_asr_diarization_and_global_speakers() {
     eprintln!(
         "windowed acceptance: transcript_segments={}, transcript_chars={}, diarization_segments={}, observations={}, speakers={}",
         result.asr.segments.len(),
-        result.asr.segments.iter().map(|segment| segment.text.chars().count()).sum::<usize>(),
+        result
+            .asr
+            .segments
+            .iter()
+            .map(|segment| segment.text.chars().count())
+            .sum::<usize>(),
         result.diarization.segments.len(),
         result.diarization.embedding_observations.len(),
         clusters.len()
