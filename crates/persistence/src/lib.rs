@@ -1,6 +1,7 @@
 use application::{
-    DocumentChange, DocumentIssue, DocumentMetadata, DocumentMutationBatch, DocumentMutationCommit,
-    DocumentMutationRevision, DocumentMutationStoreError, DocumentRepository, DocumentSnapshot,
+    DocumentChange, DocumentCommandError, DocumentIssue, DocumentMetadata, DocumentMutationBatch,
+    DocumentMutationCommit, DocumentMutationRevision, DocumentMutationStoreError,
+    DocumentRepository, DocumentSaveBase, DocumentSnapshot,
 };
 use contracts::{AgentMutationProvenance, DocumentRecord};
 use domain::{
@@ -1136,18 +1137,33 @@ impl FileDocumentRepository {
             })
     }
 
-    fn save_unlocked(
+    fn save_with_base(
         &self,
         mut document: DocumentState,
         markdown: Option<String>,
-    ) -> Result<(), String> {
-        validate_document_id(document.id().as_str()).map_err(|error| error.to_string())?;
+        base: Option<DocumentSaveBase<'_>>,
+    ) -> Result<(), DocumentCommandError> {
+        let _repository_lock = self
+            .acquire_repository_lock()
+            .map_err(DocumentCommandError::Service)?;
+        let _guard = self
+            .transaction_lock
+            .write()
+            .map_err(|_| DocumentCommandError::Service("mutation lock poisoned".into()))?;
+        validate_document_id(document.id().as_str())
+            .map_err(|error| DocumentCommandError::Service(error.to_string()))?;
         let directory = self.root().join(document.id().as_str());
         let existing = match DocumentPackage::load(&directory) {
             Ok(package) => Some(package),
             Err(DocumentPackageError::NotDirectory(_)) if !directory.exists() => None,
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(DocumentCommandError::Service(error.to_string())),
         };
+        if let Some(base) = base {
+            let current = existing
+                .as_ref()
+                .ok_or_else(|| DocumentCommandError::NotFound(document.id().clone()))?;
+            base.validate(&current.state, &current.markdown)?;
+        }
         if let Some(existing) = &existing {
             document.schema.revision = existing.state.revision().saturating_add(1);
         }
@@ -1156,9 +1172,9 @@ impl FileDocumentRepository {
             .or_else(|| existing.map(|package| package.markdown))
             .unwrap_or_else(|| format!("# {}\n\n", document.title()));
         DocumentPackage::new(directory, document, markdown)
-            .map_err(|error| error.to_string())?
+            .map_err(|error| DocumentCommandError::Service(error.to_string()))?
             .save()
-            .map_err(|error| error.to_string())
+            .map_err(|error| DocumentCommandError::Service(error.to_string()))
     }
 
     fn mutation_root(&self) -> PathBuf {
@@ -1748,12 +1764,20 @@ impl DocumentRepository for FileDocumentRepository {
     }
 
     fn save(&self, document: DocumentState, markdown: Option<String>) -> Result<(), String> {
-        let _repository_lock = self.acquire_repository_lock()?;
-        let _guard = self
-            .transaction_lock
-            .write()
-            .map_err(|_| "mutation lock poisoned".to_string())?;
-        self.save_unlocked(document, markdown)
+        self.save_with_base(document, markdown, None)
+            .map_err(|error| match error {
+                DocumentCommandError::Service(message) => message,
+                error => error.to_string(),
+            })
+    }
+
+    fn save_checked(
+        &self,
+        document: DocumentState,
+        base: DocumentSaveBase<'_>,
+        markdown: Option<String>,
+    ) -> Result<(), DocumentCommandError> {
+        self.save_with_base(document, markdown, Some(base))
     }
 
     fn commit_agent_mutation(
@@ -3406,6 +3430,46 @@ mod tests {
         assert_eq!(final_scan.packages[0].state.revision(), 1);
         assert_eq!(final_scan.packages[0].state.title(), "Renamed document");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_editor_save_keeps_a_newer_external_markdown_body() {
+        let root = std::env::temp_dir().join(format!(
+            "meetnote-checked-editor-save-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let repository = Arc::new(FileDocumentRepository::open(&root).unwrap());
+        let document = DocumentState::new(DocumentId::new("edited"), "Edited", "recording.m4a");
+        repository
+            .save(document.clone(), Some("original body".into()))
+            .unwrap();
+        let commands = application::DocumentCommandService::new(application::DocumentService::new(
+            repository.clone(),
+        ));
+        let original = repository.read(document.id()).unwrap().unwrap();
+        std::fs::write(root.join("edited/document.md"), "external body").unwrap();
+        let patch = contracts::DocumentPatch {
+            markdown: Some("stale editor body".into()),
+            ..Default::default()
+        };
+
+        let result = commands.update_document_checked(
+            document.id(),
+            DocumentSaveBase {
+                revision: original.state.revision(),
+                markdown: Some(&original.markdown),
+            },
+            patch,
+        );
+        let stored = repository.read(document.id()).unwrap().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert!(
+            matches!(result, Err(DocumentCommandError::MarkdownConflict(id)) if &id == document.id())
+        );
+        assert_eq!(stored.markdown, "external body");
+        assert_eq!(stored.state.revision(), original.state.revision());
     }
 
     fn rejects_markdown_changed_after_preflight(

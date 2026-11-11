@@ -28,12 +28,34 @@ pub enum DocumentCommandError {
         expected: u64,
         actual: u64,
     },
+    #[error("Markdown for document {0} changed since it was read")]
+    MarkdownConflict(DocumentId),
     #[error("cannot move document: {0}")]
     Tree(ProjectTreeError),
     #[error("cannot correct speakers: {0}")]
     Speaker(SpeakerCorrectionError),
     #[error("invalid document command: {0}")]
     Invalid(String),
+}
+
+#[derive(Clone, Copy)]
+pub struct DocumentSaveBase<'a> {
+    pub revision: u64,
+    pub markdown: Option<&'a str>,
+}
+
+impl DocumentSaveBase<'_> {
+    pub fn validate(
+        &self,
+        state: &DocumentState,
+        markdown: &str,
+    ) -> Result<(), DocumentCommandError> {
+        ensure_revision(state, self.revision)?;
+        if self.markdown.is_some_and(|expected| expected != markdown) {
+            return Err(DocumentCommandError::MarkdownConflict(state.id().clone()));
+        }
+        Ok(())
+    }
 }
 
 /// Revision-checked document writes shared by the desktop UI, CLI/IPC
@@ -167,14 +189,35 @@ impl DocumentCommandService {
         expected_revision: u64,
         patch: DocumentPatch,
     ) -> Result<DocumentRecord, DocumentCommandError> {
+        self.update_document_checked(
+            document_id,
+            DocumentSaveBase {
+                revision: expected_revision,
+                markdown: None,
+            },
+            patch,
+        )
+    }
+
+    /// Saves an editor patch against the revision and, when replacing it,
+    /// the Markdown the editor originally loaded.
+    pub fn update_document_checked(
+        &self,
+        document_id: &DocumentId,
+        mut base: DocumentSaveBase<'_>,
+        patch: DocumentPatch,
+    ) -> Result<DocumentRecord, DocumentCommandError> {
+        if patch.markdown.is_none() {
+            base.markdown = None;
+        }
         let commands = Self::new(self.documents.frozen());
         let record = commands.require(document_id)?;
-        ensure_revision(&record.state, expected_revision)?;
+        base.validate(&record.state, &record.markdown)?;
         let mut state = record.state;
         apply_patch(&mut state, &patch)?;
         commands
             .documents
-            .save_expecting_revision(state, expected_revision, patch.markdown)?;
+            .save_checked(state, base, patch.markdown)?;
         commands.require(document_id)
     }
 
@@ -435,25 +478,33 @@ impl DocumentCommandService {
 impl DocumentService {
     /// Saves `document` as revision `expected_revision + 1` if the stored
     /// document is still at `expected_revision`; `markdown: None` keeps the
-    /// stored body. The re-read and the write are two repository calls, not
-    /// one locked step: a writer that lands between them is overwritten.
+    /// stored body.
     pub(crate) fn save_expecting_revision(
         &self,
-        mut document: DocumentState,
+        document: DocumentState,
         expected_revision: u64,
         markdown: Option<String>,
     ) -> Result<DocumentState, DocumentCommandError> {
-        let repository = self.current();
-        let current = repository
-            .read(document.id())
-            .map_err(ServiceError::from)?
-            .ok_or_else(|| DocumentCommandError::NotFound(document.id().clone()))?;
-        ensure_revision(&current.state, expected_revision)?;
-        document.schema.revision = expected_revision.saturating_add(1);
+        self.save_checked(
+            document,
+            DocumentSaveBase {
+                revision: expected_revision,
+                markdown: None,
+            },
+            markdown,
+        )
+    }
+
+    pub(crate) fn save_checked(
+        &self,
+        mut document: DocumentState,
+        base: DocumentSaveBase<'_>,
+        markdown: Option<String>,
+    ) -> Result<DocumentState, DocumentCommandError> {
+        document.schema.revision = base.revision.saturating_add(1);
         document.schema.updated_at_ms = crate::now_ms();
-        repository
-            .save(document.clone(), markdown)
-            .map_err(ServiceError::from)?;
+        self.current()
+            .save_checked(document.clone(), base, markdown)?;
         Ok(document)
     }
 }
