@@ -2260,6 +2260,7 @@ mod tests {
         let seam = rt.presented("content-plane").unwrap().0[0];
         assert!((left + width / 2.0 - seam).abs() < 0.5);
         assert!(left < seam - 4.0 && left + width > seam + 4.0);
+        assert!((width - 9.0).abs() < 0.5, "glow width was {width}");
         rt.pointer_move(x + 100.0, y);
         advance(&mut rt, 2);
         assert!((0.0..1.0).contains(&glow(&rt)) && glow(&rt) > 0.0);

@@ -314,7 +314,7 @@ pub fn layout(s: &MeetNote, k: &Kit, cx: &Cx<MeetNote>, page: El) -> El {
                 Color::BLACK.alpha(0.30)
             };
             PaneDivider::new(s.tr("resize_sidebar"), k)
-                .glow(18.0, peak, 110.0)
+                .glow(9.0, peak, 110.0)
                 .build(
                     &s.shell.pane,
                     &s.shell.resize,
