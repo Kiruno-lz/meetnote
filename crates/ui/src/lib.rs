@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod assistant_tests;
-pub mod assistant_ui;
+pub use application::desktop_assistant as assistant_ui;
 mod audio;
 mod components;
 mod controller;

@@ -15,6 +15,7 @@ gpui-component-assets.workspace = true
 models = { path = "../models" }
 runtime = { path = "../runtime" }
 settings = { path = "../settings" }
+ui-text = { path = "../ui-text" }
 
 # Accessibility display flags (reduce transparency / motion). gpui-base
 # already locks these crates; only the features read here are named.

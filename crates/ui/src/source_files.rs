@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 /// Every `.rs` file under `crates/ui/src`, by its path relative to it.
 pub(crate) const SOURCES: &[(&str, &str)] = &[
     ("assistant_tests.rs", include_str!("assistant_tests.rs")),
-    ("assistant_ui.rs", include_str!("assistant_ui.rs")),
     ("audio.rs", include_str!("audio.rs")),
     ("components.rs", include_str!("components.rs")),
     ("controller.rs", include_str!("controller.rs")),

@@ -19,6 +19,8 @@ mod assistant_skills;
 mod audio_source;
 mod backend_worker;
 mod capabilities;
+pub mod desktop_assistant;
+
 mod document_commands;
 mod document_issues;
 mod document_search;
@@ -47,7 +49,7 @@ pub use capabilities::{
     SettingsPatchArguments, SettingsReadArguments, SettingsSection,
 };
 pub use contracts::BackendDescriptor;
-pub use document_commands::{DocumentCommandError, DocumentCommandService};
+pub use document_commands::{DocumentCommandError, DocumentCommandService, DocumentSaveBase};
 pub use document_issues::DocumentIssueKind;
 pub use document_search::{
     DocumentSearchHit, DocumentSearchQuery, DocumentSearchResults, SearchSource,
@@ -355,6 +357,23 @@ pub trait DocumentRepository: Send + Sync {
 
     fn save(&self, document: domain::DocumentState, markdown: Option<String>)
         -> Result<(), String>;
+
+    /// Repositories with concurrent writers override this to check the base
+    /// and save while holding the same write lock.
+    fn save_checked(
+        &self,
+        document: domain::DocumentState,
+        base: DocumentSaveBase<'_>,
+        markdown: Option<String>,
+    ) -> Result<(), DocumentCommandError> {
+        let current = self
+            .read(document.id())
+            .map_err(DocumentCommandError::Service)?
+            .ok_or_else(|| DocumentCommandError::NotFound(document.id().clone()))?;
+        base.validate(&current.state, &current.markdown)?;
+        self.save(document, markdown)
+            .map_err(DocumentCommandError::Service)
+    }
 
     fn commit_agent_mutation(
         &self,

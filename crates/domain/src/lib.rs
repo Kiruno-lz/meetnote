@@ -97,6 +97,18 @@ pub struct DocumentContent {
     pub summary: Option<String>,
 }
 
+/// Tags typed as a list separated by commas (`,`, `，` or `、`): trimmed,
+/// without empty or repeated entries, in typed order.
+pub fn parse_document_tags(text: &str) -> Vec<String> {
+    let mut tags: Vec<String> = Vec::new();
+    for tag in text.split([',', '，', '、']).map(str::trim) {
+        if !tag.is_empty() && !tags.iter().any(|kept| kept == tag) {
+            tags.push(tag.to_string());
+        }
+    }
+    tags
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct ProcessingMetadata {
     pub latest: Option<ProcessingRecord>,

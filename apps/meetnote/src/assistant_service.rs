@@ -1,7 +1,14 @@
+use application::desktop_assistant::{
+    AssistantDocumentChange, AssistantFieldDiff, AssistantJobEvent, AssistantMutationSummary,
+    AssistantPendingReview, AssistantProgress, AssistantProgressHandler, AssistantRangePreview,
+    AssistantRunDiagnostics, AssistantRunRequest, AssistantRunResult, AssistantSettingsSave,
+    AssistantTreeChange, AssistantUiError, AssistantUiService, AssistantUsage,
+    ConnectionDiagnostic, ConnectionProbeKind,
+};
 use application::{
-    agent_error_from_llm, AgentCancellation, AgentProgress, AgentProgressStage, AgentRunResult,
-    AgentRuntime, AgentRuntimeConfig, AgentTask, DocumentService, WorkspaceAccessPolicy,
-    WorkspaceCapabilityPort,
+    AgentCancellation, AgentProgress, AgentProgressStage, AgentRunResult, AgentRuntime,
+    AgentRuntimeConfig, AgentTask, DocumentService, WorkspaceAccessPolicy, WorkspaceCapabilityPort,
+    agent_error_from_llm,
 };
 use contracts::{
     AgentActor, AgentDocumentRevision, AgentErrorCode, AgentMutationReceipt, AgentPendingMutation,
@@ -20,13 +27,6 @@ use settings::{
 };
 use std::io::Read;
 use std::sync::{Arc, Mutex};
-use ui::assistant_ui::{
-    AssistantDocumentChange, AssistantFieldDiff, AssistantJobEvent, AssistantMutationSummary,
-    AssistantPendingReview, AssistantProgress, AssistantProgressHandler, AssistantRangePreview,
-    AssistantRunDiagnostics, AssistantRunRequest, AssistantRunResult, AssistantSettingsSave,
-    AssistantTreeChange, AssistantUiError, AssistantUiService, AssistantUsage,
-    ConnectionDiagnostic, ConnectionProbeKind,
-};
 
 #[derive(Clone)]
 pub struct DesktopAssistantService {
@@ -205,7 +205,7 @@ impl DesktopAssistantService {
 
     /// Provider for the active connection, built exactly as desktop runs build
     /// it. `None` means no active connection is configured.
-    pub(crate) fn active_provider(
+    pub fn active_provider(
         &self,
     ) -> Result<Option<(LiteLlmProvider, Option<String>)>, AssistantUiError> {
         let Some(profile) = self
@@ -475,10 +475,10 @@ impl AssistantUiService for DesktopAssistantService {
         let response = self
             .gateway(&authorized_document_ids, assistant.write_mode)?
             .undo(&undo_token, &format!("undo:{undo_token}"));
-        if let Some(AgentToolResult::Mutation(receipt)) = response.result.as_ref() {
-            if response.ok {
-                return Ok(map_mutation(receipt.clone()));
-            }
+        if let Some(AgentToolResult::Mutation(receipt)) = response.result.as_ref()
+            && response.ok
+        {
+            return Ok(map_mutation(receipt.clone()));
         }
         Err(ui_error(response.error.clone().unwrap_or_else(|| {
             AgentToolError::new(
@@ -695,7 +695,7 @@ fn redact_ui_error(mut error: AssistantUiError, secret: Option<&str>) -> Assista
     error
 }
 
-pub(crate) fn redact_secret(message: &mut String, secret: Option<&str>) {
+pub fn redact_secret(message: &mut String, secret: Option<&str>) {
     if let Some(secret) = secret.filter(|secret| !secret.is_empty()) {
         *message = message.replace(secret, "[REDACTED]");
     }
@@ -724,8 +724,8 @@ mod tests {
         SettingsRepository,
     };
     use std::fs;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct MemorySettingsRepository(Mutex<AppSettings>);
 
@@ -837,12 +837,14 @@ mod tests {
 
         assert_eq!(error.code, "ASSISTANT_SETTINGS_INVALID");
         assert!(!error.retryable);
-        assert!(service
-            .settings_snapshot()
-            .unwrap()
-            .assistant
-            .connections
-            .is_empty());
+        assert!(
+            service
+                .settings_snapshot()
+                .unwrap()
+                .assistant
+                .connections
+                .is_empty()
+        );
     }
 
     /// Counts the writes Settings sends to its repository.
@@ -1057,11 +1059,13 @@ mod tests {
                     scene: contracts::AgentScene::Ask,
                     skill: contracts::AgentSkillSelector::for_scene(contracts::AgentScene::Ask),
                     prompt: "question".into(),
-                    authorized_documents: vec![ui::assistant_ui::AssistantDocumentContext {
-                        document_id: "doc".into(),
-                        title: "Document".into(),
-                        revision: 99,
-                    }],
+                    authorized_documents: vec![
+                        application::desktop_assistant::AssistantDocumentContext {
+                            document_id: "doc".into(),
+                            title: "Document".into(),
+                            revision: 99,
+                        },
+                    ],
                     projection: contracts::DocumentProjection::Metadata,
                     write_mode: contracts::AgentWriteMode::Automatic,
                     connection_id: "local".into(),
@@ -1180,7 +1184,7 @@ mod tests {
             scene: contracts::AgentScene::Ask,
             skill: contracts::AgentSkillSelector::for_scene(contracts::AgentScene::Ask),
             prompt: "question".into(),
-            authorized_documents: vec![ui::assistant_ui::AssistantDocumentContext {
+            authorized_documents: vec![application::desktop_assistant::AssistantDocumentContext {
                 document_id: "doc".into(),
                 title: "Document".into(),
                 revision: 1,
@@ -1317,16 +1321,20 @@ mod tests {
         }
         assert_eq!(error.code, "DOCUMENT_NOT_FOUND");
         match received.as_slice() {
-            [JobEvent::Started { job_id }, JobEvent::Progress {
-                job_id: progress_job,
-                progress:
-                    Progress {
-                        completed: 0,
-                        total: None,
-                    },
-            }, JobEvent::Failed {
-                job_id: failed_job, ..
-            }] if progress_job == job_id && failed_job == job_id => {}
+            [
+                JobEvent::Started { job_id },
+                JobEvent::Progress {
+                    job_id: progress_job,
+                    progress:
+                        Progress {
+                            completed: 0,
+                            total: None,
+                        },
+                },
+                JobEvent::Failed {
+                    job_id: failed_job, ..
+                },
+            ] if progress_job == job_id && failed_job == job_id => {}
             other => panic!("unexpected job events: {other:?}"),
         }
     }
