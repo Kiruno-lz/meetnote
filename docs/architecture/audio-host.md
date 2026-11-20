@@ -4,7 +4,7 @@ Audio Host 是 MeetNote 四个基础层之一，负责音频事实、处理编�
 
 ## 目标
 
-ASR 与 diarization 分别注册、选择和执行。application 只依赖稳定 trait 和归一化 contracts，不知道模型族、推理库或文件布局；新增具体 backend 不修改 domain、application 或 GPUI 接口。
+ASR 与 diarization 分别注册、选择和执行。application 只依赖稳定 trait 和归一化 contracts，不知道模型族、推理库或文件布局；新增具体 backend 不修改 domain、application 或 UI 接口。
 
 ```text
 application
@@ -176,7 +176,7 @@ ASR future -> diarization future -> identity -> alignment -> normalized result
 
 短音频 ASR 完成后才启动 diarization，包括 ASR future 暂停时；ASR 失败保留错误 code，并取消未启动的 diarization job。Whisper/Sherpa 的整文件 ASR 与 native/Sherpa 的整文件 diarization 通过 application 的 `run_backend_worker` 复用所属 JobRuntime 可取消准入；排队取消无需等待其他录音结束，不加载音频或模型。运行中继续合作取消并等待真实 worker 退出；正常 backend 错误保留 code/message，无取消标记的异常退出报告 `InferenceFailed`。JobRuntime 继续负责状态、取消与资源记录。长音频保留 window session 的独立调度，短音频顺序测试不证明进程级 native runtime 的隔离。
 
-成功结果在 Workspace 构造 provenance 后、进入 repository 保存前再次检查 ASR/diarization 取消 token；校验收尾期间收到取消时，返回 `Cancelled`，保留已有文档、Markdown 和处理记录。该检查是保存准入边界，通过后让 repository 完成原有写入协议，不中断已准入的提交。桌面使用 GPUI 后台执行器轮询完整处理 future，进度与结果回到界面投影，避免推理后的同步校验和保存占用 UI 执行器。
+成功结果在 Workspace 构造 provenance 后、进入 repository 保存前再次检查 ASR/diarization 取消 token；校验收尾期间收到取消时，返回 `Cancelled`，保留已有文档、Markdown 和处理记录。该检查是保存准入边界，通过后让 repository 完成原有写入协议，不中断已准入的提交。桌面经 `workspace_host` 把完整处理放在 JobRuntime 后台任务中执行，界面每帧轮询进度与结果，推理后的同步校验和保存不占用 UI 线程。
 
 已用独立真实 Whisper 推理与 macOS faulting-thread 栈定位并修复取消回调 userdata 故障。
 
@@ -234,4 +234,4 @@ backend 执行 -> session/graph/context 真实加载
 - `PersistenceFailed`
 - `NotImplemented`
 
-backend 不读取文档树，不更新 GPUI，不保存项目，也不解释 Agent/Skill 语义。处理结果由 application 写入当前文档和 processing provenance。
+backend 不读取文档树，不更新 UI，不保存项目，也不解释 Agent/Skill 语义。处理结果由 application 写入当前文档和 processing provenance。

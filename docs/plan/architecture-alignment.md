@@ -8,10 +8,10 @@ MeetNote 已完成第一轮四层职责收敛和 capability 初步闭环。当�
 |---|---|---|
 | Workspace | `WorkspaceCapabilityPort` 已承载 typed tools、scope、revision、Markdown hash、分页快照、batch/journal/pending/undo、repository lock 和 512 KiB result cap；CLI/Built-in 共用服务 | Workspace 分支补锁内内容检查、普通保存 CAS/恢复与读取上限；不归 Agent 接入建设 |
 | Audio | 解码、重采样、离线分窗、ASR/diarization provider、模型管理和多个 backend 已存在；`AudioCapabilityPort` 已接入 grant、job、snapshot、cancel 和 envelope | 真实模型质量、speaker identity 阈值和更多 backend 矩阵仍待验收 |
-| Built-in Agent | 已收缩为最小 Tool Loop，三协议 adapter、Skill、JobRuntime worker gate、progress、warning、多 receipt 和 UI 终态均有测试 | 真实 provider/GPUI host 集成仍是发布门，不增加第二套 runtime |
+| Built-in Agent | 已收缩为最小 Tool Loop，三协议 adapter、Skill、JobRuntime worker gate、progress、warning、多 receipt 和 UI 终态均有测试 | 真实 provider/桌面 host 集成仍是发布门，不增加第二套 runtime |
 | 文档场景 | ask、organize、partition、extract、move 的 Skill 与工具校验已分离；Workspace 负责事实、结构和写回 | 跨块语义质量依赖外部 Agent/场景插件和真实模型评测 |
 | 外部 Agent | JSON capability CLI 已覆盖读取、分页、写回、source hash、confirm_each、undo、Settings、Audio discovery/error envelope；Codex CLI 已真实完成 discovery、`read_document` metadata 和临时 workspace 无预览自动写回/mutation receipt bridge | 外部工具桥接按能力验收；不要求 MeetNote 托管 session/context/loop |
-| GPUI UI | 四个 route 已迁移到 zui/gpui-base，具备玻璃外壳、文档编辑/恢复反馈、模型管理、Assistant 状态、键盘遍历与带 label 控件 | 原生窗口、Accessibility Inspector 与真实 provider 桌面验收见 UI 计划 |
+| Rune UI | 四个 route 在 Rune 上实现（`apps/meetnote`），具备文档编辑/恢复反馈、模型管理、Assistant review、键盘与快捷键流程，并有 Runtime 交互测试 | 原生窗口、Accessibility Inspector 与真实 provider 桌面验收见 UI 计划 |
 | Extension | 当前采用显式 Rust 装配，不建设通用 manifest、依赖解析或 lifecycle runtime | 只有出现真实动态 provider 才验证注册撤销、依赖失败回滚和在途任务停止 |
 
 这些状态描述当前代码、已确定的设计和待实现能力，不等同于生产验收。测试存在、编译通过、真实模型执行、质量验收和发布就绪必须分别记录。
@@ -39,7 +39,7 @@ MeetNote 已完成第一轮四层职责收敛和 capability 初步闭环。当�
 - 文档工具执行、写入校验和事务归 Workspace；Agent Host 复用 capability 的小型事件 envelope，不建立第二套格式；Skill/可选场景插件负责语义。
 - 外部 Agent 自行管理会话与上下文；MeetNote 不提供跨 backend create/resume/close。Built-in 只保存本次运行必需消息，持久会话不是当前前置能力。
 - 非流式 HTTP 是当前 Built-in 路径的实现选择，不是所有 Agent backend 的长期限制。统一事件可以承载完整消息，也可以承载真实流式事件，但不能把完整文本切片伪装成流式。
-- 主程序保持 Rust/GPUI 和原生音频链路；外部进程或云 provider 是可选执行载体，必须单独管理取消、退出、超时、资源和数据传输。
+- 主程序保持 Rust/Rune 和原生音频链路；外部进程或云 provider 是可选执行载体，必须单独管理取消、退出、超时、资源和数据传输。
 - 不使用权威 SQLite 或全局 project store；这不意味着删除 state、事务 journal、undo 或会话历史。它们分别属于事实、恢复和操作历史，不能都当作缓存。
 
 ## 分支职责与依赖
@@ -47,14 +47,14 @@ MeetNote 已完成第一轮四层职责收敛和 capability 初步闭环。当�
 - Assistant：完整 capability 接口化、Host 真实回应、Codex（Luna medium）经 Host/测试插件完成任务；MoonBit 真实插件与红线测试是当前验收要求，详见 [Assistant 计划](assistant-plan.md)。
 - Workspace 基础服务：资产、CAS、恢复与读取上限的唯一进度/TODO 归 [Workspace Host](../architecture/workspace-host.md)；Settings 基础服务由工程计划协调。
 - Audio 基础服务：任务执行与跨进程生命周期归工程计划；AMI ASR/diarization 边界优先由[音频质量计划](audio-quality-plan.md)执行。
-- GPUI：所有页面、设置界面、结果/错误渲染和交互验收归[UI 计划](ui-plan.md)。
+- Rune UI：所有页面、设置界面、结果/错误渲染和交互验收归[UI 计划](ui-plan.md)。
 - 质量按固定 benchmark 的本地原子测试、组合测试、Agent 语义与端到端逐级执行；三协议完整语义矩阵不是 Agent Host 分支验收门。
 
 ## 当前缺口
 
 - 外部 Markdown 编辑不会参与受管理事务；owner/liveness 的发布级证明和更广泛的外部编辑边界仍需独立验收。
 - 真实上游模型语义质量、长音频 AHC 的二次内存、speaker identity 阈值、质量基准和 macOS 发布验收仍是独立工作。
-- 外部 Agent 工具调用与 fake 测试分层验证；GPUI 异步交互归 UI 计划，完整语义质量不作为当前 Agent 接入门槛。
+- 外部 Agent 工具调用与 fake 测试分层验证；桌面异步交互归 UI 计划，完整语义质量不作为当前 Agent 接入门槛。
 - Extension 当前仍以 Rust 装配为主；先实现明确要求的 MoonBit 测试插件与 Host 桥接，不扩成通用动态插件平台。
 
 ## 最小闭环的验收归属

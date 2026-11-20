@@ -33,7 +33,7 @@ models/                         本地模型缓存
 ## 架构
 
 
-                 GPUI UI
+                 Rune UI
           交互、状态投影、任务反馈
                     │
       ┌─────────────┼─────────────┐
@@ -53,4 +53,4 @@ Workspace Host  Audio Host   Agent Host
 - [Audio Host 与模型后端](docs/architecture/audio-host.md)
 - [架构决策](docs/architecture/decisions.md)
 - [工程实施计划](docs/plan/implementation-plan.md)
-- [GPUI UI 计划](docs/plan/ui-plan.md)
+- [Rune UI 计划](docs/plan/ui-plan.md)
