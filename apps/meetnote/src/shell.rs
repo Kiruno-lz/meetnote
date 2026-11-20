@@ -16,10 +16,16 @@ const FRAME_RADIUS: f32 = 10.0;
 const CHROME_TINT: f32 = 0.24;
 const SHELL_TINT: f32 = 0.45;
 const WORKSPACE_TINT: f32 = 0.29;
+// Back and forward are one mirrored chevron pair, so the titlebar reads as a matched control.
 static BACK: Icon = Icon {
     name: "meetnote-back",
     view: 16.0,
-    body: r#"<path d="M10 3.5 5.5 8 10 12.5" fill="none" stroke="currentColor" stroke-width="1.4"/>"#,
+    body: r#"<path d="M10 3.5 5.5 8 10 12.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>"#,
+};
+static FORWARD: Icon = Icon {
+    name: "meetnote-forward",
+    view: 16.0,
+    body: r#"<path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>"#,
 };
 
 #[derive(PartialEq, Eq)]
@@ -328,7 +334,7 @@ pub fn layout(s: &MeetNote, k: &Kit, cx: &Cx<MeetNote>, page: El) -> El {
                 .help_keys(command_keys(false, "[")),
         )
         .leading(
-            IconButton::new(&glyphs::ARROW_RIGHT)
+            IconButton::new(&FORWARD)
                 .label(s.tr("navigate_forward"))
                 .disabled(s.shell.forward.is_empty())
                 .on_press(|s: &mut MeetNote| s.travel(true))
@@ -451,7 +457,7 @@ pub fn layout(s: &MeetNote, k: &Kit, cx: &Cx<MeetNote>, page: El) -> El {
 
 #[cfg(test)]
 mod tests {
-    use super::{ZOOM_DEFAULT, ZOOM_STEPS, zoom_step};
+    use super::{BACK, FORWARD, ZOOM_DEFAULT, ZOOM_STEPS, zoom_step};
 
     #[test]
     fn zoom_steps_stop_at_both_ends() {
@@ -460,5 +466,35 @@ mod tests {
         assert_eq!(zoom_step(0, -1), 0);
         assert_eq!(zoom_step(ZOOM_STEPS.len() - 1, 1), ZOOM_STEPS.len() - 1);
         assert!(ZOOM_STEPS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    /// The `d` points of an icon's single path, as (x, y) pairs.
+    fn points(body: &str) -> Vec<(f32, f32)> {
+        let d = body
+            .split("d=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap();
+        let numbers: Vec<f32> = d
+            .split(|c: char| c.is_ascii_alphabetic() || c.is_whitespace())
+            .filter(|n| !n.is_empty())
+            .map(|n| n.parse().unwrap())
+            .collect();
+        numbers.chunks(2).map(|p| (p[0], p[1])).collect()
+    }
+
+    fn attributes(body: &str) -> &str {
+        body.split_once("\" ").map(|(_, rest)| rest).unwrap()
+    }
+
+    #[test]
+    fn navigation_icons_are_one_mirrored_pair() {
+        assert_eq!(BACK.view, FORWARD.view);
+        assert_eq!(attributes(BACK.body), attributes(FORWARD.body));
+        let mirrored: Vec<(f32, f32)> = points(BACK.body)
+            .into_iter()
+            .map(|(x, y)| (BACK.view - x, y))
+            .collect();
+        assert_eq!(mirrored, points(FORWARD.body));
     }
 }
