@@ -220,7 +220,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -1078,7 +1078,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1216,7 +1216,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3116,7 +3116,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3807,7 +3807,7 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/Kiruno-lz/rune?rev=f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b#f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b"
+source = "git+https://github.com/Kiruno-lz/rune?rev=80456b72fd5155291cc37c7f0a3ad7493cac779d#80456b72fd5155291cc37c7f0a3ad7493cac779d"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -3823,6 +3823,7 @@ dependencies = [
  "futures-util",
  "half",
  "icu_properties",
+ "icu_segmenter",
  "image",
  "js-sys",
  "libc",
@@ -3855,6 +3856,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "serde",
  "serde_json",
+ "skrifa",
  "swash",
  "taffy",
  "tokio",
@@ -3872,6 +3874,7 @@ dependencies = [
  "wgpu-hal",
  "wgpu-naga-bridge",
  "windows",
+ "windows-core",
  "windows-sys 0.59.0",
  "winit",
  "x11rb",
@@ -3883,7 +3886,7 @@ dependencies = [
 [[package]]
 name = "rune-highlights"
 version = "0.0.1"
-source = "git+https://github.com/Kiruno-lz/rune?rev=f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b#f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b"
+source = "git+https://github.com/Kiruno-lz/rune?rev=80456b72fd5155291cc37c7f0a3ad7493cac779d#80456b72fd5155291cc37c7f0a3ad7493cac779d"
 dependencies = [
  "unicode-ident",
  "wasmparser",
@@ -3892,7 +3895,7 @@ dependencies = [
 [[package]]
 name = "rune-kit"
 version = "0.0.1"
-source = "git+https://github.com/Kiruno-lz/rune?rev=f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b#f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b"
+source = "git+https://github.com/Kiruno-lz/rune?rev=80456b72fd5155291cc37c7f0a3ad7493cac779d#80456b72fd5155291cc37c7f0a3ad7493cac779d"
 dependencies = [
  "pulldown-cmark",
  "rune",
@@ -3904,12 +3907,12 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/Kiruno-lz/rune?rev=f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b#f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b"
+source = "git+https://github.com/Kiruno-lz/rune?rev=80456b72fd5155291cc37c7f0a3ad7493cac779d#80456b72fd5155291cc37c7f0a3ad7493cac779d"
 
 [[package]]
 name = "rune-staging"
 version = "0.0.1"
-source = "git+https://github.com/Kiruno-lz/rune?rev=f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b#f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b"
+source = "git+https://github.com/Kiruno-lz/rune?rev=80456b72fd5155291cc37c7f0a3ad7493cac779d#80456b72fd5155291cc37c7f0a3ad7493cac779d"
 dependencies = [
  "wgpu",
 ]
@@ -3917,7 +3920,7 @@ dependencies = [
 [[package]]
 name = "rune-taffy"
 version = "0.0.1"
-source = "git+https://github.com/Kiruno-lz/rune?rev=f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b#f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b"
+source = "git+https://github.com/Kiruno-lz/rune?rev=80456b72fd5155291cc37c7f0a3ad7493cac779d#80456b72fd5155291cc37c7f0a3ad7493cac779d"
 dependencies = [
  "taffy",
 ]
@@ -3983,7 +3986,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4630,10 +4633,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.6",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5445,7 +5448,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

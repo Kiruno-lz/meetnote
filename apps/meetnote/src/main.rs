@@ -3,12 +3,11 @@ mod controls;
 mod documents;
 mod settings;
 mod shell;
+mod toasts;
 mod workspace_host;
 
-use std::time::Duration;
-
 use rune::{App, AppSpec, Chrome, Cx, El, Tx, col, el, row};
-use rune_kit::{ButtonVariant, Dialog, Toast, ToastRegion};
+use rune_kit::{ButtonVariant, Dialog};
 use ui_text::Locale;
 
 use controls::action;
@@ -131,7 +130,7 @@ struct MeetNote {
     models: settings::Models,
     select: Option<&'static str>,
     confirm: Option<Confirm>,
-    toast: Option<(String, f64)>,
+    toasts: toasts::Toasts,
     now: f64,
 }
 
@@ -163,11 +162,6 @@ impl MeetNote {
 
     fn tr(&self, key: &str) -> &'static str {
         ui_text::text(self.locale(), key)
-    }
-
-    fn notify(&mut self, message: impl Into<String>, tx: &mut Tx) {
-        self.toast = Some((message.into(), self.now + 4.0));
-        tx.wake_after(Duration::from_secs(4));
     }
 
     fn confirm(&mut self, tx: &mut Tx) {
@@ -211,10 +205,7 @@ impl MeetNote {
 
     fn poll(&mut self, now: f64, tx: &mut Tx) -> bool {
         self.now = now;
-        let expired = self.toast.as_ref().is_some_and(|(_, until)| now >= *until);
-        if expired {
-            self.toast = None;
-        }
+        let expired = self.toasts.tick(now);
         let workspace = self.poll_workspace(tx);
         let processed = self.documents.poll(now, tx);
         let downloaded = self.models.poll(now, tx);
@@ -224,6 +215,8 @@ impl MeetNote {
 }
 
 fn view(s: &MeetNote, cx: &mut Cx<MeetNote>) -> El {
+    cx.zoom(s.zoom());
+    cx.mark_texts(s.documents.search_marks());
     let k = &controls::theme(s.settings.dark(cx.system_dark()));
     let mut overlays = Vec::new();
     let page = if !s.sample_mode && s.workspace_host.live.is_none() {
@@ -246,17 +239,7 @@ fn view(s: &MeetNote, cx: &mut Cx<MeetNote>) -> El {
             Route::Settings => settings::page(s, k, &mut overlays),
         }
     };
-    if let Some((message, _)) = &s.toast {
-        overlays.push(
-            ToastRegion::new()
-                .toast(
-                    Toast::new("preview-toast", message)
-                        .on_close(|s: &mut MeetNote| s.toast = None)
-                        .build(k),
-                )
-                .build(k),
-        );
-    }
+    overlays.extend(toasts::region(s, k));
     if let Some(confirm) = &s.confirm {
         let (heading, description, accept) = confirm.copy(s);
         let mut dialog = Dialog::new("confirm-dialog", heading)
@@ -377,6 +360,27 @@ fn main() {
                 s.navigate(Route::Settings);
                 s.select = Some("theme");
             }),
+            ("toasts", |s| {
+                s.show_sample();
+                for message in [
+                    "Sample recording imported",
+                    "Speakers merged",
+                    "Notes saved",
+                ] {
+                    s.toasts.show(message.into(), s.now);
+                }
+            }),
+            ("toasts-expanded", |s| {
+                s.show_sample();
+                for message in [
+                    "Sample recording imported",
+                    "Speakers merged",
+                    "Notes saved",
+                ] {
+                    s.toasts.show(message.into(), s.now);
+                }
+                s.toasts.hover(true, s.now);
+            }),
             ("import", |s| {
                 s.show_sample();
                 s.confirm = Some(Confirm::Import);
@@ -399,6 +403,7 @@ fn main() {
         )
     };
     App::new(spec)
+        .on_visibility(MeetNote::window_visibility)
         .window_options(rune::WindowOptions {
             transparent: cfg!(target_os = "macos"),
             ..Default::default()
@@ -417,6 +422,7 @@ mod tests {
     use rune::{Env, Key, KeyEvent, Mods, Runtime};
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
+    use std::time::Duration;
 
     struct TestRuntime {
         runtime: Runtime<MeetNote>,
@@ -1481,7 +1487,7 @@ mod tests {
         assert!(
             visible_text(&rt, "Audio processing finished"),
             "{:?}",
-            rt.state.toast
+            rt.state.toasts.messages().collect::<Vec<_>>()
         );
         let saved = documents.read(&id).unwrap().unwrap();
         assert!(!saved.state.results.transcript.is_empty());
@@ -1738,6 +1744,21 @@ mod tests {
         assert!(rt.state.documents.mode == documents::Mode::Original);
         assert!(visible_text(&rt, "draft checklist on Thursday"));
         assert!(visible_text(&rt, "Search match"));
+        advance(&mut rt, 30);
+        let marks = rt.state.documents.search_marks();
+        assert_eq!(marks.len(), 1, "the searched words are marked once");
+        assert!(marks[0].text().eq_ignore_ascii_case("draft checklist"));
+        let marked = rt
+            .elements()
+            .into_iter()
+            .find(|element| element.path == marks[0].path())
+            .expect("the mark names a mounted text");
+        assert_eq!(
+            &marked.text.as_deref().unwrap()[marks[0].range()],
+            marks[0].text()
+        );
+        click(&mut rt, "workspace-search/action");
+        assert!(rt.state.documents.search_marks().is_empty());
     }
 
     #[test]
@@ -1905,6 +1926,48 @@ mod tests {
     }
 
     #[test]
+    fn command_keys_zoom_the_view_and_reset_it() {
+        let mut rt = runtime();
+        let width = |rt: &TestRuntime| rt.presented("inner-frame").unwrap().0[2];
+        let unzoomed = width(&rt);
+        command(&mut rt, '=', false, false);
+        assert_eq!(rt.state.zoom(), 1.1);
+        assert!(
+            width(&rt) < unzoomed,
+            "a zoomed view lays out fewer points across"
+        );
+        command(&mut rt, '-', false, false);
+        command(&mut rt, '-', false, false);
+        assert_eq!(rt.state.zoom(), 0.9);
+        command(&mut rt, '0', false, false);
+        assert_eq!(rt.state.zoom(), 1.0);
+        assert!((width(&rt) - unzoomed).abs() < 0.5);
+    }
+
+    #[test]
+    fn shell_tooltips_list_their_shortcuts() {
+        let rt = runtime();
+        let help = |key: &str| {
+            rt.elements()
+                .into_iter()
+                .find(|element| element.key.as_deref() == Some(key))
+                .and_then(|element| element.help)
+                .unwrap_or_else(|| panic!("{key} has no help"))
+        };
+        let command = if cfg!(target_os = "macos") {
+            "⌘"
+        } else {
+            "Ctrl"
+        };
+        assert!(help("navigate-back").contains(&format!("{command} [")));
+        assert!(help("navigate-forward").contains(&format!("{command} ]")));
+        assert!(help("import-audio").contains(&format!("{command} O")));
+        let documents = help("nav-documents");
+        assert!(documents.contains(&format!("{command} 2")), "{documents}");
+        assert!(documents.contains("F"), "{documents}");
+    }
+
+    #[test]
     fn history_restores_documents_and_discards_forward_entries_on_a_new_route() {
         let mut rt = runtime();
         click(&mut rt, "design");
@@ -2026,6 +2089,32 @@ mod tests {
                     && node.inert
                     && !node.focused)
         );
+    }
+
+    #[test]
+    fn escape_from_search_returns_focus_to_where_the_shortcut_left_it() {
+        let mut rt = runtime();
+        rt.set_full_keyboard_access(true);
+        let focused = |rt: &Runtime<MeetNote>, key: &str| {
+            rt.elements()
+                .iter()
+                .any(|node| node.key.as_deref() == Some(key) && node.focused)
+        };
+        for _ in 0..20 {
+            if focused(&rt, "detail-toggle") {
+                break;
+            }
+            key(&mut rt, Key::Tab);
+        }
+        assert!(focused(&rt, "detail-toggle"));
+        command(&mut rt, 'f', false, true);
+        assert!(
+            rt.elements()
+                .iter()
+                .any(|node| node.focused && node.path.contains("/workspace-search/"))
+        );
+        key(&mut rt, Key::Escape);
+        assert!(focused(&rt, "detail-toggle"));
     }
 
     #[test]

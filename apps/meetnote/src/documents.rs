@@ -14,7 +14,7 @@ use domain::{
     DocumentState, ProjectId, ProjectTreeError, SpeakerCorrection, SpeakerTaggedSegment,
     parse_document_tags, reorder_project, reparent_project,
 };
-use rune::{El, Key, KeyEvent, TextEdit, Tx, col, el, row};
+use rune::{El, Key, KeyEvent, TextEdit, TextMark, Tx, col, el, row};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, Collapsible, Divider, DropPlacement as Placement,
     DropTarget as Target, Kit, Markdown, Progress, SegmentedControl, TextArea, TextField,
@@ -301,6 +301,8 @@ pub struct Workspace {
     search: TextEdit,
     search_hits: Option<SearchResults>,
     transcript_match: Option<usize>,
+    /// The runtime path of the matched paragraph's text, picked once it lays out.
+    match_text: Option<(usize, String)>,
     pub mode: Mode,
     pub detail: bool,
     speakers: bool,
@@ -319,6 +321,7 @@ impl Default for Workspace {
             search: TextEdit::new(""),
             search_hits: None,
             transcript_match: None,
+            match_text: None,
             mode: Mode::Summary,
             detail: false,
             speakers: false,
@@ -1162,6 +1165,7 @@ pub fn sidebar(s: &MeetNote, k: &Kit) -> El {
                     s.documents.reset_search_results();
                 })
                 .on_submit(MeetNote::submit_document_search)
+                .on_key(MeetNote::search_key)
                 .build(k)
                 .key("workspace-search"),
         )
@@ -1640,6 +1644,51 @@ fn transcript_index(document: &Document, target: &TranscriptSearchTarget) -> Opt
     }
 }
 
+/// Byte ranges of `query` in `text`, ignoring ASCII case, without overlaps.
+fn match_ranges(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let (haystack, needle) = (text.as_bytes(), query.as_bytes());
+    let mut ranges = Vec::new();
+    let mut at = 0;
+    while at + needle.len() <= haystack.len() {
+        if text.is_char_boundary(at)
+            && text.is_char_boundary(at + needle.len())
+            && haystack[at..at + needle.len()].eq_ignore_ascii_case(needle)
+        {
+            ranges.push(at..at + needle.len());
+            at += needle.len();
+        } else {
+            at += 1;
+        }
+    }
+    ranges
+}
+
+impl Workspace {
+    /// The searched words in the transcript paragraph a search hit opened, painted as the
+    /// selection paints them (`Cx::mark_texts`) while the results stay up.
+    pub fn search_marks(&self) -> Vec<TextMark> {
+        let (Some(index), Some((picked, path)), Some(_)) =
+            (self.transcript_match, &self.match_text, &self.search_hits)
+        else {
+            return Vec::new();
+        };
+        if *picked != index || self.mode != Mode::Original || !self.has_selection() {
+            return Vec::new();
+        }
+        let Some((_, _, text)) = transcript_lines(self.current()).nth(index) else {
+            return Vec::new();
+        };
+        match_ranges(text, &self.search.text)
+            .into_iter()
+            .map(|range| TextMark::new(path.clone(), range.clone(), &text[range]))
+            .collect()
+    }
+}
+
 fn transcript_lines(document: &Document) -> impl Iterator<Item = (u64, &str, &str)> {
     let results = &document.state.results;
     results
@@ -1723,11 +1772,29 @@ fn original(s: &MeetNote, k: &Kit) -> El {
         } else {
             (paragraph, header)
         };
-        body = body.child(
-            paragraph
-                .child(header)
-                .child(label(k, text).selectable(true)),
-        );
+        let mut line = label(k, text).selectable(true).key("text");
+        if s.documents.transcript_match == Some(index)
+            && s.documents
+                .match_text
+                .as_ref()
+                .is_none_or(|(at, _)| *at != index)
+        {
+            // `Cx::mark_texts` names a text by its runtime path: pick it once it lays out.
+            line = line.on_layout_tx(move |_: &mut MeetNote, [x, y, ..], tx| {
+                let scope = format!("transcript-{index}");
+                tx.element_at_in(
+                    scope,
+                    x + 1.0,
+                    y + 1.0,
+                    move |s: &mut MeetNote, picked, _| {
+                        if let Some(picked) = picked {
+                            s.documents.match_text = Some((index, picked.path().to_owned()));
+                        }
+                    },
+                );
+            });
+        }
+        body = body.child(paragraph.child(header).child(line));
     }
     body
 }
@@ -1840,6 +1907,21 @@ fn edit(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_ranges_find_every_case_insensitive_occurrence() {
+        assert_eq!(
+            super::match_ranges("Draft the draft", "draft"),
+            [0..5, 10..15]
+        );
+        assert_eq!(super::match_ranges("aaaa", "aa"), [0..2, 2..4]);
+        assert!(super::match_ranges("草稿 draft", " ").is_empty());
+        assert_eq!(
+            super::match_ranges("草稿 draft 草稿", "草稿"),
+            [0..6, 13..19]
+        );
+        assert!(super::match_ranges("anything", "").is_empty());
+    }
 
     #[test]
     fn newer_saved_notes_block_a_stale_draft_until_explicit_reload() {

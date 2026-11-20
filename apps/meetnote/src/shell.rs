@@ -1,4 +1,4 @@
-use rune::{Color, Cx, El, Icon, KeyEvent, Spring, SystemMaterial, Tx, col, el, row};
+use rune::{Color, Cx, El, Icon, Key, KeyEvent, Side, Spring, SystemMaterial, Tx, col, el, row};
 use rune_kit::{
     Badge, BadgeVariant, ControlSize, IconButton, IconButtonVariant, Kit, PaneState, glyphs,
     shell::{SIDEBAR, WindowTitlebar, is_sidebar_toggle},
@@ -16,10 +16,16 @@ const FRAME_RADIUS: f32 = 10.0;
 const CHROME_TINT: f32 = 0.24;
 const SHELL_TINT: f32 = 0.45;
 const WORKSPACE_TINT: f32 = 0.29;
+// Back and forward are one mirrored chevron pair, so the titlebar reads as a matched control.
 static BACK: Icon = Icon {
     name: "meetnote-back",
     view: 16.0,
-    body: r#"<path d="M10 3.5 5.5 8 10 12.5" fill="none" stroke="currentColor" stroke-width="1.4"/>"#,
+    body: r#"<path d="M10 3.5 5.5 8 10 12.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>"#,
+};
+static FORWARD: Icon = Icon {
+    name: "meetnote-forward",
+    view: 16.0,
+    body: r#"<path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>"#,
 };
 
 #[derive(PartialEq, Eq)]
@@ -33,6 +39,18 @@ pub struct Shell {
     resize: docked_pane::ResizeInteraction,
     back: Vec<Location>,
     forward: Vec<Location>,
+    zoom: usize,
+    /// Where focus was before ⇧⌘F moved it into the search field, for Escape to hand back.
+    search_return: Option<(String, bool)>,
+}
+
+/// Page zoom steps, as a browser's ⌘+ / ⌘− walk them.
+const ZOOM_STEPS: [f32; 9] = [0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+const ZOOM_DEFAULT: usize = 3;
+
+/// The zoom step after `step` going `by` steps, held inside [`ZOOM_STEPS`].
+fn zoom_step(step: usize, by: isize) -> usize {
+    step.saturating_add_signed(by).min(ZOOM_STEPS.len() - 1)
 }
 
 impl Default for Shell {
@@ -42,11 +60,40 @@ impl Default for Shell {
             resize: docked_pane::ResizeInteraction::default(),
             back: Vec::new(),
             forward: Vec::new(),
+            zoom: ZOOM_DEFAULT,
+            search_return: None,
         }
     }
 }
 
 impl MeetNote {
+    /// The UI zoom `view` hands to `Cx::zoom`.
+    pub fn zoom(&self) -> f32 {
+        ZOOM_STEPS[self.shell.zoom]
+    }
+
+    /// The workspace search field's keys: Escape hands focus back to where ⇧⌘F found it.
+    pub fn search_key(&mut self, event: &KeyEvent, tx: &mut Tx) -> bool {
+        if event.key != Key::Escape {
+            return false;
+        }
+        match self.shell.search_return.take() {
+            Some((key, ring)) => {
+                tx.focus(key, ring);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn zoom_by(&mut self, by: isize) {
+        self.shell.zoom = if by == 0 {
+            ZOOM_DEFAULT
+        } else {
+            zoom_step(self.shell.zoom, by)
+        };
+    }
+
     fn location(&self, route: Route) -> Location {
         Location {
             route,
@@ -109,7 +156,7 @@ impl MeetNote {
             self.shell.pane.toggle();
             if !self.shell.pane.is_open() {
                 self.shell.resize = docked_pane::ResizeInteraction::default();
-                tx.focus("toggle-sidebar", tx.focus_visible());
+                tx.return_focus("toggle-sidebar", tx.focus_visible());
             }
         }
     }
@@ -127,18 +174,23 @@ pub fn shortcuts(s: &mut MeetNote, event: &KeyEvent, tx: &mut Tx) -> bool {
     } else if event.is_command('f') && event.mods.shift {
         s.navigate(Route::Documents);
         s.shell.pane.set_open(true);
+        s.shell.search_return = tx
+            .focused()
+            .filter(|key| *key != "workspace-search")
+            .map(|key| (key.to_owned(), tx.focus_visible()));
         tx.focus("workspace-search", true);
-    } else if let Some(route) = [
-        ('1', Route::Assistant),
-        ('2', Route::Documents),
-        ('3', Route::Models),
-        ('4', Route::Settings),
-        (',', Route::Settings),
-    ]
-    .into_iter()
-    .find_map(|(key, route)| event.is_command(key).then_some(route))
+    } else if let Some(route) = Route::ALL
+        .into_iter()
+        .find(|route| event.is_command(route.digit().chars().next().unwrap_or_default()))
+        .or_else(|| event.is_command(',').then_some(Route::Settings))
     {
         s.navigate(route);
+    } else if event.is_command('=') || event.is_command('+') {
+        s.zoom_by(1);
+    } else if event.is_command('-') {
+        s.zoom_by(-1);
+    } else if event.is_command('0') {
+        s.zoom_by(0);
     } else if event.is_command('[') || event.is_command(']') {
         s.travel(event.is_command(']'));
     } else if event.is_command('s')
@@ -158,6 +210,28 @@ impl Route {
     fn has_sidebar(self) -> bool {
         matches!(self, Route::Documents | Route::Settings)
     }
+
+    /// The digit `shortcuts` maps to this route.
+    fn digit(self) -> &'static str {
+        match self {
+            Route::Assistant => "1",
+            Route::Documents => "2",
+            Route::Models => "3",
+            Route::Settings => "4",
+        }
+    }
+}
+
+/// Tooltip keycaps for a command shortcut, with the platform's own modifier names.
+fn command_keys(shift: bool, key: &'static str) -> Vec<&'static str> {
+    let mac = cfg!(target_os = "macos");
+    let mut keys = Vec::with_capacity(3);
+    if shift {
+        keys.push(if mac { "⇧" } else { "Shift" });
+    }
+    keys.push(if mac { "⌘" } else { "Ctrl" });
+    keys.push(key);
+    keys
 }
 
 fn rail(s: &MeetNote, k: &Kit) -> El {
@@ -176,9 +250,8 @@ fn rail(s: &MeetNote, k: &Kit) -> El {
                 Route::Settings => &glyphs::KEYBOARD,
             };
             let active = route == s.route;
-            IconButton::new(icon)
+            let button = IconButton::new(icon)
                 .label(route.name(s.locale()))
-                .help(route.name(s.locale()))
                 .control_size(ControlSize::ExtraLarge)
                 .variant(if active {
                     IconButtonVariant::Neutral
@@ -190,6 +263,16 @@ fn rail(s: &MeetNote, k: &Kit) -> El {
                 .key(route.key())
                 .role("tab")
                 .focus_selected(active)
+                .help(route.name(s.locale()))
+                .help_keys(command_keys(false, route.digit()))
+                .help_side(Side::Right);
+            if route == Route::Documents {
+                button
+                    .help_row(s.tr("workspace_search"))
+                    .help_keys(command_keys(true, "F"))
+            } else {
+                button
+            }
         }));
     col()
         .key("navigation-rail")
@@ -205,12 +288,14 @@ fn rail(s: &MeetNote, k: &Kit) -> El {
         .child(
             IconButton::new(&glyphs::MIC)
                 .label(s.tr("import_audio"))
-                .help(s.tr("import_audio"))
                 .control_size(ControlSize::ExtraLarge)
                 .disabled(s.workspace_host.busy())
                 .on_press_tx(MeetNote::import_audio)
                 .build(k)
-                .key("import-audio"),
+                .key("import-audio")
+                .help(s.tr("import_audio"))
+                .help_keys(command_keys(false, "O"))
+                .help_side(Side::Right),
         )
 }
 
@@ -233,7 +318,7 @@ pub fn layout(s: &MeetNote, k: &Kit, cx: &Cx<MeetNote>, page: El) -> El {
     let glass = s.settings.glass && !s.reduce_transparency;
     let open = s.shell.pane.is_open();
     let sidebar_label = s.tr("toggle_sidebar");
-    let toolbar = WindowTitlebar::from_insets(cx.chrome_insets(), 1.0)
+    let toolbar = WindowTitlebar::from_insets(cx.chrome_insets())
         .height(46.0)
         .fill(Color::TRANSPARENT)
         .leading_padding(10.0)
@@ -241,30 +326,33 @@ pub fn layout(s: &MeetNote, k: &Kit, cx: &Cx<MeetNote>, page: El) -> El {
         .leading(
             IconButton::new(&BACK)
                 .label(s.tr("navigate_back"))
-                .help(s.tr("navigate_back"))
                 .disabled(s.shell.back.is_empty())
                 .on_press(|s: &mut MeetNote| s.travel(false))
                 .build(k)
-                .key("navigate-back"),
+                .key("navigate-back")
+                .help(s.tr("navigate_back"))
+                .help_keys(command_keys(false, "[")),
         )
         .leading(
-            IconButton::new(&glyphs::ARROW_RIGHT)
+            IconButton::new(&FORWARD)
                 .label(s.tr("navigate_forward"))
-                .help(s.tr("navigate_forward"))
                 .disabled(s.shell.forward.is_empty())
                 .on_press(|s: &mut MeetNote| s.travel(true))
                 .build(k)
-                .key("navigate-forward"),
+                .key("navigate-forward")
+                .help(s.tr("navigate_forward"))
+                .help_keys(command_keys(false, "]")),
         )
         .leading(
             IconButton::new(&SIDEBAR)
                 .label(sidebar_label)
-                .help(sidebar_label)
                 .disabled(!s.route.has_sidebar())
                 .expanded(open && s.route.has_sidebar())
                 .on_press_tx(MeetNote::toggle_sidebar)
                 .build(k)
-                .key("toggle-sidebar"),
+                .key("toggle-sidebar")
+                .help(sidebar_label)
+                .help_keys(command_keys(true, "B")),
         )
         .leading(title(k, "MeetNote", 15.0));
     let toolbar = if s.sample_mode {
@@ -364,5 +452,49 @@ pub fn layout(s: &MeetNote, k: &Kit, cx: &Cx<MeetNote>, page: El) -> El {
             .child(chrome.fill(k.c.layer_01.alpha(SHELL_TINT)))
     } else {
         shell.fill(k.c.bg_deep).child(chrome)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BACK, FORWARD, ZOOM_DEFAULT, ZOOM_STEPS, zoom_step};
+
+    #[test]
+    fn zoom_steps_stop_at_both_ends() {
+        assert_eq!(ZOOM_STEPS[ZOOM_DEFAULT], 1.0);
+        assert_eq!(zoom_step(ZOOM_DEFAULT, 1), ZOOM_DEFAULT + 1);
+        assert_eq!(zoom_step(0, -1), 0);
+        assert_eq!(zoom_step(ZOOM_STEPS.len() - 1, 1), ZOOM_STEPS.len() - 1);
+        assert!(ZOOM_STEPS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    /// The `d` points of an icon's single path, as (x, y) pairs.
+    fn points(body: &str) -> Vec<(f32, f32)> {
+        let d = body
+            .split("d=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap();
+        let numbers: Vec<f32> = d
+            .split(|c: char| c.is_ascii_alphabetic() || c.is_whitespace())
+            .filter(|n| !n.is_empty())
+            .map(|n| n.parse().unwrap())
+            .collect();
+        numbers.chunks(2).map(|p| (p[0], p[1])).collect()
+    }
+
+    fn attributes(body: &str) -> &str {
+        body.split_once("\" ").map(|(_, rest)| rest).unwrap()
+    }
+
+    #[test]
+    fn navigation_icons_are_one_mirrored_pair() {
+        assert_eq!(BACK.view, FORWARD.view);
+        assert_eq!(attributes(BACK.body), attributes(FORWARD.body));
+        let mirrored: Vec<(f32, f32)> = points(BACK.body)
+            .into_iter()
+            .map(|(x, y)| (BACK.view - x, y))
+            .collect();
+        assert_eq!(mirrored, points(FORWARD.body));
     }
 }

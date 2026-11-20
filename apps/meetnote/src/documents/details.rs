@@ -61,7 +61,7 @@ pub(super) fn panel(s: &MeetNote, k: &Kit) -> El {
                     s.tr("hide_detail"),
                     |s, tx| {
                         s.documents.detail = false;
-                        tx.focus("detail-toggle", tx.focus_visible());
+                        tx.return_focus("detail-toggle", tx.focus_visible());
                     },
                 )),
         )
