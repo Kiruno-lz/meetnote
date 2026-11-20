@@ -1945,6 +1945,14 @@ mod tests {
     }
 
     #[test]
+    fn svg_images_rasterize_with_runes_svg_feature() {
+        let cache = rune::ImageCache::new(std::sync::Arc::new(|| {}));
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 8"><rect width="16" height="8" fill="#3366ff"/></svg>"##;
+        let image = cache.svg(&svg[..], 16.0, 2.0);
+        assert_eq!(image.wait(), Ok([32, 16]), "{:?}", image.error());
+    }
+
+    #[test]
     fn shell_tooltips_list_their_shortcuts() {
         let rt = runtime();
         let help = |key: &str| {

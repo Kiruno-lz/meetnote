@@ -4,7 +4,7 @@
 /// The executable never opens MeetNote data. It receives the previous Host
 /// response as an argument, extracts live revision/hash/receipt fields, and
 /// constructs the next typed call from those values.
-fn json_at(value : Json, path : Array[String], index? : Int = 0) -> Json? {
+fn json_at(value : Json, path : Array[String], index~ : Int32 = 0) -> Json? {
   if index >= path.length() {
     Some(value)
   } else {
@@ -39,7 +39,7 @@ fn json_number(value : Json?, fallback : String) -> String {
 fn json_array_string(
   value : Json?,
   path : Array[String],
-  index : Int,
+  index : Int32,
   field : String,
   fallback : String,
 ) -> String {
