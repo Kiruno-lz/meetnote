@@ -87,11 +87,10 @@ fn first_launch_opens_a_real_workspace_and_sample_mode_is_explicit() {
             command.arg("--sample");
         }
         let output = command.output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{stderr}");
+        // Chinese text must break with ICU4X's dictionaries, not log a missing model per line.
+        assert!(!stderr.contains("No segmentation model"), "{stderr}");
         std::fs::read_to_string(&tree).unwrap()
     };
     assert!(run(true).contains("Product sync"));

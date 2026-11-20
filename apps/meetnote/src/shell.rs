@@ -233,7 +233,7 @@ pub fn layout(s: &MeetNote, k: &Kit, cx: &Cx<MeetNote>, page: El) -> El {
     let glass = s.settings.glass && !s.reduce_transparency;
     let open = s.shell.pane.is_open();
     let sidebar_label = s.tr("toggle_sidebar");
-    let toolbar = WindowTitlebar::from_insets(cx.chrome_insets(), 1.0)
+    let toolbar = WindowTitlebar::from_insets(cx.chrome_insets())
         .height(46.0)
         .fill(Color::TRANSPARENT)
         .leading_padding(10.0)

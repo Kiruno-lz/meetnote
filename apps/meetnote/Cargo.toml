@@ -29,8 +29,8 @@ persistence = { path = "../../crates/persistence" }
 models = { path = "../../crates/models" }
 settings = { path = "../../crates/settings" }
 ui-text = { path = "../../crates/ui-text" }
-rune = { git = "https://github.com/Kiruno-lz/rune", rev = "f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b", default-features = false, features = ["accessibility", "metal-backend", "native-file-dialog"] }
-rune-kit = { git = "https://github.com/Kiruno-lz/rune", rev = "f5765f1b8a469a61ba9daaa87e62e76fc1b81b8b", features = ["markdown"] }
+rune = { git = "https://github.com/Kiruno-lz/rune", rev = "80456b72fd5155291cc37c7f0a3ad7493cac779d", default-features = false, features = ["accessibility", "metal-backend", "native-file-dialog"] }
+rune-kit = { git = "https://github.com/Kiruno-lz/rune", rev = "80456b72fd5155291cc37c7f0a3ad7493cac779d", features = ["markdown"] }
 
 [dev-dependencies]
 audio = { path = "../../crates/audio" }
