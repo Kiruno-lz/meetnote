@@ -59,6 +59,3 @@ __pycache__/
 
 # Generated native test plugin output
 /plugins/assistant-test-plugin/_build/
-
-crates/ui/tests/visual/*.png
-crates/ui/tests/visual/baseline.json

@@ -62,7 +62,7 @@ MeetNote 不建设完整 Agent Runtime。外部 Agent 自管 Session、Context�
 
 三项目标分别通过，不互相替代：
 
-1. **接口完整与可替换**：无 GPUI，真实 MoonBit 插件经 Host 调用三类真实服务 port 的全部约定操作；Audio 可用 fake backend。新增测试 capability 只改装配，不改 Loop。描述/schema 与实参实返一致。
+1. **接口完整与可替换**：无桌面 UI，真实 MoonBit 插件经 Host 调用三类真实服务 port 的全部约定操作；Audio 可用 fake backend。新增测试 capability 只改装配，不改 Loop。描述/schema 与实参实返一致。
 2. **边界正确**：覆盖文档/job/字段越权、非法参数、过期 revision、处理事实只读、服务不可用；返回预期固定错误，既无旁路也无隐式扩权。两种写策略、幂等、取消和 receipt 保留正确。
 3. **Host 连通**：短请求产生来自实际 Agent/provider 的可解析回应，包括有效错误响应；记录实际调用路径，不要求业务内容质量。
 4. **Codex 与 Claude Code 任务完成**：Codex（Luna medium）与 Claude Code 分别经 **外部 Agent → Agent Host → 插件可访问 capability → 服务 → Host → 外部 Agent** 完成一次合法写回与回读；轨迹包含 Skill/tools 发现、错误反馈、调用修正和最终结果。直接 capability CLI 调用只算接口测试。

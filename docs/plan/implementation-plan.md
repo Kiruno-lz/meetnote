@@ -6,7 +6,7 @@ MeetNote 已有 Rust-native 核心分层和主要音频处理链路，当前进�
 
 | 能力 | 状态 |
 |---|---|
-| Rust workspace、分层与 GPUI 入口 | 已完成 |
+| Rust workspace、分层与 Rune 桌面入口 | 已完成 |
 | 文档包、目录扫描、三层树和文件监听 | 已完成基础实现 |
 | ASR/diarization registry、manager 与 provider | 已完成 |
 | Whisper、Paraformer、sherpa diarization、native diarization | 已实现 |
@@ -14,7 +14,7 @@ MeetNote 已有 Rust-native 核心分层和主要音频处理链路，当前进�
 | Speaker Library 匹配、候选、enroll、merge、split | application 已实现 |
 | 短音频整文件 pipeline | 已完成 |
 | 长音频离线分窗与 native 全局聚类 | 已完成技术链路 |
-| GPUI 文档、模型、设置和处理界面 | zui/gpui-base 页面与键盘流程已实现，自动与离屏验收见 UI 计划；原生窗口和无障碍发布检查待手验 |
+| Rune 文档、模型、设置和处理界面 | 页面与键盘流程已实现并有 Runtime 交互测试，离屏快照用于人工核对，见 UI 计划；原生窗口和无障碍发布检查待手验 |
 | Assistant / external Agent | 工作树已有工具、Skill、adapter 和 loop；本分支收口三服务 capability 与无 UI 调用验收，UI/音频质量分别归对应计划 |
 | Capability / Extension 生命周期 | 插件共享 port 与生命周期待收敛；不建设完整 Agent Runtime |
 | 长音频资源、精度、故障与发布验收 | 音频质量矩阵计划已建立；已有数据下载/转换、Audio Host export、WER/CER/DER 和复合边界评分工具；导出到评分器的协议回归已通过，冻结矩阵与真实模型质量/资源验收仍待执行 |
