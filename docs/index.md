@@ -27,5 +27,6 @@
 - [Diarization 三阶段模型与 native backend](reserch/diarization-native-three-stage.md)
 - [语音模型格式与 Rust 后端](reserch/voice-models-and-rust-runtimes.md)
 - [长音频离线分窗与语义子项目](reserch/audio-streaming-and-semantic-splitting.md)
+- [DJI Mic 3 TX 蓝牙识别](reserch/dji-mic3-ble-identification.md)：LE GATT 上的 DUML 协议，型号 `DM303_TX`、SN 与固件的字节来源。
 
 研究文档提供选型与验证依据；当前产品事实以 `architecture/`、`plan/` 和代码为准。
