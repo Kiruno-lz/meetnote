@@ -2,9 +2,9 @@
 
 ## 项目定义
 
-MeetNote 的项目是由音频事实派生的 AI 可读文档，不是固定的会议记录。根文档可以覆盖一整段录音；Assistant 或外部 Agent 可以按 Skill 将其拆成最多两级子文档，因此整棵树最多三层。
+MeetNote 的项目是由音频事实派生的 AI 可读文档，不是固定的会议记录。根文档可以覆盖一整段录音；Assistant 可以按 Skill 将其拆成最多两级子文档，因此整棵树最多三层。
 
-MeetNote 负责保存和校验事实，Agent 负责判断语义。音频必须先完成完整 ASR、diarization 与对齐，语义拆分不能截断或替代原始结果。
+MeetNote 负责保存和校验事实，Assistant 负责判断语义。音频必须先完成完整 ASR、diarization 与对齐，语义拆分不能截断或替代原始结果。
 
 ## 工作区文件结构
 
@@ -135,11 +135,11 @@ MeetNote 写入关系时必须拒绝：
 
 扫描外部修改时检查目录 ID、schema、重复 ID、父节点、循环、来源、声明深度和三层上限。无效文档保留为可定位 issue，不得静默生成另一棵树。
 
-拖动到目标内部表示 reparent；拖动到目标前后表示同级 reorder。关系写回必须更新文档 JSON，而不是只修改 UI 内存。Agent mutation 已有多文档 batch、严格时间范围/树范围校验、journal、幂等和 undo；非 Agent 的其他直接编辑入口仍需继续收敛到同一提交边界，见[Workspace 恢复边界](workspace-host.md)。
+拖动到目标内部表示 reparent；拖动到目标前后表示同级 reorder。关系写回必须更新文档 JSON，而不是只修改 UI 内存。Assistant mutation 已有多文档 batch、严格时间范围/树范围校验、journal、幂等和 undo；其他直接编辑入口仍需继续收敛到同一提交边界，见[Workspace 恢复边界](workspace-host.md)。
 
 ## 子项目分割标准
 
-语义分割只由 Assistant 或外部 Agent 按 Skill 发起：
+语义分割只由 Assistant 按 Skill 发起：
 
 1. 读取根文档完整 transcript、diarization、speaker alignment 和当前 revision。
 2. 决定语义边界、标题、标签、总结与父节点。
@@ -162,15 +162,8 @@ MeetNote 写入关系时必须拒绝：
 
 更新 `document_status` 使用与正文相同的 revision 检查。处理成功、失败、取消和重新处理都不得重置它。
 
-## Assistant 与外部 Agent
+## Assistant
 
-Assistant 是内置 Agent 客户端，外部 Agent 是可替换客户端；两者必须使用相同文档权限和校验规则。
-使用同一套Agent Capability API
+内置 Assistant 与 UI 使用相同文档权限和校验规则，经 `WorkspaceCapabilityPort` 执行 list、read、create、update、create semantic children 与 move，详见 [Workspace Host](workspace-host.md)。
 
-```text
-read / write
-create / move
-search / patch
-```
-
-`DocumentCommandService` 提供 list、read、create、update、create semantic child、reparent 和 reorder 的内部应用边界，但不是外部 Agent 必须绑定的 ABI。CLI、IPC 或其他 adapter 必须复用相同 service；不得直接改写 MeetNote 管理的 processing/results 字段。
+`DocumentCommandService` 提供 list、read、create、update、create semantic child、reparent 和 reorder 的内部应用边界，不是对外 ABI。UI、Assistant 与 CLI 必须复用相同 service；不得直接改写 MeetNote 管理的 processing/results 字段。

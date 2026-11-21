@@ -1,6 +1,6 @@
 # Audio Host 与模型后端系统
 
-Audio Host 是 MeetNote 四个基础层之一，负责音频事实、处理编排、模型资源和 ASR/diarization provider；它通过 Workspace 保存结果，通过 Agent capability 接受显式调用。
+Audio Host 是 MeetNote 四个基础层之一，负责音频事实、处理编排、模型资源和 ASR/diarization provider；它通过 Workspace 保存结果，由 UI 与 `meetnote process` CLI 发起处理。
 
 ## 目标
 
@@ -14,13 +14,11 @@ application
 
 模型来源、安装和 checksum 由 `models` crate 管理，见[模型管理](model-management.md)。
 
-## Audio Host 与扩展边界
+## Audio Host 边界
 
-Audio Host 是现有 application processing、audio、模型管理与专用 provider 的逻辑集合，不要求新增同名 crate。保留现有 adapter/backend 链路；provider contract 决定能做什么，Extension lifecycle 决定实现如何注册、启动、停止与分发，见[扩展系统](extension-system.md)。
+Audio Host 是现有 application processing、audio、模型管理与专用 provider 的逻辑集合，不要求新增同名 crate。保留现有 adapter/backend 链路；provider contract 决定能做什么，具体 backend 经内置 registry 注册，由入口显式装配。
 
-`application::AudioCapabilityPort` 是面向 Assistant、外部 Agent 和插件的最小受控入口。它只接受授予的项目 ID，复用 `WorkspaceService` 的 probe 和 `ProjectProcessingJob`；模型、配置、任务进度和结果仍由 Audio/Workspace 服务负责，port 不开放任意音频路径或文件系统。
-
-处理失败保留 `BackendErrorCode`，application pipeline 在不改变 code 的前提下补充 ASR/diarization stage 与 backend ID；Audio CLI 将已接受请求的失败映射为版本化 envelope 中的固定 `AUDIO_*` code 和 exit 2，参数/适配器错误仍使用 exit 3。这样外部 Agent 可以按阶段和稳定 code 修正，不依赖解析 stderr 文本。
+处理失败保留 `BackendErrorCode`，application pipeline 在不改变 code 的前提下补充 ASR/diarization stage 与 backend ID；调用方按稳定 code 与阶段处理失败，不依赖解析 stderr 文本。
 
 当前公开替换点是 ASR 与 diarization；native segmentation/embedding/clustering stage 配置不是独立通用 provider。只有出现独立消费者、替换需求与明确的输出/模型兼容规则后，才提取 VadProvider、EmbeddingProvider 或 enhancement contract，不一次拆开全部 pipeline。
 

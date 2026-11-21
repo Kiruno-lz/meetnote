@@ -2,13 +2,12 @@
 
 ## 定位与入口
 
-MeetNote 是 Rust-native、本地优先的音频与 AI 可读文档工作区。基础框架由 Workspace Host、Audio Host、Agent Host 和 Rune UI 组成。MeetNote 维护音频事实、文件与结构完整性；Agent 按 profile/Skill 决定语义。项目树固定最多三层。
+MeetNote 是 Rust-native、本地优先的音频与 AI 可读文档工作区。基础框架由 Workspace Host、Audio Host、Agent Host 和 Rune UI 组成。MeetNote 维护音频事实、文件与结构完整性；内置 Assistant 按 profile/Skill 决定语义。项目树固定最多三层。
 
 - [架构总览](docs/architecture/overview.md)：四个基础层与当前 crate 的对应关系。
 - [Workspace Host](docs/architecture/workspace-host.md) / [文档状态](docs/architecture/document-state.md)：事实来源、操作边界、外部编辑与恢复。
-- [Agent Host](docs/architecture/agent-host.md)：Capability API、最小 Tool Loop 与外部 Agent 的分工。
+- [Agent Host](docs/architecture/agent-host.md)：内置 Assistant 的最小 Tool Loop、LLM 供应商与凭据。
 - [Audio Host 与 provider](docs/architecture/audio-host.md) / [模型管理](docs/architecture/model-management.md)：原生处理与模型生命周期。
-- [Extension](docs/architecture/extension-system.md)：服务注册、依赖、生命周期与执行载体。
 - [架构决策](docs/architecture/decisions.md)：长期约束与设计取舍。
 - [架构对齐计划](docs/plan/architecture-alignment.md)：当前架构进度、职责收敛和最小实施步骤。
 - [工程计划](docs/plan/implementation-plan.md) / [Assistant 计划](docs/plan/assistant-plan.md) / [UI 计划](docs/plan/ui-plan.md)。其他材料见[文档索引](docs/index.md)。
@@ -21,8 +20,8 @@ MeetNote 是 Rust-native、本地优先的音频与 AI 可读文档工作区。�
 - `document.md + state.json` 和普通资产文件是事实来源；树与索引可重建，不引入权威 SQLite/global project store。
 - 源文件音频、Markdown、项目 JSON 和 Speaker Library 是 Workspace 的不可删除资产；全文索引、embedding index、解析状态和搜索缓存是可重建派生状态。
 - MeetNote 管理的写入统一校验 schema、revision、来源、范围、循环和三层上限；外部编辑是正常流程，无效文件必须报告路径和原因。
-- 插件只能通过 Host 提供的版本化 capability port 访问 Workspace 能力；port 不等于任意文件系统权限，也不能删除或静默覆盖不可删除资产。
-- 内置 Assistant、外部 Agent 与插件共用 capability port 执行 Workspace、Audio、Settings 操作；MeetNote 不实现完整 Agent Runtime，外部 Agent 自管 Session/Context/Loop，Built-in 仅保留最小 Tool Loop。
+- 内置 Assistant 是唯一的 LLM 消费者，经最小 Tool Loop 与 `WorkspaceCapabilityPort` 读写文档；port 不等于任意文件系统权限，也不能删除或静默覆盖不可删除资产。不建设完整 Agent Runtime、外部 Agent 接入或插件运行时。
+- 供应商 secret（API key、OAuth token）只存 `credentials.json`，`settings.json` 不含 secret；不使用 OS keychain。账户额度只做展示，不建设计费、预算或成本核算。
 - Audio 保留独立 ASR/diarization provider、manager 和具体 backend；新增兼容实现不改领域与 UI contract。新能力才扩展 contract。
 - 短音频保留整文件 baseline；长音频使用重叠离线窗口。ASR 拼接归 backend；diarization 汇总 observation 后录音级聚类；Speaker Library 在匿名聚类后匹配身份。
 - 模型下载与安装归 models；backend 不下载模型、不更新 UI 或项目树。外部进程/云 provider 可按明确需求接入，必须管理取消、退出、资源和错误；不改变现有原生链路。

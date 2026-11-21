@@ -1,20 +1,20 @@
 # Workspace Host
 
-Workspace Host 是 MeetNote 四个基础层之一，负责用户工作区和文档事实；它不依赖 Agent 会话才能工作，也不承担 Audio provider 的实现。
+Workspace Host 是 MeetNote 四个基础层之一，负责用户工作区和文档事实；它不依赖 Assistant 会话才能工作，也不承担 Audio provider 的实现。
 
 ## 现有 Workspace 抽象
 
-`application/src/workspace.rs` 已有 `WorkspaceService` 与 `ProcessingService`。前者同时提供列表、导入、树编辑、summary/speaker 修改与启动音频处理，`DocumentCommandService` 又提供 revision-aware 文档命令；未来 Agent 工具写入也必须复用这一边界。目标是收敛这些入口的写入保证和所有权，不是第一次引入 Workspace 名称。`ProcessingService` 保持 Audio 编排，Workspace 负责资产关联与结果提交。
+`application/src/workspace.rs` 已有 `WorkspaceService` 与 `ProcessingService`。前者同时提供列表、导入、树编辑、summary/speaker 修改与启动音频处理，`DocumentCommandService` 又提供 revision-aware 文档命令；Assistant 工具写入复用这一边界。目标是收敛这些入口的写入保证和所有权，不是第一次引入 Workspace 名称。`ProcessingService` 保持 Audio 编排，Workspace 负责资产关联与结果提交。
 
 ## 文件是事实来源
 
 Workspace Host 负责工作区关联、文档读写、结构校验、资产定位、扫描与恢复。它是现有 `DocumentService`、document commands、repository、scanner/watcher 的职责收敛，不是用新 Storage 框架替换它们。
 
-`document.md + state.json` 共同表达权威文档；JSON 不是可丢弃的 parsed metadata，其中包含来源、关系、revision 与处理事实。源文件音频、Markdown、项目 JSON 和 Speaker Library 都是 Workspace 的不可删除资产，不能被索引清理、插件卸载或普通 patch 当作缓存处理。普通附件仍是用户文件。具体格式保持[文档状态](document-state.md)。
+`document.md + state.json` 共同表达权威文档；JSON 不是可丢弃的 parsed metadata，其中包含来源、关系、revision 与处理事实。源文件音频、Markdown、项目 JSON 和 Speaker Library 都是 Workspace 的不可删除资产，不能被索引清理或普通 patch 当作缓存处理。普通附件仍是用户文件。具体格式保持[文档状态](document-state.md)。
 
 | 数据 | 所有权与可重建性 |
 |---|---|
-| 源文件音频、Markdown、state JSON、Speaker Library | 用户资产，Workspace 负责引用、校验、备份和迁移；插件端口不能删除或静默覆盖 |
+| 源文件音频、Markdown、state JSON、Speaker Library | 用户资产，Workspace 负责引用、校验、备份和迁移；capability port 不能删除或静默覆盖 |
 | 普通附件 | 用户文件，是否属于项目资产由工作区清单和导入策略决定 |
 | 项目树、全文索引、embedding index、解析元数据、搜索缓存 | 派生状态，可删除并从不可删除资产重建；版本或模型不匹配时必须标记 stale |
 | 未完成事务 journal | 恢复所需，完成恢复前不能删除 |
@@ -52,15 +52,13 @@ Workspace Host 负责工作区关联、文档读写、结构校验、资产定�
 
 这些索引不能成为项目树、文档内容、音频来源或 Speaker Library 的第二事实来源。watcher、受控写入和外部编辑刷新后，相关索引必须进入更新或 stale 状态；更新失败只能降低搜索能力，不能阻止读取原始资产或伪造搜索结果。索引重建必须从项目目录、源音频资产和 `speakers/library.json` 读取，不依赖旧索引自身。
 
-## 窄操作边界与插件端口
+## 窄操作边界与 capability port
 
-Workspace 提供读取、创建、patch、列表、关系更新、语义子文档创建和搜索等明确操作。当前 `WorkspaceCapabilityPort` 承载文档工具、范围、分页快照、事务、固定错误和 512 KiB 单次 result 上限；超限返回 `CONTEXT_LIMIT_EXCEEDED`，大型 transcript 使用 segment page，不静默截断。`workspace.read_document/create_document/patch_document/search` 是逻辑能力名，内部命令继续复用，不新增同义接口。索引构建和 embedding provider 也通过明确的 Workspace capability 暴露，而不是让插件直接打开文件目录。
+Workspace 提供读取、创建、patch、列表、关系更新、语义子文档创建和搜索等明确操作。`WorkspaceCapabilityPort` 是内置 Assistant 的唯一文档入口，承载 `list_documents`、`read_document`、`create_document`、`update_document`、`create_semantic_children`、`move_document` 六个工具及 confirm/reject/undo 控制，负责范围、分页快照、事务、固定错误和 512 KiB 单次 result 上限；超限返回 `CONTEXT_LIMIT_EXCEEDED`，大型 transcript 使用 segment page，不静默截断。工具内部复用既有文档命令，不新增同义接口。
 
-文档授权、typed arguments、schema/revision、音频来源、segment 范围、三层树和写策略由服务执行；业务实现不能留在通用 Agent Host。自动写入与逐次确认只是不同提交策略，都不能绕过校验。确认时重新核对源版本；undo 也不能覆盖后续修改。撤销创建会将文档包移动到 Workspace 私有 trash，保留附件和恢复机会，不直接删除用户资产。trash 只提供由 Workspace/persistence owner 调用的显式 list/restore/purge，不做后台静默清理；当前不向 Agent 暴露任意 trash 路径。
+文档范围、typed arguments、schema/revision、音频来源、segment 范围、三层树和写策略由服务执行；业务实现不能留在 Agent Host。自动写入与逐次确认只是不同提交策略，都不能绕过校验。确认时重新核对源版本；undo 也不能覆盖后续修改。撤销创建会将文档包移动到 Workspace 私有 trash，保留附件和恢复机会，不直接删除用户资产。trash 只提供由 Workspace/persistence owner 调用的显式 list/restore/purge，不做后台静默清理；不向 Assistant 暴露 trash 路径。
 
-UI、内置 Agent、外部工具 adapter 和插件端口经过同一读写服务。音频结果有专用受控写入入口；语义 patch 不可覆盖 processing/results。插件只能获得 manifest 声明且由 Workspace 授予的 capability port，例如文档读取、受限 patch、搜索、索引构建或事件订阅；port 不提供任意文件系统访问，也不提供删除不可删除资产的操作。最初使用工作区/文档范围与读写能力即可，不建设复杂权限语言。
-
-每个 port 必须有稳定名称、版本、输入输出 schema、错误语义、取消和生命周期。Workspace 在 port 内执行 workspace/document scope、revision、来源、范围、三层关系和资产保护；插件卸载只撤销 port、订阅和派生任务，不撤销已经提交的文档或资产变更。
+UI 与 Assistant 经过同一读写服务。音频结果有专用受控写入入口；语义 patch 不可覆盖 processing/results。port 不提供任意文件系统访问，也不提供删除不可删除资产的操作；范围只区分工作区/文档与读写能力，不建设权限语言。
 
 ## 外部编辑与并发
 
@@ -68,20 +66,20 @@ UI、内置 Agent、外部工具 adapter 和插件端口经过同一读写服务
 
 revision 只能保护遵守版本协议的客户端。直接编辑 Markdown 不一定递增 JSON revision，故提交前还需检测所读文件内容是否变化。受管理写入使用工作区级 OS advisory repository lock 进行跨进程串行化；该锁不把任意外部同步软件纳入同一个原子事务，外部编辑仍通过 Markdown hash/扫描暴露冲突。
 
-外部修改不能保证经过 Agent tool 审计。记录观测到的变化即可，不伪造 actor、撤销链或音频 processing provenance。备份/迁移应说明外部音频引用和历史数据的范围。
+外部修改不经过 Assistant 工具审计。记录观测到的变化即可，不伪造 actor、撤销链或音频 processing provenance。备份/迁移应说明外部音频引用和历史数据的范围。
 
 ## 当前恢复能力与缺口
 
-文档包已有逐文件原子保存；工作树已有 WorkspaceCapabilityPort 与 batch、journal、pending、幂等、undo。repository lock、跨进程 open/recovery、真实子进程故障恢复、trash restore/purge、普通附件、嵌套目录和 symlink 不跟随均已有回归证据；ExternalAgent update/semantic write 还会校验 read projection 提供的 Markdown hash。
+文档包已有逐文件原子保存；工作树已有 WorkspaceCapabilityPort 与 batch、journal、pending、幂等、undo。repository lock、跨进程 open/recovery、真实子进程故障恢复、trash restore/purge、普通附件、嵌套目录和 symlink 不跟随均已有回归证据；`update_document`、带父文档的 `create_document` 与 `create_semantic_children` 必须携带 `read_document` 提供的 Markdown hash 并在写入前校验。
 
 按 ID 的 `get/read` 在相同 repository/transaction 锁下只加载目标文档包，共用 ID、schema、目录身份与单文件大小校验；不存在返回 None，目标包损坏传播加载错误，不转成“不存在”，也不触发无关包迁移。全工作区 snapshot 继续负责收集扫描与关系问题，不由单文档读取隐式执行。 128 包、每包 256 KiB 正文的本机 warm fixture，40 次定向读取由 486.75 ms 降至 4.26 ms；这不代表 UI 帧率或冷盘表现，协议和回归见[定向读取回执](../quality/targeted-document-read-validation.json)。
 
 已有 child-process 锁与恢复测试；metadata 扫描限制单包 16 MiB、校验 schema 版本并支持提前停止。完整读取也对 `state.json` 与 `document.md` 各限制 16 MiB，并在读取过程中执行上限；超限报告路径且保留原文件。普通保存和事务暂存先验证 Markdown 与序列化 JSON 均未超限，再写入任一文件；repository 保存传播现有包加载错误，不将损坏包当作不存在覆盖。不能把任意外部编辑器纳入事务，也不能据此标记所有写入口已完成。
 
-Agent batch 提供 `source_markdown_sha256` 时，文件与内存 repository 在提交锁内读取当前正文，复用服务预检的同一 SHA-256 比较规则。正文变化即返回 `ContentConflict`；所有写入预验完成前不写 journal、不应用任何文档。重新读取后的匹配校验值可提交，已提交批次仍按幂等记录重放。确定性回归先完成服务预检，再保持 revision 不变修改正文，验证整个双文档批次被拒绝且正文、同批其他文档和历史均未变，见[提交正文校验回执](../quality/mutation-source-recheck-validation.json)。这只是提交时的内容前置条件；OS advisory lock 仍不排除不遵守锁的外部编辑器在校验后写入。
+Assistant batch 提供 `source_markdown_sha256` 时，文件与内存 repository 在提交锁内读取当前正文，复用服务预检的同一 SHA-256 比较规则。正文变化即返回 `ContentConflict`；所有写入预验完成前不写 journal、不应用任何文档。重新读取后的匹配校验值可提交，已提交批次仍按幂等记录重放。确定性回归先完成服务预检，再保持 revision 不变修改正文，验证整个双文档批次被拒绝且正文、同批其他文档和历史均未变，见[提交正文校验回执](../quality/mutation-source-recheck-validation.json)。这只是提交时的内容前置条件；OS advisory lock 仍不排除不遵守锁的外部编辑器在校验后写入。
 
 - //TODO - 普通 save/save_versioned 共用 CAS 与双文件恢复；不能仅增加锁后接受旧内容，JSON/Markdown 替换间失败须可恢复。
 - //TODO - 扩展跨进程写入、确认与 undo 的外部无效文件冲突测试，验证所有写入口保留加载/解析错误。
 - //TODO - 在逐文件输入上限之外验证解析后对象、文档总数与扫描峰值内存，不能将单文件读取有界视为工作区整体内存有界。
 
-上述是 Workspace 待实现项，不是 Agent Host 的额外功能；影响 Host 必测任务时，以具体服务依赖报告阻塞。
+上述是 Workspace 待实现项，不是 Agent Host 的额外功能；影响 Assistant 验收时，以具体服务依赖报告阻塞。

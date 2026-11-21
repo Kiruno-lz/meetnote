@@ -17,26 +17,26 @@
 13. 每个项目由 `document.md + state.json` 表达；文档目录是项目结构的唯一事实来源，不以 SQLite 或独立全局 project store 保存权威事实；派生索引可重建。
 14. 项目树固定最多三层，由文档关系扫描派生，必须可丢弃和重建。
 15. MeetNote 校验 schema、revision、父子关系、循环、层级与音频来源；无效外部修改必须产生可定位错误。
-16. 复合录音的语义边界、标题、标签、总结和父子关系由 Agent 按 Skill 决定；MeetNote 不内置自动语义拆分器。
-17. Assistant 是内置 Agent 客户端，与外部 Agent 使用相同 document service、权限和写回规则，不拥有特权路径。
-18. `DocumentCommandService` 是内部 application 边界，不是外部 Agent 的强制 ABI；CLI、IPC 和其他 adapter 必须复用同一服务。
+16. 复合录音的语义边界、标题、标签、总结和父子关系由 Assistant 按 Skill 决定；MeetNote 不内置自动语义拆分器。
+17. 内置 Assistant 是唯一的 LLM 消费者，经 `WorkspaceCapabilityPort` 使用与 UI 相同的 document service、revision 和写回规则，不拥有特权路径；MeetNote 不向外部 Agent 暴露 CLI、MCP 或插件桥接。
+18. `DocumentCommandService` 是内部 application 边界，不是对外 ABI；UI、Assistant 与 CLI 必须复用同一服务。
 19. 处理任务状态、处理完成记录和文档工作流状态分离：`JobRuntime` 管理运行状态，`processing` 保存当前处理来源，`document_status` 保存长期知识工作流。
 20. 语义编辑不得覆盖原始音频引用、ASR、diarization、对齐和 processing provenance；重新处理只替换当前处理结果。
 21. 文档与 Speaker Library 写入采用临时文件和原子替换；涉及多个文件或多个文档的操作必须在生产化阶段补齐事务与恢复保证。
 22. UI locale 与 ASR transcription language 是独立设置。
 23. Rune、模型清单和第三方推理依赖必须锁定；模型 revision、checksum、来源与 license 必须可追溯。
 24. MeetNote 的基础框架由 Workspace Host、Audio Host、Agent Host 和 Rune UI 组成；现有 crate 按职责归入这四个层次，不要求新增同名 crate。
-25. Agent Host 以 Capability API 为核心，只保留薄规范化层与 Built-in 最小 Tool Loop；Codex/Claude Code 自行管理 Session、Context、Loop。具体操作归 Workspace、Audio、Settings，语义策略归 Skill/可选场景插件。
-26. LLM 协议 adapter 只服务模型连接，不实现外部 Agent Runtime；三种模型协议与外部 Agent 工具桥接分别验证，不建设跨 backend session 管理。
+25. Agent Host 只承载内置 Assistant 的 LLM 供应商与最小 Tool Loop，不建设完整 Agent Runtime；Loop 以 pi-agent-core（badlogic/pi-mono）的最小 agent loop 为收敛参照。文档操作归 Workspace，语义策略归 Skill/profile。
+26. LLM 协议 adapter 只服务模型连接；Chat Completions、Anthropic Messages、OpenAI Responses 与 ChatGPT（Codex backend）分别验证，不建设跨 backend session 管理。一个供应商可提供多种 API，模型列表跨 API 聚合，每个模型按移植自 magpie 的 native 规则选择 API；不接入 Gemini `generateContent` 与 magpie System One，Gemini 模型经 OpenAI 兼容 Chat 或 magpie 网关转译访问。
 27. Rune UI 只负责四个基础层的交互、状态投影和任务反馈，不承载 Workspace、Audio 或 Agent 的领域实现。
-28. Extension 是可选的注册与执行机制，不改变四个基础层的职责；先验证内置 Rust 服务，再考虑 manifest 和 Wasm Component。
-29. 生命周期撤销注册不撤销已提交副作用；事务/undo/会话历史与可丢弃缓存分开管理。
+28. ASR/diarization registry 与供应商目录都是内置 Rust 注册，由入口显式装配；不建设插件、Extension 运行时、manifest 或 Wasm Component。
+29. 事务、undo 与会话历史是恢复和操作历史，与可丢弃缓存分开管理。
 30. Workspace 的源文件音频、Markdown、项目 JSON 和 Speaker Library 是不可删除资产；全文索引、embedding index、解析状态和搜索缓存只能作为可重建派生状态存在。
-31. 插件通过 Workspace Host 的版本化 capability port 访问开放能力；port 执行 Workspace 的范围、revision、结构和资产保护，不提供任意文件系统删除权限。
-32. Assistant connection profile 直接在 `settings.json` 保存 `apiKey`，或保存包含 API key 的 `apiKeyFile` 路径；当前项目不建设操作系统 credential store、secret broker 或 credential 生命周期管理。计算费用、账户额度、计算配额和 billing budget 不属于当前项目职责；运行时只保留防止无限循环、超出协议上下文和结果失控所必需的硬上限。
+31. `WorkspaceCapabilityPort` 执行 Workspace 的范围、revision、结构和资产保护，不提供任意文件系统访问或删除权限。
+32. 供应商配置保存在 `settings.json`（`meetnote.settings.v2`），不含 secret；API key 与 OAuth token 只保存在同目录 owner-only 的 `credentials.json`，原子替换并加锁，不使用操作系统 keychain 或 secret broker。浏览器登录只接入供应商允许第三方使用的 OAuth：ChatGPT 订阅与 OpenRouter 支持，Anthropic 订阅因条款不允许第三方使用而不支持。账户额度与余额只做展示，不建设计费、预算或成本核算；运行时只保留防止无限循环、超出协议上下文和结果失控所必需的硬上限。
 33. 桌面 UI 使用 `Kiruno-lz/rune` 的 `rune`/`rune-kit`，在 `apps/meetnote/Cargo.toml` 以 git rev 锁定，只启用所需 feature；Rune 的改动在 Rune 仓库完成后整体升级 rev，MeetNote 不 vendor、不 `[patch]` UI 依赖。
 
-详细理由见[Agent Host](agent-host.md)、[Workspace Host](workspace-host.md)、[Extension](extension-system.md)和 [Rune UI 计划](../plan/ui-plan.md)。
+详细理由见[Agent Host](agent-host.md)、[Workspace Host](workspace-host.md)和 [Rune UI 计划](../plan/ui-plan.md)。
 
 ## 禁止偏离
 

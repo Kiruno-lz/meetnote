@@ -23,7 +23,8 @@ cargo run -p meetnote -- process /absolute/path/to/audio.m4a
 
 ```text
 data/documents/                 Markdown + JSON 文档包
-data/settings/settings.json     应用设置
+data/settings/settings.json     应用设置（不含 secret）
+data/settings/credentials.json  供应商 API key 与登录 token（owner-only）
 data/speakers/library.json      Speaker Library
 models/                         本地模型缓存
 ```
@@ -39,8 +40,8 @@ models/                         本地模型缓存
       ┌─────────────┼─────────────┐
       ▼             ▼             ▼
 Workspace Host  Audio Host   Agent Host
-文档、文件、     解码、模型、    capability 绑定、
-结构校验、恢复   provider、处理  薄适配、最小 loop
+文档、文件、     解码、模型、    内置 Assistant、
+结构校验、恢复   provider、处理  LLM 供应商、最小 loop
 
 详细边界见[架构总览](docs/architecture/overview.md)
 
@@ -51,6 +52,7 @@ Workspace Host  Audio Host   Agent Host
 - [模型管理](docs/architecture/model-management.md)
 - [文档状态与音频项目模型](docs/architecture/document-state.md)
 - [Audio Host 与模型后端](docs/architecture/audio-host.md)
+- [Agent Host 与 LLM 供应商](docs/architecture/agent-host.md)
 - [架构决策](docs/architecture/decisions.md)
 - [工程实施计划](docs/plan/implementation-plan.md)
 - [Rune UI 计划](docs/plan/ui-plan.md)
