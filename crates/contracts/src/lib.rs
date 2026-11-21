@@ -12,7 +12,7 @@ pub use assistant::*;
 pub use capability::*;
 pub use workspace_capability::*;
 
-/// Version of the wire envelope shared by all capability services.
+/// Version of the capability wire envelope.
 pub const CAPABILITY_ENVELOPE_VERSION: u32 = 1;
 
 /// The capability service that owns a request and its validation rules.
@@ -20,15 +20,13 @@ pub const CAPABILITY_ENVELOPE_VERSION: u32 = 1;
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityService {
     Workspace,
-    Audio,
-    Settings,
 }
 
 /// Stable location data for a service error.
 ///
 /// The request id identifies the wire call. This context identifies the
-/// service operation and, when applicable, the resource, field, path, or
-/// revision that caused the failure.
+/// service operation and, when applicable, the resource that caused the
+/// failure; service-specific details live in the flattened extension map.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CapabilityErrorContext {
@@ -40,14 +38,6 @@ pub struct CapabilityErrorContext {
     pub resource_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub field: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_revision: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub actual_revision: Option<String>,
     #[serde(flatten)]
     details: BTreeMap<String, Value>,
 }
@@ -59,10 +49,6 @@ impl CapabilityErrorContext {
             operation: Some(operation.into()),
             resource_type: None,
             resource_id: None,
-            field: None,
-            path: None,
-            expected_revision: None,
-            actual_revision: None,
             details: BTreeMap::new(),
         }
     }
@@ -77,35 +63,11 @@ impl CapabilityErrorContext {
         self
     }
 
-    pub fn with_field(mut self, field: impl Into<String>) -> Self {
-        self.field = Some(field.into());
-        self
-    }
-
-    pub fn with_path(mut self, path: impl Into<String>) -> Self {
-        self.path = Some(path.into());
-        self
-    }
-
-    pub fn with_revisions(
-        mut self,
-        expected_revision: impl Into<String>,
-        actual_revision: impl Into<String>,
-    ) -> Self {
-        self.expected_revision = Some(expected_revision.into());
-        self.actual_revision = Some(actual_revision.into());
-        self
-    }
-
     pub fn is_empty(&self) -> bool {
         self.service.is_none()
             && self.operation.is_none()
             && self.resource_type.is_none()
             && self.resource_id.is_none()
-            && self.field.is_none()
-            && self.path.is_none()
-            && self.expected_revision.is_none()
-            && self.actual_revision.is_none()
             && self.details.is_empty()
     }
 }
@@ -124,11 +86,8 @@ impl DerefMut for CapabilityErrorContext {
     }
 }
 
-/// A service-owned error that preserves a stable code and typed location.
-///
-/// `CapabilityError` remains the small adapter error used by the existing
-/// CLI writers. Service ports can use this richer error without encoding
-/// location data into human-readable messages.
+/// A service-owned error that preserves a stable code and typed location
+/// without encoding location data into human-readable messages.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilityServiceError {
@@ -158,7 +117,7 @@ impl CapabilityServiceError {
 /// Common wire envelope for capability results and failures.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct CapabilityEnvelope<T, E = CapabilityError> {
+pub struct CapabilityEnvelope<T, E> {
     pub schema_version: u32,
     pub capability_id: String,
     pub capability_version: u32,
@@ -170,27 +129,8 @@ pub struct CapabilityEnvelope<T, E = CapabilityError> {
     pub error: Option<E>,
 }
 
-impl<T> CapabilityEnvelope<T, CapabilityError> {
-    pub fn success(
-        capability_id: impl Into<String>,
-        capability_version: u32,
-        request_id: impl Into<String>,
-        result: T,
-    ) -> Self {
-        Self {
-            schema_version: CAPABILITY_ENVELOPE_VERSION,
-            capability_id: capability_id.into(),
-            capability_version,
-            request_id: request_id.into(),
-            ok: true,
-            result: Some(result),
-            error: None,
-        }
-    }
-}
-
 impl<T, E> CapabilityEnvelope<T, E> {
-    pub fn success_with_error_type(
+    pub fn success(
         capability_id: impl Into<String>,
         capability_version: u32,
         request_id: impl Into<String>,
@@ -221,25 +161,6 @@ impl<T, E> CapabilityEnvelope<T, E> {
             ok: false,
             result: None,
             error: Some(error),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CapabilityError {
-    pub code: String,
-    pub message: String,
-    pub retryable: bool,
-}
-
-impl CapabilityError {
-    pub fn with_context(self, context: CapabilityErrorContext) -> CapabilityServiceError {
-        CapabilityServiceError {
-            code: self.code,
-            message: self.message,
-            retryable: self.retryable,
-            context: Some(context),
         }
     }
 }

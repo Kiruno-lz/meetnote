@@ -4,7 +4,7 @@
 use application::{
     asr_descriptor, diarization_descriptor, AsrBackend, BackendFuture, DiarizationBackend,
     DocumentChange, DocumentRepository, DocumentService, DocumentSnapshot, DocumentsRoot,
-    DocumentsRootError, ProcessingRequest, ProcessingService, WorkspaceService,
+    DocumentsRootError, ProcessingService, WorkspaceService,
 };
 use contracts::{
     AsrRequest, AsrResult, BackendDescriptor, BackendError, DiarizationRequest, DiarizationResult,
@@ -105,11 +105,11 @@ fn package_bytes(root: &Path) -> Vec<Vec<u8>> {
         .into()
 }
 
-fn start_during_switch(explicit_request: bool) {
+#[test]
+fn processing_request_and_job_admission_keep_the_same_workspace() {
     let fixture = Fixture(std::env::temp_dir().join(format!(
-        "meetnote-processing-start-{}-{}-{}",
+        "meetnote-processing-start-{}-{}",
         std::process::id(),
-        explicit_request,
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -164,30 +164,13 @@ fn start_during_switch(explicit_request: bool) {
     let asr = model("probe-asr");
     let dia = model("probe-dia");
     let worker = workspace.clone();
-    let audio_path = old_audio.to_str().unwrap().to_string();
     let start = std::thread::spawn(move || {
-        if explicit_request {
-            worker.start_project_processing_with_request(
-                DocumentId::new("meeting"),
-                ProcessingRequest {
-                    audio_path,
-                    asr_model: asr,
-                    diarization_model: dia,
-                    language: None,
-                    expected_speakers: None,
-                    device: contracts::ComputeDevice::Cpu,
-                    speaker_library_path: None,
-                    stage_configuration: Default::default(),
-                },
-            )
-        } else {
-            worker.start_project_processing_with_speaker_library(
-                DocumentId::new("meeting"),
-                asr,
-                dia,
-                None,
-            )
-        }
+        worker.start_project_processing_with_speaker_library(
+            DocumentId::new("meeting"),
+            asr,
+            dia,
+            None,
+        )
     });
     reached.recv_timeout(Duration::from_secs(10)).unwrap();
     let switcher = workspace.clone();
@@ -213,27 +196,13 @@ fn start_during_switch(explicit_request: bool) {
         reads.lock().unwrap(),
     );
     assert_eq!(workspace.documents_root(), Some(old_root.clone()));
-    let expected_reads = if explicit_request { 1 } else { 2 };
-    assert_eq!(
-        *reads.lock().unwrap(),
-        vec![old_audio.to_str().unwrap(); expected_reads]
-    );
+    assert_eq!(*reads.lock().unwrap(), vec![old_audio.to_str().unwrap(); 2]);
     assert!(package_bytes(&old_root) == old_bytes);
     assert!(package_bytes(&new_root) == new_bytes);
-    workspace.discard_processing_job(&job);
+    workspace.discard_processing_job_ids(job.job_ids());
     drop(job);
     workspace.switch_documents_root(&new_root).unwrap();
     assert_eq!(workspace.documents_root(), Some(new_root));
     assert_eq!(fs::read(old_audio).unwrap(), b"old audio");
     assert_eq!(fs::read(new_audio).unwrap(), b"different audio");
-}
-
-#[test]
-fn processing_request_and_job_admission_keep_the_same_workspace() {
-    start_during_switch(false);
-}
-
-#[test]
-fn explicit_processing_request_keeps_the_workspace_during_job_admission() {
-    start_during_switch(true);
 }

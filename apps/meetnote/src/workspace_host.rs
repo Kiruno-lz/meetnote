@@ -18,13 +18,13 @@ use runtime::CancellationToken;
 use crate::{Confirm, MeetNote, Route, documents::TreeMove};
 
 pub(crate) mod assistant;
-pub(crate) mod assistant_connection;
 mod audio;
 pub(crate) mod devices;
 pub(crate) mod diarization_stages;
 pub(crate) mod models;
 pub(crate) mod preferences;
 mod processing;
+pub(crate) mod providers;
 pub(crate) mod speaker_library;
 
 type Task<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send>>;
@@ -43,6 +43,7 @@ pub struct WorkspaceHost {
     pub models: models::ModelHost,
     pub preferences: preferences::PreferenceHost,
     pub assistant: assistant::AssistantHost,
+    pub providers: providers::ProviderHost,
     pub speaker_library: speaker_library::LibraryHost,
     pub devices: devices::DeviceHost,
 }
@@ -210,6 +211,12 @@ impl WorkspaceHost {
         self.processing_config.configure(settings, models);
     }
 
+    /// Points sign-ins and the Codex login at test stubs.
+    #[cfg(test)]
+    pub fn set_provider_endpoints(&mut self, endpoints: application::ProviderEndpoints) {
+        self.processing_config.endpoints = endpoints;
+    }
+
     fn start(&mut self, work: impl FnOnce() -> Result<Answer, String> + Send + 'static) {
         self.task = Some(Box::pin(runtime::spawn_blocking(work)));
     }
@@ -298,7 +305,7 @@ fn load_workspace(
                 .map_err(|error| error.to_string())?;
         }
     }
-    let assistant = assistant_connection::public_assistant(settings.assistant.clone());
+    let assistant = settings.assistant.clone();
     Ok(Answer::Opened(
         live,
         snapshot,
@@ -502,6 +509,7 @@ impl MeetNote {
                 self.sample_mode = false;
                 self.workspace_host.live = Some(live);
                 self.workspace_host.assistant.reset_workspace(assistant);
+                self.workspace_host.providers.open_live();
                 self.settings.apply_appearance(preferences.appearance);
                 if !self
                     .workspace_host
@@ -657,6 +665,7 @@ impl MeetNote {
             | self.poll_speaker_library(tx)
             | self.poll_live_assistant(tx)
             | self.poll_devices(tx)
+            | self.poll_providers(tx)
             | changed
     }
 

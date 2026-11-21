@@ -2,11 +2,11 @@
 
 ## 目标与原则
 
-建立 MeetNote 专属、版本固定、参考答案确定的 benchmark 集，自动生成测试音频、运行、评分并产出可读模型比较文档；不需要用户标注、干预或人工评审。测试分原子功能、组合链路和 Agent 插件语义三层，精准定位误差来源。
+建立 MeetNote 专属、版本固定、参考答案确定的 benchmark 集，自动生成测试音频、运行、评分并产出可读模型比较文档；不需要用户标注、干预或人工评审。测试分原子功能、组合链路和 Assistant 语义三层，精准定位误差来源。
 
-“确定性”指素材、构造规则、gold、参数与评分固定，不要求推理输出逐字恒定。参考答案来自官方标注和可验证的变换，不能来自待测模型。原子测试先于组合，低成本先于高成本：离线检查 → 本地 ASR/diarization → 对齐/窗口/资源 → Agent 语义 → 端到端。当地计算仍消耗 CPU/GPU、时间和内存，但不产生远程调用费用。
+“确定性”指素材、构造规则、gold、参数与评分固定，不要求推理输出逐字恒定。参考答案来自官方标注和可验证的变换，不能来自待测模型。原子测试先于组合，低成本先于高成本：离线检查 → 本地 ASR/diarization → 对齐/窗口/资源 → Assistant 语义 → 端到端。当地计算仍消耗 CPU/GPU、时间和内存，但不产生远程调用费用。
 
-Agent Host 是否正常只按 [Assistant 计划](assistant-plan.md)验收；本计划中的语义质量测试通过 Host 调用语义插件，不能把语义策略写入 Host，也不阻塞其三项基础目标。
+Assistant 与供应商的连通只按 [Assistant 计划](assistant-plan.md)验收；本计划中的语义质量测试由 `scripts/assistant-eval` 的 runner 直接请求供应商端点评估，不能把语义策略写入 Loop，也不阻塞 Assistant 计划的基础目标。
 
 ## 固定 Benchmark 集
 
@@ -38,7 +38,7 @@ AMI 的 B2 参考复用 [BUT/pyannote 固定 setup](https://github.com/pyannote/
 | B1 ASR | 音频 → transcript；不启动 diarization/Agent | 分语言 WER/CER、遗漏/重复、可用时间戳误差，wall/RTF/峰值内存；从 smoke 通过后扩短/长档 |
 | B2 diarization | 音频 → speaker 时间段；不依赖 ASR 文本或 Agent | 固定 UEM/collar/overlap 的 DER 及 miss/false alarm/confusion、speaker count、边界误差；AMI 优先 |
 | B3 对齐/窗口/身份/运行 | 先用 gold transcript+gold speaker 测纯对齐，再只替换一个预测；窗口与整文件对比 | 分离对齐损失、窗口重复/缺失、跨窗口身份漂移；独立测身份匹配、取消/并发/恢复和资源 |
-| B4 Agent 语义插件 | 先用 gold transcript/speaker 投影，经 Host 调用插件 → 语义范围/工具结果 | 固定 boundary F1、Pk/WindowDiff、coverage/evidence、结构/写回成功率；不让 ASR 误差混入语义基线 |
+| B4 Assistant 语义 | 先用 gold transcript/speaker 投影，经 `scripts/assistant-eval` runner 请求供应商 → 语义范围/工具结果 | 固定 boundary F1、Pk/WindowDiff、coverage/evidence、结构/写回成功率；不让 ASR 误差混入语义基线 |
 | B5 端到端归因 | 相同 case 逐步换为 ASR prediction、diarization prediction，再运行完整链路 | 与 B1–B4 对比质量降幅、耗时/内存/调用量，定位传播损失；不得仅给一个总分 |
 
 B1 的可选 `knownSilenceRangesMs` 标注以区间并集计算转写与已知静音的交集，分组输出 `knownSilence`；失败标为未测，不能当作零覆盖或词对齐通过。
@@ -66,7 +66,7 @@ B1 可选安装 `requirements-timing.txt`，用 `report_asr_timing.py --run <run
 - //TODO - B2 已接通固定 crop UEM、完整 collar 与重叠策略的独立评分；扩展会议/speaker 隔离的留出参考、多录音与小时级执行，再冻结质量门。完整 Audio export 不能代替独立 ASR/diarization 测试。
 - //TODO - 各阶段在运行前冻结场景阈值与评分口径。低质量是 fail，不是已完成执行；不要临时放宽阈值。近似 WER/CER 不作为正式通过门，需精确分块/流式评分或明确不具备评分条件。
 - //TODO - 自动发现可用模型、校验配置，按 case/model/配置哈希复用缓存；只重跑受改动影响的阶段。固定重复次数，保留波动范围与失败，支持断点续跑。
-- //TODO - B4 前先满足 B0–B3 所需基线与 Host 功能门；远程调用使用预置调用数/token/时长上限，有限重试，超限或缺凭据自动标记 blocked 并退出，不等待用户评审、不悄悄切换模型。相关本地失败不触发更昂贵的下游运行。
+- //TODO - B4 前先满足 B0–B3 所需基线与 Assistant 计划的真实供应商连接门；远程调用使用预置调用数/token/时长上限，有限重试，超限或缺凭据自动标记 blocked 并退出，不等待用户评审、不悄悄切换模型。相关本地失败不触发更昂贵的下游运行。
 - //TODO - 变更时先运行本地小集；定期完整本地集与昂贵任务由显式配置的执行策略触发，不在本次文档工作创建后台监控。新增模型先过 smoke 再进入可比较矩阵。
 
 ## 模型比较报告
@@ -74,7 +74,7 @@ B1 可选安装 `requirements-timing.txt`，用 `report_asr_timing.py --run <run
 `report_asr.py` 已从逐样本原始预测自动生成[模型比较](../quality/model-comparison.md)与机器 receipt：按语言和原生/构造/AMI 场景统计，保留失败。评分器统一重算原样 CER/WER 与单独列出的英文 normalized WER，不混入时间戳、DER 或语义分数。
 
 - //TODO - 按 B2–B5 的独立参考与门槛扩展报告，未测项明确标为未评估。
-- 每行至少包含 benchmark/case 版本、场景、语言、时长/样本数、模型/backend/revision、设备/线程、冷/热、质量指标、wall/RTF、峰值 RAM/VRAM、失败率；Agent 另列调用数/token 与可获得的费用，未提供费用标 unknown。
+- 每行至少包含 benchmark/case 版本、场景、语言、时长/样本数、模型/backend/revision、设备/线程、冷/热、质量指标、wall/RTF、峰值 RAM/VRAM、失败率；B4 另列调用数/token 与可获得的费用，未提供费用标 unknown。
 - 同时输出逐 case 明细、分组均值/中位数/尾部与最差样本，说明加权方法、参考/评分版本和重复波动；不同硬件、输入或评分口径不得直接排名。speaker ID 允许置换，不能要求预测标签字符串等于 gold。
 - 分析回答“哪个模型适合哪类内容/时长、质量与速度取舍、哪个原子环节退化”；不只给全局平均或跨任务单一总分。失败/unsupported/blocked 同样展示，链接可复现命令与脱敏结果。
 - 确定性比较不需要人工签收；已有结果不足时报告缺项，不用历史 smoke 替代新 benchmark 分数。
@@ -89,6 +89,6 @@ B1 可选安装 `requirements-timing.txt`，用 `report_asr_timing.py --run <run
 | B1 模型比较 | Paraformer、SenseVoice、Whisper large/base/Turbo、Qwen MLX 已真实比较；CPU/Metal、线程与加载策略分别记录；Unicode 分段接入保留这组真实输出，Silero VAD 裁剪因英文/低音量退化拒绝默认集成，见[边界回执](../quality/asr-boundary-evaluation.json) | 扩大场景，添加可靠词时间参考与时间误差 |
 | B2 diarization | 独立 release runner 记录执行、完整输出与进程资源；CPU 线程对照通过 baseline 输出等价和资源门；标准 DER 评分器经手算反例与导出协议验证；已有 ES2002a 180 秒及五段 utterance 的 word-activity 参考；四段短语音的漏执行修复经两轮 DER、静音与源边界验证，AHC 距离切分与固定 SciPy 分组交叉验证通过，真实训练裁剪输出不变，未作留出/生产验收 | 用隔离留出参考验证模型与聚类取舍 |
 | B3 窗口/运行 | 已复现并修复 Whisper 回调、子词边界、设备回退与推理粒度问题；短路径和应用窗口分别核对；对齐区间索引通过构造 gold、128 组穷举对照及资源门，长音频接入所属 runtime 并发门 | 验证小时级资源、取消延迟、恢复和身份漂移；AHC 的二次内存仍需单独治理 |
-| B4/B5 | 已有 Agent runner 与历史基础；本轮未开展语义和完整误差传播验收 | 使用固定 gold 经 Host 调用，逐层替换预测定位损失 |
+| B4/B5 | 已有 `scripts/assistant-eval` runner 与历史基础；本轮未开展语义和完整误差传播验收 | 使用固定 gold 运行 runner，逐层替换预测定位损失 |
 
 现有脚本位于 `scripts/audio-eval/` 和 `scripts/assistant-eval/`；重用而不另造产品 runtime。历史下载、smoke 和复合样本评分是已有基础，不表示专属 benchmark 或任何阶段已全部通过。

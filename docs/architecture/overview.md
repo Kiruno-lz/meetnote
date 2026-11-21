@@ -15,17 +15,17 @@ Workspace Host、Audio Host、Agent Host 和 Rune UI 是 MeetNote 的四个基�
       ┌─────────────┼─────────────┐
       ▼             ▼             ▼
 Workspace Host  Audio Host   Agent Host
-文档、文件、     解码、模型、   capability 绑定、
-结构校验、恢复   provider、处理  薄适配、最小 loop
-      │             │             │
-      └─────── 显式 capability ───┘
+文档、文件、     解码、模型、   内置 Assistant、
+结构校验、恢复   provider、处理  LLM 供应商、最小 loop
+      ▲                           │
+      └── WorkspaceCapabilityPort ┘
 
 应用入口和 CLI 负责装配四个基础层。
 ```
 
-Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事实、处理编排、模型资源和音频 provider；Agent Host 提供 capability 绑定、薄适配与 Built-in 最小 Tool Loop；Rune UI 负责交互和状态投影。Agent 通过显式 capability 调用 Workspace 或 Audio，不把这两个 Host 的领域逻辑复制到 Agent Host。
+Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事实、处理编排、模型资源和音频 provider；Agent Host 承载内置 Assistant 的 LLM 供应商与最小 Tool Loop；Rune UI 负责交互和状态投影。Assistant 只通过 `WorkspaceCapabilityPort` 读写文档，不把 Workspace 或 Audio 的领域逻辑复制到 Agent Host。
 
-四个基础层是责任边界，不是必须拆出的 crate 或进程。核心 Workspace、Audio、Agent 可以内置 Rust 实现；Rune UI 只做客户端和状态投影。Extension lifecycle 是可选的注册和执行机制，不改变四层归属。
+四个基础层是责任边界，不是必须拆出的 crate 或进程，均为内置 Rust 实现，由入口显式装配；不建设插件或 Extension 运行时。Rune UI 只做客户端和状态投影。
 
 ## 现有 crate 的基础层归属
 
@@ -52,9 +52,10 @@ Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事
 
 | crate / 代码区域 | 职责 |
 |---|---|
-| `crates/llm` | LLM provider 描述和协议适配边界 |
-| Agent application、Agent contracts | 能力绑定、薄适配、Built-in 最小 Tool Loop；工作树已有实现，职责收敛见 Assistant 计划 |
-| Workspace / Audio capabilities | Agent 可调用的显式服务；不把文档或音频领域逻辑复制进 Host |
+| `crates/llm` | 三种协议 adapter、`ApiProvider`、供应商目录、模型列表、OAuth 登录与额度读取 |
+| `crates/application` 的 `AgentRuntime`、`WorkspaceAgentScene`、Skill | 最小 Tool Loop、场景装配与工具收窄 |
+| `crates/application` 的 `ProviderService` | 供应商配置、凭据、登录、模型选择与客户端构造 |
+| `WorkspaceCapabilityPort` | Assistant 可调用的文档工具；执行规则归 Workspace，不复制进 Agent Host |
 
 ### Rune UI 与应用入口
 
@@ -69,7 +70,7 @@ Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事
 |---|---|
 | `crates/contracts` | 跨层请求、结果、能力、模型引用和统一错误；具体 contract 按服务归属 |
 | `crates/runtime` | JobRuntime、任务状态、进度、取消和 worker gate |
-| `crates/settings` | 设置、选择和本地配置持久化 |
+| `crates/settings` | 设置、选择和本地配置持久化；供应商凭据存于独立 `credentials.json` |
 
 全局 `runtime::spawn_blocking` 承载匿名后台读取，复用共享 worker gate；其 context 由 future/worker 持有，不向私有 registry 累积任务历史，未轮询即丢弃、正常完成和 worker panic 都不会留下注册记录。显式 `JobRuntime::create_job` 仍保留可查询的任务状态，按调用方生命周期移除。
 
@@ -81,19 +82,18 @@ Workspace Host 维护用户工作区和文档事实；Audio Host 维护音频事
 音频 -> Audio Host providers -> 匿名聚类 -> 身份匹配 -> 对齐
      -> Workspace Host 写入 document.md + state.json
      -> 扫描/监听 -> 三层树与 Rune UI
-Agent Host + profile/Skill -> Workspace/Audio capability -> 同一服务校验
+Assistant + profile/Skill -> WorkspaceCapabilityPort -> 同一服务校验
 ```
 
-短音频保留整文件 pipeline，长音频使用有上下文重叠的离线窗口，具体参数与模型族协议见[Audio Host 与模型后端系统](audio-host.md)。语义边界、标题、标签、总结由 Agent 场景层决定；Workspace 负责验证与执行。
+短音频保留整文件 pipeline，长音频使用有上下文重叠的离线窗口，具体参数与模型族协议见[Audio Host 与模型后端系统](audio-host.md)。语义边界、标题、标签、总结由 Assistant 按 Skill 决定；Workspace 负责验证与执行。
 
-`domain` 不依赖 IO/UI/推理库；`application` 依赖能力 trait，具体实现由入口装配。Workspace 不依赖 Agent session 才能读写；Audio 不依赖 Agent 或插件运行时才能处理；Rune UI 不反向承载 Host 的领域实现。新增与现有 contract 兼容的 backend 不修改领域与 UI；新增真实能力才演进 contract。
+`domain` 不依赖 IO/UI/推理库；`application` 依赖能力 trait，具体实现由入口装配。Workspace 不依赖 Assistant 才能读写；Audio 不依赖 Assistant 才能处理；Rune UI 不反向承载 Host 的领域实现。新增与现有 contract 兼容的 backend 不修改领域与 UI；新增真实能力才演进 contract。
 
 ## 详细边界
 
 - [Workspace Host](workspace-host.md)：文件、外部编辑、窄操作与恢复。
 - [Audio Host 与模型后端](audio-host.md)：音频处理、provider、backend 和模型生命周期。
-- [Agent Host](agent-host.md)：Capability API、最小 Tool Loop 与外部 Agent 边界。
+- [Agent Host](agent-host.md)：最小 Tool Loop、LLM 供应商与凭据。
 - [Rune UI 计划](../plan/ui-plan.md)：四个基础层之上的交互客户端和状态投影。
-- [Extension](extension-system.md)：逻辑契约先于执行载体。
 - [文档状态](document-state.md)与[架构决策](decisions.md)。
 - [架构对齐](../plan/architecture-alignment.md)负责迁移顺序；[工程计划](../plan/implementation-plan.md)负责生产验收。

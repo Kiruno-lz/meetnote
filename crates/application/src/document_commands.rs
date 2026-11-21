@@ -58,8 +58,7 @@ impl DocumentSaveBase<'_> {
     }
 }
 
-/// Revision-checked document writes shared by the desktop UI, CLI/IPC
-/// adapters and tests. Every write names the revision it was based on and
+/// Revision-checked document writes shared by the desktop UI and tests. Every write names the revision it was based on and
 /// fails with [`DocumentCommandError::RevisionConflict`] instead of
 /// overwriting a newer document.
 #[derive(Clone)]

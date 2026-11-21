@@ -1,5 +1,5 @@
 use llm::{
-    AuthMode, ConnectionConfig, Credential, LiteLlmProvider, LlmCancellation, LlmInputBlock,
+    ApiProvider, AuthMode, ConnectionConfig, Credential, LlmCancellation, LlmInputBlock,
     LlmMessage, LlmOutputBlock, LlmProtocol, LlmProvider, LlmRequest, LlmToolChoice,
     LlmToolDefinition,
 };
@@ -132,7 +132,7 @@ litellm_settings:
         .unwrap();
     let _proxy = ChildGuard { child: proxy };
 
-    let base_url = format!("http://127.0.0.1:{proxy_port}/gateway");
+    let base_url = format!("http://127.0.0.1:{proxy_port}/gateway/v1");
     let cancellation = LlmCancellation::new();
     wait_until_ready(&base_url, &cancellation);
     for protocol in [
@@ -278,7 +278,7 @@ fn protocol_base_url(protocol: LlmProtocol, fallback: &str) -> String {
     std::env::var(variable).unwrap_or_else(|_| fallback.to_owned())
 }
 
-fn provider(protocol: LlmProtocol, base_url: &str, model: &str) -> LiteLlmProvider {
+fn provider(protocol: LlmProtocol, base_url: &str, model: &str) -> ApiProvider {
     configured_provider(
         "real-litellm",
         base_url,
@@ -296,8 +296,8 @@ fn configured_provider(
     protocol: LlmProtocol,
     auth_mode: AuthMode,
     credential: &str,
-) -> LiteLlmProvider {
-    LiteLlmProvider::new(
+) -> ApiProvider {
+    ApiProvider::new(
         ConnectionConfig {
             id: id.into(),
             protocol,
@@ -360,7 +360,7 @@ fn wait_until_ready(base_url: &str, cancellation: &LlmCancellation) {
             base_url,
             "primary-route",
         )
-        .readiness(cancellation)
+        .discover_models(cancellation)
         .is_ok()
         {
             return;

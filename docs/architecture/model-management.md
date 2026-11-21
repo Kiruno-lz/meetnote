@@ -4,7 +4,7 @@
 
 `resources/models/catalog.json` 是模型来源、格式、revision、候选 backend、大小、显存预估、license 与 artifact 清单的版本化声明。`models/` 是本地缓存，`.download-tasks.json` 是可恢复的下载任务状态；两者都不保存文档或项目树。
 
-模型权重不进入仓库。backend 不自行联网下载，UI、Assistant 和外部 Agent 也不能直接修改 catalog、缓存或下载任务内部状态。
+模型权重不进入仓库。backend 不自行联网下载，UI 与 Assistant 也不能直接修改 catalog、缓存或下载任务内部状态。
 
 ```text
 resources/models/catalog.json

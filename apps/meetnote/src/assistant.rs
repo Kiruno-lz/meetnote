@@ -140,11 +140,7 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             .grow(1.0)
             .min_w(0.0),
         )
-        .child(
-            Badge::new("Sample connection")
-                .variant(BadgeVariant::Accent)
-                .build(k),
-        );
+        .children(crate::providers::model_picker(s, k, overlays));
     let transcript = col().w_full().gap(18.0).padding(24.0).child(intro)
         .child(match a.state {
             RunState::Idle => {

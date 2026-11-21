@@ -79,9 +79,8 @@ class LiteLLMTemporaryDirectoryTests(unittest.TestCase):
                 model=None,
                 provider_model=None,
                 output_dir=root / "runs",
-                writeback_root=None,
                 binary="litellm",
-                writeback_cli=None,
+                provider=None,
             )
             self.assert_config_created_and_removed(
                 run_matrix_litellm,

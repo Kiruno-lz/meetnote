@@ -4,7 +4,7 @@
 
 更新日期：2026-11-02；实施分支：`codex/workspace-discovery`。竞品调研基于 2026-10-24 至 2026-11-02 可访问的官方页面，页面更新时间不等于功能首次发布日期，未实际购买或逐项试用竞品。
 
-MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模型管理和受控 Agent 工具。下一步应把已有事实变成易查找、可核对、可带走的资料。产品优势在于本地文件、音频证据和外部 Agent 能力边界；继续增加 backend 或扩成通用 Agent Runtime，不能直接解决资料积累后的使用成本。
+MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模型管理和受控的内置 Assistant 工具。下一步应把已有事实变成易查找、可核对、可带走的资料。产品优势在于本地文件、音频证据和受控写回边界；继续增加 backend 或扩成通用 Agent Runtime，不能直接解决资料积累后的使用成本。
 
 ## 当前瓶颈
 
@@ -22,7 +22,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 | 产品与官方依据 | 当前可确认功能 | 对 MeetNote 的取舍 |
 |---|---|---|
 | [Granola 产品入门](https://docs.granola.ai/help-center/getting-started/granola-101)、[跨会议对话](https://help.granola.ai/article/chatting-with-your-meetings) | 文件夹组织、选择多份会议作为上下文、单会议/文件夹/全库问答、模板与可复用 recipes | 借鉴明确的上下文范围、场景模板与重复操作入口；模板放入 profile/Skill，不能把语义规则写入 Workspace |
-| [Otter Advanced Chat](https://help.otter.ai/hc/en-us/articles/35234602608919-Advanced-Otter-AI-Chat-Modes)，更新于 2026-03-09 | 跨转写、截图和历史会议搜索；行动项、邮件/日历与录音控制；页面还列有 MCP 接入 | 优先借鉴“结果可追溯到会议证据”和现有 capability 对外复用。邮件、日历与云端自动化需要独立授权和外部适配，本轮不接入 |
+| [Otter Advanced Chat](https://help.otter.ai/hc/en-us/articles/35234602608919-Advanced-Otter-AI-Chat-Modes)，更新于 2026-03-09 | 跨转写、截图和历史会议搜索；行动项、邮件/日历与录音控制；页面还列有 MCP 接入 | 优先借鉴“结果可追溯到会议证据”。MCP 等对外 Agent 接入不在当前范围；邮件、日历与云端自动化需要独立授权和外部适配，本轮不接入 |
 | [Fathom AI Search](https://help.fathom.video/en/articles/7374465)，更新于 2026-08-17 | 普通搜索与 AI 搜索并列；可按日期、团队、会议类型和发言者筛选；支持保存搜索订阅 | 先交付可预测的本地文本检索，再依据使用情况补日期/标签筛选。语义检索独立增强，结果须带原文证据；不复制团队权限体系 |
 | [Notta 导出与分享](https://support.notta.ai/hc/en-us/articles/18646448413083-Intro-to-data-export-sharing)，更新于 2026-09-21 | 复制选段、工作区权限分享、TXT/DOCX/SRT 等文件导出 | 便携导出价值高、与本地优先方向一致；先 TXT/Markdown/SRT。多人协作与云分享不是当前闭环前置条件 |
 | [MacWhisper](https://www.macwhisper.com/)，官网未提供对应功能发布日期 | 本地文件转写、无机器人会议录制、听写、转写内搜索、多格式导出 | 借鉴原文检索和低摩擦导出；录音采集具有独立的设备、权限和音频路由成本，必须单独完成生命周期与真实设备验证 |
@@ -63,7 +63,7 @@ MeetNote 已有原生转写、说话人分离、文档包、外部编辑、模�
 2. **原文定位扩展**：//TODO - 独立验证段内词级定位与真实音频播放/seek；覆盖长段落、时间边界、取消与文档切换后迟到回调，不以段落定位测试替代播放验收。
 3. **模板与有依据的行动项**：//TODO - 复用现有 Skill/profile 与 capability；输出保留 document/segment 来源，区分 AI 推断、人工确认与已执行状态，使用固定真实 provider 数据集验证遗漏和无依据生成。
 4. **长音频与真实模型质量**：已有[ASR 模型比较](../quality/model-comparison.md)；//TODO - 扩展自然中文会议与重叠场景，补 DER、身份误匹配、词时间、取消/故障及小时级 RSS；资源约束与精度取舍达标后再承诺长录音生产支持。
-5. **资料规模优化**：//TODO - 测量 100/1000/10000 文档的冷、热查询、取消延迟与峰值 RSS；达到明确交互预算后再决定是否建立可重建全文索引。未来外部 Agent 搜索必须经版本化 capability 与 scope 校验，不能直接暴露内部 DocumentService。
+5. **资料规模优化**：//TODO - 测量 100/1000/10000 文档的冷、热查询、取消延迟与峰值 RSS；达到明确交互预算后再决定是否建立可重建全文索引。Assistant 搜索工具必须经 `WorkspaceCapabilityPort` 与 scope 校验，不能直接暴露内部 DocumentService。
 
 ## 验证记录
 

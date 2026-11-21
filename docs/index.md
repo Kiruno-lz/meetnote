@@ -4,10 +4,9 @@
 
 - [系统架构总览](architecture/overview.md)：Workspace Host、Audio Host、Agent Host、Rune UI，以及现有 crate 的归属和依赖方向。
 - [Workspace Host](architecture/workspace-host.md)：文件事实、窄操作、外部编辑与恢复。
-- [Agent Host](architecture/agent-host.md)：Capability API、最小 Tool Loop 与场景分工。
-- [Extension](architecture/extension-system.md)：服务注册、依赖、生命周期与执行载体。
+- [Agent Host](architecture/agent-host.md)：内置 Assistant 的最小 Tool Loop、LLM 供应商、凭据、登录与额度。
 - [模型管理](architecture/model-management.md)：catalog、下载、安装、校验和 probe 生命周期。
-- [文档状态与音频项目模型](architecture/document-state.md)：文档包、音频处理结果、三层项目树和 Agent 协作。
+- [文档状态与音频项目模型](architecture/document-state.md)：文档包、音频处理结果、三层项目树和 Assistant 协作。
 - [Audio Host 与模型后端](architecture/audio-host.md)：兼容层接口、具体 ASR/diarization backend 和长音频协议。
 - [架构决策](architecture/decisions.md)：当前必须长期保持的设计约束。
 
@@ -18,8 +17,8 @@
 - [产品瓶颈与改进优先级](plan/product-opportunities.md)：当前代码瓶颈、同类产品功能、本地全文搜索交付与后续验证。
 - [录音设备接入计划](plan/device-ingest-plan.md)：白名单设备目录、蓝牙 GATT 型号/SN/固件校验、有线配对、自动导入与分析，以及实测事实。
 - [Rune UI 计划](plan/ui-plan.md)：Rune 桌面的 route、技术栈、当前状态与测试基线。
-- [Assistant 构建计划](plan/assistant-plan.md)：Workspace、Audio、Settings 的 capability、Host 真实回应、MoonBit 插件与 Codex 经 Host 完成任务。
-- [渐进式 Benchmark 计划](plan/audio-quality-plan.md)：固定测试音频/gold、原子能力到 Agent 的自动门禁与模型比较报告。
+- [Assistant 构建计划](plan/assistant-plan.md)：内置 Assistant 与供应商的目标、当前状态和待验证项。
+- [渐进式 Benchmark 计划](plan/audio-quality-plan.md)：固定测试音频/gold、原子能力到 Assistant 语义的自动门禁与模型比较报告。
 - [本机模型比较](quality/model-comparison.md)：固定参考的 ASR 精度、速度、资源与失败汇总。
 - [转录质量与后端选型](reserch/asr-quality-and-runtime-evaluation.md)：模型、FFI、推理窗口与执行载体的实测依据。
 

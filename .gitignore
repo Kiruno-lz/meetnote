@@ -57,5 +57,3 @@ __pycache__/
 # Keep the checked-in model catalog while ignoring downloaded artifacts.
 !resources/models/catalog.json
 
-# Generated native test plugin output
-/plugins/assistant-test-plugin/_build/

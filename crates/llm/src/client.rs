@@ -1,3 +1,5 @@
+use crate::codex::{self, CodexModel};
+use crate::http::{auth_headers, endpoint_url, header_secret, Http, Reply, MAX_STREAM_BYTES};
 use crate::{
     AnthropicMessagesAdapter, AuthMode, ConnectionConfig, LlmCancellation, LlmError, LlmErrorKind,
     LlmInputBlock, LlmMessage, LlmOutput, LlmOutputBlock, LlmProtocol, LlmProvider,
@@ -5,20 +7,8 @@ use crate::{
     OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, ProbeResult, ProtocolAdapter,
 };
 use serde_json::{json, Value};
-use std::error::Error as _;
-use std::io::Read;
-use std::net::IpAddr;
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::thread;
+use std::sync::Mutex;
 use std::time::Duration;
-use url::Url;
-
-const MAX_RESPONSE_BYTES: u64 = 4 * 1024 * 1024;
-
-struct HttpJsonResponse {
-    body: Value,
-    cost_microusd: Option<u64>,
-}
 
 pub struct Credential(String);
 
@@ -27,30 +17,57 @@ impl Credential {
         Self(secret.into())
     }
 
-    fn expose(&self) -> &str {
+    pub(crate) fn expose(&self) -> &str {
         &self.0
     }
 }
 
-pub struct LiteLlmProvider {
-    config: ConnectionConfig,
-    credential: Option<Credential>,
-    agent: ureq::Agent,
-    adapter: Box<dyn ProtocolAdapter>,
-    local: bool,
+/// Where a connection's requests go beyond its protocol.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Backend {
+    /// The vendor's own API at the connection's base URL.
+    Standard,
+    /// The ChatGPT backend serving Codex (`https://chatgpt.com/backend-api/codex`),
+    /// reached with a ChatGPT sign-in's access token as the credential.
+    ChatGpt { account_id: String },
 }
 
-impl LiteLlmProvider {
+pub struct ApiProvider {
+    config: ConnectionConfig,
+    credential: Option<Credential>,
+    backend: Backend,
+    http: Http,
+    adapter: Box<dyn ProtocolAdapter>,
+    local: bool,
+    /// The configured model's Codex instructions, read once per provider.
+    codex_instructions: Mutex<Option<String>>,
+}
+
+impl ApiProvider {
     pub fn new(config: ConnectionConfig, credential: Option<Credential>) -> Result<Self, LlmError> {
+        Self::with_backend(config, credential, Backend::Standard)
+    }
+
+    pub fn with_backend(
+        config: ConnectionConfig,
+        credential: Option<Credential>,
+        backend: Backend,
+    ) -> Result<Self, LlmError> {
         validate_config(&config)?;
-        let local = is_local_url(&config.base_url)?;
-        let timeout = Duration::from_millis(config.timeout_ms);
-        let agent = ureq::AgentBuilder::new()
-            .timeout(timeout)
-            .timeout_connect(timeout)
-            .redirects(0)
-            .https_only(!local)
-            .build();
+        if let Backend::ChatGpt { account_id } = &backend {
+            if config.protocol != LlmProtocol::OpenAiResponses
+                || config.auth_mode != AuthMode::Bearer
+                || credential.is_none()
+                || account_id.trim().is_empty()
+            {
+                return Err(LlmError::new(
+                    LlmErrorKind::ConnectionNotConfigured,
+                    "a ChatGPT connection needs the Responses protocol, a bearer access token and an account id",
+                ));
+            }
+        }
+        let local = crate::http::is_local_url(&config.base_url)?;
+        let http = Http::for_url(&config.base_url, Duration::from_millis(config.timeout_ms))?;
         let adapter: Box<dyn ProtocolAdapter> = match config.protocol {
             LlmProtocol::OpenAiChatCompletions => Box::<OpenAiChatCompletionsAdapter>::default(),
             LlmProtocol::AnthropicMessages => Box::<AnthropicMessagesAdapter>::default(),
@@ -59,9 +76,11 @@ impl LiteLlmProvider {
         Ok(Self {
             config,
             credential,
-            agent,
+            backend,
+            http,
             adapter,
             local,
+            codex_instructions: Mutex::new(None),
         })
     }
 
@@ -69,97 +88,134 @@ impl LiteLlmProvider {
         &self.config
     }
 
-    pub fn readiness(&self, cancellation: &LlmCancellation) -> Result<(), LlmError> {
-        cancellation.check()?;
-        self.get_json("/health/readiness", cancellation).map(|_| ())
+    pub fn backend(&self) -> &Backend {
+        &self.backend
     }
 
+    /// The models the endpoint lists, in its order.
     pub fn discover_models(&self, cancellation: &LlmCancellation) -> Result<Vec<String>, LlmError> {
-        cancellation.check()?;
-        let response = self.get_json("/v1/models", cancellation)?;
-        let models = response
-            .get("data")
-            .and_then(Value::as_array)
+        match &self.backend {
+            Backend::Standard => crate::vendors::models::list_with(
+                &self.http,
+                &self.config.base_url,
+                self.config.protocol,
+                self.auth_headers()?,
+                cancellation,
+            ),
+            Backend::ChatGpt { .. } => Ok(self
+                .codex_models(cancellation)?
+                .into_iter()
+                .map(|model| model.slug)
+                .collect()),
+        }
+    }
+
+    fn auth_headers(&self) -> Result<Vec<(&'static str, String)>, LlmError> {
+        auth_headers(
+            self.config.protocol,
+            self.config.auth_mode,
+            self.credential.as_ref(),
+        )
+    }
+
+    fn codex_models(&self, cancellation: &LlmCancellation) -> Result<Vec<CodexModel>, LlmError> {
+        let Backend::ChatGpt { account_id } = &self.backend else {
+            return Err(LlmError::new(
+                LlmErrorKind::CapabilityUnsupported,
+                "Codex models are only listed by the ChatGPT backend",
+            ));
+        };
+        codex::models(
+            &self.http,
+            &self.config.base_url,
+            self.access_token()?,
+            account_id,
+            cancellation,
+        )
+    }
+
+    fn codex_instructions(&self, cancellation: &LlmCancellation) -> Result<String, LlmError> {
+        let mut cached = self
+            .codex_instructions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(instructions) = cached.as_ref() {
+            return Ok(instructions.clone());
+        }
+        let instructions = self
+            .codex_models(cancellation)?
+            .into_iter()
+            .find(|model| model.slug == self.config.model)
+            .and_then(|model| model.instructions)
             .ok_or_else(|| {
                 LlmError::new(
-                    LlmErrorKind::ResponseInvalid,
-                    "model discovery response has no data array",
+                    LlmErrorKind::CapabilityUnsupported,
+                    format!(
+                        "this ChatGPT account does not offer {} to Codex",
+                        self.config.model
+                    ),
                 )
             })?;
-        let mut ids = models
-            .iter()
-            .filter_map(|model| model.get("id").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
-        ids.sort();
-        ids.dedup();
-        Ok(ids)
+        *cached = Some(instructions.clone());
+        Ok(instructions)
     }
 
-    fn post_json(
+    fn access_token(&self) -> Result<&str, LlmError> {
+        let credential = self.credential.as_ref().ok_or_else(|| {
+            LlmError::new(
+                LlmErrorKind::Authentication,
+                "the ChatGPT connection has no access token",
+            )
+        })?;
+        header_secret(credential)
+    }
+
+    /// Posts an encoded request and returns the provider's response object.
+    fn send(
         &self,
-        endpoint: &str,
         body: &Value,
         cancellation: &LlmCancellation,
-    ) -> Result<HttpJsonResponse, LlmError> {
-        cancellation.check()?;
-        let url = endpoint_url(&self.config.base_url, endpoint)?;
-        let agent = self.agent.clone();
-        let headers = self.authentication_headers()?;
-        let body = serde_json::to_string(body)
-            .map_err(|error| LlmError::new(LlmErrorKind::RequestInvalid, error.to_string()))?;
-        run_cancellable(cancellation, move || {
-            let mut request = agent
-                .post(url.as_str())
-                .set("Content-Type", "application/json");
-            for (name, value) in headers {
-                request = request.set(name, &value);
+    ) -> Result<(Value, Reply), LlmError> {
+        let url = endpoint_url(&self.config.base_url, self.adapter.endpoint_path())?;
+        match &self.backend {
+            Backend::Standard => {
+                let reply = self
+                    .http
+                    .post(url)
+                    .headers(self.auth_headers()?)
+                    .json(body)
+                    .send(cancellation)?
+                    .success()?;
+                let response = serde_json::from_slice(&reply.body).map_err(|error| {
+                    LlmError::new(
+                        LlmErrorKind::ResponseInvalid,
+                        format!("provider returned malformed JSON: {error}"),
+                    )
+                })?;
+                Ok((response, reply))
             }
-            parse_http_result(request.send_string(&body))
-        })
-    }
-
-    fn get_json(&self, endpoint: &str, cancellation: &LlmCancellation) -> Result<Value, LlmError> {
-        cancellation.check()?;
-        let url = endpoint_url(&self.config.base_url, endpoint)?;
-        let agent = self.agent.clone();
-        let headers = self.authentication_headers()?;
-        run_cancellable(cancellation, move || {
-            let mut request = agent.get(url.as_str());
-            for (name, value) in headers {
-                request = request.set(name, &value);
+            Backend::ChatGpt { account_id } => {
+                let instructions = self.codex_instructions(cancellation)?;
+                let (body, session) =
+                    codex::request_body(body.clone(), &instructions, &self.config.model);
+                let reply = self
+                    .http
+                    .post(url)
+                    .headers(codex::backend_headers(self.access_token()?, account_id))
+                    .header("Accept", "text/event-stream")
+                    .header("session-id", session.clone())
+                    .header("thread-id", session)
+                    .json(&body)
+                    .limit(MAX_STREAM_BYTES)
+                    .send(cancellation)?
+                    .success()?;
+                Ok((codex::read_stream(&reply.body)?, reply))
             }
-            parse_http_result(request.call()).map(|response| response.body)
-        })
-    }
-
-    fn authentication_headers(&self) -> Result<Vec<(&'static str, String)>, LlmError> {
-        let mut headers = Vec::new();
-        if let Some(credential) = &self.credential {
-            if credential.expose().is_empty()
-                || !credential
-                    .expose()
-                    .bytes()
-                    .all(|byte| byte.is_ascii_graphic())
-            {
-                return Err(LlmError::new(
-                    LlmErrorKind::Authentication,
-                    "connection credential is empty or cannot be represented as an HTTP header",
-                ));
-            }
-            headers.push(match self.config.auth_mode {
-                AuthMode::Bearer => ("Authorization", format!("Bearer {}", credential.expose())),
-                AuthMode::XApiKey => ("x-api-key", credential.expose().to_owned()),
-            });
         }
-        if self.config.protocol == LlmProtocol::AnthropicMessages {
-            headers.push(("anthropic-version", "2023-06-01".into()));
-        }
-        Ok(headers)
     }
 }
 
-impl LlmProvider for LiteLlmProvider {
+impl LlmProvider for ApiProvider {
     fn descriptor(&self) -> LlmProviderDescriptor {
         LlmProviderDescriptor {
             id: self.config.id.clone(),
@@ -188,17 +244,15 @@ impl LlmProvider for LiteLlmProvider {
             ));
         }
         let body = self.adapter.encode(&request, &self.config.model)?;
-        let response = self.post_json(self.adapter.endpoint_path(), &body, cancellation)?;
-        let mut output = self.adapter.decode(response.body, &self.config.model)?;
-        if let (Some(usage), Some(cost_microusd)) = (output.usage.as_mut(), response.cost_microusd)
-        {
+        let (response, reply) = self.send(&body, cancellation)?;
+        let mut output = self.adapter.decode(response, &self.config.model)?;
+        if let (Some(usage), Some(cost_microusd)) = (output.usage.as_mut(), reply.cost_microusd) {
             usage.cost_microusd = Some(cost_microusd);
         }
         Ok(output)
     }
 
     fn probe(&self, cancellation: &LlmCancellation) -> Result<ProbeResult, LlmError> {
-        self.readiness(cancellation)?;
         let models = self.discover_models(cancellation).ok();
 
         let text = self.complete(
@@ -349,12 +403,7 @@ fn validate_config(config: &ConnectionConfig) -> Result<(), LlmError> {
             "LLM connection is incomplete",
         ));
     }
-    let parsed = Url::parse(&config.base_url).map_err(|error| {
-        LlmError::new(
-            LlmErrorKind::ConnectionNotConfigured,
-            format!("invalid LLM base URL: {error}"),
-        )
-    })?;
+    let parsed = crate::http::parse_url(&config.base_url)?;
     if parsed.query().is_some()
         || parsed.fragment().is_some()
         || !parsed.username().is_empty()
@@ -365,13 +414,6 @@ fn validate_config(config: &ConnectionConfig) -> Result<(), LlmError> {
             "LLM base URL cannot contain credentials, query, or fragment",
         ));
     }
-    let local = is_local_url(&config.base_url)?;
-    if parsed.scheme() != "https" && !(parsed.scheme() == "http" && local) {
-        return Err(LlmError::new(
-            LlmErrorKind::ConnectionNotConfigured,
-            "LLM base URL must use HTTPS unless it targets localhost",
-        ));
-    }
     config.input_token_budget().or_else(|error| {
         if error.kind == LlmErrorKind::ContextLimitUnknown {
             Ok(0)
@@ -380,198 +422,4 @@ fn validate_config(config: &ConnectionConfig) -> Result<(), LlmError> {
         }
     })?;
     Ok(())
-}
-
-fn is_local_url(base_url: &str) -> Result<bool, LlmError> {
-    let url = Url::parse(base_url).map_err(|error| {
-        LlmError::new(
-            LlmErrorKind::ConnectionNotConfigured,
-            format!("invalid LLM base URL: {error}"),
-        )
-    })?;
-    let host = url.host_str().ok_or_else(|| {
-        LlmError::new(
-            LlmErrorKind::ConnectionNotConfigured,
-            "LLM base URL has no host",
-        )
-    })?;
-    Ok(is_loopback_host(host))
-}
-
-fn is_loopback_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("localhost")
-        || host.to_ascii_lowercase().ends_with(".localhost")
-        || host
-            .parse::<IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
-}
-
-fn endpoint_url(base_url: &str, endpoint: &str) -> Result<Url, LlmError> {
-    let mut url = Url::parse(base_url).map_err(|error| {
-        LlmError::new(
-            LlmErrorKind::ConnectionNotConfigured,
-            format!("invalid LLM base URL: {error}"),
-        )
-    })?;
-    let mut base_path = url.path().trim_end_matches('/');
-    let endpoint = if base_path.ends_with("/v1") && endpoint.starts_with("/v1/") {
-        endpoint.strip_prefix("/v1").unwrap_or(endpoint)
-    } else {
-        if base_path.ends_with("/v1") && !endpoint.starts_with("/v1/") {
-            base_path = base_path.trim_end_matches("/v1");
-        }
-        endpoint
-    };
-    url.set_path(&format!("{base_path}{endpoint}"));
-    Ok(url)
-}
-
-fn run_cancellable<T: Send + 'static>(
-    cancellation: &LlmCancellation,
-    operation: impl FnOnce() -> Result<T, LlmError> + Send + 'static,
-) -> Result<T, LlmError> {
-    cancellation.check()?;
-    let (sender, receiver) = mpsc::sync_channel(1);
-    thread::Builder::new()
-        .name("meetnote-llm-http".into())
-        .spawn(move || {
-            let _ = sender.send(operation());
-        })
-        .map_err(|error| {
-            LlmError::new(
-                LlmErrorKind::Transport,
-                format!("failed to start LLM HTTP request: {error}"),
-            )
-        })?;
-
-    loop {
-        cancellation.check()?;
-        match receiver.recv_timeout(Duration::from_millis(10)) {
-            Ok(result) => return result,
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {
-                return Err(LlmError::new(
-                    LlmErrorKind::Transport,
-                    "LLM HTTP request ended without a result",
-                ))
-            }
-        }
-    }
-}
-
-fn parse_http_result(
-    result: Result<ureq::Response, ureq::Error>,
-) -> Result<HttpJsonResponse, LlmError> {
-    match result {
-        Ok(response) if (300..400).contains(&response.status()) => {
-            let status = response.status();
-            Err(LlmError::new(
-                LlmErrorKind::ResponseInvalid,
-                "provider redirect was rejected to prevent credential forwarding",
-            )
-            .with_status(status))
-        }
-        Ok(response) => {
-            let cost_microusd = response
-                .header("x-litellm-response-cost-original")
-                .or_else(|| response.header("x-litellm-response-cost"))
-                .and_then(parse_cost_microusd);
-            parse_response_body(response).map(|body| HttpJsonResponse {
-                body,
-                cost_microusd,
-            })
-        }
-        Err(ureq::Error::Status(status, response)) => {
-            if (300..400).contains(&status) {
-                return Err(LlmError::new(
-                    LlmErrorKind::ResponseInvalid,
-                    "provider redirect was rejected to prevent credential forwarding",
-                )
-                .with_status(status));
-            }
-            let retry_after_ms = response
-                .header("retry-after")
-                .and_then(|value| value.parse::<u64>().ok())
-                .map(|seconds| seconds.saturating_mul(1_000));
-            let provider_message = parse_response_body(response)
-                .ok()
-                .and_then(|body| {
-                    body.pointer("/error/message")
-                        .or_else(|| body.get("detail"))
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .unwrap_or_else(|| format!("provider returned HTTP {status}"));
-            let kind = match status {
-                401 | 403 => LlmErrorKind::Authentication,
-                408 | 504 => LlmErrorKind::Timeout,
-                429 => LlmErrorKind::RateLimited,
-                413 => LlmErrorKind::ContextLimitExceeded,
-                404 => LlmErrorKind::CapabilityUnsupported,
-                500..=599 => LlmErrorKind::Transport,
-                _ => LlmErrorKind::ResponseInvalid,
-            };
-            Err(LlmError::new(kind, provider_message)
-                .with_status(status)
-                .with_retry_after(retry_after_ms))
-        }
-        Err(ureq::Error::Transport(error)) => {
-            let timed_out = transport_timed_out(&error);
-            let kind = if timed_out {
-                LlmErrorKind::Timeout
-            } else {
-                LlmErrorKind::Transport
-            };
-            Err(LlmError::new(kind, error.to_string()))
-        }
-    }
-}
-
-fn parse_cost_microusd(value: &str) -> Option<u64> {
-    let dollars = value.parse::<f64>().ok()?;
-    if !dollars.is_finite() || dollars < 0.0 {
-        return None;
-    }
-    let microusd = dollars * 1_000_000.0;
-    (microusd <= u64::MAX as f64).then(|| microusd.round() as u64)
-}
-
-fn transport_timed_out(error: &ureq::Transport) -> bool {
-    let mut source = error.source();
-    while let Some(current) = source {
-        if current
-            .downcast_ref::<std::io::Error>()
-            .is_some_and(|io_error| {
-                matches!(
-                    io_error.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                )
-            })
-        {
-            return true;
-        }
-        source = current.source();
-    }
-    false
-}
-
-fn parse_response_body(response: ureq::Response) -> Result<Value, LlmError> {
-    let mut bytes = Vec::new();
-    response
-        .into_reader()
-        .take(MAX_RESPONSE_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| LlmError::new(LlmErrorKind::Transport, error.to_string()))?;
-    if bytes.len() as u64 > MAX_RESPONSE_BYTES {
-        return Err(LlmError::new(
-            LlmErrorKind::ResponseInvalid,
-            "provider response exceeds the maximum supported size",
-        ));
-    }
-    serde_json::from_slice(&bytes).map_err(|error| {
-        LlmError::new(
-            LlmErrorKind::ResponseInvalid,
-            format!("provider returned malformed JSON: {error}"),
-        )
-    })
 }

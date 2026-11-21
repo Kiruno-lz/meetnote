@@ -23,7 +23,6 @@ from typing import Any, Iterable
 
 from evaluate import evaluate_records, read_jsonl, validate_structure
 from semantic_schema import SemanticSchemaError, validate_semantic_fixture
-from writeback import WritebackConfig, WritebackError, writeback_predictions
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -575,7 +574,6 @@ def run_one(
     matrix: dict[str, Any], source_report: dict[str, Any], records: list[dict[str, Any]],
     corpus_hash: str, holdout_hash: str, protocol: str, case_id: str, runner: str | None,
     output_dir: Path, environment: dict[str, str], timeout_override: float | None,
-    writeback_cli: str | None, writeback_package_root: Path | None,
 ) -> dict[str, Any]:
     request = build_request(matrix, protocol, case_id, records, corpus_hash, source_report, holdout_hash)
     request_hash = sha256_bytes(canonical_json(request))
@@ -643,54 +641,6 @@ def run_one(
                         validation = validate_prediction_contract(
                             case_id, matrix["tasks"][case_id], records, predictions, matrix
                         )
-                        family = matrix["tasks"][case_id]["family"]
-                        if writeback_cli and family in {"partition", "organize"}:
-                            package_root = writeback_package_root or (ROOT / "eval-data" / "assistant" / "writeback")
-                            # Never carry model-claimed receipts/readbacks into a
-                            # Workspace writeback artifact.  Only the CLI result
-                            # below is authoritative for mutation evidence.
-                            for field in (
-                                "readback",
-                                "readbacks",
-                                "receipt",
-                                "receipts",
-                                "mutationReceipts",
-                                "receiptAvailable",
-                            ):
-                                runner_metadata.pop(field, None)
-                            try:
-                                writeback = writeback_predictions(
-                                    predictions,
-                                    [public_record(record) for record in records],
-                                    WritebackConfig(
-                                        cli=writeback_cli,
-                                        package_root=package_root,
-                                        timeout=timeout_override or resources["timeoutMs"] / 1000,
-                                        environment=environment,
-                                    ),
-                                    family=family,
-                                    run_key=run_id,
-                                )
-                            except WritebackError as error:
-                                status = "failed"
-                                error_code = "WORKSPACE_WRITEBACK_FAILED"
-                                reason = f"{error.code}: {error.reason}"
-                                runner_metadata["writeback"] = {
-                                    "status": "failed",
-                                    "errorCode": error.code,
-                                    "reason": error.reason,
-                                    "mutationReceipts": error.receipts,
-                                    "readback": error.readback,
-                                }
-                            else:
-                                runner_metadata["writeback"] = {
-                                    "status": "verified",
-                                    "mutationReceipts": writeback["mutationReceipts"],
-                                    "readback": writeback["readback"],
-                                    "evidence": writeback["evidence"],
-                                }
-                                runner_metadata["mutationReceipts"] = writeback["mutationReceipts"]
-                                runner_metadata["readback"] = writeback["readback"]
             except subprocess.TimeoutExpired:
                 status = "failed"
                 error_code = "EXTERNAL_RUNNER_TIMEOUT"
@@ -833,8 +783,6 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
                     args.output_dir,
                     environment,
                     args.timeout,
-                    getattr(args, "writeback_cli", None),
-                    getattr(args, "writeback_package_root", None),
                 )
             )
     statuses = {status: sum(result["status"] == status for result in results) for status in ALLOWED_STATUSES}
@@ -863,15 +811,6 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--protocol", choices=PROTOCOLS)
     value.add_argument("--case", choices=CASES)
     value.add_argument("--timeout", type=float, help="Override the matrix timeout for this invocation")
-    value.add_argument(
-        "--writeback-cli",
-        help="Explicitly enable real Workspace writeback with a meetnote CLI command",
-    )
-    value.add_argument(
-        "--writeback-package-root",
-        type=Path,
-        help="Temporary package root for writeback (defaults to eval-data/assistant/writeback)",
-    )
     value.add_argument("--require-ready", action="store_true", help="Exit non-zero when any selected run is pending or failed")
     return value
 

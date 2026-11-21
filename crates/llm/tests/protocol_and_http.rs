@@ -1,153 +1,20 @@
 use llm::{
-    AnthropicMessagesAdapter, AuthMode, ConnectionConfig, Credential, LiteLlmProvider,
-    LlmCancellation, LlmErrorKind, LlmInputBlock, LlmMessage, LlmOutputBlock, LlmProtocol,
-    LlmProvider, LlmRequest, LlmStopReason, LlmToolChoice, LlmToolDefinition,
-    OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, ProtocolAdapter,
+    AnthropicMessagesAdapter, ApiProvider, AuthMode, ConnectionConfig, Credential, LlmCancellation,
+    LlmErrorKind, LlmInputBlock, LlmMessage, LlmOutputBlock, LlmProtocol, LlmProvider, LlmRequest,
+    LlmStopReason, LlmToolChoice, LlmToolDefinition, OpenAiChatCompletionsAdapter,
+    OpenAiResponsesAdapter, ProtocolAdapter,
 };
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc::{self, Receiver};
-use std::thread::{self, JoinHandle};
+use std::net::TcpListener;
+use std::thread;
 use std::time::{Duration, Instant};
+use support::{spawn_server, ResponseSpec};
+
+mod support;
 
 const CHAT_FIXTURE: &str = include_str!("fixtures/openai_chat.json");
 const ANTHROPIC_FIXTURE: &str = include_str!("fixtures/anthropic_messages.json");
 const RESPONSES_FIXTURE: &str = include_str!("fixtures/openai_responses.json");
-
-#[derive(Debug)]
-struct CapturedRequest {
-    method: String,
-    path: String,
-    headers: BTreeMap<String, String>,
-    body: Value,
-}
-
-struct ResponseSpec {
-    status: u16,
-    headers: Vec<(String, String)>,
-    body: String,
-    delay: Duration,
-}
-
-impl ResponseSpec {
-    fn json(body: Value) -> Self {
-        Self {
-            status: 200,
-            headers: Vec::new(),
-            body: body.to_string(),
-            delay: Duration::ZERO,
-        }
-    }
-
-    fn status(status: u16, body: Value) -> Self {
-        Self {
-            status,
-            headers: Vec::new(),
-            body: body.to_string(),
-            delay: Duration::ZERO,
-        }
-    }
-}
-
-fn spawn_server(
-    responses: Vec<ResponseSpec>,
-) -> (String, Receiver<CapturedRequest>, JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = listener.local_addr().unwrap();
-    let (sender, receiver) = mpsc::channel();
-    let handle = thread::spawn(move || {
-        for response in responses {
-            let (mut stream, _) = listener.accept().unwrap();
-            let request = read_request(&mut stream);
-            sender.send(request).unwrap();
-            if !response.delay.is_zero() {
-                thread::sleep(response.delay);
-            }
-            write_response(&mut stream, response);
-        }
-    });
-    (format!("http://{address}"), receiver, handle)
-}
-
-fn read_request(stream: &mut TcpStream) -> CapturedRequest {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .unwrap();
-    let mut bytes = Vec::new();
-    let header_end = loop {
-        let mut chunk = [0_u8; 4096];
-        let read = stream.read(&mut chunk).unwrap();
-        assert!(read > 0, "client closed before sending complete headers");
-        bytes.extend_from_slice(&chunk[..read]);
-        if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
-            break index + 4;
-        }
-    };
-
-    let header_text = std::str::from_utf8(&bytes[..header_end]).unwrap();
-    let mut lines = header_text.split("\r\n");
-    let mut request_line = lines.next().unwrap().split_whitespace();
-    let method = request_line.next().unwrap().to_owned();
-    let path = request_line.next().unwrap().to_owned();
-    let mut headers = BTreeMap::new();
-    for line in lines.filter(|line| !line.is_empty()) {
-        let (name, value) = line.split_once(':').unwrap();
-        headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
-    }
-    let content_length = headers
-        .get("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
-    while bytes.len() - header_end < content_length {
-        let mut chunk = [0_u8; 4096];
-        let read = stream.read(&mut chunk).unwrap();
-        assert!(read > 0, "client closed before sending complete body");
-        bytes.extend_from_slice(&chunk[..read]);
-    }
-    let body = if content_length == 0 {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes[header_end..header_end + content_length]).unwrap()
-    };
-
-    CapturedRequest {
-        method,
-        path,
-        headers,
-        body,
-    }
-}
-
-fn write_response(stream: &mut TcpStream, response: ResponseSpec) {
-    let reason = match response.status {
-        200 => "OK",
-        302 => "Found",
-        307 => "Temporary Redirect",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        403 => "Forbidden",
-        404 => "Not Found",
-        413 => "Payload Too Large",
-        422 => "Unprocessable Entity",
-        429 => "Too Many Requests",
-        503 => "Service Unavailable",
-        _ => "Test Status",
-    };
-    let mut headers = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
-        response.status,
-        reason,
-        response.body.len()
-    );
-    for (name, value) in response.headers {
-        headers.push_str(&format!("{name}: {value}\r\n"));
-    }
-    headers.push_str("\r\n");
-    let _ = stream.write_all(headers.as_bytes());
-    let _ = stream.write_all(response.body.as_bytes());
-}
 
 fn fixture(protocol: LlmProtocol) -> Value {
     let source = match protocol {
@@ -385,7 +252,7 @@ fn gateway_cost_is_optional_and_rejects_invalid_values() {
             .headers
             .push(("x-litellm-response-cost-original".into(), header.into()));
         let (base, captured, server) = spawn_server(vec![response]);
-        let provider = LiteLlmProvider::new(
+        let provider = ApiProvider::new(
             connection(protocol, base, 2_000),
             Some(Credential::new("fixture-secret")),
         )
@@ -409,7 +276,7 @@ fn http_client_preserves_custom_path_port_auth_and_protocol_payload() {
         let fixture = fixture(protocol);
         let (base, captured, server) =
             spawn_server(vec![ResponseSpec::json(fixture["text"].clone())]);
-        let provider = LiteLlmProvider::new(
+        let provider = ApiProvider::new(
             connection(protocol, format!("{base}/gateway/v1/"), 2_000),
             Some(Credential::new("fixture-secret")),
         )
@@ -452,7 +319,7 @@ fn http_client_preserves_custom_path_port_auth_and_protocol_payload() {
 }
 
 #[test]
-fn probe_checks_readiness_discovery_text_and_tool_result_round_trip() {
+fn probe_checks_discovery_text_and_tool_result_round_trip() {
     for protocol in [
         LlmProtocol::OpenAiChatCompletions,
         LlmProtocol::AnthropicMessages,
@@ -461,7 +328,6 @@ fn probe_checks_readiness_discovery_text_and_tool_result_round_trip() {
         let text = fixture(protocol)["text"].clone();
         let tool_call = probe_tool_response(protocol);
         let (base, captured, server) = spawn_server(vec![
-            ResponseSpec::json(json!({"status": "healthy"})),
             ResponseSpec::json(json!({
                 "data": [{"id": "route-z"}, {"id": "route-test"}, {"id": "route-test"}]
             })),
@@ -469,7 +335,7 @@ fn probe_checks_readiness_discovery_text_and_tool_result_round_trip() {
             ResponseSpec::json(tool_call),
             ResponseSpec::json(text),
         ]);
-        let provider = LiteLlmProvider::new(
+        let provider = ApiProvider::new(
             connection(protocol, format!("{base}/gateway/v1"), 2_000),
             Some(Credential::new("fixture-secret")),
         )
@@ -479,30 +345,40 @@ fn probe_checks_readiness_discovery_text_and_tool_result_round_trip() {
         assert!(probe.ready);
         assert_eq!(
             probe.models,
-            Some(vec!["route-test".into(), "route-z".into()])
+            Some(vec!["route-z".into(), "route-test".into()])
         );
         assert_eq!(probe.requested_model, "route-test");
         assert_eq!(probe.resolved_model.as_deref(), Some("resolved-test"));
         assert!(probe.capabilities.text);
         assert!(probe.capabilities.client_tools);
 
-        let requests = (0..5)
+        let requests = (0..4)
             .map(|_| captured.recv_timeout(Duration::from_secs(1)).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(requests[0].method, "GET");
-        assert_eq!(requests[0].path, "/gateway/health/readiness");
-        assert_eq!(requests[1].path, "/gateway/v1/models");
+        assert_eq!(
+            requests[0].path,
+            models_path(protocol, "/gateway/v1/models")
+        );
+        assert_eq!(requests[1].path, protocol_path(protocol));
         assert_eq!(requests[2].path, protocol_path(protocol));
         assert_eq!(requests[3].path, protocol_path(protocol));
-        assert_eq!(requests[4].path, protocol_path(protocol));
-        assert!(request_requires_tool(protocol, &requests[3].body));
-        assert!(request_contains_tool_result(protocol, &requests[4].body));
+        assert!(request_requires_tool(protocol, &requests[2].body));
+        assert!(request_contains_tool_result(protocol, &requests[3].body));
         if protocol == LlmProtocol::OpenAiResponses {
-            assert_eq!(requests[4].body["store"], false);
-            assert!(!contains_string(&requests[4].body, "output_text"));
-            assert!(contains_string(&requests[4].body, "input_text"));
+            assert_eq!(requests[3].body["store"], false);
+            assert!(!contains_string(&requests[3].body, "output_text"));
+            assert!(contains_string(&requests[3].body, "input_text"));
         }
         server.join().unwrap();
+    }
+}
+
+/// Anthropic's list is paged, so its first page asks for the most.
+fn models_path(protocol: LlmProtocol, path: &str) -> String {
+    match protocol {
+        LlmProtocol::AnthropicMessages => format!("{path}?limit=1000"),
+        LlmProtocol::OpenAiChatCompletions | LlmProtocol::OpenAiResponses => path.into(),
     }
 }
 
@@ -734,7 +610,7 @@ fn http_statuses_and_retry_hints_map_to_stable_error_kinds() {
                 response.headers.push(("Retry-After".into(), "2".into()));
             }
             let (base, captured, server) = spawn_server(vec![response]);
-            let provider = LiteLlmProvider::new(
+            let provider = ApiProvider::new(
                 connection(protocol, base, 2_000),
                 Some(Credential::new("fixture-secret")),
             )
@@ -766,7 +642,7 @@ fn provider_supports_bounded_tool_round_and_error_correction_for_each_protocol()
             ResponseSpec::json(probe_tool_response(protocol)),
             ResponseSpec::json(fixture(protocol)["text"].clone()),
         ]);
-        let provider = LiteLlmProvider::new(connection(protocol, base, 2_000), None).unwrap();
+        let provider = ApiProvider::new(connection(protocol, base, 2_000), None).unwrap();
 
         let first = provider
             .complete(&tool_round_request(), &LlmCancellation::new())
@@ -822,7 +698,7 @@ fn malformed_http_responses_are_rejected_for_each_protocol() {
     ] {
         let (base, captured, server) =
             spawn_server(vec![ResponseSpec::json(json!({"unexpected": true}))]);
-        let provider = LiteLlmProvider::new(connection(protocol, base, 2_000), None).unwrap();
+        let provider = ApiProvider::new(connection(protocol, base, 2_000), None).unwrap();
         let error = provider
             .complete(&simple_request(), &LlmCancellation::new())
             .unwrap_err();
@@ -842,7 +718,7 @@ fn provider_decodes_multi_tool_calls_through_the_http_boundary() {
         let (base, captured, server) = spawn_server(vec![ResponseSpec::json(
             fixture(protocol)["multiTool"].clone(),
         )]);
-        let provider = LiteLlmProvider::new(connection(protocol, base, 2_000), None).unwrap();
+        let provider = ApiProvider::new(connection(protocol, base, 2_000), None).unwrap();
 
         let output = provider
             .complete(&simple_request(), &LlmCancellation::new())
@@ -870,7 +746,7 @@ fn provider_rejects_malformed_tool_calls_through_the_http_boundary() {
     ] {
         let (base, captured, server) =
             spawn_server(vec![ResponseSpec::json(malformed_tool_response(protocol))]);
-        let provider = LiteLlmProvider::new(connection(protocol, base, 2_000), None).unwrap();
+        let provider = ApiProvider::new(connection(protocol, base, 2_000), None).unwrap();
 
         let error = provider
             .complete(&simple_request(), &LlmCancellation::new())
@@ -890,13 +766,12 @@ fn probe_keeps_manual_alias_when_discovery_fails_and_answers_parallel_tools() {
     ] {
         let text = fixture(protocol)["text"].clone();
         let (base, captured, server) = spawn_server(vec![
-            ResponseSpec::json(json!({"status": "healthy"})),
             ResponseSpec::status(404, json!({"error": {"message": "discovery disabled"}})),
             ResponseSpec::json(text.clone()),
             ResponseSpec::json(parallel_probe_tool_response(protocol)),
             ResponseSpec::json(text),
         ]);
-        let provider = LiteLlmProvider::new(connection(protocol, base, 2_000), None).unwrap();
+        let provider = ApiProvider::new(connection(protocol, base, 2_000), None).unwrap();
 
         let probe = provider.probe(&LlmCancellation::new()).unwrap();
         assert_eq!(probe.models, None);
@@ -905,11 +780,11 @@ fn probe_keeps_manual_alias_when_discovery_fails_and_answers_parallel_tools() {
         assert!(probe.capabilities.text);
         assert!(probe.capabilities.client_tools);
 
-        let requests = (0..5)
+        let requests = (0..4)
             .map(|_| captured.recv_timeout(Duration::from_secs(1)).unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(requests[1].path, "/v1/models");
-        assert_eq!(tool_result_count(protocol, &requests[4].body), 2);
+        assert_eq!(requests[0].path, models_path(protocol, "/models"));
+        assert_eq!(tool_result_count(protocol, &requests[3].body), 2);
         server.join().unwrap();
     }
 }
@@ -980,11 +855,11 @@ fn connection_limits_are_explicit_and_enforced_before_http() {
         unknown.input_token_budget().unwrap_err().kind,
         LlmErrorKind::ContextLimitUnknown
     );
-    assert!(LiteLlmProvider::new(unknown, None).is_ok());
+    assert!(ApiProvider::new(unknown, None).is_ok());
 
     let mut oversized_request = simple_request();
     oversized_request.max_output_tokens = Some(configured.max_output_tokens + 1);
-    let provider = LiteLlmProvider::new(configured, None).unwrap();
+    let provider = ApiProvider::new(configured, None).unwrap();
     assert_eq!(
         provider
             .complete(&oversized_request, &LlmCancellation::new())
@@ -996,13 +871,8 @@ fn connection_limits_are_explicit_and_enforced_before_http() {
 
 #[test]
 fn malformed_http_body_is_rejected() {
-    let (base, captured, server) = spawn_server(vec![ResponseSpec {
-        status: 200,
-        headers: Vec::new(),
-        body: "{".into(),
-        delay: Duration::ZERO,
-    }]);
-    let provider = LiteLlmProvider::new(
+    let (base, captured, server) = spawn_server(vec![ResponseSpec::text(200, "{")]);
+    let provider = ApiProvider::new(
         connection(LlmProtocol::OpenAiChatCompletions, base, 2_000),
         None,
     )
@@ -1023,13 +893,8 @@ fn oversized_http_bodies_are_rejected_before_protocol_decode() {
         LlmProtocol::AnthropicMessages,
         LlmProtocol::OpenAiResponses,
     ] {
-        let (base, captured, server) = spawn_server(vec![ResponseSpec {
-            status: 200,
-            headers: Vec::new(),
-            body: body.clone(),
-            delay: Duration::ZERO,
-        }]);
-        let provider = LiteLlmProvider::new(connection(protocol, base, 2_000), None).unwrap();
+        let (base, captured, server) = spawn_server(vec![ResponseSpec::text(200, body.clone())]);
+        let provider = ApiProvider::new(connection(protocol, base, 2_000), None).unwrap();
         let error = provider
             .complete(&simple_request(), &LlmCancellation::new())
             .unwrap_err();
@@ -1048,12 +913,10 @@ fn request_timeout_is_classified_without_accepting_late_output() {
         LlmProtocol::OpenAiResponses,
     ] {
         let (base, captured, server) = spawn_server(vec![ResponseSpec {
-            status: 200,
-            headers: Vec::new(),
-            body: fixture(protocol)["text"].to_string(),
             delay: Duration::from_millis(150),
+            ..ResponseSpec::json(fixture(protocol)["text"].clone())
         }]);
-        let provider = LiteLlmProvider::new(connection(protocol, base, 20), None).unwrap();
+        let provider = ApiProvider::new(connection(protocol, base, 20), None).unwrap();
         let error = provider
             .complete(&simple_request(), &LlmCancellation::new())
             .unwrap_err();
@@ -1071,12 +934,10 @@ fn cancellation_interrupts_waiting_without_accepting_late_output() {
         LlmProtocol::OpenAiResponses,
     ] {
         let (base, captured, server) = spawn_server(vec![ResponseSpec {
-            status: 200,
-            headers: Vec::new(),
-            body: fixture(protocol)["text"].to_string(),
             delay: Duration::from_millis(250),
+            ..ResponseSpec::json(fixture(protocol)["text"].clone())
         }]);
-        let provider = LiteLlmProvider::new(connection(protocol, base, 2_000), None).unwrap();
+        let provider = ApiProvider::new(connection(protocol, base, 2_000), None).unwrap();
         let cancellation = LlmCancellation::new();
         let cancel_from_thread = cancellation.clone();
         let canceller = thread::spawn(move || {
@@ -1110,7 +971,7 @@ fn redirects_are_rejected_without_forwarding_credentials() {
             .headers
             .push(("Location".into(), format!("{target_url}/stolen")));
         let (base, captured, server) = spawn_server(vec![redirect]);
-        let provider = LiteLlmProvider::new(
+        let provider = ApiProvider::new(
             connection(protocol, base, 2_000),
             Some(Credential::new("must-not-leak")),
         )
@@ -1145,7 +1006,7 @@ fn redirects_are_rejected_without_forwarding_credentials() {
 fn unsafe_header_values_and_remote_plaintext_connections_are_rejected() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
-    let provider = LiteLlmProvider::new(
+    let provider = ApiProvider::new(
         connection(
             LlmProtocol::OpenAiChatCompletions,
             format!("http://{}", listener.local_addr().unwrap()),
@@ -1163,7 +1024,7 @@ fn unsafe_header_values_and_remote_plaintext_connections_are_rejected() {
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
     ));
 
-    let remote = LiteLlmProvider::new(
+    let remote = ApiProvider::new(
         connection(
             LlmProtocol::OpenAiResponses,
             "http://example.com:4321/proxy".into(),
@@ -1175,7 +1036,7 @@ fn unsafe_header_values_and_remote_plaintext_connections_are_rejected() {
         remote,
         Err(error) if error.kind == LlmErrorKind::ConnectionNotConfigured
     ));
-    assert!(LiteLlmProvider::new(
+    assert!(ApiProvider::new(
         connection(
             LlmProtocol::OpenAiResponses,
             "https://example.com:4321/proxy".into(),

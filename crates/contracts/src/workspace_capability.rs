@@ -21,18 +21,6 @@ pub struct AgentScopeSelector {
     pub all_documents: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ConfirmationMutationArguments {
-    pub confirmation_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct UndoMutationArguments {
-    pub undo_token: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilityRequest {
@@ -61,11 +49,7 @@ impl CapabilityRequest {
     }
 }
 
-/// Workspace's typed view over the common capability response envelope.
-///
-/// The transparent wrapper preserves the existing two-argument constructors
-/// used by the Workspace port while keeping one serialized envelope schema
-/// for every capability service.
+/// Workspace's typed view over the capability response envelope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct CapabilityResponse(CapabilityEnvelope<AgentToolResult, AgentToolError>);
@@ -87,7 +71,7 @@ impl DerefMut for CapabilityResponse {
 impl CapabilityResponse {
     pub fn success(request_id: impl Into<String>, result: AgentToolResult) -> Self {
         Self(
-            CapabilityEnvelope::<AgentToolResult, AgentToolError>::success_with_error_type(
+            CapabilityEnvelope::<AgentToolResult, AgentToolError>::success(
                 WORKSPACE_CAPABILITY_ID,
                 WORKSPACE_CAPABILITY_VERSION,
                 request_id,
@@ -446,7 +430,7 @@ pub struct UpdateDocumentArguments {
     pub expected_revision: u64,
     #[serde(default)]
     #[schemars(
-        description = "SHA-256 from read_document.metadata.markdownSha256; required for external consumers and automatically supplied by Built-in"
+        description = "SHA-256 from read_document.metadata.markdownSha256; the Assistant runtime supplies it from the latest read when omitted"
     )]
     pub source_markdown_sha256: Option<String>,
     pub patch: AgentDocumentPatch,
@@ -518,7 +502,7 @@ pub struct CreateSemanticChildrenArguments {
     pub expected_parent_revision: u64,
     #[serde(default)]
     #[schemars(
-        description = "SHA-256 from read_document.metadata.markdownSha256; required for external consumers and automatically supplied by Built-in"
+        description = "SHA-256 from read_document.metadata.markdownSha256; the Assistant runtime supplies it from the latest read when omitted"
     )]
     pub source_markdown_sha256: Option<String>,
     pub mode: SemanticSplitMode,
@@ -583,22 +567,6 @@ mod tests {
         }))
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));
-    }
-
-    #[test]
-    fn capability_envelope_keeps_service_payloads_on_the_common_wire() {
-        let envelope = CapabilityEnvelope::success(
-            "settings.app",
-            1,
-            "settings-update-1",
-            serde_json::json!({"revision": "abc"}),
-        );
-        let value = serde_json::to_value(&envelope).unwrap();
-        assert_eq!(value["schemaVersion"], crate::CAPABILITY_ENVELOPE_VERSION);
-        assert_eq!(value["capabilityId"], "settings.app");
-        assert_eq!(value["requestId"], "settings-update-1");
-        assert_eq!(value["result"]["revision"], "abc");
-        assert!(value.get("error").is_none());
     }
 }
 

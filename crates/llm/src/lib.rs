@@ -1,11 +1,14 @@
 mod adapters;
 mod client;
+mod codex;
+mod http;
 mod types;
+pub mod vendors;
 
 pub use adapters::{
     AnthropicMessagesAdapter, OpenAiChatCompletionsAdapter, OpenAiResponsesAdapter, ProtocolAdapter,
 };
-pub use client::{Credential, LiteLlmProvider};
+pub use client::{ApiProvider, Backend, Credential};
 pub use types::{
     AuthMode, ConnectionConfig, LlmCancellation, LlmError, LlmErrorKind, LlmInputBlock, LlmMessage,
     LlmOutput, LlmOutputBlock, LlmProtocol, LlmProvider, LlmProviderDescriptor, LlmRequest,
