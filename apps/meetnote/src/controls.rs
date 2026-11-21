@@ -58,11 +58,25 @@ pub fn card(k: &Kit) -> El {
         .border(1.0, k.c.border_muted)
 }
 
-pub fn page_header(k: &Kit, section: &str, heading: &str, description: &str) -> El {
+/// The width of a page's readable column. The space either side grows with
+/// the window, so every page keeps the same even margins.
+pub const PAGE_WIDTH: f32 = 760.0;
+/// The padding a page's content keeps inside its column.
+pub const PAGE_GUTTER: f32 = 24.0;
+
+/// Centers page content that pads itself by [`PAGE_GUTTER`] in a column
+/// [`PAGE_WIDTH`] wide.
+pub fn page_center(content: El) -> El {
+    row()
+        .w_full()
+        .justify_center()
+        .child(content.w_full().max_w(PAGE_WIDTH + 2.0 * PAGE_GUTTER))
+}
+
+pub fn page_header(k: &Kit, heading: &str, description: &str) -> El {
     col()
         .w_full()
         .gap(7.0)
-        .child(eyebrow(k, section))
         .child(title(k, heading, 30.0))
         .child(caption(k, description))
 }

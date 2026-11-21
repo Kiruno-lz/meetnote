@@ -33,7 +33,6 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>, wide: bool) -> El {
     let host = &s.workspace_host.providers;
     let mut body = col().w_full().max_w(MAX_WIDTH).gap(28.0).child(page_header(
         k,
-        s.tr("providers_eyebrow"),
         s.tr("providers"),
         s.tr("providers_caption"),
     ));

@@ -23,7 +23,7 @@ use rune_kit::{
 
 use crate::MeetNote;
 use crate::controls::{
-    action, caption, card, dot, eyebrow, icon_action, label, scroll, select, title,
+    action, caption, card, dot, eyebrow, icon_action, label, page_center, scroll, select, title,
 };
 
 const MAIN: &str = "product";
@@ -1372,26 +1372,13 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             NoteRead::Ready => edit(s, k, overlays),
         },
     };
-    let body = row().grow(1.0).min_h(0.0).w_full().child(
-        col()
-            .grow(1.0)
-            .min_w(0.0)
-            .min_h(0.0)
-            .child(scroll(k, "document-scroll", reading)),
-    );
-    let body = if w.detail {
-        body.child(Divider::vertical().build(k))
-            .child(details::panel(s, k))
-    } else {
-        body
-    };
+    let detail = w.detail;
     let header = col()
         .w_full()
         .gap(13.0)
         .px(24.0)
         .pt(21.0)
         .pb(14.0)
-        .child(eyebrow(k, s.tr("documents_workspace")))
         .child(title(k, document.title(), 31.0).key("document-title"))
         .child(
             row()
@@ -1462,15 +1449,33 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
     } else {
         header
     };
-    col()
+    // The header and the reading share one column, so they stay aligned
+    // while the details panel takes the full height beside them.
+    let main = col()
+        .grow(1.0)
+        .min_w(0.0)
+        .min_h(0.0)
+        .h_full()
+        .child(workspace_issues(w, k))
+        .child(page_center(header))
+        .child(Divider::horizontal().build(k))
+        .child(col().grow(1.0).min_h(0.0).w_full().child(scroll(
+            k,
+            "document-scroll",
+            page_center(reading),
+        )));
+    let page = row()
         .key("documents-page")
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(workspace_issues(w, k))
-        .child(header)
-        .child(Divider::horizontal().build(k))
-        .child(body)
+        .child(main);
+    if detail {
+        page.child(Divider::vertical().build(k))
+            .child(details::panel(s, k))
+    } else {
+        page
+    }
 }
 
 fn workspace_issues(w: &Workspace, k: &Kit) -> El {

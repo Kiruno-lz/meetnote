@@ -7,7 +7,7 @@ use rune::{El, col, row};
 use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant, Collapsible, Kit, Progress};
 
 use crate::MeetNote;
-use crate::controls::{caption, card, label, scroll, title};
+use crate::controls::{caption, card, label, page_center, scroll, title};
 use crate::workspace_host::models::ModelAction;
 
 pub(super) fn page(s: &MeetNote, k: &Kit) -> El {
@@ -56,7 +56,7 @@ pub(super) fn page(s: &MeetNote, k: &Kit) -> El {
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(scroll(k, "models-scroll", body))
+        .child(scroll(k, "models-scroll", page_center(body)))
 }
 
 fn model(s: &MeetNote, k: &Kit, entry: &ModelAvailability, selected: Option<&str>) -> El {

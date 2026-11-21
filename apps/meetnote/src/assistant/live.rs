@@ -5,7 +5,7 @@ use contracts::AgentScene;
 use rune::{El, col, row};
 use rune_kit::{Button, ButtonVariant, Kit, Markdown, TextInput};
 
-use crate::controls::{caption, card, label, scroll, select, title};
+use crate::controls::{caption, card, label, page_center, scroll, select, title};
 use crate::workspace_host::assistant::ReviewDecision;
 use crate::{MeetNote, providers};
 
@@ -293,8 +293,8 @@ pub(super) fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(scroll(k, "live-assistant-scroll", content))
-        .child(composer)
+        .child(scroll(k, "live-assistant-scroll", page_center(content)))
+        .child(page_center(composer))
 }
 
 fn result_details(s: &MeetNote, k: &Kit, result: &AssistantRunResult) -> Vec<El> {

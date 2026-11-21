@@ -7,7 +7,8 @@ use rune_kit::{
 };
 
 use crate::controls::{
-    action, caption, card, dot, eyebrow, field, label, page_header, scroll, select, title,
+    action, caption, card, dot, eyebrow, field, label, page_center, page_header, scroll, select,
+    title,
 };
 use crate::{Confirm, MeetNote};
 
@@ -314,7 +315,6 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
         .gap(16.0)
         .child(page_header(
             k,
-            s.tr("settings_workspace"),
             s.tr("settings"),
             "Appearance, workspace and processing preferences.",
         ))
@@ -340,7 +340,7 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
         .h_full()
         .w_full()
         .min_h(0.0)
-        .child(scroll(k, "settings-scroll", body))
+        .child(scroll(k, "settings-scroll", page_center(body)))
         .children(live.then(|| live_preferences::actions(s, k)))
 }
 
@@ -427,7 +427,6 @@ pub fn models_page(s: &MeetNote, k: &Kit) -> El {
     }
     let mut body = col().w_full().gap(16.0).padding(24.0).child(page_header(
         k,
-        "MODELS  /  AUDIO",
         "Models",
         "Browse the sample catalog and try the download controls.",
     ));
@@ -439,7 +438,7 @@ pub fn models_page(s: &MeetNote, k: &Kit) -> El {
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(scroll(k, "models-scroll", body))
+        .child(scroll(k, "models-scroll", page_center(body)))
 }
 
 fn model_card(s: &MeetNote, k: &Kit, model: &Model, index: usize) -> El {
