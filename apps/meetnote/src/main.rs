@@ -3414,6 +3414,54 @@ mod tests {
             );
         }
 
+        /// Recorded on a real DMT03 while adding it: the cable enumerates the
+        /// device before its volume is mounted, and macOS holds the volume
+        /// read behind its access prompt. Bluetooth verified in between and
+        /// the device was paired through its USB port, so the volume that
+        /// mounted a moment later read as an unpaired device.
+        #[test]
+        fn pairing_waits_for_the_volume_when_the_cable_enumerates_before_it_mounts() {
+            let fixture = tempfile::tempdir().unwrap();
+            let volume = fixture.path().join("NO NAME");
+            write_take(&volume, "20261120_093012");
+            let (mut rt, discovery) = workspace_runtime(fixture.path());
+            click(&mut rt, "device-add");
+
+            let mut enumerated = mic_on_usb(&volume);
+            enumerated.volumes.clear();
+            enumerated.volume_uuid = None;
+            discovery.plug(vec![enumerated]);
+            until(&mut rt, |rt| {
+                !rt.state.workspace_host.devices.attached.is_empty()
+            });
+            transmitter_nearby(
+                &discovery,
+                Ok(crate::workspace_host::devices::sample_verified()),
+            );
+            advance(&mut rt, 120);
+            assert!(
+                rt.state.workspace_host.devices.registry.devices.is_empty(),
+                "never paired through the USB port"
+            );
+            assert!(rt.find("device-pair-finish").is_none());
+
+            discovery.plug(vec![mic_on_usb(&volume)]);
+            until_within(&mut rt, Duration::from_secs(10), |rt| {
+                rt.find("device-pair-finish").is_some()
+            });
+            click(&mut rt, "device-pair-finish");
+            let card = card_id(MIC_KEY);
+            until_within(&mut rt, Duration::from_secs(10), |rt| {
+                document_count(rt) == 1 && rt.state.workspace_host.devices.import.is_none()
+            });
+            assert!(rt.find("device-unpaired").is_none());
+            assert!(rt.find(&format!("{card}-serial")).is_some());
+            assert!(visible_text(&rt, "Connected · Up to date"));
+            let settings = rt.state.workspace_host.processing_config_settings();
+            let registry = RegistryStore::beside_settings(&settings).load().unwrap();
+            assert_eq!(registry.device(MIC_KEY).unwrap().usb_links, [MIC_VOLUME]);
+        }
+
         #[test]
         fn a_device_that_fails_verification_is_never_paired() {
             let fixture = tempfile::tempdir().unwrap();

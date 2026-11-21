@@ -39,20 +39,26 @@ pub struct AttachedDevice {
 }
 
 impl AttachedDevice {
-    /// The registry key: the identity's, else the volume's, else one built
-    /// from the USB port.
-    pub fn key(&self) -> String {
+    /// The key that names this unit wherever it is plugged in: the
+    /// identity's or the volume's. `None` while it is known only by its USB
+    /// port, as between enumeration and the volume being mounted and read.
+    pub fn stable_key(&self) -> Option<String> {
         self.identity
             .key()
             .or_else(|| self.volume_uuid.as_ref().map(|uuid| format!("vol:{uuid}")))
-            .unwrap_or_else(|| {
-                format!(
-                    "usb:{:04x}:{:04x}:{:08x}",
-                    self.usb.vendor_id,
-                    self.usb.product_id,
-                    self.usb.location_id.unwrap_or_default()
-                )
-            })
+    }
+
+    /// The registry key: the identity's, else the volume's, else one built
+    /// from the USB port.
+    pub fn key(&self) -> String {
+        self.stable_key().unwrap_or_else(|| {
+            format!(
+                "usb:{:04x}:{:04x}:{:08x}",
+                self.usb.vendor_id,
+                self.usb.product_id,
+                self.usb.location_id.unwrap_or_default()
+            )
+        })
     }
 }
 
@@ -373,6 +379,28 @@ devfs on /dev (devfs, local, nobrowse)
         assert!(
             attached(parse_ioreg(IOREG), &parse_mount(MOUNT)).is_empty(),
             "neither the keyboard nor an unlisted DJI product is a recorder"
+        );
+    }
+
+    /// Recorded on a real DMT03: the cable enumerates the device, then its
+    /// disk, and only then is the volume mounted and its UUID read.
+    #[test]
+    fn only_a_mounted_volume_gives_a_stable_key() {
+        let devices = parse_ioreg(IOREG_MIC3);
+        let enumerated = attached(devices.clone(), &[]).remove(0);
+        assert_eq!(enumerated.key(), "usb:be57:0104:00100000");
+        assert_eq!(enumerated.stable_key(), None, "the port is not the unit");
+
+        let mut mounted = attached(
+            devices,
+            &parse_mount("/dev/disk4 on /Volumes/NO NAME (msdos, local, fskit)\n"),
+        )
+        .remove(0);
+        assert_eq!(mounted.stable_key(), None, "the uuid is not read yet");
+        mounted.volume_uuid = Some("645BECBB-3236-3D95-9BAC-7E99F3B01EED".into());
+        assert_eq!(
+            mounted.stable_key().as_deref(),
+            Some("vol:645BECBB-3236-3D95-9BAC-7E99F3B01EED")
         );
     }
 

@@ -397,7 +397,10 @@ impl DeviceHost {
     }
 
     /// Pairs the verified device with the unpaired USB attachment of the
-    /// same model, keyed by its serial number.
+    /// same model, keyed by its serial number. The attachment must already
+    /// have a stable key: the cable enumerates the device before its volume
+    /// is mounted and read (longer while macOS asks for volume access), and
+    /// a link to the USB port would not match the volume that follows.
     fn pair_attached(&mut self, now: f64) -> Option<String> {
         self.fill_missing_macs();
         let pairing = self.pairing.as_ref()?;
@@ -410,6 +413,7 @@ impl DeviceHost {
             .unpaired()
             .find(|attached| {
                 attached.identity.model_code.as_deref() == Some(verified.model_code.as_str())
+                    && attached.stable_key().is_some()
             })?
             .clone();
         if target.identity.mac.is_none() && target.model.advertising.mac != MacSource::Absent {
