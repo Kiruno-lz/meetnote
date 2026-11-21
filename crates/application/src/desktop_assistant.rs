@@ -1,10 +1,9 @@
+use contracts::AgentToolError;
 use contracts::{AgentScene, AgentSkillSelector, AgentWriteMode, DocumentProjection};
 use domain::DocumentState;
 use futures::channel::mpsc::UnboundedReceiver;
 use runtime::{JobEvent, JobId, Progress};
-use settings::{
-    AppSettings, AssistantConnectionProfile, AssistantSettings, SettingsError, SettingsPatch,
-};
+use settings::{AssistantSettings, ModelChoice, SettingsError};
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,30 +14,6 @@ pub use crate::AgentCancellation as AssistantCancellation;
 
 static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConnectionProbeKind {
-    Readiness,
-    Model,
-}
-
-/// Identifies one connection probe so late results of cancelled or superseded
-/// probes can be dropped.
-pub type ConnectionProbeId = u64;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectionDiagnostic {
-    pub kind: ConnectionProbeKind,
-    pub ready: bool,
-    pub local: bool,
-    pub models: Option<Vec<String>>,
-    pub text: Option<bool>,
-    pub client_tools: Option<bool>,
-    pub requested_model: String,
-    pub resolved_model: Option<String>,
-    pub context_window_tokens: Option<u32>,
-    pub message: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssistantUiError {
     pub code: String,
@@ -47,9 +22,6 @@ pub struct AssistantUiError {
 }
 
 pub const SETTINGS_REVISION_CONFLICT: &str = "SETTINGS_REVISION_CONFLICT";
-/// A connection's protocol, base URL, model or authentication changed while
-/// its stored credential was left as it was; the key must be entered again.
-pub const SETTINGS_CREDENTIAL_TARGET_CONFLICT: &str = "SETTINGS_CREDENTIAL_TARGET_CONFLICT";
 const TASK_CANCELLED: &str = "TASK_CANCELLED";
 
 impl AssistantUiError {
@@ -62,12 +34,10 @@ impl AssistantUiError {
     }
 
     /// A settings write that lost a compare-and-swap is retryable once the
-    /// caller reloads; every other settings error is not. A changed
-    /// connection target keeps the code Settings reports it with.
+    /// caller reloads; every other settings error is not.
     pub fn from_settings(error: &SettingsError) -> Self {
         let code = match error {
             SettingsError::RevisionConflict => SETTINGS_REVISION_CONFLICT,
-            SettingsError::CredentialTargetConflict => SETTINGS_CREDENTIAL_TARGET_CONFLICT,
             _ => "ASSISTANT_SETTINGS_INVALID",
         };
         Self {
@@ -81,19 +51,36 @@ impl AssistantUiError {
         self.code == SETTINGS_REVISION_CONFLICT
     }
 
-    pub fn is_credential_target_conflict(&self) -> bool {
-        self.code == SETTINGS_CREDENTIAL_TARGET_CONFLICT
+    /// The run or sign-in was cancelled rather than failed.
+    pub fn is_cancelled(&self) -> bool {
+        self.code == TASK_CANCELLED
     }
 }
 
-/// The Assistant settings form as changes relative to the settings it was
-/// loaded from. `patch.connection` edits an existing profile; a new profile
-/// is `new_connection`, and its credential is `patch.connection.credential`.
-/// A credential of `None` keeps the stored one.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AssistantSettingsSave {
-    pub patch: SettingsPatch,
-    pub new_connection: Option<AssistantConnectionProfile>,
+impl From<AgentToolError> for AssistantUiError {
+    fn from(error: AgentToolError) -> Self {
+        let code = serde_json::to_value(error.code)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "PROVIDER_RESPONSE_INVALID".into());
+        Self {
+            code,
+            message: error.message,
+            retryable: error.retryable,
+        }
+    }
+}
+
+impl From<llm::LlmError> for AssistantUiError {
+    fn from(error: llm::LlmError) -> Self {
+        crate::agent_error_from_llm(error).into()
+    }
+}
+
+impl From<SettingsError> for AssistantUiError {
+    fn from(error: SettingsError) -> Self {
+        Self::from_settings(&error)
+    }
 }
 
 impl fmt::Display for AssistantUiError {
@@ -135,7 +122,9 @@ pub struct AssistantRunRequest {
     pub authorized_documents: Vec<AssistantDocumentContext>,
     pub projection: DocumentProjection,
     pub write_mode: AgentWriteMode,
-    pub connection_id: String,
+    /// The model choice the run was started under; the run fails when the
+    /// settings name another by the time it starts.
+    pub model: ModelChoice,
     pub max_tool_rounds: u32,
     pub max_validation_retries: u32,
 }
@@ -265,9 +254,8 @@ pub type AssistantProgressHandler = Arc<dyn Fn(AssistantProgress) + Send + Sync>
 /// `JobRuntime`, tagged with the run it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssistantJobEvent {
-    /// The run's `AssistantRunRequest::request_id`; `None` for jobs that are
-    /// not runs, such as connection probes.
-    pub request_id: Option<String>,
+    /// The run's `AssistantRunRequest::request_id`.
+    pub request_id: String,
     pub event: JobEvent,
 }
 
@@ -282,21 +270,6 @@ pub struct AssistantRunDiagnostics {
 }
 
 pub trait AssistantUiService: Send + Sync {
-    /// Commits `save` only while the settings still have `expected_revision`;
-    /// otherwise fails with a retryable `SETTINGS_REVISION_CONFLICT`.
-    fn save_assistant_settings(
-        &self,
-        expected_revision: String,
-        save: AssistantSettingsSave,
-    ) -> Result<AppSettings, AssistantUiError>;
-
-    fn probe_connection(
-        &self,
-        profile: AssistantConnectionProfile,
-        kind: ConnectionProbeKind,
-        cancellation: AssistantCancellation,
-    ) -> Result<ConnectionDiagnostic, AssistantUiError>;
-
     fn run(
         &self,
         request: AssistantRunRequest,
@@ -367,17 +340,11 @@ pub struct AssistantController {
     pub task: AssistantTaskState,
     pub result: Option<AssistantRunResult>,
     pub pending: Option<PendingReviewState>,
-    pub diagnostic: Option<Result<ConnectionDiagnostic, AssistantUiError>>,
     pub progress: Option<AssistantProgress>,
     /// The current run's job on the shared runtime and its last reported
     /// progress, projected from its `JobEvent`s.
     pub job: Option<JobId>,
     pub job_progress: Option<Progress>,
-    pub probe_running: Option<ConnectionProbeKind>,
-    /// The last probe was cancelled before it answered.
-    pub probe_cancelled: bool,
-    /// The kind of the last probe started, which a retry repeats.
-    last_probe: Option<ConnectionProbeKind>,
     /// The run whose result, error and job events the controller still
     /// accepts; a job event may end the task before the result arrives.
     active_request: Option<String>,
@@ -398,9 +365,6 @@ pub struct AssistantController {
     undone_mutation_ids: HashSet<String>,
     undo_in_flight: HashSet<String>,
     cancellation: Option<AssistantCancellation>,
-    probe_cancellation: Option<AssistantCancellation>,
-    probe_sequence: ConnectionProbeId,
-    active_probe: Option<ConnectionProbeId>,
 }
 
 impl Default for AssistantController {
@@ -413,13 +377,9 @@ impl Default for AssistantController {
             task: AssistantTaskState::Idle,
             result: None,
             pending: None,
-            diagnostic: None,
             progress: None,
             job: None,
             job_progress: None,
-            probe_running: None,
-            probe_cancelled: false,
-            last_probe: None,
             active_request: None,
             result_run: None,
             prompt: None,
@@ -431,9 +391,6 @@ impl Default for AssistantController {
             undone_mutation_ids: HashSet::new(),
             undo_in_flight: HashSet::new(),
             cancellation: None,
-            probe_cancellation: None,
-            probe_sequence: 0,
-            active_probe: None,
         }
     }
 }
@@ -486,10 +443,10 @@ impl AssistantController {
                 retryable: false,
             });
         }
-        let Some(connection_id) = settings.active_connection_id.clone() else {
+        let Some(model) = settings.model.clone() else {
             return Err(AssistantUiError {
                 code: "CONNECTION_NOT_CONFIGURED".into(),
-                message: "Select an active Assistant connection in Settings".into(),
+                message: "Choose the Assistant's model in Settings".into(),
                 retryable: false,
             });
         };
@@ -510,7 +467,7 @@ impl AssistantController {
             authorized_documents: self.authorized_documents.clone(),
             projection: self.projection,
             write_mode: settings.write_mode,
-            connection_id,
+            model,
             max_tool_rounds: settings.max_tool_rounds,
             max_validation_retries: settings.max_validation_retries,
         };
@@ -612,10 +569,7 @@ impl AssistantController {
     /// changed. A failed or cancelled job ends the task at once; the run's
     /// typed result or error still replaces it when it arrives.
     pub fn apply_job_event(&mut self, event: AssistantJobEvent) -> bool {
-        let Some(request_id) = event.request_id else {
-            return false;
-        };
-        if !self.matches_active_request(&request_id) {
+        if !self.matches_active_request(&event.request_id) {
             return false;
         }
         match event.event {
@@ -892,8 +846,7 @@ impl AssistantController {
     /// Drops everything that belongs to the documents root the workspace
     /// left: the result with its undo entries, the pending reviews, the
     /// authorized documents and a run still going, which is cancelled and
-    /// whose late result is ignored. The scene, scope and connection
-    /// diagnostics stay.
+    /// whose late result is ignored. The scene and scope stay.
     pub fn forget_workspace(&mut self) {
         if let Some(cancellation) = self.cancellation.take() {
             cancellation.cancel();
@@ -915,66 +868,6 @@ impl AssistantController {
         self.progress = None;
         self.job = None;
         self.job_progress = None;
-    }
-
-    /// A changed connection no longer owns the last probe or its feedback.
-    pub fn forget_probe(&mut self) {
-        self.request_probe_cancel();
-        self.diagnostic = None;
-        self.last_probe = None;
-        self.probe_cancelled = false;
-    }
-
-    pub fn begin_probe(
-        &mut self,
-        kind: ConnectionProbeKind,
-    ) -> (ConnectionProbeId, AssistantCancellation) {
-        if let Some(superseded) = self.probe_cancellation.take() {
-            superseded.cancel();
-        }
-        let cancellation = AssistantCancellation::new();
-        self.probe_sequence += 1;
-        self.active_probe = Some(self.probe_sequence);
-        self.probe_running = Some(kind);
-        self.probe_cancelled = false;
-        self.last_probe = Some(kind);
-        self.diagnostic = None;
-        self.probe_cancellation = Some(cancellation.clone());
-        (self.probe_sequence, cancellation)
-    }
-
-    /// The probe to repeat when the last one failed with a retryable error.
-    pub fn probe_to_retry(&self) -> Option<ConnectionProbeKind> {
-        match &self.diagnostic {
-            Some(Err(error)) if error.retryable => self.last_probe,
-            _ => None,
-        }
-    }
-
-    /// Records a probe result unless the probe was cancelled or superseded.
-    pub fn finish_probe(
-        &mut self,
-        probe_id: ConnectionProbeId,
-        result: Result<ConnectionDiagnostic, AssistantUiError>,
-    ) {
-        if self.active_probe != Some(probe_id) {
-            return;
-        }
-        self.active_probe = None;
-        self.probe_running = None;
-        self.probe_cancellation = None;
-        self.diagnostic = Some(result);
-    }
-
-    pub fn request_probe_cancel(&mut self) -> bool {
-        let Some(cancellation) = self.probe_cancellation.take() else {
-            return false;
-        };
-        cancellation.cancel();
-        self.active_probe = None;
-        self.probe_running = None;
-        self.probe_cancelled = true;
-        true
     }
 
     /// Expires every due review from the awaiting one on; returns whether
@@ -1052,39 +945,10 @@ fn is_terminal_progress(stage: &str) -> bool {
 mod tests {
     use super::*;
     use domain::{DocumentState, ProjectId};
-    use settings::{AssistantAuthMode, LlmProtocol};
 
     struct FakeAssistantService;
 
     impl AssistantUiService for FakeAssistantService {
-        fn save_assistant_settings(
-            &self,
-            _: String,
-            _: AssistantSettingsSave,
-        ) -> Result<AppSettings, AssistantUiError> {
-            Err(AssistantUiError::unavailable("not exercised"))
-        }
-
-        fn probe_connection(
-            &self,
-            profile: AssistantConnectionProfile,
-            kind: ConnectionProbeKind,
-            _: AssistantCancellation,
-        ) -> Result<ConnectionDiagnostic, AssistantUiError> {
-            Ok(ConnectionDiagnostic {
-                kind,
-                ready: true,
-                local: profile.is_local(),
-                models: Some(vec![profile.model.clone()]),
-                text: Some(true),
-                client_tools: Some(true),
-                requested_model: profile.model.clone(),
-                resolved_model: Some(profile.model),
-                context_window_tokens: profile.context_window_tokens,
-                message: "ready".into(),
-            })
-        }
-
         fn run(
             &self,
             request: AssistantRunRequest,
@@ -1217,7 +1081,11 @@ mod tests {
 
     fn settings() -> AssistantSettings {
         AssistantSettings {
-            active_connection_id: Some("local".into()),
+            model: Some(ModelChoice {
+                provider: "local".into(),
+                model: "fixture".into(),
+                protocol: None,
+            }),
             ..AssistantSettings::default()
         }
     }
@@ -1294,37 +1162,9 @@ mod tests {
     }
 
     #[test]
-    fn fake_service_drives_run_and_probe_state() {
+    fn fake_service_drives_run_state() {
         let service = FakeAssistantService;
-        let profile = AssistantConnectionProfile {
-            id: "local".into(),
-            name: "Local LiteLLM".into(),
-            protocol: LlmProtocol::OpenAiChatCompletions,
-            base_url: "http://localhost:4000".into(),
-            model: "fixture".into(),
-            auth_mode: AssistantAuthMode::Bearer,
-            api_key: Some("fixture-key".into()),
-            api_key_file: None,
-            context_window_tokens: Some(8_192),
-            timeout_ms: 1_000,
-            max_output_tokens: 512,
-        };
         let mut controller = AssistantController::default();
-        let (probe_id, cancellation) = controller.begin_probe(ConnectionProbeKind::Model);
-        let diagnostic = service
-            .probe_connection(profile, ConnectionProbeKind::Model, cancellation)
-            .unwrap();
-        controller.finish_probe(probe_id, Ok(diagnostic));
-        assert!(matches!(
-            controller.diagnostic,
-            Some(Ok(ConnectionDiagnostic {
-                ready: true,
-                local: true,
-                client_tools: Some(true),
-                ..
-            }))
-        ));
-
         let document = DocumentState::new(ProjectId::new("example"), "Example", "example.wav");
         controller.authorize_document(Some(&document));
         let (request, cancellation) = controller.begin("question".into(), &settings()).unwrap();
@@ -1662,16 +1502,12 @@ mod tests {
         controller.authorize_document(Some(&document));
         let job_id = JobId(3);
         let event = |request_id: &str, event| AssistantJobEvent {
-            request_id: Some(request_id.into()),
+            request_id: request_id.into(),
             event,
         };
         let (request, _) = controller.begin("cancel".into(), &settings()).unwrap();
         let run = request.request_id.as_str();
 
-        assert!(!controller.apply_job_event(AssistantJobEvent {
-            request_id: None,
-            event: JobEvent::Started { job_id },
-        }));
         assert!(!controller.apply_job_event(event("other", JobEvent::Started { job_id })));
         assert!(controller.apply_job_event(event(run, JobEvent::Started { job_id })));
         assert_eq!(controller.job, Some(job_id));
@@ -1932,7 +1768,7 @@ mod tests {
         let (request, _) = controller.begin("organize".into(), &settings()).unwrap();
         assert!(controller.awaiting_result());
         assert!(controller.apply_job_event(AssistantJobEvent {
-            request_id: Some(request.request_id.clone()),
+            request_id: request.request_id.clone(),
             event: JobEvent::Cancelled { job_id: JobId(1) },
         }));
         assert_eq!(controller.task, AssistantTaskState::Cancelled);
@@ -2014,56 +1850,30 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_connection_target_keeps_its_settings_code() {
-        let error = AssistantUiError::from_settings(&SettingsError::CredentialTargetConflict);
-        assert_eq!(error.code, SETTINGS_CREDENTIAL_TARGET_CONFLICT);
-        assert!(error.is_credential_target_conflict() && !error.retryable);
+    fn a_settings_conflict_is_retryable_and_cancellation_is_recognized() {
         let conflict = AssistantUiError::from_settings(&SettingsError::RevisionConflict);
         assert!(conflict.is_settings_conflict() && conflict.retryable);
+        let invalid: AssistantUiError = SettingsError::Invalid("bad".into()).into();
+        assert!(!invalid.is_settings_conflict() && !invalid.retryable);
+        let cancelled: AssistantUiError =
+            llm::LlmError::new(llm::LlmErrorKind::Cancelled, "stopped").into();
+        assert!(cancelled.is_cancelled());
+        let failed: AssistantUiError =
+            llm::LlmError::new(llm::LlmErrorKind::Authentication, "denied").into();
+        assert!(!failed.is_cancelled());
     }
 
     #[test]
-    fn a_retryable_probe_failure_offers_its_kind_again_and_a_cancel_is_shown() {
+    fn a_run_needs_a_model_choice() {
+        let document = DocumentState::new(ProjectId::new("example"), "Example", "example.wav");
         let mut controller = AssistantController::default();
-        let (probe, _) = controller.begin_probe(ConnectionProbeKind::Model);
-        controller.finish_probe(
-            probe,
-            Err(AssistantUiError {
-                code: "PROVIDER_TIMEOUT".into(),
-                message: "timed out".into(),
-                retryable: true,
-            }),
-        );
-        assert_eq!(
-            controller.probe_to_retry(),
-            Some(ConnectionProbeKind::Model)
-        );
-        let (probe, _) = controller.begin_probe(ConnectionProbeKind::Readiness);
-        assert_eq!(controller.probe_to_retry(), None);
-        controller.finish_probe(
-            probe,
-            Err(AssistantUiError {
-                code: "PROVIDER_AUTHENTICATION_FAILED".into(),
-                message: "401".into(),
-                retryable: false,
-            }),
-        );
-        assert_eq!(controller.probe_to_retry(), None);
-        controller.begin_probe(ConnectionProbeKind::Readiness);
-        assert!(controller.request_probe_cancel());
-        assert!(controller.probe_cancelled);
-        controller.begin_probe(ConnectionProbeKind::Readiness);
-        assert!(!controller.probe_cancelled);
-    }
-
-    #[test]
-    fn probe_cancellation_is_visible_to_the_runtime_boundary() {
-        let mut controller = AssistantController::default();
-        let (_, cancellation) = controller.begin_probe(ConnectionProbeKind::Readiness);
-        assert!(controller.request_probe_cancel());
-        assert!(cancellation.is_cancelled());
-        assert!(controller.probe_running.is_none());
-        assert!(!controller.request_probe_cancel());
+        controller.authorize_document(Some(&document));
+        let error = controller
+            .begin("question".into(), &AssistantSettings::default())
+            .unwrap_err();
+        assert_eq!(error.code, "CONNECTION_NOT_CONFIGURED");
+        let (request, _) = controller.begin("question".into(), &settings()).unwrap();
+        assert_eq!(request.model, settings().model.unwrap());
     }
 
     #[test]
@@ -2132,68 +1942,5 @@ mod tests {
         controller.pending = Some(PendingReviewState::Awaiting(review));
         assert!(controller.expire_pending("due"));
         assert_eq!(controller.pending, Some(PendingReviewState::Expired));
-    }
-
-    fn ready_diagnostic(kind: ConnectionProbeKind) -> ConnectionDiagnostic {
-        ConnectionDiagnostic {
-            kind,
-            ready: true,
-            local: true,
-            models: None,
-            text: Some(true),
-            client_tools: Some(true),
-            requested_model: "fixture".into(),
-            resolved_model: Some("fixture".into()),
-            context_window_tokens: None,
-            message: "ready".into(),
-        }
-    }
-
-    #[test]
-    fn forgetting_a_probe_cancels_it_and_drops_its_late_feedback() {
-        let mut controller = AssistantController::default();
-        let (id, token) = controller.begin_probe(ConnectionProbeKind::Model);
-        controller.forget_probe();
-        assert!(token.is_cancelled());
-        controller.finish_probe(id, Ok(ready_diagnostic(ConnectionProbeKind::Model)));
-        assert_eq!(controller.diagnostic, None);
-        assert_eq!(controller.probe_running, None);
-        assert!(!controller.probe_cancelled);
-        assert_eq!(controller.probe_to_retry(), None);
-    }
-
-    #[test]
-    fn late_ok_after_probe_cancel_is_ignored() {
-        let mut controller = AssistantController::default();
-        let (probe_id, _) = controller.begin_probe(ConnectionProbeKind::Readiness);
-        assert!(controller.request_probe_cancel());
-
-        controller.finish_probe(
-            probe_id,
-            Ok(ready_diagnostic(ConnectionProbeKind::Readiness)),
-        );
-
-        assert_eq!(controller.diagnostic, None);
-        assert_eq!(controller.probe_running, None);
-    }
-
-    #[test]
-    fn superseded_probe_result_is_ignored() {
-        let mut controller = AssistantController::default();
-        let (first, first_cancellation) = controller.begin_probe(ConnectionProbeKind::Readiness);
-        let (second, _) = controller.begin_probe(ConnectionProbeKind::Model);
-        assert_ne!(first, second);
-        assert!(first_cancellation.is_cancelled());
-
-        controller.finish_probe(first, Ok(ready_diagnostic(ConnectionProbeKind::Readiness)));
-        assert_eq!(controller.diagnostic, None);
-        assert_eq!(controller.probe_running, Some(ConnectionProbeKind::Model));
-
-        controller.finish_probe(second, Ok(ready_diagnostic(ConnectionProbeKind::Model)));
-        assert_eq!(
-            controller.diagnostic,
-            Some(Ok(ready_diagnostic(ConnectionProbeKind::Model)))
-        );
-        assert_eq!(controller.probe_running, None);
     }
 }

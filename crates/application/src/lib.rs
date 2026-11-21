@@ -13,12 +13,10 @@ use std::pin::Pin;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
-mod agent_host;
 mod assistant_runtime;
 mod assistant_skills;
 mod audio_source;
 mod backend_worker;
-mod capabilities;
 pub mod desktop_assistant;
 
 mod document_commands;
@@ -27,27 +25,21 @@ mod document_search;
 mod documents_root;
 mod installation;
 mod long_audio;
+mod providers;
 mod speaker_identity;
 mod workspace;
 mod workspace_capability;
 
-pub use agent_host::{
-    AgentHost, CapabilityBinding, AGENT_HOST_CAPABILITY_ID, AGENT_HOST_CAPABILITY_VERSION,
-};
 pub use assistant_runtime::{
     agent_error_from_llm, AgentAnswer, AgentCancellation, AgentCapabilityBinding,
     AgentCapabilityDescription, AgentCapabilityInvoker, AgentContext, AgentContextAssembler,
     AgentPreparedRun, AgentProgress, AgentProgressStage, AgentRunDiagnostics, AgentRunPath,
     AgentRunResult, AgentRuntime, AgentRuntimeConfig, AgentSceneAssembly, AgentTask, AgentUsage,
-    HostAgentScene, WorkspaceAgentScene,
+    WorkspaceAgentScene,
 };
 pub use assistant_skills::BundledAgentSkill;
 pub use audio_source::{AudioSourceError, AudioStatus};
 pub use backend_worker::run_backend_worker;
-pub use capabilities::{
-    AudioCapabilityPort, CapabilityDescriptor, CapabilityOperation, SettingsCapabilityPort,
-    SettingsPatchArguments, SettingsReadArguments, SettingsSection,
-};
 pub use contracts::BackendDescriptor;
 pub use document_commands::{DocumentCommandError, DocumentCommandService, DocumentSaveBase};
 pub use document_issues::DocumentIssueKind;
@@ -64,6 +56,11 @@ pub use installation::{
 };
 pub use long_audio::{
     run_windowed_pipeline, AsrWindowSession, DiarizationWindowSession, LongAudioConfig,
+};
+pub use providers::{
+    llm_protocol, model_choice, model_ids, model_protocol, settings_protocol, upgraded_choice,
+    visible_models, CredentialChange, CredentialSummary, PendingSignIn, ProviderEndpoints,
+    ProviderService, ProviderView,
 };
 pub use speaker_identity::{
     apply_identity_matches, cosine_similarity, ClusterIdentityResolver, IdentityResolution,
@@ -221,7 +218,7 @@ pub struct DocumentSnapshot {
     pub issues: Vec<DocumentIssue>,
 }
 
-/// The bounded projection used by list/read capability consumers. It excludes
+/// The bounded projection used by list/read capability calls. It excludes
 /// transcript, diarization, and processing payloads so repositories can emit
 /// list rows without materializing complete document states.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -873,7 +870,7 @@ pub struct AudioWindowing {
 }
 
 /// Preserve the backend's stable error code while making the pipeline stage
-/// visible to CLI and external capability consumers.
+/// visible to callers.
 pub(crate) fn annotate_backend_error(
     mut error: BackendError,
     stage: &str,
