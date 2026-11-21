@@ -7,7 +7,7 @@ use rune_kit::{Button, ButtonVariant, Kit, Markdown, TextInput};
 
 use crate::controls::{caption, card, label, scroll, select, title};
 use crate::workspace_host::assistant::ReviewDecision;
-use crate::{MeetNote, Route};
+use crate::{MeetNote, providers};
 
 const SCENES: [AgentScene; 5] = [
     AgentScene::Ask,
@@ -187,19 +187,9 @@ pub(super) fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
         }
         _ => {}
     }
-    let configured = host.settings.enabled && host.settings.active_connection_id.is_some();
-    if !configured {
-        content = content.child(
-            card(k)
-                .child(label(k, s.tr("assistant_connection_required")))
-                .child(
-                    Button::new(s.tr("assistant_open_settings"))
-                        .variant(ButtonVariant::Outline)
-                        .on_press(|s: &mut MeetNote| s.navigate(Route::Settings))
-                        .build(k),
-                ),
-        );
-    }
+    let configured =
+        host.settings.enabled && matches!(providers::current_model(s), Some((_, true)));
+    content = content.children(providers::model_notice(s, k));
     let all_documents = controller.scope_mode == AssistantScopeMode::AllVisibleDocuments;
     let scope = if all_documents {
         format!("{} documents", s.documents.document_states().count())
@@ -222,6 +212,7 @@ pub(super) fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                 .gap(8.0)
                 .flex_wrap()
                 .items_center()
+                .children(providers::model_picker(s, k, overlays))
                 .child(select(
                     s,
                     k,

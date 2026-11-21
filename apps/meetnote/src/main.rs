@@ -1,6 +1,7 @@
 mod assistant;
 mod controls;
 mod documents;
+mod providers;
 mod settings;
 mod shell;
 mod toasts;
@@ -19,14 +20,16 @@ enum Route {
     #[default]
     Documents,
     Models,
+    Providers,
     Settings,
 }
 
 impl Route {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Assistant,
         Self::Documents,
         Self::Models,
+        Self::Providers,
         Self::Settings,
     ];
 
@@ -37,6 +40,7 @@ impl Route {
                 Self::Assistant => "assistant",
                 Self::Documents => "meetings",
                 Self::Models => "models",
+                Self::Providers => "providers",
                 Self::Settings => "settings",
             },
         )
@@ -47,6 +51,7 @@ impl Route {
             Self::Assistant => "nav-assistant",
             Self::Documents => "nav-documents",
             Self::Models => "nav-models",
+            Self::Providers => "nav-providers",
             Self::Settings => "nav-settings",
         }
     }
@@ -68,6 +73,7 @@ enum Confirm {
         into: Option<String>,
     },
     ResetSettings,
+    RemoveProvider(String),
 }
 
 impl Confirm {
@@ -113,6 +119,11 @@ impl Confirm {
                 "Restore the sample appearance, processing and Assistant preferences.",
                 "Reset settings",
             ),
+            Self::RemoveProvider(_) => (
+                s.tr("provider_remove_title"),
+                s.tr("provider_remove_description"),
+                s.tr("provider_remove"),
+            ),
         }
     }
 }
@@ -136,11 +147,13 @@ struct MeetNote {
 
 impl MeetNote {
     fn sample() -> Self {
-        Self {
+        let mut sample = Self {
             sample_mode: true,
             documents: documents::Workspace::sample(),
             ..Self::default()
-        }
+        };
+        sample.workspace_host.providers = workspace_host::providers::ProviderHost::sample();
+        sample
     }
 
     fn show_sample(&mut self) {
@@ -199,6 +212,9 @@ impl MeetNote {
                 self.settings = settings::Preferences::default();
                 self.notify("Sample settings reset", tx);
             }
+            Some(Confirm::RemoveProvider(id)) => {
+                self.provider_write(workspace_host::providers::Write::Remove(id), tx);
+            }
             None => {}
         }
     }
@@ -236,6 +252,12 @@ fn view(s: &MeetNote, cx: &mut Cx<MeetNote>) -> El {
             Route::Documents => documents::page(s, k, &mut overlays),
             Route::Assistant => assistant::page(s, k, &mut overlays),
             Route::Models => settings::models_page(s, k),
+            Route::Providers => {
+                let wide = cx
+                    .layout_with("content-plane", |rect| rect[2] >= providers::TWO_COLUMNS)
+                    .unwrap_or(true);
+                providers::page(s, k, &mut overlays, wide)
+            }
             Route::Settings => settings::page(s, k, &mut overlays),
         }
     };
@@ -300,7 +322,9 @@ fn view(s: &MeetNote, cx: &mut Cx<MeetNote>) -> El {
                             .variant(
                                 if matches!(
                                     confirm,
-                                    Confirm::RemoveSpeaker | Confirm::DeleteLibraryProfile(_)
+                                    Confirm::RemoveSpeaker
+                                        | Confirm::DeleteLibraryProfile(_)
+                                        | Confirm::RemoveProvider(_)
                                 ) {
                                     ButtonVariant::Danger
                                 } else {
@@ -350,6 +374,37 @@ fn main() {
             ("models", |s| {
                 s.show_sample();
                 s.navigate(Route::Models);
+            }),
+            ("providers", |s| {
+                s.show_sample();
+                s.navigate(Route::Providers);
+            }),
+            ("providers-search", |s| {
+                s.show_sample();
+                s.navigate(Route::Providers);
+                let host = &mut s.workspace_host.providers;
+                host.searching = true;
+                host.search = rune::TextEdit::new("mi");
+            }),
+            ("provider-detail", |s| {
+                s.show_sample();
+                s.navigate(Route::Providers);
+                s.open_provider_sheet("magpie");
+            }),
+            ("provider-account", |s| {
+                s.show_sample();
+                s.navigate(Route::Providers);
+                s.open_provider_sheet("openai");
+            }),
+            ("provider-custom", |s| {
+                s.show_sample();
+                s.navigate(Route::Providers);
+                s.open_custom_sheet();
+            }),
+            ("provider-more", |s| {
+                s.show_sample();
+                s.navigate(Route::Providers);
+                s.workspace_host.providers.more = true;
             }),
             ("settings", |s| {
                 s.show_sample();
@@ -659,7 +714,7 @@ mod tests {
     }
 
     #[test]
-    fn file_workspace_saves_an_assistant_connection_from_settings() {
+    fn file_workspace_saves_the_assistant_behaviour_from_settings() {
         use ::settings::{JsonSettingsRepository, SettingsRepository};
 
         let fixture = tempfile::tempdir().unwrap();
@@ -672,14 +727,8 @@ mod tests {
         click(&mut rt, "nav-settings");
         click(&mut rt, "category-assistant");
         for (field, value) in [
-            ("live-connection-name", "Local"),
-            ("live-connection-endpoint", "http://127.0.0.1:4000"),
-            ("live-connection-model", "local-model"),
-            ("live-connection-context-window", "16384"),
-            ("live-connection-timeout", "9500"),
-            ("live-connection-output-limit", "1024"),
-            ("live-connection-tool-rounds", "6"),
-            ("live-connection-validation-retries", "2"),
+            ("assistant-tool-rounds", "6"),
+            ("assistant-validation-retries", "2"),
         ] {
             rt.update(|_, tx| tx.scroll_into_view(field));
             advance(&mut rt, 30);
@@ -687,61 +736,65 @@ mod tests {
             command(&mut rt, 'a', false, false);
             key(&mut rt, Key::Text(value.into()));
         }
-        rt.update(|_, tx| tx.scroll_into_view("save-live-connection"));
+        rt.update(|_, tx| tx.scroll_into_view("assistant-confirm-each"));
         advance(&mut rt, 30);
-        click(&mut rt, "save-live-connection");
-        until(&mut rt, |rt| {
-            visible_text(rt, "Assistant connection updated")
-        });
+        click(&mut rt, "assistant-confirm-each");
+        rt.update(|_, tx| tx.scroll_into_view("save-assistant-settings"));
+        advance(&mut rt, 30);
+        click(&mut rt, "save-assistant-settings");
+        until(&mut rt, |rt| visible_text(rt, "Assistant settings saved"));
         let saved = JsonSettingsRepository::open(&settings_path).load().unwrap();
-        let active = saved.assistant.active_connection().unwrap();
-        assert_eq!(active.name, "Local");
-        assert_eq!(active.base_url, "http://127.0.0.1:4000");
-        assert_eq!(active.model, "local-model");
-        assert_eq!(active.context_window_tokens, Some(16_384));
-        assert_eq!(active.timeout_ms, 9_500);
-        assert_eq!(active.max_output_tokens, 1_024);
         assert_eq!(saved.assistant.max_tool_rounds, 6);
         assert_eq!(saved.assistant.max_validation_retries, 2);
-        assert!(
-            rt.state
-                .workspace_host
-                .assistant
-                .settings
-                .active_connection()
-                .is_some()
+        assert_eq!(
+            saved.assistant.write_mode,
+            contracts::AgentWriteMode::ConfirmEach
         );
+        assert_eq!(rt.state.workspace_host.assistant.settings, saved.assistant);
     }
 
+    /// A custom provider at the loopback stub, with a key in
+    /// `credentials.json`, chosen as the Assistant's model.
     fn assistant_settings(
         path: &std::path::Path,
         address: std::net::SocketAddr,
         write_mode: contracts::AgentWriteMode,
     ) {
         use ::settings::{
-            AppSettings, AssistantAuthMode, AssistantConnectionProfile, JsonSettingsRepository,
-            LlmProtocol, SettingsRepository,
+            AppSettings, AssistantAuthMode, CredentialStore, CustomEndpoint, EndpointUrls,
+            JsonSettingsRepository, ModelChoice, ProviderCredential, ProviderSettings,
+            SettingsRepository,
         };
         let mut settings = AppSettings::default();
         settings.assistant.write_mode = write_mode;
-        settings.assistant.active_connection_id = Some("loopback".into());
-        settings
-            .assistant
-            .connections
-            .push(AssistantConnectionProfile {
-                id: "loopback".into(),
+        settings.assistant.providers.push(ProviderSettings {
+            endpoints: EndpointUrls {
+                chat: Some(format!("http://{address}/v1")),
+                ..EndpointUrls::default()
+            },
+            custom: Some(CustomEndpoint {
                 name: "Loopback".into(),
-                protocol: LlmProtocol::OpenAiChatCompletions,
-                base_url: format!("http://{address}"),
-                model: "loopback".into(),
                 auth_mode: AssistantAuthMode::Bearer,
-                api_key: None,
-                api_key_file: None,
-                context_window_tokens: Some(16000),
-                timeout_ms: 3000,
-                max_output_tokens: 256,
-            });
+            }),
+            context_window_tokens: Some(16000),
+            timeout_ms: 3000,
+            max_output_tokens: 256,
+            ..ProviderSettings::new("custom-loopback")
+        });
+        settings.assistant.model = Some(ModelChoice {
+            provider: "custom-loopback".into(),
+            model: "loopback".into(),
+            protocol: None,
+        });
         JsonSettingsRepository::open(path).save(&settings).unwrap();
+        CredentialStore::beside(path)
+            .set(
+                "custom-loopback",
+                Some(ProviderCredential::ApiKey {
+                    key: "loopback-key".into(),
+                }),
+            )
+            .unwrap();
     }
 
     fn loopback_assistant(
@@ -753,25 +806,40 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
+            // Opening the Assistant refreshes the model list first; that GET finds nothing.
+            let (mut stream, mut reader, mut line) = loop {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if !line.starts_with("GET ") {
+                    break (stream, reader, line);
+                }
+                write!(
+                    stream,
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
                 .unwrap();
-            let mut reader = BufReader::new(&mut stream);
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
+            };
             assert!(line.starts_with("POST /v1/chat/completions "));
             let mut length = 0;
+            let mut authorized = false;
             loop {
                 line.clear();
                 reader.read_line(&mut line).unwrap();
                 if line.trim().is_empty() {
                     break;
                 }
+                authorized |= line.trim() == "authorization: Bearer loopback-key"
+                    || line.trim() == "Authorization: Bearer loopback-key";
                 if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
                     length = value.trim().parse().unwrap();
                 }
             }
+            assert!(authorized, "the stored key must authorize the request");
             let mut body = vec![0; length];
             reader.read_exact(&mut body).unwrap();
             let response = reply(serde_json::from_slice(&body).unwrap()).to_string();
@@ -1975,11 +2043,605 @@ mod tests {
         assert!(documents.contains("F"), "{documents}");
     }
 
+    fn reveal(rt: &mut Runtime<MeetNote>, key: &str) {
+        let target = key.to_owned();
+        rt.update(move |_, tx| tx.scroll_into_view(target));
+        advance(rt, 30);
+        click(rt, key);
+    }
+
+    /// A loopback DeepSeek: model list, balance and chat completions, each
+    /// request recorded as "METHOD path" once its key authorized it.
+    fn loopback_deepseek(
+        key: &'static str,
+        models: &'static [&'static str],
+    ) -> (
+        std::net::SocketAddr,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+        use std::sync::{Arc, Mutex};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let seen = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut reader = BufReader::new(&mut stream);
+                let mut request = String::new();
+                if reader.read_line(&mut request).is_err() {
+                    continue;
+                }
+                let (mut length, mut authorized) = (0, false);
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                        break;
+                    }
+                    let lower = line.trim().to_ascii_lowercase();
+                    authorized |= lower == format!("authorization: bearer {key}");
+                    if let Some(value) = lower.strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let mut parts = request.split_whitespace();
+                let route = format!(
+                    "{} {}",
+                    parts.next().unwrap_or_default(),
+                    parts.next().unwrap_or_default()
+                );
+                let (status, response) = if !authorized {
+                    ("401 Unauthorized", serde_json::json!({"error": "no key"}))
+                } else {
+                    seen.lock().unwrap().push(route.clone());
+                    match route.as_str() {
+                        "GET /v1/models" => (
+                            "200 OK",
+                            serde_json::json!({"object": "list", "data": models
+                                .iter()
+                                .map(|id| serde_json::json!({"id": id, "object": "model"}))
+                                .collect::<Vec<_>>()}),
+                        ),
+                        "GET /user/balance" => (
+                            "200 OK",
+                            serde_json::json!({"is_available": true, "balance_infos": [
+                                {"currency": "CNY", "total_balance": "110.00"}
+                            ]}),
+                        ),
+                        "POST /v1/chat/completions" => {
+                            let request: serde_json::Value =
+                                serde_json::from_slice(&body).unwrap_or_default();
+                            (
+                                "200 OK",
+                                serde_json::json!({
+                                    "model": request["model"],
+                                    "choices": [{
+                                        "message": {"role": "assistant", "content": "Stub answer from DeepSeek."},
+                                        "finish_reason": "stop"
+                                    }],
+                                    "usage": {"prompt_tokens": 4, "completion_tokens": 3}
+                                }),
+                            )
+                        }
+                        _ => ("404 Not Found", serde_json::json!({"error": "unknown"})),
+                    }
+                };
+                let response = response.to_string();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                    response.len()
+                );
+            }
+        });
+        (address, requests)
+    }
+
+    #[test]
+    fn providers_open_from_the_rail_and_command_four_with_a_detail_sheet() {
+        let mut rt = runtime();
+        click(&mut rt, "nav-providers");
+        assert!(rt.state.route == Route::Providers);
+        assert!(visible_text(&rt, "Connected"));
+        assert!(visible_text(&rt, "Used by Assistant"));
+        command(&mut rt, '1', false, false);
+        assert!(rt.state.route == Route::Assistant);
+        command(&mut rt, '4', false, false);
+        assert!(rt.state.route == Route::Providers);
+
+        click(&mut rt, "provider-openai");
+        assert!(rt.find("provider-sheet-dialog").is_some());
+        assert!(visible_text(&rt, "morgan@example.com"));
+        command(&mut rt, '5', false, false);
+        assert!(
+            rt.state.route == Route::Providers,
+            "the sheet keeps route shortcuts from leaving it"
+        );
+        click(&mut rt, "provider-cancel");
+        assert!(rt.state.workspace_host.providers.sheet.is_none());
+
+        click(&mut rt, "provider-openai-enabled");
+        assert!(visible_text(
+            &rt,
+            "Disabled — Assistant can't use its model"
+        ));
+        command(&mut rt, '1', false, false);
+        assert!(visible_text(&rt, "OpenAI · gpt-5.1 · Disabled"));
+        command(&mut rt, '4', false, false);
+        click(&mut rt, "provider-openai-enabled");
+        assert!(!visible_text(&rt, "Disabled"));
+
+        reveal(&mut rt, "providers-more");
+        assert!(rt.find("add-ollama-cloud").is_some() || rt.find("add-lmstudio").is_some());
+        reveal(&mut rt, "provider-add-custom");
+        let sheet = rt.state.workspace_host.providers.sheet.as_ref().unwrap();
+        assert_eq!(sheet.id, "custom-1");
+    }
+
+    #[test]
+    fn file_workspace_connects_deepseek_picks_its_model_runs_and_removes_it() {
+        use ::settings::{
+            CredentialStore, JsonSettingsRepository, ModelListMode, SettingsRepository,
+        };
+        use application::DocumentService;
+        use persistence::FileDocumentRepository;
+        use std::sync::Arc;
+
+        const KEY: &str = "sk-loopback-deepseek-7f2c";
+        let (address, requests) = loopback_deepseek(
+            KEY,
+            &[
+                "deepseek-chat",
+                "deepseek-v3",
+                "deepseek-v3.1",
+                "deepseek-r1",
+                "deepseek-r1-0528",
+            ],
+        );
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("documents");
+        let settings_path = fixture.path().join("settings.json");
+        let audio = fixture.path().join("recording.wav");
+        std::fs::write(&audio, []).unwrap();
+        DocumentService::new(Arc::new(FileDocumentRepository::open(&root).unwrap()))
+            .import_audio(audio.to_str().unwrap())
+            .unwrap();
+        let mut rt = runtime();
+        rt.configure_processing(Some(settings_path.clone()), None);
+        open_test_workspace(&mut rt, &root);
+
+        click(&mut rt, "nav-providers");
+        until(&mut rt, |rt| rt.find("provider-connect-deepseek").is_some());
+        assert!(rt.find("provider-deepseek").is_none());
+        reveal(&mut rt, "provider-connect-deepseek");
+        click(&mut rt, "provider-key/value/input");
+        key(&mut rt, Key::Text(KEY.into()));
+        reveal(&mut rt, "provider-advanced/trigger");
+        // every API DeepSeek serves goes to the stub, never to api.deepseek.com
+        for api in ["chat", "responses", "messages"] {
+            reveal(&mut rt, &format!("provider-url-{api}/wrapper/input"));
+            key(&mut rt, Key::Text(format!("http://{address}/v1")));
+        }
+        reveal(&mut rt, "provider-save");
+        until(&mut rt, |rt| {
+            rt.state.workspace_host.providers.sheet.is_none() && visible_text(rt, "Balance ¥110.00")
+        });
+
+        let saved = std::fs::read_to_string(&settings_path).unwrap();
+        assert!(!saved.contains(KEY), "the key stays out of settings.json");
+        let settings = JsonSettingsRepository::open(&settings_path).load().unwrap();
+        let deepseek = settings
+            .assistant
+            .providers
+            .iter()
+            .find(|provider| provider.id == "deepseek")
+            .unwrap();
+        assert!(deepseek.enabled);
+        let stub = format!("http://{address}/v1");
+        assert_eq!(
+            [
+                deepseek.endpoints.chat.as_deref(),
+                deepseek.endpoints.responses.as_deref(),
+                deepseek.endpoints.messages.as_deref(),
+            ],
+            [Some(stub.as_str()); 3],
+            "each API DeepSeek serves keeps its own override"
+        );
+        assert!(
+            std::fs::read_to_string(settings_path.with_file_name("credentials.json"))
+                .unwrap()
+                .contains(KEY)
+        );
+        assert!(
+            CredentialStore::beside(&settings_path)
+                .get("deepseek")
+                .unwrap()
+                .is_some()
+        );
+
+        reveal(&mut rt, "provider-deepseek");
+        reveal(&mut rt, "provider-refetch");
+        until(&mut rt, |rt| {
+            !rt.state
+                .workspace_host
+                .providers
+                .working("deepseek", crate::workspace_host::providers::Work::Models)
+                && rt.find("provider-model-deepseek-v3").is_some()
+        });
+        reveal(&mut rt, "provider-mode/segment2");
+        assert!(rt.find("provider-model-deepseek-v3.1").is_some());
+        assert!(rt.find("provider-model-deepseek-r1").is_some());
+        assert!(rt.find("provider-model-deepseek-chat").is_some());
+        assert!(rt.find("provider-model-deepseek-v3").is_none());
+        assert!(rt.find("provider-model-deepseek-r1-0528").is_none());
+        reveal(&mut rt, "provider-save");
+        until(&mut rt, |rt| {
+            rt.state.workspace_host.providers.sheet.is_none()
+        });
+        let settings = JsonSettingsRepository::open(&settings_path).load().unwrap();
+        assert_eq!(
+            settings
+                .assistant
+                .providers
+                .iter()
+                .find(|p| p.id == "deepseek")
+                .unwrap()
+                .models
+                .mode,
+            ModelListMode::LatestPerFamily
+        );
+
+        click(&mut rt, "nav-assistant");
+        until(&mut rt, |rt| rt.find("assistant-model-trigger").is_some());
+        click(&mut rt, "assistant-model-trigger");
+        assert!(visible_text(&rt, "DeepSeek · deepseek-v3.1 · Chat"));
+        assert!(!visible_text(&rt, "DeepSeek · deepseek-v3 · Chat"));
+        let index = crate::providers::model_options(&rt.state)
+            .iter()
+            .position(|(label, _)| label == "DeepSeek · deepseek-v3.1 · Chat")
+            .unwrap();
+        click(&mut rt, &format!("option{index}"));
+        until(&mut rt, |rt| {
+            rt.state
+                .workspace_host
+                .assistant
+                .settings
+                .model
+                .as_ref()
+                .is_some_and(|choice| {
+                    choice.provider == "deepseek" && choice.model == "deepseek-v3.1"
+                })
+        });
+        let settings = JsonSettingsRepository::open(&settings_path).load().unwrap();
+        let choice = settings.assistant.model.unwrap();
+        assert_eq!(choice.model, "deepseek-v3.1");
+        assert_eq!(
+            choice.protocol,
+            Some(::settings::LlmProtocol::OpenAiChatCompletions)
+        );
+        click(&mut rt, "live-assistant-input/value/input");
+        key(&mut rt, Key::Text("Summarize.".into()));
+        click(&mut rt, "live-assistant-send");
+        until(&mut rt, |rt| visible_text(rt, "Stub answer from DeepSeek."));
+        assert!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|request| request == "POST /v1/chat/completions")
+        );
+
+        click(&mut rt, "nav-providers");
+        reveal(&mut rt, "provider-deepseek");
+        reveal(&mut rt, "provider-remove");
+        click(&mut rt, "dialog-confirm");
+        until(&mut rt, |rt| rt.find("provider-deepseek").is_none());
+        let settings = JsonSettingsRepository::open(&settings_path).load().unwrap();
+        assert!(
+            settings
+                .assistant
+                .providers
+                .iter()
+                .all(|provider| provider.id != "deepseek")
+        );
+        assert!(
+            CredentialStore::beside(&settings_path)
+                .get("deepseek")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    fn element_text(rt: &Runtime<MeetNote>, key: &str) -> Option<String> {
+        rt.elements()
+            .iter()
+            .find(|element| !element.exiting && element.key.as_deref() == Some(key))
+            .and_then(|element| element.text.clone())
+    }
+
+    #[test]
+    fn provider_search_filters_the_add_list_and_escape_closes_it() {
+        let mut rt = runtime();
+        rt.set_full_keyboard_access(true);
+        click(&mut rt, "nav-providers");
+        assert!(rt.find("providers-search").is_none());
+        reveal(&mut rt, "providers-search-button");
+        assert!(rt.state.workspace_host.providers.searching);
+        assert!(rt.find("providers-search-button").is_none());
+        assert!(
+            rt.elements()
+                .iter()
+                .any(|node| node.focused && node.path.contains("/providers-search/")),
+            "the field takes focus as it opens"
+        );
+        key(&mut rt, Key::Text("MI".into()));
+        for found in ["add-google", "add-moonshot", "add-mistral", "add-minimax"] {
+            assert!(rt.find(found).is_some(), "{found}");
+        }
+        assert!(rt.find("add-anthropic").is_none());
+        assert!(rt.find("providers-more").is_none(), "a search lists flat");
+        assert!(rt.find("provider-add-custom").is_some());
+
+        key(&mut rt, Key::Text("zzz".into()));
+        rt.update(|_, tx| tx.scroll_into_view("providers-search-empty"));
+        advance(&mut rt, 30);
+        assert!(visible_text(&rt, "No matching providers"));
+        assert!(rt.find("provider-add-custom").is_some());
+
+        key(&mut rt, Key::Escape);
+        let host = &rt.state.workspace_host.providers;
+        assert!(!host.searching && host.search.text.is_empty());
+        assert!(rt.find("add-anthropic").is_some());
+        assert!(rt.find("providers-more").is_some());
+        assert!(
+            rt.elements().iter().any(|node| {
+                node.key.as_deref() == Some("providers-search-button") && node.focused
+            }),
+            "Escape hands focus back to the search button"
+        );
+
+        reveal(&mut rt, "providers-search-button");
+        key(&mut rt, Key::Text("kimi".into()));
+        assert!(rt.find("add-moonshot").is_some());
+        click(&mut rt, "providers-search/action");
+        assert!(!rt.state.workspace_host.providers.searching);
+        assert!(rt.find("providers-search-button").is_some());
+    }
+
+    #[test]
+    fn picking_a_model_stores_the_api_it_resolves_to() {
+        let mut rt = runtime();
+        click(&mut rt, "nav-assistant");
+        until(&mut rt, |rt| rt.find("assistant-model-trigger").is_some());
+        click(&mut rt, "assistant-model-trigger");
+        const LABEL: &str = "magpie · claude-sonnet-4-5 · Messages";
+        let index = crate::providers::model_options(&rt.state)
+            .iter()
+            .position(|(label, _)| label == LABEL)
+            .unwrap();
+        reveal(&mut rt, &format!("option{index}"));
+        assert_eq!(
+            rt.state
+                .workspace_host
+                .providers
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.model.clone()),
+            Some(::settings::ModelChoice {
+                provider: "magpie".into(),
+                model: "claude-sonnet-4-5".into(),
+                protocol: Some(::settings::LlmProtocol::AnthropicMessages),
+            })
+        );
+        assert!(visible_text(&rt, LABEL));
+        // a provider serving one API shows no tag
+        assert!(
+            crate::providers::model_options(&rt.state)
+                .iter()
+                .any(|(label, _)| label == "OpenAI · gpt-5.1")
+        );
+    }
+
+    #[test]
+    fn a_custom_endpoint_saves_only_with_at_least_one_url() {
+        let mut rt = runtime();
+        click(&mut rt, "nav-providers");
+        reveal(&mut rt, "provider-add-custom");
+        assert!(rt.find("provider-url-chat").is_some());
+        assert!(rt.find("provider-url-responses").is_some());
+        assert!(rt.find("provider-url-messages").is_some());
+        click(&mut rt, "provider-name/wrapper/input");
+        key(&mut rt, Key::Text("Gateway".into()));
+        reveal(&mut rt, "provider-save");
+        let sheet = rt.state.workspace_host.providers.sheet.as_ref().unwrap();
+        assert_eq!(sheet.invalid(), Some("provider_url_required"));
+        assert!(rt.find("provider-urls-error").is_some());
+        assert!(
+            rt.find("provider-sheet-error").is_none(),
+            "the error shows inline"
+        );
+
+        reveal(&mut rt, "provider-url-messages/wrapper/input");
+        key(&mut rt, Key::Text("https://gw.example/v1".into()));
+        reveal(&mut rt, "provider-save");
+        assert!(rt.state.workspace_host.providers.sheet.is_none());
+        let snapshot = rt.state.workspace_host.providers.snapshot.as_ref().unwrap();
+        let view = snapshot.view("custom-1").unwrap();
+        assert!(view.configured);
+        assert_eq!(view.name, "Gateway");
+        assert_eq!(
+            view.settings.endpoints.messages.as_deref(),
+            Some("https://gw.example/v1")
+        );
+        assert_eq!(
+            view.endpoints.protocols(),
+            [llm::LlmProtocol::AnthropicMessages]
+        );
+    }
+
+    #[test]
+    fn editing_the_name_hides_its_hint_without_saving() {
+        let mut rt = runtime();
+        click(&mut rt, "nav-providers");
+        reveal(&mut rt, "provider-add-custom");
+        reveal(&mut rt, "provider-save");
+        assert!(rt.find("provider-name/error").is_some());
+
+        reveal(&mut rt, "provider-url-chat/wrapper/input");
+        key(&mut rt, Key::Text("https://gw.example/v1".into()));
+        assert!(
+            rt.find("provider-name/error").is_some(),
+            "another field leaves it"
+        );
+
+        reveal(&mut rt, "provider-name/wrapper/input");
+        key(&mut rt, Key::Text("Gateway".into()));
+        assert!(rt.find("provider-name/error").is_none());
+        assert!(rt.state.workspace_host.providers.sheet.is_some());
+    }
+
+    #[test]
+    fn editing_a_url_hides_its_hint_without_saving() {
+        let mut rt = runtime();
+        click(&mut rt, "nav-providers");
+        reveal(&mut rt, "provider-add-custom");
+        click(&mut rt, "provider-name/wrapper/input");
+        key(&mut rt, Key::Text("Gateway".into()));
+        reveal(&mut rt, "provider-save");
+        assert!(rt.find("provider-urls-error").is_some());
+
+        reveal(&mut rt, "provider-name/wrapper/input");
+        key(&mut rt, Key::Text(" 2".into()));
+        assert!(
+            rt.find("provider-urls-error").is_some(),
+            "another field leaves it"
+        );
+
+        reveal(&mut rt, "provider-url-responses/wrapper/input");
+        key(&mut rt, Key::Text("h".into()));
+        assert!(rt.find("provider-urls-error").is_none());
+        assert!(rt.state.workspace_host.providers.sheet.is_some());
+    }
+
+    #[test]
+    fn endpoint_rows_follow_the_picked_region() {
+        let mut rt = runtime();
+        click(&mut rt, "nav-providers");
+        reveal(&mut rt, "provider-connect-moonshot");
+        assert_eq!(
+            element_text(&rt, "provider-endpoint-chat").as_deref(),
+            Some("https://api.moonshot.ai/v1")
+        );
+        assert_eq!(
+            element_text(&rt, "provider-endpoint-messages").as_deref(),
+            Some("https://api.moonshot.ai/anthropic/v1")
+        );
+        assert!(element_text(&rt, "provider-endpoint-responses").is_none());
+        reveal(&mut rt, "provider-region/segment1");
+        assert_eq!(
+            element_text(&rt, "provider-endpoint-chat").as_deref(),
+            Some("https://api.moonshot.cn/v1")
+        );
+        reveal(&mut rt, "provider-advanced/trigger");
+        assert!(rt.find("provider-url-responses").is_none());
+        reveal(&mut rt, "provider-url-chat/wrapper/input");
+        key(&mut rt, Key::Text("http://127.0.0.1:9/v1".into()));
+        assert_eq!(
+            element_text(&rt, "provider-endpoint-chat").as_deref(),
+            Some("http://127.0.0.1:9/v1")
+        );
+        reveal(&mut rt, "provider-save");
+        let view = rt
+            .state
+            .workspace_host
+            .providers
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.view("moonshot").cloned())
+            .unwrap();
+        assert_eq!(view.settings.region.as_deref(), Some("China"));
+        assert_eq!(view.region, Some("China"));
+        assert_eq!(
+            view.endpoints.messages.as_deref(),
+            Some("https://api.moonshot.cn/anthropic/v1")
+        );
+    }
+
+    #[test]
+    fn file_workspace_sign_in_opens_the_browser_and_cancel_closes_its_listener() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("documents");
+        std::fs::create_dir(&root).unwrap();
+        let mut rt = runtime();
+        rt.configure_processing(Some(fixture.path().join("settings.json")), None);
+        rt.state
+            .workspace_host
+            .set_provider_endpoints(application::ProviderEndpoints {
+                openrouter: llm::vendors::oauth::openrouter::OpenRouterEndpoints {
+                    site: "http://127.0.0.1:9".into(),
+                },
+                ..Default::default()
+            });
+        open_test_workspace(&mut rt, &root);
+        click(&mut rt, "nav-providers");
+        until(&mut rt, |rt| {
+            rt.find("provider-connect-openrouter").is_some()
+        });
+        reveal(&mut rt, "provider-connect-openrouter");
+        click(&mut rt, "provider-sign-in");
+        let mut opened = Vec::new();
+        until(&mut rt, |rt| {
+            rt.find("provider-signing-in").is_some()
+                && rt
+                    .state
+                    .workspace_host
+                    .providers
+                    .sign_in
+                    .as_ref()
+                    .is_some_and(|sign_in| sign_in.url.is_some())
+        });
+        opened.extend(rt.take_url_requests());
+        let url = opened.pop().expect("the sign-in page opens in the browser");
+        assert!(
+            url.starts_with("http://127.0.0.1:9/auth?callback_url="),
+            "{url}"
+        );
+        let port: u16 = url
+            .split("localhost%3A")
+            .nth(1)
+            .or_else(|| url.split("localhost:").nth(1))
+            .and_then(|rest| rest.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|digits| digits.parse().ok())
+            .unwrap_or_else(|| panic!("no callback port in {url}"));
+        assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_ok());
+
+        click(&mut rt, "provider-cancel-sign-in");
+        assert!(rt.state.workspace_host.providers.sign_in.is_none());
+        assert!(rt.find("provider-sign-in").is_some());
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the callback listener stays open"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     #[test]
     fn history_restores_documents_and_discards_forward_entries_on_a_new_route() {
         let mut rt = runtime();
         click(&mut rt, "design");
-        command(&mut rt, '4', false, false);
+        command(&mut rt, '5', false, false);
         assert!(rt.state.route == Route::Settings);
         click(&mut rt, "navigate-back");
         assert_eq!(rt.state.documents.selection().0, "design");

@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
-use application::{AudioStatus, WorkspaceService};
+use application::{AudioStatus, ProviderEndpoints, ProviderService, WorkspaceService};
 use contracts::{BackendErrorCode, DiarizationStageOption, DocumentRecord, ModelRef};
 use domain::ProjectId;
 use futures::Stream;
@@ -14,7 +14,9 @@ use meetnote::audio_services::{AudioBackends, model_catalog, processing_options}
 use models::{ModelInstallState, ModelManager};
 use rune::Tx;
 use runtime::{CancellationToken, JobEvent, JobRuntime, Progress};
-use settings::{AppSettings, JsonSettingsRepository, SettingsRepository, SettingsService};
+use settings::{
+    AppSettings, CredentialStore, JsonSettingsRepository, SettingsRepository, SettingsService,
+};
 
 use super::{LiveWorkspace, Task, WorkspaceHost};
 use crate::MeetNote;
@@ -28,6 +30,7 @@ pub(super) struct ProcessingConfig {
     jobs: Arc<JobRuntime>,
     audio: Arc<OnceLock<AudioServices>>,
     pub(super) persist_workspace: bool,
+    pub(super) endpoints: ProviderEndpoints,
 }
 
 pub(super) struct AudioServices {
@@ -43,6 +46,7 @@ impl Default for ProcessingConfig {
             jobs: Arc::new(JobRuntime::default()),
             audio: Arc::default(),
             persist_workspace: false,
+            endpoints: ProviderEndpoints::default(),
         }
     }
 }
@@ -72,6 +76,14 @@ impl ProcessingConfig {
     pub(super) fn settings_service(&self) -> Result<SettingsService, String> {
         SettingsService::open(Arc::new(JsonSettingsRepository::open(&self.settings)))
             .map_err(|error| error.to_string())
+    }
+
+    pub(super) fn providers(&self) -> Result<ProviderService, String> {
+        Ok(ProviderService::new(
+            self.settings_service()?,
+            CredentialStore::beside(&self.settings),
+        )
+        .with_endpoints(self.endpoints.clone()))
     }
 
     pub(super) fn settings(&self) -> Result<AppSettings, String> {

@@ -28,6 +28,13 @@ static FORWARD: Icon = Icon {
     body: r#"<path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>"#,
 };
 
+// A plug: the rail mark for providers, drawn in the same stroke as the chevrons.
+static PLUG: Icon = Icon {
+    name: "meetnote-plug",
+    view: 16.0,
+    body: r#"<path d="M5.5 2v3M10.5 2v3M3.5 5h9v2.5a4.5 4.5 0 0 1-9 0V5ZM8 12v2.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>"#,
+};
+
 #[derive(PartialEq, Eq)]
 struct Location {
     route: Route,
@@ -107,6 +114,9 @@ impl MeetNote {
             self.shell.resize = docked_pane::ResizeInteraction::default();
         }
         self.route = location.route;
+        if matches!(self.route, Route::Providers | Route::Assistant) {
+            self.workspace_host.providers.page_opened();
+        }
         if let Some(id) = location.document {
             self.documents.pick(&id);
         }
@@ -163,7 +173,7 @@ impl MeetNote {
 }
 
 pub fn shortcuts(s: &mut MeetNote, event: &KeyEvent, tx: &mut Tx) -> bool {
-    if s.confirm.is_some() || s.select.is_some() {
+    if s.confirm.is_some() || s.select.is_some() || s.workspace_host.providers.sheet.is_some() {
         return false;
     }
     if s.document_tree_shortcut(event, tx) {
@@ -217,7 +227,8 @@ impl Route {
             Route::Assistant => "1",
             Route::Documents => "2",
             Route::Models => "3",
-            Route::Settings => "4",
+            Route::Providers => "4",
+            Route::Settings => "5",
         }
     }
 }
@@ -247,6 +258,7 @@ fn rail(s: &MeetNote, k: &Kit) -> El {
                 Route::Assistant => &glyphs::SPARKLE,
                 Route::Documents => &glyphs::FOLDER,
                 Route::Models => &glyphs::FILE_CODE,
+                Route::Providers => &PLUG,
                 Route::Settings => &glyphs::KEYBOARD,
             };
             let active = route == s.route;

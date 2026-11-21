@@ -1,14 +1,13 @@
 use application::desktop_assistant::{
     AssistantDocumentChange, AssistantFieldDiff, AssistantJobEvent, AssistantMutationSummary,
     AssistantPendingReview, AssistantProgress, AssistantProgressHandler, AssistantRangePreview,
-    AssistantRunDiagnostics, AssistantRunRequest, AssistantRunResult, AssistantSettingsSave,
-    AssistantTreeChange, AssistantUiError, AssistantUiService, AssistantUsage,
-    ConnectionDiagnostic, ConnectionProbeKind,
+    AssistantRunDiagnostics, AssistantRunRequest, AssistantRunResult, AssistantTreeChange,
+    AssistantUiError, AssistantUiService, AssistantUsage,
 };
 use application::{
     AgentCancellation, AgentProgress, AgentProgressStage, AgentRunResult, AgentRuntime,
-    AgentRuntimeConfig, AgentTask, DocumentService, WorkspaceAccessPolicy, WorkspaceCapabilityPort,
-    agent_error_from_llm,
+    AgentRuntimeConfig, AgentTask, DocumentService, ProviderService, WorkspaceAccessPolicy,
+    WorkspaceCapabilityPort,
 };
 use contracts::{
     AgentActor, AgentDocumentRevision, AgentErrorCode, AgentMutationReceipt, AgentPendingMutation,
@@ -16,21 +15,13 @@ use contracts::{
 };
 use domain::DocumentId;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
-use llm::{
-    AuthMode, ConnectionConfig, Credential, LiteLlmProvider, LlmProtocol as ProviderProtocol,
-    LlmProvider,
-};
 use runtime::{JobEvent, JobRuntime, Progress};
-use settings::{
-    AppSettings, AssistantAuthMode, AssistantConnectionProfile, AssistantSettings, LlmProtocol,
-    SettingsError, SettingsGrant, SettingsPatch, SettingsService,
-};
-use std::io::Read;
+use settings::AssistantSettings;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
 pub struct DesktopAssistantService {
-    settings: SettingsService,
+    providers: ProviderService,
     documents: DocumentService,
     jobs: Arc<JobRuntime>,
     job_events: Arc<Mutex<Vec<UnboundedSender<AssistantJobEvent>>>>,
@@ -38,19 +29,19 @@ pub struct DesktopAssistantService {
 
 impl DesktopAssistantService {
     #[cfg(test)]
-    pub fn new(settings: SettingsService, documents: DocumentService) -> Self {
-        Self::with_job_runtime(settings, documents, Arc::new(JobRuntime::default()))
+    pub fn new(providers: ProviderService, documents: DocumentService) -> Self {
+        Self::with_job_runtime(providers, documents, Arc::new(JobRuntime::default()))
     }
 
     /// Runs Assistant jobs on the application's shared `jobs`, so they count
     /// against the same worker limit as audio processing.
     pub fn with_job_runtime(
-        settings: SettingsService,
+        providers: ProviderService,
         documents: DocumentService,
         jobs: Arc<JobRuntime>,
     ) -> Self {
         Self {
-            settings,
+            providers,
             documents,
             jobs,
             job_events: Arc::default(),
@@ -58,21 +49,17 @@ impl DesktopAssistantService {
     }
 
     /// Republishes what the job has emitted so far, tagged with the run it
-    /// belongs to (`None` for probes). The service makes every state change
+    /// belongs to. The service makes every state change
     /// of its jobs on the calling thread, so publishing after each change
     /// keeps a job's events in order without a forwarding thread.
-    fn publish_job_events(
-        &self,
-        events: &mut UnboundedReceiver<JobEvent>,
-        request_id: Option<&str>,
-    ) {
+    fn publish_job_events(&self, events: &mut UnboundedReceiver<JobEvent>, request_id: &str) {
         let mut subscribers = self
             .job_events
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         while let Ok(event) = events.try_recv() {
             let event = AssistantJobEvent {
-                request_id: request_id.map(str::to_string),
+                request_id: request_id.to_owned(),
                 event,
             };
             subscribers.retain(|sender| sender.unbounded_send(event.clone()).is_ok());
@@ -85,7 +72,7 @@ impl DesktopAssistantService {
         write_mode: contracts::AgentWriteMode,
     ) -> Result<WorkspaceCapabilityPort, AssistantUiError> {
         if document_ids.is_empty() || document_ids.iter().any(|id| id.trim().is_empty()) {
-            return Err(ui_error(AgentToolError::new(
+            return Err(AssistantUiError::from(AgentToolError::new(
                 AgentErrorCode::DocumentAccessDenied,
                 "Assistant requires an explicit non-empty document grant",
                 false,
@@ -105,118 +92,8 @@ impl DesktopAssistantService {
         .with_write_mode(write_mode))
     }
 
-    fn settings_snapshot(&self) -> Result<AppSettings, AssistantUiError> {
-        self.settings
-            .snapshot()
-            .map_err(|error| settings_ui_error(error.to_string()))
-    }
-
-    fn configured_profile(
-        &self,
-        connection_id: &str,
-    ) -> Result<(AssistantSettings, AssistantConnectionProfile), AssistantUiError> {
-        let assistant = self.settings_snapshot()?.assistant;
-        if !assistant.enabled {
-            return Err(AssistantUiError {
-                code: "ASSISTANT_DISABLED".into(),
-                message: "Assistant is disabled in Settings".into(),
-                retryable: false,
-            });
-        }
-        if assistant.active_connection_id.as_deref() != Some(connection_id) {
-            return Err(ui_error(AgentToolError::new(
-                AgentErrorCode::ConnectionNotConfigured,
-                "requested connection is not the active Assistant connection",
-                false,
-            )));
-        }
-        let profile = assistant
-            .connections
-            .iter()
-            .find(|profile| profile.id == connection_id)
-            .cloned()
-            .ok_or_else(|| {
-                ui_error(AgentToolError::new(
-                    AgentErrorCode::ConnectionNotConfigured,
-                    "active Assistant connection was not found",
-                    false,
-                ))
-            })?;
-        Ok((assistant, profile))
-    }
-
-    fn provider(
-        &self,
-        profile: &AssistantConnectionProfile,
-    ) -> Result<(LiteLlmProvider, Option<String>), AssistantUiError> {
-        profile
-            .validate()
-            .map_err(|error| settings_ui_error(error.to_string()))?;
-        let owned_secret = self.resolve_api_key(profile)?;
-        let provider = LiteLlmProvider::new(
-            connection_config(profile),
-            owned_secret.clone().map(Credential::new),
-        )
-        .map_err(|error| {
-            redact_ui_error(
-                ui_error(agent_error_from_llm(error)),
-                owned_secret.as_deref(),
-            )
-        })?;
-        Ok((provider, owned_secret))
-    }
-
-    /// `apiKeyFile` is opened only through Settings, and the key is read from
-    /// the handle Settings verified; the key itself never enters an error.
-    fn resolve_api_key(
-        &self,
-        profile: &AssistantConnectionProfile,
-    ) -> Result<Option<String>, AssistantUiError> {
-        if let Some(api_key) = profile.api_key.as_deref() {
-            return Ok(Some(api_key.to_owned()));
-        }
-        let Some(reference) = profile.api_key_file.as_deref() else {
-            return Ok(None);
-        };
-        let read_failed = |message: String| AssistantUiError {
-            code: "ASSISTANT_API_KEY_FILE_READ_FAILED".into(),
-            message,
-            retryable: false,
-        };
-        let opened = self.settings.open_credential_file(reference);
-        let mut file = opened.map_err(|error| match error {
-            SettingsError::Read { .. } => read_failed(error.to_string()),
-            error => settings_ui_error(error.to_string()),
-        })?;
-        let mut key = String::new();
-        file.read_to_string(&mut key).map_err(|error| {
-            read_failed(format!("failed to read apiKeyFile {reference}: {error}"))
-        })?;
-        let key = key.trim();
-        if key.is_empty() {
-            return Err(AssistantUiError {
-                code: "ASSISTANT_API_KEY_FILE_EMPTY".into(),
-                message: format!("apiKeyFile {reference} is empty"),
-                retryable: false,
-            });
-        }
-        Ok(Some(key.to_owned()))
-    }
-
-    /// Provider for the active connection, built exactly as desktop runs build
-    /// it. `None` means no active connection is configured.
-    pub fn active_provider(
-        &self,
-    ) -> Result<Option<(LiteLlmProvider, Option<String>)>, AssistantUiError> {
-        let Some(profile) = self
-            .settings_snapshot()?
-            .assistant
-            .active_connection()
-            .cloned()
-        else {
-            return Ok(None);
-        };
-        self.provider(&profile).map(Some)
+    fn assistant_settings(&self) -> Result<AssistantSettings, AssistantUiError> {
+        Ok(self.providers.settings().snapshot()?.assistant)
     }
 
     fn verify_source_revisions(
@@ -230,7 +107,7 @@ impl DesktopAssistantService {
                 .documents
                 .get(&id)
                 .map_err(|message| {
-                    ui_error(AgentToolError::new(
+                    AssistantUiError::from(AgentToolError::new(
                         AgentErrorCode::WriteTransactionFailed,
                         message,
                         false,
@@ -243,7 +120,7 @@ impl DesktopAssistantService {
                         true,
                     );
                     error.document_id = Some(document.document_id.clone());
-                    ui_error(error)
+                    AssistantUiError::from(error)
                 })?;
             if current.revision() != document.revision {
                 let mut error = AgentToolError::new(
@@ -254,7 +131,7 @@ impl DesktopAssistantService {
                 error.document_id = Some(document.document_id.clone());
                 error.expected_revision = Some(document.revision);
                 error.actual_revision = Some(current.revision());
-                return Err(ui_error(error));
+                return Err(AssistantUiError::from(error));
             }
             ids.push(document.document_id.clone());
         }
@@ -268,8 +145,24 @@ impl DesktopAssistantService {
         progress_handler: AssistantProgressHandler,
     ) -> Result<AssistantRunResult, AssistantUiError> {
         let document_ids = self.verify_source_revisions(&request)?;
-        let (assistant, profile) = self.configured_profile(&request.connection_id)?;
-        let (provider, secret) = self.provider(&profile)?;
+        let assistant = self.assistant_settings()?;
+        if !assistant.enabled {
+            return Err(AssistantUiError {
+                code: "ASSISTANT_DISABLED".into(),
+                message: "Assistant is disabled in Settings".into(),
+                retryable: false,
+            });
+        }
+        if assistant.model.as_ref() != Some(&request.model) {
+            return Err(AgentToolError::new(
+                AgentErrorCode::ConnectionNotConfigured,
+                "the Assistant's model changed after this request was made",
+                false,
+            )
+            .into());
+        }
+        let provider = self.providers.client(&request.model)?;
+        let limits = provider.connection().clone();
         let gateway = self.gateway(&document_ids, assistant.write_mode)?;
         let runtime = AgentRuntime::new(
             Arc::new(provider),
@@ -279,8 +172,8 @@ impl DesktopAssistantService {
                 max_validation_retries: request
                     .max_validation_retries
                     .min(assistant.max_validation_retries),
-                max_output_tokens: Some(profile.max_output_tokens),
-                context_window_tokens: profile.context_window_tokens,
+                max_output_tokens: Some(limits.max_output_tokens),
+                context_window_tokens: limits.context_window_tokens,
             },
         );
         let result = runtime.run_with_progress(
@@ -295,96 +188,12 @@ impl DesktopAssistantService {
             &cancellation,
             |progress| progress_handler(map_progress(progress)),
         );
-        map_run_result(result).map_err(|error| redact_ui_error(error, secret.as_deref()))
+        map_run_result(result)
+            .map_err(|error| self.providers.redact(&request.model.provider, error))
     }
 }
 
 impl AssistantUiService for DesktopAssistantService {
-    /// A new profile and its credential commit in the same typed patch, with
-    /// one compare-and-swap.
-    fn save_assistant_settings(
-        &self,
-        expected_revision: String,
-        save: AssistantSettingsSave,
-    ) -> Result<AppSettings, AssistantUiError> {
-        let patch = SettingsPatch {
-            new_connection: save.new_connection,
-            ..save.patch
-        };
-        self.settings
-            .patch_if_equal(&expected_revision, patch, SettingsGrant::full())
-            .map_err(|error| AssistantUiError::from_settings(&error))
-    }
-
-    fn probe_connection(
-        &self,
-        profile: AssistantConnectionProfile,
-        kind: ConnectionProbeKind,
-        cancellation: AgentCancellation,
-    ) -> Result<ConnectionDiagnostic, AssistantUiError> {
-        let (provider, secret) = self.provider(&profile)?;
-        let (job, mut events) = self.jobs.create_job();
-        job.started();
-        self.publish_job_events(&mut events, None);
-        cancellation.link_job(&job.cancellation_token());
-        let secret_for_job = secret.clone();
-        let profile_for_job = profile.clone();
-        let result: Result<ConnectionDiagnostic, AssistantUiError> =
-            futures::executor::block_on(job.spawn_blocking(move || {
-                let descriptor = provider.descriptor();
-                let result = match kind {
-                    ConnectionProbeKind::Readiness => {
-                        provider.readiness(cancellation.llm()).map_err(|error| {
-                            redact_ui_error(
-                                ui_error(agent_error_from_llm(error)),
-                                secret_for_job.as_deref(),
-                            )
-                        })?;
-                        ConnectionDiagnostic {
-                            kind,
-                            ready: true,
-                            local: descriptor.local,
-                            models: None,
-                            text: None,
-                            client_tools: None,
-                            requested_model: profile_for_job.model.clone(),
-                            resolved_model: None,
-                            context_window_tokens: profile_for_job.context_window_tokens,
-                            message: "LiteLLM readiness endpoint is reachable".into(),
-                        }
-                    }
-                    ConnectionProbeKind::Model => {
-                        let probe = provider.probe(cancellation.llm()).map_err(|error| {
-                            redact_ui_error(
-                                ui_error(agent_error_from_llm(error)),
-                                secret_for_job.as_deref(),
-                            )
-                        })?;
-                        ConnectionDiagnostic {
-                            kind,
-                            ready: probe.ready,
-                            local: descriptor.local,
-                            models: probe.models,
-                            text: Some(probe.capabilities.text),
-                            client_tools: Some(probe.capabilities.client_tools),
-                            requested_model: probe.requested_model,
-                            resolved_model: probe.resolved_model,
-                            context_window_tokens: probe.context_window_tokens,
-                            message: "Text and client-tool capability probe completed".into(),
-                        }
-                    }
-                };
-                Ok(result)
-            }));
-        match &result {
-            Ok(_) => job.completed(),
-            Err(error) if error.code == "TASK_CANCELLED" => job.cancel(),
-            Err(error) => job.failed(error.to_string()),
-        }
-        self.publish_job_events(&mut events, None);
-        result
-    }
-
     fn run(
         &self,
         request: AssistantRunRequest,
@@ -407,7 +216,7 @@ impl AssistantUiService for DesktopAssistantService {
             completed: 0,
             total: None,
         });
-        self.publish_job_events(&mut events, Some(&request_id));
+        self.publish_job_events(&mut events, &request_id);
         let service = self.clone();
         let job_for_worker = job.clone();
         let result = futures::executor::block_on(job.spawn_blocking(move || {
@@ -431,7 +240,7 @@ impl AssistantUiService for DesktopAssistantService {
             Err(error) if error.code == "TASK_CANCELLED" => job.cancel(),
             Err(error) => job.failed(error.to_string()),
         }
-        self.publish_job_events(&mut events, Some(&request_id));
+        self.publish_job_events(&mut events, &request_id);
         result
     }
 
@@ -440,7 +249,7 @@ impl AssistantUiService for DesktopAssistantService {
         confirmation_id: String,
         authorized_document_ids: Vec<String>,
     ) -> Result<AssistantRunResult, AssistantUiError> {
-        let assistant = self.settings_snapshot()?.assistant;
+        let assistant = self.assistant_settings()?;
         let response = self
             .gateway(&authorized_document_ids, assistant.write_mode)?
             .confirm(&confirmation_id, &format!("confirm:{confirmation_id}"));
@@ -452,13 +261,13 @@ impl AssistantUiService for DesktopAssistantService {
         confirmation_id: String,
         authorized_document_ids: Vec<String>,
     ) -> Result<(), AssistantUiError> {
-        let assistant = self.settings_snapshot()?.assistant;
+        let assistant = self.assistant_settings()?;
         let response = self
             .gateway(&authorized_document_ids, assistant.write_mode)?
             .reject(&confirmation_id, &format!("reject:{confirmation_id}"));
         match response.error.as_ref() {
             Some(error) if error.code == AgentErrorCode::WritePolicyRejected => Ok(()),
-            Some(error) => Err(ui_error(error.clone())),
+            Some(error) => Err(AssistantUiError::from(error.clone())),
             None if response.ok => Ok(()),
             None => Err(AssistantUiError::unavailable(
                 "reject returned neither a result nor an error",
@@ -471,7 +280,7 @@ impl AssistantUiService for DesktopAssistantService {
         undo_token: String,
         authorized_document_ids: Vec<String>,
     ) -> Result<AssistantMutationSummary, AssistantUiError> {
-        let assistant = self.settings_snapshot()?.assistant;
+        let assistant = self.assistant_settings()?;
         let response = self
             .gateway(&authorized_document_ids, assistant.write_mode)?
             .undo(&undo_token, &format!("undo:{undo_token}"));
@@ -480,13 +289,15 @@ impl AssistantUiService for DesktopAssistantService {
         {
             return Ok(map_mutation(receipt.clone()));
         }
-        Err(ui_error(response.error.clone().unwrap_or_else(|| {
-            AgentToolError::new(
-                AgentErrorCode::WriteTransactionFailed,
-                "undo returned an unexpected response",
-                false,
-            )
-        })))
+        Err(AssistantUiError::from(
+            response.error.clone().unwrap_or_else(|| {
+                AgentToolError::new(
+                    AgentErrorCode::WriteTransactionFailed,
+                    "undo returned an unexpected response",
+                    false,
+                )
+            }),
+        ))
     }
 
     /// The `JobEvent`s of every Assistant job from now on, each job's in the
@@ -519,36 +330,16 @@ fn map_progress(progress: &AgentProgress) -> AssistantProgress {
     }
 }
 
-fn connection_config(profile: &AssistantConnectionProfile) -> ConnectionConfig {
-    ConnectionConfig {
-        id: profile.id.clone(),
-        protocol: match profile.protocol {
-            LlmProtocol::OpenAiChatCompletions => ProviderProtocol::OpenAiChatCompletions,
-            LlmProtocol::AnthropicMessages => ProviderProtocol::AnthropicMessages,
-            LlmProtocol::OpenAiResponses => ProviderProtocol::OpenAiResponses,
-        },
-        base_url: profile.base_url.clone(),
-        model: profile.model.clone(),
-        auth_mode: match profile.auth_mode {
-            AssistantAuthMode::Bearer => AuthMode::Bearer,
-            AssistantAuthMode::XApiKey => AuthMode::XApiKey,
-        },
-        timeout_ms: profile.timeout_ms,
-        context_window_tokens: profile.context_window_tokens,
-        max_output_tokens: profile.max_output_tokens,
-    }
-}
-
 fn map_run_result(result: AgentRunResult) -> Result<AssistantRunResult, AssistantUiError> {
     if let Some(error) = result.error.as_ref() {
         if result.mutation.is_some() || !result.mutations.is_empty() || result.pending.is_some() {
-            let warning = ui_error(error.clone());
+            let warning = AssistantUiError::from(error.clone());
             let mut partial = map_run_result_without_error(result);
             partial.warning = Some(warning.clone());
             partial.warnings.push(warning);
             return Ok(partial);
         }
-        return Err(ui_error(error.clone()));
+        return Err(AssistantUiError::from(error.clone()));
     }
     Ok(map_run_result_without_error(result))
 }
@@ -593,7 +384,7 @@ fn map_tool_response(
     response: contracts::CapabilityResponse,
 ) -> Result<AssistantRunResult, AssistantUiError> {
     if let Some(error) = response.error.as_ref() {
-        return Err(ui_error(error.clone()));
+        return Err(AssistantUiError::from(error.clone()));
     }
     match response.result.as_ref() {
         Some(AgentToolResult::Mutation(receipt)) => Ok(AssistantRunResult {
@@ -678,41 +469,12 @@ fn map_pending(pending: AgentPendingMutation) -> AssistantPendingReview {
     }
 }
 
-fn ui_error(error: AgentToolError) -> AssistantUiError {
-    let code = serde_json::to_value(error.code)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "PROVIDER_RESPONSE_INVALID".into());
-    AssistantUiError {
-        code,
-        message: error.message,
-        retryable: error.retryable,
-    }
-}
-
-fn redact_ui_error(mut error: AssistantUiError, secret: Option<&str>) -> AssistantUiError {
-    redact_secret(&mut error.message, secret);
-    error
-}
-
-pub fn redact_secret(message: &mut String, secret: Option<&str>) {
-    if let Some(secret) = secret.filter(|secret| !secret.is_empty()) {
-        *message = message.replace(secret, "[REDACTED]");
-    }
-}
-
-fn settings_ui_error(message: String) -> AssistantUiError {
-    AssistantUiError {
-        code: "ASSISTANT_SETTINGS_INVALID".into(),
-        message,
-        retryable: false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use application::{AgentRunDiagnostics, AgentUsage, DocumentRepository, DocumentService};
+    use application::{
+        AgentRunDiagnostics, AgentUsage, CredentialChange, DocumentRepository, DocumentService,
+    };
     use contracts::{
         AgentErrorCode, AgentFieldDiff, AgentMutationProvenance, AgentMutationReceipt,
         AgentRangePreview, AgentToolError, AgentTreeChange,
@@ -720,12 +482,10 @@ mod tests {
     use domain::DocumentState;
     use persistence::InMemoryDocumentRepository;
     use settings::{
-        AssistantConnectionPatch, CredentialUpdate, SettingsError, SettingsGrant, SettingsPatch,
-        SettingsRepository,
+        AppSettings, AssistantAuthMode, CredentialStore, CustomEndpoint, EndpointUrls, ModelChoice,
+        ProviderSettings, SettingsError, SettingsRepository, SettingsService,
     };
-    use std::fs;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct MemorySettingsRepository(Mutex<AppSettings>);
 
@@ -740,318 +500,200 @@ mod tests {
         }
     }
 
-    fn profile() -> AssistantConnectionProfile {
-        AssistantConnectionProfile {
-            id: "local".into(),
-            name: "Local LiteLLM".into(),
-            protocol: LlmProtocol::OpenAiChatCompletions,
-            base_url: "http://127.0.0.1:4000".into(),
-            model: "assistant-default".into(),
-            auth_mode: AssistantAuthMode::Bearer,
-            api_key: Some("private-token".into()),
-            api_key_file: None,
-            context_window_tokens: Some(8_192),
-            timeout_ms: 1_000,
-            max_output_tokens: 512,
-        }
-    }
-
-    fn service() -> (DesktopAssistantService, Arc<InMemoryDocumentRepository>) {
+    /// Settings in memory and a credential store in a fresh directory.
+    fn providers() -> (ProviderService, tempfile::TempDir) {
+        let directory = tempfile::tempdir().unwrap();
         let settings = SettingsService::open(Arc::new(MemorySettingsRepository(Mutex::new(
             AppSettings::default(),
         ))))
         .unwrap();
+        let credentials = CredentialStore::beside(directory.path().join("settings.json"));
+        (ProviderService::new(settings, credentials), directory)
+    }
+
+    fn local_choice() -> ModelChoice {
+        ModelChoice {
+            provider: "custom-local".into(),
+            model: "assistant-default".into(),
+            protocol: None,
+        }
+    }
+
+    /// Adds the custom provider `custom-local` at `base_url` with `key` and
+    /// chooses its `assistant-default` model.
+    fn choose_local(providers: &ProviderService, base_url: &str, key: &str) {
+        let revision = providers.settings().revision().unwrap();
+        let saved = providers
+            .save(
+                &revision,
+                ProviderSettings {
+                    endpoints: EndpointUrls {
+                        chat: Some(base_url.into()),
+                        ..EndpointUrls::default()
+                    },
+                    custom: Some(CustomEndpoint {
+                        name: "Local".into(),
+                        auth_mode: AssistantAuthMode::Bearer,
+                    }),
+                    context_window_tokens: Some(8_192),
+                    timeout_ms: 2_000,
+                    max_output_tokens: 512,
+                    ..ProviderSettings::new("custom-local")
+                },
+                CredentialChange::ApiKey(key.into()),
+            )
+            .unwrap();
+        providers
+            .set_model(&SettingsService::revision_of(&saved), Some(local_choice()))
+            .unwrap();
+    }
+
+    fn service() -> (
+        DesktopAssistantService,
+        Arc<InMemoryDocumentRepository>,
+        tempfile::TempDir,
+    ) {
+        let (providers, directory) = providers();
         let documents = Arc::new(InMemoryDocumentRepository::default());
         (
-            DesktopAssistantService::new(settings, DocumentService::new(documents.clone())),
+            DesktopAssistantService::new(providers, DocumentService::new(documents.clone())),
             documents,
+            directory,
         )
     }
 
-    /// The settings form's save for a new `profile()` with its direct key.
-    fn new_connection_save(credential: CredentialUpdate) -> AssistantSettingsSave {
-        AssistantSettingsSave {
-            patch: SettingsPatch {
-                active_connection_id: Some(Some("local".into())),
-                connection: Some(AssistantConnectionPatch {
-                    id: "local".into(),
-                    credential: Some(credential),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            new_connection: Some(AssistantConnectionProfile {
-                api_key: None,
-                ..profile()
-            }),
-        }
-    }
-
-    fn save(
-        service: &DesktopAssistantService,
-        save: AssistantSettingsSave,
-    ) -> Result<AppSettings, AssistantUiError> {
-        service.save_assistant_settings(service.settings.revision().unwrap(), save)
-    }
-
-    fn rename(name: &str) -> AssistantSettingsSave {
-        AssistantSettingsSave {
-            patch: SettingsPatch {
-                connection: Some(AssistantConnectionPatch {
-                    id: "local".into(),
-                    name: Some(name.into()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-            new_connection: None,
-        }
-    }
-
-    #[test]
-    fn saves_profile_metadata_and_api_key_in_settings() {
-        let (service, _) = service();
-        let saved = save(
-            &service,
-            new_connection_save(CredentialUpdate::Direct("private-token".into())),
-        )
-        .unwrap();
-
-        let expected = AssistantSettings {
-            active_connection_id: Some("local".into()),
-            connections: vec![profile()],
-            ..Default::default()
-        };
-        assert_eq!(saved.assistant, expected);
-        assert_eq!(service.settings_snapshot().unwrap().assistant, expected);
-    }
-
-    #[test]
-    fn a_new_connection_credential_follows_the_typed_patch_rules() {
-        let (service, _) = service();
-        let error = save(
-            &service,
-            new_connection_save(CredentialUpdate::File("/etc/meetnote-key".into())),
-        )
-        .unwrap_err();
-
-        assert_eq!(error.code, "ASSISTANT_SETTINGS_INVALID");
-        assert!(!error.retryable);
-        assert!(
-            service
-                .settings_snapshot()
-                .unwrap()
-                .assistant
-                .connections
-                .is_empty()
-        );
-    }
-
-    /// Counts the writes Settings sends to its repository.
-    #[derive(Default)]
-    struct CountingSettingsRepository {
-        settings: Mutex<AppSettings>,
-        saves: AtomicUsize,
-        conditional_saves: AtomicUsize,
-    }
-
-    impl SettingsRepository for CountingSettingsRepository {
-        fn load(&self) -> Result<AppSettings, SettingsError> {
-            Ok(self.settings.lock().unwrap().clone())
-        }
-
-        fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
-            self.saves.fetch_add(1, Ordering::SeqCst);
-            *self.settings.lock().unwrap() = settings.clone();
-            Ok(())
-        }
-
-        fn save_if_equal(
-            &self,
-            expected: &AppSettings,
-            settings: &AppSettings,
-        ) -> Result<(), SettingsError> {
-            self.conditional_saves.fetch_add(1, Ordering::SeqCst);
-            let mut current = self.settings.lock().unwrap();
-            if &*current != expected {
-                return Err(SettingsError::RevisionConflict);
-            }
-            *current = settings.clone();
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn a_new_connection_is_created_by_one_revision_checked_patch() {
-        let repository = Arc::new(CountingSettingsRepository::default());
-        let service = DesktopAssistantService::new(
-            SettingsService::open(repository.clone()).unwrap(),
-            DocumentService::new(Arc::new(InMemoryDocumentRepository::default())),
-        );
-        let request = new_connection_save(CredentialUpdate::Direct("private-token".into()));
-        // The same save as one `patch_if_equal` on an identical service.
-        let reference = memory_settings();
-        let expected = reference
-            .patch_if_equal(
-                &reference.revision().unwrap(),
-                SettingsPatch {
-                    new_connection: request.new_connection.clone(),
-                    ..request.patch.clone()
-                },
-                SettingsGrant::full(),
-            )
-            .unwrap();
-
-        let stale = service
-            .save_assistant_settings("stale".into(), request.clone())
-            .unwrap_err();
-        assert_eq!(stale.code, "SETTINGS_REVISION_CONFLICT");
-        assert_eq!(repository.conditional_saves.load(Ordering::SeqCst), 0);
-
-        let saved = save(&service, request).unwrap();
-        assert_eq!(saved, expected);
-        assert_eq!(repository.load().unwrap(), expected);
-        assert_eq!(repository.conditional_saves.load(Ordering::SeqCst), 1);
-        assert_eq!(repository.saves.load(Ordering::SeqCst), 0);
-    }
-
-    /// Desktop service whose active connection `local` stores `private-token`.
-    fn service_with_stored_key() -> DesktopAssistantService {
-        let (service, _) = service();
-        let mut settings = service.settings_snapshot().unwrap();
-        settings.assistant.active_connection_id = Some("local".into());
-        settings.assistant.connections = vec![profile()];
-        service.settings.update(settings).unwrap();
-        service
-    }
-
-    #[test]
-    fn an_unchanged_credential_keeps_the_stored_key() {
-        let service = service_with_stored_key();
-        save(&service, rename("Renamed")).unwrap();
-
-        let saved = &service.settings_snapshot().unwrap().assistant.connections[0];
-        assert_eq!(saved.name, "Renamed");
-        assert_eq!(saved.api_key.as_deref(), Some("private-token"));
-    }
-
-    #[test]
-    fn a_stale_revision_is_a_retryable_conflict_that_keeps_the_external_change() {
-        let service = service_with_stored_key();
-        let loaded_revision = service.settings.revision().unwrap();
-        service
-            .settings
-            .patch_if_equal(
-                &loaded_revision,
-                SettingsPatch {
-                    write_mode: Some(contracts::AgentWriteMode::ConfirmEach),
-                    ..Default::default()
-                },
-                SettingsGrant::full(),
-            )
-            .unwrap();
-        let error = service
-            .save_assistant_settings(loaded_revision, rename("Renamed"))
-            .unwrap_err();
-
-        assert_eq!(error.code, "SETTINGS_REVISION_CONFLICT");
-        assert!(error.retryable);
-        let persisted = service.settings_snapshot().unwrap().assistant;
-        assert_eq!(persisted.write_mode, contracts::AgentWriteMode::ConfirmEach);
-        assert_eq!(persisted.connections[0].name, "Local LiteLLM");
-
-        let saved = save(&service, rename("Renamed")).unwrap().assistant;
-        assert_eq!(saved.write_mode, contracts::AgentWriteMode::ConfirmEach);
-        assert_eq!(saved.connections[0].name, "Renamed");
-        assert_eq!(
-            saved.connections[0].api_key.as_deref(),
-            Some("private-token")
-        );
-    }
-
-    #[test]
-    fn resolves_api_key_file_from_the_settings_directory() {
-        let root = std::env::temp_dir().join(format!(
-            "meetnote-assistant-key-root-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
-        let key_path = root.join("settings/credentials/key");
-        fs::create_dir_all(key_path.parent().unwrap()).unwrap();
-        fs::write(&key_path, "file-token\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        let mut profile = profile();
-        profile.api_key = None;
-        profile.api_key_file = Some("credentials/key".into());
-        let mut settings = AppSettings::default();
-        settings.assistant.active_connection_id = Some(profile.id.clone());
-        settings.assistant.connections = vec![profile];
-        let repository =
-            settings::JsonSettingsRepository::open(root.join("settings/settings.json"));
-        repository.save(&settings).unwrap();
-        let service = DesktopAssistantService::new(
-            SettingsService::open(Arc::new(repository)).unwrap(),
-            DocumentService::new(Arc::new(InMemoryDocumentRepository::default())),
-        );
-
-        let (_, secret) = service
-            .active_provider()
-            .unwrap_or_else(|error| panic!("settings-validated key file must resolve: {error:?}"))
-            .expect("active connection is configured");
-        assert_eq!(secret.as_deref(), Some("file-token"));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn rejects_an_absolute_api_key_file_before_reading_it() {
-        let root = std::env::temp_dir().join(format!(
-            "meetnote-assistant-absolute-key-{}-{}",
-            std::process::id(),
-            unique_suffix()
-        ));
-        let key_path = root.join("key");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(&key_path, "file-token\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        let service = DesktopAssistantService::new(
-            SettingsService::open(Arc::new(settings::JsonSettingsRepository::open(
-                root.join("settings/settings.json"),
-            )))
-            .unwrap(),
-            DocumentService::new(Arc::new(InMemoryDocumentRepository::default())),
-        );
-        let mut profile = profile();
-        profile.api_key = None;
-        profile.api_key_file = Some(key_path.display().to_string());
-
-        let error = service.resolve_api_key(&profile).unwrap_err();
-        assert_eq!(error.code, "ASSISTANT_SETTINGS_INVALID");
-        assert!(!error.message.contains("file-token"));
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn run_rejects_a_stale_ui_document_before_contacting_the_provider() {
-        let (service, documents) = service();
-        save(
-            &service,
-            new_connection_save(CredentialUpdate::Direct("private-token".into())),
-        )
-        .unwrap();
+    /// One document at revision 1, as `ask_request` authorizes it.
+    fn save_document(documents: &InMemoryDocumentRepository) {
         documents
             .save(
                 DocumentState::new(DocumentId::new("doc"), "Document", "audio.wav"),
                 Some("# Document\n".into()),
             )
             .unwrap();
+    }
+
+    /// `ask_request` at the saved document's current revision.
+    fn ready_request(documents: &InMemoryDocumentRepository) -> AssistantRunRequest {
+        let mut request = ask_request();
+        request.authorized_documents[0].revision = documents
+            .get(&DocumentId::new("doc"))
+            .unwrap()
+            .unwrap()
+            .revision();
+        request
+    }
+
+    /// Answers one request with a 401 that quotes the bearer token back.
+    fn echoing_stub() -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_millis(500)))
+                .unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            while let Ok(read) = stream.read(&mut chunk) {
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&request);
+                if let Some((head, body)) = text.split_once("\r\n\r\n") {
+                    let length = head
+                        .lines()
+                        .find_map(|line| {
+                            line.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|value| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if body.len() >= length {
+                        break;
+                    }
+                }
+            }
+            let text = String::from_utf8_lossy(&request);
+            let token = text
+                .lines()
+                .find_map(|line| line.strip_prefix("authorization: Bearer "))
+                .or_else(|| {
+                    text.lines()
+                        .find_map(|line| line.strip_prefix("Authorization: Bearer "))
+                })
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            let body = serde_json::json!({"error": {"message": format!("invalid key {token}")}})
+                .to_string();
+            write!(
+                stream,
+                "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        (base_url, server)
+    }
+
+    #[test]
+    fn a_run_fails_when_the_model_choice_changed_after_it_started() {
+        let (service, documents, _directory) = service();
+        save_document(&documents);
+        choose_local(&service.providers, "http://127.0.0.1:9/v1", "private-token");
+        let mut request = ready_request(&documents);
+        request.model.model = "another-model".into();
+
+        let error = service.run(request, AgentCancellation::new()).unwrap_err();
+
+        assert_eq!(error.code, "CONNECTION_NOT_CONFIGURED");
+        assert!(error.message.contains("model changed"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_disabled_assistant_refuses_to_run() {
+        let (service, documents, _directory) = service();
+        save_document(&documents);
+        choose_local(&service.providers, "http://127.0.0.1:9/v1", "private-token");
+        let settings = service.providers.settings();
+        settings
+            .edit(&settings.revision().unwrap(), |settings| {
+                settings.assistant.enabled = false;
+                Ok(())
+            })
+            .unwrap();
+
+        let error = service
+            .run(ready_request(&documents), AgentCancellation::new())
+            .unwrap_err();
+
+        assert_eq!(error.code, "ASSISTANT_DISABLED");
+    }
+
+    #[test]
+    fn a_provider_error_never_quotes_the_stored_key() {
+        let (base_url, server) = echoing_stub();
+        let (service, documents, _directory) = service();
+        save_document(&documents);
+        choose_local(&service.providers, &base_url, "private-token-123");
+
+        let error = service
+            .run(ready_request(&documents), AgentCancellation::new())
+            .unwrap_err();
+        server.join().unwrap();
+
+        assert_eq!(error.code, "PROVIDER_AUTHENTICATION_FAILED", "{error}");
+        assert!(!error.message.contains("private-token-123"), "{error}");
+        assert!(error.message.contains("[REDACTED]"), "{error}");
+    }
+
+    #[test]
+    fn run_rejects_a_stale_ui_document_before_contacting_the_provider() {
+        let (service, documents, _directory) = service();
+        choose_local(&service.providers, "http://127.0.0.1:9/v1", "private-token");
+        save_document(&documents);
         let error = service
             .run(
                 AssistantRunRequest {
@@ -1068,7 +710,7 @@ mod tests {
                     ],
                     projection: contracts::DocumentProjection::Metadata,
                     write_mode: contracts::AgentWriteMode::Automatic,
-                    connection_id: "local".into(),
+                    model: local_choice(),
                     max_tool_rounds: 8,
                     max_validation_retries: 3,
                 },
@@ -1170,14 +812,7 @@ mod tests {
         assert_eq!(result.diagnostics.unwrap().tool_rounds, 2);
     }
 
-    fn memory_settings() -> SettingsService {
-        SettingsService::open(Arc::new(MemorySettingsRepository(Mutex::new(
-            AppSettings::default(),
-        ))))
-        .unwrap()
-    }
-
-    /// An Ask run over one document at revision 1.
+    /// An Ask run over `save_document`'s document.
     fn ask_request() -> AssistantRunRequest {
         AssistantRunRequest {
             request_id: "request".into(),
@@ -1191,7 +826,7 @@ mod tests {
             }],
             projection: contracts::DocumentProjection::Metadata,
             write_mode: contracts::AgentWriteMode::Automatic,
-            connection_id: "local".into(),
+            model: local_choice(),
             max_tool_rounds: 8,
             max_validation_retries: 3,
         }
@@ -1241,11 +876,12 @@ mod tests {
     #[test]
     fn assistant_and_audio_jobs_share_one_worker_limit() {
         let jobs = Arc::new(JobRuntime::with_max_concurrency(1));
+        let (providers, _directory) = providers();
         let log = Arc::new(Mutex::new(Vec::new()));
         let (entered, assistant_entered) = std::sync::mpsc::channel();
         let (release, released) = std::sync::mpsc::channel();
         let assistant = DesktopAssistantService::with_job_runtime(
-            memory_settings(),
+            providers,
             DocumentService::new(Arc::new(GatedRepository {
                 log: log.clone(),
                 entered: Mutex::new(entered),
@@ -1303,7 +939,7 @@ mod tests {
 
     #[test]
     fn publishes_the_job_events_of_each_assistant_run() {
-        let (service, _) = service();
+        let (service, _, _directory) = service();
         let mut events = service.job_events();
 
         let error = service
@@ -1313,8 +949,8 @@ mod tests {
         let mut received = Vec::new();
         while let Ok(event) = events.try_recv() {
             assert_eq!(
-                event.request_id.as_deref(),
-                Some(ask_request().request_id.as_str()),
+                event.request_id,
+                ask_request().request_id,
                 "each event names its run"
             );
             received.push(event.event);
@@ -1337,12 +973,5 @@ mod tests {
             ] if progress_job == job_id && failed_job == job_id => {}
             other => panic!("unexpected job events: {other:?}"),
         }
-    }
-
-    fn unique_suffix() -> u128 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
     }
 }

@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use rune::{El, TextEdit, Tx, col, el, row};
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, Collapsible, Divider, Kit, Progress, RadioGroup,
-    RadioItem, SidebarRow, Switch, TextField, TextInput,
+    Badge, BadgeVariant, Button, ButtonVariant, Collapsible, Kit, Progress, RadioGroup, RadioItem,
+    SidebarRow, Switch, TextField, TextInput,
 };
 
 use crate::controls::{
@@ -11,7 +11,7 @@ use crate::controls::{
 };
 use crate::{Confirm, MeetNote};
 
-mod live_connection;
+mod live_assistant;
 mod live_models;
 mod live_preferences;
 pub(crate) mod live_speaker_library;
@@ -29,9 +29,6 @@ pub struct Preferences {
     stages: bool,
     pub speaker: bool,
     speaker_name: TextEdit,
-    endpoint: TextEdit,
-    model: TextEdit,
-    secret: TextEdit,
     pub confirm_writes: bool,
 }
 
@@ -50,9 +47,6 @@ impl Default for Preferences {
             stages: true,
             speaker: true,
             speaker_name: TextEdit::new("Morgan Park"),
-            endpoint: TextEdit::new("https://example.test/v1"),
-            model: TextEdit::new("sample-assistant"),
-            secret: TextEdit::new(""),
             confirm_writes: true,
         }
     }
@@ -83,7 +77,7 @@ const SECTIONS: [(&str, &str); 5] = [
     ("workspace", "workspace"),
     ("audio", "audio_processing"),
     ("speaker-library", "speaker_library"),
-    ("assistant", "assistant_connection"),
+    ("assistant", "assistant_settings"),
 ];
 
 pub fn sidebar(s: &MeetNote, k: &Kit) -> El {
@@ -291,37 +285,14 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             },
         )
     };
-    let connection = if live {
-        live_connection::page(s, k, overlays)
+    let assistant = if live {
+        live_assistant::page(s, k)
     } else {
         section(
             k,
-            "Assistant connection",
-            "Connection fields and masked input use in-memory values.",
+            "Assistant",
+            "The sample Assistant applies its writes as chosen here.",
         )
-        .child(
-            TextField::new("Endpoint", &prefs.endpoint)
-                .on_edit(|s: &mut MeetNote| &mut s.settings.endpoint)
-                .build(k)
-                .key("endpoint"),
-        )
-        .child(
-            TextField::new("Model", &prefs.model)
-                .on_edit(|s: &mut MeetNote| &mut s.settings.model)
-                .build(k)
-                .key("assistant-model"),
-        )
-        .child(label(k, "API key"))
-        .child(
-            TextInput::new(&prefs.secret)
-                .label("API key")
-                .secure()
-                .placeholder("Sample credential")
-                .on_edit(|s: &mut MeetNote| &mut s.settings.secret)
-                .build(k)
-                .key("api-key"),
-        )
-        .child(Divider::horizontal().build(k))
         .child(
             RadioGroup::new()
                 .label("Workspace writes")
@@ -350,7 +321,7 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
         .children(
             SECTIONS
                 .into_iter()
-                .zip([appearance, workspace, processing, library, connection])
+                .zip([appearance, workspace, processing, library, assistant])
                 .map(|((id, _), section)| section.key(format!("settings-section-{id}"))),
         )
         .children((!live).then(|| {

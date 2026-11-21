@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -6,15 +7,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use application::desktop_assistant::{
     AssistantController, AssistantMutationSummary, AssistantProgress, AssistantRunResult,
     AssistantScopeMode, AssistantTaskState, AssistantUiError, AssistantUiService,
-    ConnectionDiagnostic, ConnectionProbeId, ConnectionProbeKind, PendingReviewState,
+    PendingReviewState,
 };
+use contracts::AgentWriteMode;
 use futures::Stream;
 use futures::channel::mpsc::{UnboundedReceiver, unbounded};
 use meetnote::assistant_service::DesktopAssistantService;
 use rune::{TextEdit, Tx};
-use settings::{AssistantSettings, SettingsService};
+use settings::{AssistantSettings, SettingsError, SettingsService};
 
-use super::assistant_connection::{ConnectionDraft, public_assistant};
 use super::{LiveWorkspace, Task, WorkspaceHost, processing::ProcessingConfig};
 use crate::MeetNote;
 
@@ -23,7 +24,7 @@ pub(crate) struct AssistantHost {
     pub controller: AssistantController,
     pub prompt: TextEdit,
     pub settings: AssistantSettings,
-    pub connection: Option<ConnectionDraft>,
+    pub behaviour: BehaviourDraft,
     task: Option<Task<Reply>>,
     progress: Option<UnboundedReceiver<AssistantProgress>>,
 }
@@ -37,11 +38,51 @@ enum Reply {
         String,
         Result<AssistantMutationSummary, AssistantUiError>,
     ),
-    SavedConnection(Result<AssistantSettings, AssistantUiError>),
-    Probe(
-        ConnectionProbeId,
-        Result<ConnectionDiagnostic, AssistantUiError>,
-    ),
+    Saved(Result<AssistantSettings, AssistantUiError>),
+}
+
+/// The Settings page's Assistant behaviour form. Providers and the model
+/// choice have their own page.
+#[derive(Default)]
+pub(crate) struct BehaviourDraft {
+    pub enabled: bool,
+    pub confirm_writes: bool,
+    pub tool_rounds: TextEdit,
+    pub validation_retries: TextEdit,
+}
+
+impl BehaviourDraft {
+    fn new(settings: &AssistantSettings) -> Self {
+        Self {
+            enabled: settings.enabled,
+            confirm_writes: settings.write_mode == AgentWriteMode::ConfirmEach,
+            tool_rounds: TextEdit::new(settings.max_tool_rounds.to_string()),
+            validation_retries: TextEdit::new(settings.max_validation_retries.to_string()),
+        }
+    }
+
+    /// `settings` with the form's values, or which field is not a number.
+    fn apply(&self, settings: &AssistantSettings) -> Result<AssistantSettings, String> {
+        Ok(AssistantSettings {
+            enabled: self.enabled,
+            write_mode: if self.confirm_writes {
+                AgentWriteMode::ConfirmEach
+            } else {
+                AgentWriteMode::Automatic
+            },
+            max_tool_rounds: number(&self.tool_rounds, "maximum tool rounds")?,
+            max_validation_retries: number(&self.validation_retries, "maximum validation retries")?,
+            ..settings.clone()
+        })
+    }
+}
+
+fn number<T: FromStr>(value: &TextEdit, field: &str) -> Result<T, String> {
+    value
+        .text
+        .trim()
+        .parse()
+        .map_err(|_| format!("Enter a valid number for {field}"))
 }
 
 #[derive(Clone, Copy)]
@@ -64,8 +105,7 @@ impl AssistantHost {
 
     pub(super) fn reset_workspace(&mut self, settings: AssistantSettings) {
         self.controller.forget_workspace();
-        self.controller.forget_probe();
-        self.connection = Some(ConnectionDraft::active(&settings));
+        self.behaviour = BehaviourDraft::new(&settings);
         self.settings = settings;
         self.prompt.clear();
     }
@@ -98,7 +138,6 @@ impl AssistantHost {
 impl Drop for AssistantHost {
     fn drop(&mut self) {
         self.controller.forget_workspace();
-        self.controller.forget_probe();
     }
 }
 
@@ -106,11 +145,9 @@ fn service(
     config: &ProcessingConfig,
     live: LiveWorkspace,
 ) -> Result<DesktopAssistantService, AssistantUiError> {
-    let settings = config
-        .settings_service()
-        .map_err(AssistantUiError::unavailable)?;
+    let providers = config.providers().map_err(AssistantUiError::unavailable)?;
     Ok(DesktopAssistantService::with_job_runtime(
-        settings,
+        providers,
         live.documents,
         config.jobs(),
     ))
@@ -124,106 +161,37 @@ fn now_ms() -> u64 {
 }
 
 impl MeetNote {
-    pub(crate) fn save_assistant_connection(&mut self, tx: &mut Tx) {
+    /// Saves the behaviour form unless the Assistant settings changed since
+    /// they were loaded.
+    pub(crate) fn save_assistant_behaviour(&mut self, tx: &mut Tx) {
         if self.workspace_host.busy() {
             return;
         }
-        let Some(live) = self.workspace_host.live.clone() else {
-            return;
-        };
         let config = self.workspace_host.processing_config.clone();
         let host = &mut self.workspace_host.assistant;
-        let Some(draft) = &host.connection else {
-            return;
-        };
-        let patch = match draft.changes(&host.settings) {
-            Ok(patch) => patch,
+        let expected = host.settings.clone();
+        let updated = match host.behaviour.apply(&expected) {
+            Ok(updated) => updated,
             Err(message) => {
                 self.notify(message, tx);
                 return;
             }
         };
-        let expected = host.settings.clone();
         host.start(tx, move || {
-            Reply::SavedConnection((|| {
+            Reply::Saved((|| {
                 let settings = config
                     .settings_service()
                     .map_err(AssistantUiError::unavailable)?;
-                let snapshot = settings
-                    .snapshot()
-                    .map_err(|error| AssistantUiError::from_settings(&error))?;
-                if public_assistant(snapshot.assistant.clone()) != expected {
-                    return Err(AssistantUiError::from_settings(
-                        &settings::SettingsError::RevisionConflict,
-                    ));
+                let snapshot = settings.snapshot()?;
+                if snapshot.assistant != expected {
+                    return Err(SettingsError::RevisionConflict.into());
                 }
-                let revision = SettingsService::revision_of(&snapshot);
-                let service = DesktopAssistantService::with_job_runtime(
-                    settings,
-                    live.documents,
-                    config.jobs(),
-                );
-                service
-                    .save_assistant_settings(revision, patch)
-                    .map(|saved| public_assistant(saved.assistant))
+                let saved = settings.edit(&SettingsService::revision_of(&snapshot), |all| {
+                    all.assistant = updated;
+                    Ok(())
+                })?;
+                Ok(saved.assistant)
             })())
-        });
-    }
-
-    pub(crate) fn probe_assistant_connection(&mut self, kind: ConnectionProbeKind, tx: &mut Tx) {
-        if self.workspace_host.busy() {
-            return;
-        }
-        let Some(live) = self.workspace_host.live.clone() else {
-            return;
-        };
-        let config = self.workspace_host.processing_config.clone();
-        let host = &mut self.workspace_host.assistant;
-        let Some(profile_id) = host.settings.active_connection_id.clone() else {
-            return;
-        };
-        let (id, cancellation) = host.controller.begin_probe(kind);
-        host.start(tx, move || {
-            Reply::Probe(
-                id,
-                (|| {
-                    let settings = config
-                        .settings_service()
-                        .map_err(AssistantUiError::unavailable)?;
-                    let snapshot = settings
-                        .snapshot()
-                        .map_err(|error| AssistantUiError::from_settings(&error))?;
-                    let profile = snapshot
-                        .assistant
-                        .active_connection()
-                        .filter(|profile| profile.id == profile_id)
-                        .cloned()
-                        .ok_or_else(|| {
-                            AssistantUiError::unavailable("The active connection changed")
-                        })?;
-                    DesktopAssistantService::with_job_runtime(
-                        settings,
-                        live.documents,
-                        config.jobs(),
-                    )
-                    .probe_connection(profile, kind, cancellation)
-                })(),
-            )
-        });
-    }
-
-    pub(crate) fn reload_assistant_connection(&mut self, tx: &mut Tx) {
-        if self.workspace_host.busy() {
-            return;
-        }
-        let config = self.workspace_host.processing_config.clone();
-        self.workspace_host.assistant.start(tx, move || {
-            Reply::SavedConnection(
-                config
-                    .settings()
-                    .map(|saved| public_assistant(saved.assistant))
-                    .map_err(AssistantUiError::unavailable),
-            )
         });
     }
 
@@ -362,14 +330,12 @@ impl MeetNote {
                 Ok(Reply::Undo(id, mutation, Err(error))) => {
                     controller.mutation_undo_failed(&id, &mutation, error)
                 }
-                Ok(Reply::SavedConnection(Ok(settings))) => {
-                    controller.forget_probe();
-                    host.connection = Some(ConnectionDraft::active(&settings));
+                Ok(Reply::Saved(Ok(settings))) => {
+                    host.behaviour = BehaviourDraft::new(&settings);
                     host.settings = settings;
-                    notice = Some("Assistant connection updated".to_owned());
+                    notice = Some("Assistant settings saved".to_owned());
                 }
-                Ok(Reply::SavedConnection(Err(error))) => notice = Some(error.to_string()),
-                Ok(Reply::Probe(id, result)) => controller.finish_probe(id, result),
+                Ok(Reply::Saved(Err(error))) => notice = Some(error.to_string()),
                 Err(message) => {
                     controller.task =
                         AssistantTaskState::Failed(AssistantUiError::unavailable(message))
