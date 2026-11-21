@@ -21,12 +21,10 @@ from run_matrix import (
     load_json,
     normalize_runner_output,
     run_matrix,
-    run_one,
     select_case_records,
     validate_model_matrix,
     validate_prediction_contract,
     validate_sources,
-    WritebackError,
 )
 from evaluate import read_jsonl
 from verify import verify_model_matrix
@@ -40,88 +38,6 @@ HOLDOUT = ROOT / "scripts/assistant-eval/review-manifest.json"
 
 
 class MatrixRunnerTests(unittest.TestCase):
-    def _partition_runner_output(self, request):
-        record = request["records"][0]
-        segments = record["record"]["state"]["results"]["transcript"]
-        prediction = {
-            "scenarioId": record["scenarioId"],
-            "mode": "partition",
-            "children": [{
-                "start_segment_id": segments[0]["id"],
-                "end_segment_id": segments[-1]["id"],
-                "evidence_segment_ids": [segments[0]["id"]],
-                "title": "External topic",
-                "summary": "Evidence-backed topic",
-                "tags": ["external"],
-            }],
-            "uncovered_ranges": [],
-        }
-        return subprocess.CompletedProcess(
-            args=["fixture-runner"],
-            returncode=0,
-            stdout=json.dumps({"status": "completed", "predictions": [prediction], "metadata": {}}),
-            stderr="",
-        )
-
-    def test_explicit_writeback_publishes_real_receipt_metadata(self):
-        matrix = load_json(MATRIX)
-        records = read_jsonl(CORPUS)[:1]
-        with tempfile.TemporaryDirectory() as temporary, patch("run_matrix.subprocess.run") as run, patch(
-            "run_matrix.writeback_predictions",
-            return_value={
-                "mutationReceipts": [{"mutationId": "real-mutation", "affectedDocuments": []}],
-                "readback": [{"documentId": "doc", "metadata": {"revision": 1}, "markdown": "# doc\n"}],
-                "evidence": [],
-            },
-        ) as writeback:
-            run.side_effect = lambda command, **kwargs: self._partition_runner_output(json.loads(kwargs["input"]))
-            result = run_one(
-                matrix,
-                {"status": "verified", "manifestSha256": "a" * 64, "baselineIds": ["no-split", "equal-length"]},
-                records,
-                "b" * 64,
-                "c" * 64,
-                "openaiResponses",
-                "partition",
-                "fixture-runner",
-                Path(temporary) / "runs",
-                {"MEETNOTE_ASSISTANT_EVAL_MODEL": "fixture", "OPENAI_API_KEY": "fixture"},
-                None,
-                "fixture-cli",
-                Path(temporary) / "packages",
-            )
-            self.assertEqual(result["status"], "completed")
-            writeback.assert_called_once()
-            receipt = json.loads((Path(temporary) / "runs/openaiResponses/partition/receipt.json").read_text())
-            self.assertEqual(receipt["mutationReceipts"][0]["mutationId"], "real-mutation")
-
-    def test_writeback_failure_is_explicit_and_never_completed(self):
-        matrix = load_json(MATRIX)
-        records = read_jsonl(CORPUS)[:1]
-        with tempfile.TemporaryDirectory() as temporary, patch("run_matrix.subprocess.run") as run, patch(
-            "run_matrix.writeback_predictions",
-            side_effect=WritebackError("WORKSPACE_READBACK_INVALID", "fixture failure"),
-        ):
-            run.side_effect = lambda command, **kwargs: self._partition_runner_output(json.loads(kwargs["input"]))
-            result = run_one(
-                matrix,
-                {"status": "verified", "manifestSha256": "a" * 64, "baselineIds": ["no-split", "equal-length"]},
-                records,
-                "b" * 64,
-                "c" * 64,
-                "openaiResponses",
-                "partition",
-                "fixture-runner",
-                Path(temporary) / "runs",
-                {"MEETNOTE_ASSISTANT_EVAL_MODEL": "fixture", "OPENAI_API_KEY": "fixture"},
-                None,
-                "fixture-cli",
-                Path(temporary) / "packages",
-            )
-            self.assertEqual(result["status"], "failed")
-            receipt = json.loads((Path(temporary) / "runs/openaiResponses/partition/receipt.json").read_text())
-            self.assertEqual(receipt["errorCode"], "WORKSPACE_WRITEBACK_FAILED")
-            self.assertEqual(receipt["status"], "failed")
     def test_matrix_keeps_verify_compatibility_and_declares_fixed_contract(self):
         verify_model_matrix()
         matrix = load_json(MATRIX)

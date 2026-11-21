@@ -358,10 +358,14 @@ impl AgentRuntime {
                 );
             };
             if estimated_context_tokens(state.input_bytes) > u64::from(input_budget) {
-                return state.finish_error(AgentToolError::new(
-                    AgentErrorCode::ContextLimitExceeded,
-                    "input exceeds the configured budget; use bounded capability reads or a document scene plugin",
-                    false), &mut on_progress);
+                return state.finish_error(
+                    AgentToolError::new(
+                        AgentErrorCode::ContextLimitExceeded,
+                        "input exceeds the configured budget; use bounded capability reads",
+                        false,
+                    ),
+                    &mut on_progress,
+                );
             }
         }
         self.run_context(
@@ -577,7 +581,7 @@ impl AgentRuntime {
                     return state.finish_error(
                         AgentToolError::new(
                             AgentErrorCode::ContextLimitExceeded,
-                            "tool results exceed the configured context window; use bounded reads or a document scene plugin",
+                            "tool results exceed the configured context window; use bounded reads",
                             false,
                         ),
                         on_progress,
@@ -609,32 +613,6 @@ impl AgentRuntime {
 pub struct WorkspaceAgentScene {
     gateway: WorkspaceCapabilityPort,
     skills: crate::assistant_skills::SkillRegistry,
-}
-
-/// Built-in scene adapter that proves the model/tool loop can be installed on
-/// the same Host used by external consumers. The scene still assembles the
-/// document context, while every subsequent tool call is routed by Host.
-#[derive(Clone)]
-pub struct HostAgentScene {
-    host: crate::AgentHost,
-}
-
-impl HostAgentScene {
-    pub fn new(host: crate::AgentHost) -> Self {
-        Self { host }
-    }
-}
-
-impl AgentSceneAssembly for HostAgentScene {
-    fn assemble(&self, task: &AgentTask) -> Result<AgentPreparedRun, AgentToolError> {
-        let mut prepared =
-            WorkspaceAgentScene::new(self.host.workspace().clone()).assemble(task)?;
-        prepared.capability = AgentCapabilityBinding::new(
-            prepared.capability.description,
-            Arc::new(self.host.clone()),
-        );
-        Ok(prepared)
-    }
 }
 
 impl WorkspaceAgentScene {
@@ -729,7 +707,6 @@ impl AgentSceneAssembly for WorkspaceAgentScene {
                     contracts::CapabilityAuthorization {
                         all_documents: false,
                         document_ids: scope.document_ids.clone(),
-                        ..contracts::CapabilityAuthorization::default()
                     },
                     serde_json::json!({
                         "documentId": document_id,
@@ -905,7 +882,6 @@ fn capability_authorization(scope: &AgentScopeSelector) -> contracts::Capability
     contracts::CapabilityAuthorization {
         all_documents: scope.all_documents,
         document_ids: scope.document_ids.clone(),
-        ..contracts::CapabilityAuthorization::default()
     }
 }
 
@@ -1425,12 +1401,10 @@ mod tests {
     };
     use contracts::DocumentRecord;
     use domain::{DocumentId, DocumentState, TranscriptSegment};
-    use futures::future;
     use llm::{
         LlmOutput, LlmProtocol, LlmProviderDescriptor, LlmUsage, ModelCapabilities, ProbeResult,
     };
     use runtime::JobRuntime;
-    use settings::{AppSettings, SettingsError, SettingsRepository, SettingsService};
     use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, VecDeque};
     use std::sync::{mpsc, Mutex};
@@ -1765,518 +1739,6 @@ mod tests {
             ),
             AgentRuntimeConfig::default(),
         )
-    }
-
-    struct HostProbeAsr;
-
-    impl crate::AsrBackend for HostProbeAsr {
-        fn descriptor(&self) -> contracts::BackendDescriptor {
-            contracts::BackendDescriptor {
-                id: "host-probe-asr".into(),
-                task: contracts::BackendTask::Asr,
-                capabilities: Vec::new(),
-                configurable_diarization_stages: Vec::new(),
-                diarization_stage_options: Vec::new(),
-            }
-        }
-
-        fn probe(&self, _: &contracts::ModelRef) -> Result<(), contracts::BackendError> {
-            Ok(())
-        }
-
-        fn transcribe(
-            &self,
-            _: contracts::AsrRequest,
-            _: runtime::JobContext,
-        ) -> crate::BackendFuture<contracts::AsrResult> {
-            Box::pin(future::ready(Err(
-                contracts::BackendError::not_implemented("Host probe ASR is not used by this test"),
-            )))
-        }
-    }
-
-    struct HostProbeDiarization;
-
-    impl crate::DiarizationBackend for HostProbeDiarization {
-        fn descriptor(&self) -> contracts::BackendDescriptor {
-            contracts::BackendDescriptor {
-                id: "host-probe-diarization".into(),
-                task: contracts::BackendTask::Diarization,
-                capabilities: Vec::new(),
-                configurable_diarization_stages: Vec::new(),
-                diarization_stage_options: Vec::new(),
-            }
-        }
-
-        fn probe(&self, _: &contracts::ModelRef) -> Result<(), contracts::BackendError> {
-            Ok(())
-        }
-
-        fn diarize(
-            &self,
-            _: contracts::DiarizationRequest,
-            _: runtime::JobContext,
-        ) -> crate::BackendFuture<contracts::DiarizationResult> {
-            Box::pin(future::ready(Err(
-                contracts::BackendError::not_implemented(
-                    "Host probe diarization is not used by this test",
-                ),
-            )))
-        }
-    }
-
-    struct RuntimeMemorySettings(Mutex<AppSettings>);
-
-    impl SettingsRepository for RuntimeMemorySettings {
-        fn load(&self) -> Result<AppSettings, SettingsError> {
-            Ok(self.0.lock().unwrap().clone())
-        }
-
-        fn save(&self, settings: &AppSettings) -> Result<(), SettingsError> {
-            *self.0.lock().unwrap() = settings.clone();
-            Ok(())
-        }
-    }
-
-    fn real_capability_host() -> crate::AgentHost {
-        let repository = TestRepository::with_document("# Host service fixture\n");
-        let documents = DocumentService::new(repository);
-        let workspace = crate::WorkspaceService::new(
-            crate::ProcessingService::new(Arc::new(HostProbeAsr), Arc::new(HostProbeDiarization)),
-            documents.clone(),
-        );
-        let settings = SettingsService::open(Arc::new(RuntimeMemorySettings(Mutex::new(
-            AppSettings::default(),
-        ))))
-        .unwrap();
-        crate::AgentHost::new(
-            crate::WorkspaceCapabilityPort::new(
-                documents,
-                crate::WorkspaceAccessPolicy::AllDocuments,
-            ),
-            crate::AudioCapabilityPort::new(workspace, [domain::ProjectId::new("allowed")]),
-            crate::SettingsCapabilityPort::new(
-                settings,
-                [
-                    "assistant.connections".into(),
-                    "assistant.connectionTargets".into(),
-                    "assistant.credentials".into(),
-                    "assistant.writePolicy".into(),
-                ],
-            ),
-            [
-                "assistant.connections".into(),
-                "assistant.connectionTargets".into(),
-                "assistant.credentials".into(),
-                "assistant.writePolicy".into(),
-            ],
-        )
-    }
-
-    struct HostServiceInvoker {
-        host: crate::AgentHost,
-    }
-
-    impl AgentCapabilityInvoker for HostServiceInvoker {
-        fn execute(
-            &self,
-            tool_name: &str,
-            mut request: CapabilityCallRequest,
-        ) -> CapabilityCallResponse {
-            match tool_name {
-                "audio.probe" => {
-                    request.capability_id = "audio.processing".into();
-                    request.operation = "probe".into();
-                    request.arguments = serde_json::json!({
-                        "projectId": "allowed",
-                        "asrModel": {
-                            "backendId": "host-probe-asr",
-                            "modelId": "probe",
-                            "revision": null,
-                            "artifactPath": "",
-                            "artifacts": []
-                        },
-                        "diarizationModel": {
-                            "backendId": "host-probe-diarization",
-                            "modelId": "probe",
-                            "revision": null,
-                            "artifactPath": "",
-                            "artifacts": []
-                        }
-                    });
-                }
-                "settings.snapshot" => {
-                    request.capability_id = "settings.app".into();
-                    request.operation = "snapshot".into();
-                    request.arguments = serde_json::json!({});
-                }
-                "settings.credentials" => {
-                    request.capability_id = "settings.app".into();
-                    request.operation = "read".into();
-                    request.arguments = serde_json::json!({"section": "credentials"});
-                }
-                _ => {
-                    return CapabilityCallResponse::failure(
-                        &request,
-                        contracts::CapabilityServiceError::new(
-                            "TEST_TOOL_UNKNOWN",
-                            "Host service test tool is not supported",
-                            false,
-                        ),
-                    )
-                }
-            }
-            self.host.dispatch(request)
-        }
-
-        fn provider_response(&self, response: &CapabilityCallResponse) -> CapabilityCallResponse {
-            response.clone()
-        }
-    }
-
-    struct HostServiceScene {
-        host: crate::AgentHost,
-        authorization: contracts::CapabilityAuthorization,
-        tools: Vec<AgentToolDefinition>,
-    }
-
-    impl AgentSceneAssembly for HostServiceScene {
-        fn assemble(&self, task: &AgentTask) -> Result<AgentPreparedRun, AgentToolError> {
-            let llm_tools = self
-                .tools
-                .iter()
-                .map(|tool| LlmToolDefinition {
-                    name: tool.name.clone(),
-                    description: tool.description.clone(),
-                    input_schema: tool.input_schema.clone(),
-                })
-                .collect();
-            Ok(AgentPreparedRun {
-                task_id: task.task_id.clone(),
-                context: AgentContext {
-                    instructions: "Use the Host-routed service tools.".into(),
-                    messages: vec![LlmMessage::User(vec![LlmInputBlock::Text {
-                        text: task.prompt.clone(),
-                    }])],
-                    tools: llm_tools,
-                    source_results: Vec::new(),
-                    scope: AgentScopeSelector::default(),
-                    evidence_segment_ids: Vec::new(),
-                },
-                capability: AgentCapabilityBinding::new(
-                    AgentCapabilityDescription {
-                        capability_id: "test.host-services".into(),
-                        capability_version: 1,
-                        write_mode: AgentWriteMode::Automatic,
-                        authorization: self.authorization.clone(),
-                        tools: self.tools.clone(),
-                    },
-                    Arc::new(HostServiceInvoker {
-                        host: self.host.clone(),
-                    }),
-                ),
-            })
-        }
-    }
-
-    struct MultiServiceScene {
-        capability: Arc<MultiServiceCapability>,
-        authorization: contracts::CapabilityAuthorization,
-    }
-
-    struct MultiServiceCapability {
-        workspace: FakeService,
-        audio: FakeService,
-        settings: FakeService,
-        expected_authorization: Option<contracts::CapabilityAuthorization>,
-    }
-
-    #[derive(Default)]
-    struct FakeService {
-        calls: Mutex<Vec<String>>,
-    }
-
-    impl AgentCapabilityInvoker for MultiServiceCapability {
-        fn execute(
-            &self,
-            tool_name: &str,
-            request: CapabilityCallRequest,
-        ) -> CapabilityCallResponse {
-            let service = match tool_name {
-                "workspace.read" => &self.workspace,
-                "audio.probe" => &self.audio,
-                "settings.snapshot" => &self.settings,
-                _ => panic!("unexpected fake service tool: {tool_name}"),
-            };
-            service.calls.lock().unwrap().push(tool_name.to_owned());
-            if let Some(expected) = &self.expected_authorization {
-                assert_eq!(&request.authorization, expected);
-            }
-            CapabilityCallResponse::success(&request, serde_json::json!({"service": tool_name}))
-        }
-    }
-
-    impl AgentSceneAssembly for MultiServiceScene {
-        fn assemble(&self, task: &AgentTask) -> Result<AgentPreparedRun, AgentToolError> {
-            let tools = [
-                ("workspace.read", "Read a workspace fact."),
-                ("audio.probe", "Probe audio capability."),
-                ("settings.snapshot", "Read settings snapshot."),
-            ]
-            .into_iter()
-            .map(|(name, description)| AgentToolDefinition {
-                name: name.into(),
-                description: description.into(),
-                side_effect: false,
-                input_schema: serde_json::json!({"type": "object"}),
-            })
-            .collect::<Vec<_>>();
-            let llm_tools = tools
-                .iter()
-                .map(|tool| LlmToolDefinition {
-                    name: tool.name.clone(),
-                    description: tool.description.clone(),
-                    input_schema: tool.input_schema.clone(),
-                })
-                .collect();
-            Ok(AgentPreparedRun {
-                task_id: task.task_id.clone(),
-                context: AgentContext {
-                    instructions: "Use the authorized service tools.".into(),
-                    messages: vec![LlmMessage::User(vec![LlmInputBlock::Text {
-                        text: task.prompt.clone(),
-                    }])],
-                    tools: llm_tools,
-                    source_results: Vec::new(),
-                    scope: AgentScopeSelector::default(),
-                    evidence_segment_ids: Vec::new(),
-                },
-                capability: AgentCapabilityBinding::new(
-                    AgentCapabilityDescription {
-                        capability_id: "test.services".into(),
-                        capability_version: 1,
-                        write_mode: AgentWriteMode::Automatic,
-                        authorization: self.authorization.clone(),
-                        tools,
-                    },
-                    self.capability.clone(),
-                ),
-            })
-        }
-    }
-
-    #[test]
-    fn one_runtime_loop_invokes_workspace_audio_and_settings_capabilities() {
-        let provider = FakeProvider::new([
-            Ok(output(
-                vec![
-                    LlmOutputBlock::ToolCall {
-                        id: "workspace-call".into(),
-                        name: "workspace.read".into(),
-                        arguments_json: "{}".into(),
-                    },
-                    LlmOutputBlock::ToolCall {
-                        id: "audio-call".into(),
-                        name: "audio.probe".into(),
-                        arguments_json: "{}".into(),
-                    },
-                    LlmOutputBlock::ToolCall {
-                        id: "settings-call".into(),
-                        name: "settings.snapshot".into(),
-                        arguments_json: "{}".into(),
-                    },
-                ],
-                LlmStopReason::ToolUse,
-            )),
-            text_output("All three service capabilities responded."),
-        ]);
-        let capability = Arc::new(MultiServiceCapability {
-            workspace: FakeService::default(),
-            audio: FakeService::default(),
-            settings: FakeService::default(),
-            expected_authorization: None,
-        });
-        let scene = MultiServiceScene {
-            capability: capability.clone(),
-            authorization: contracts::CapabilityAuthorization::default(),
-        };
-        let result = AgentRuntime::new(provider, scene, AgentRuntimeConfig::default()).run(
-            &task(AgentScene::Ask, DocumentProjection::Metadata),
-            &AgentCancellation::new(),
-        );
-
-        assert!(result.error.is_none());
-        assert_eq!(result.diagnostics.tool_rounds, 1);
-        assert_eq!(
-            *capability.workspace.calls.lock().unwrap(),
-            vec!["workspace.read".to_string()]
-        );
-        assert_eq!(
-            *capability.audio.calls.lock().unwrap(),
-            vec!["audio.probe".to_string()]
-        );
-        assert_eq!(
-            *capability.settings.calls.lock().unwrap(),
-            vec!["settings.snapshot".to_string()]
-        );
-    }
-
-    #[test]
-    fn runtime_preserves_full_capability_authorization_for_each_tool_call() {
-        let provider = FakeProvider::new([
-            Ok(output(
-                vec![
-                    LlmOutputBlock::ToolCall {
-                        id: "workspace-call".into(),
-                        name: "workspace.read".into(),
-                        arguments_json: "{}".into(),
-                    },
-                    LlmOutputBlock::ToolCall {
-                        id: "audio-call".into(),
-                        name: "audio.probe".into(),
-                        arguments_json: "{}".into(),
-                    },
-                    LlmOutputBlock::ToolCall {
-                        id: "settings-call".into(),
-                        name: "settings.snapshot".into(),
-                        arguments_json: "{}".into(),
-                    },
-                ],
-                LlmStopReason::ToolUse,
-            )),
-            text_output("All authorized service capabilities responded."),
-        ]);
-        let authorization = contracts::CapabilityAuthorization {
-            all_documents: true,
-            document_ids: vec!["document-1".into()],
-            project_ids: vec!["project-1".into()],
-            settings_fields: vec!["assistant.writePolicy".into()],
-        };
-        let capability = Arc::new(MultiServiceCapability {
-            workspace: FakeService::default(),
-            audio: FakeService::default(),
-            settings: FakeService::default(),
-            expected_authorization: Some(authorization.clone()),
-        });
-        let scene = MultiServiceScene {
-            capability,
-            authorization,
-        };
-        let result = AgentRuntime::new(provider, scene, AgentRuntimeConfig::default()).run(
-            &task(AgentScene::Ask, DocumentProjection::Metadata),
-            &AgentCancellation::new(),
-        );
-
-        assert!(result.error.is_none(), "runtime error: {:?}", result.error);
-        assert_eq!(result.diagnostics.tool_rounds, 1);
-    }
-
-    #[test]
-    fn runtime_reaches_real_host_audio_and_settings_ports_with_grant_boundaries() {
-        let provider = FakeProvider::new([
-            Ok(output(
-                vec![
-                    LlmOutputBlock::ToolCall {
-                        id: "audio-call".into(),
-                        name: "audio.probe".into(),
-                        arguments_json: "{}".into(),
-                    },
-                    LlmOutputBlock::ToolCall {
-                        id: "settings-call".into(),
-                        name: "settings.snapshot".into(),
-                        arguments_json: "{}".into(),
-                    },
-                ],
-                LlmStopReason::ToolUse,
-            )),
-            text_output("The Host returned both service results."),
-        ]);
-        let authorization = contracts::CapabilityAuthorization {
-            project_ids: vec!["allowed".into()],
-            settings_fields: vec![
-                "assistant.connections".into(),
-                "assistant.connectionTargets".into(),
-                "assistant.credentials".into(),
-                "assistant.writePolicy".into(),
-            ],
-            ..Default::default()
-        };
-        let tools = vec![
-            AgentToolDefinition {
-                name: "audio.probe".into(),
-                description: "Probe the audio service.".into(),
-                side_effect: false,
-                input_schema: serde_json::json!({"type": "object"}),
-            },
-            AgentToolDefinition {
-                name: "settings.snapshot".into(),
-                description: "Read the public settings snapshot.".into(),
-                side_effect: false,
-                input_schema: serde_json::json!({"type": "object"}),
-            },
-        ];
-        let scene = HostServiceScene {
-            host: real_capability_host(),
-            authorization,
-            tools,
-        };
-        let result = AgentRuntime::new(provider, scene, AgentRuntimeConfig::default()).run(
-            &task(AgentScene::Ask, DocumentProjection::Metadata),
-            &AgentCancellation::new(),
-        );
-        assert!(result.error.is_none(), "runtime error: {:?}", result.error);
-        assert_eq!(result.results.len(), 2);
-        assert_eq!(result.results[0].result.as_ref().unwrap()["probed"], true);
-        assert!(result.results[1].result.as_ref().unwrap()["revision"].is_string());
-    }
-
-    #[test]
-    fn runtime_cannot_escalate_a_settings_grant_through_the_real_host() {
-        let provider = FakeProvider::new([tool_output(
-            "settings-call",
-            "settings.credentials",
-            serde_json::json!({}),
-        )]);
-        let scene = HostServiceScene {
-            host: real_capability_host(),
-            authorization: contracts::CapabilityAuthorization {
-                settings_fields: vec!["assistant.writePolicy".into()],
-                ..Default::default()
-            },
-            tools: vec![AgentToolDefinition {
-                name: "settings.credentials".into(),
-                description: "Read credential status.".into(),
-                side_effect: false,
-                input_schema: serde_json::json!({"type": "object"}),
-            }],
-        };
-        let result = AgentRuntime::new(
-            provider,
-            scene,
-            AgentRuntimeConfig {
-                max_tool_rounds: 1,
-                ..Default::default()
-            },
-        )
-        .run(
-            &task(AgentScene::Ask, DocumentProjection::Metadata),
-            &AgentCancellation::new(),
-        );
-        assert_eq!(
-            result.results[0].error.as_ref().unwrap().code,
-            "SETTINGS_FIELD_NOT_GRANTED"
-        );
-        assert_eq!(
-            result.results[0]
-                .error
-                .as_ref()
-                .unwrap()
-                .context
-                .as_ref()
-                .unwrap()
-                .operation,
-            Some("read".into())
-        );
     }
 
     #[test]

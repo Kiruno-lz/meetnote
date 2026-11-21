@@ -122,10 +122,6 @@ impl ProcessingService {
         }
     }
 
-    pub fn job_snapshot(&self, job_id: JobId) -> Result<JobSnapshot, JobRuntimeError> {
-        self.runtime.snapshot(job_id)
-    }
-
     pub fn remove_job(&self, job_id: JobId) -> Result<JobSnapshot, JobRuntimeError> {
         self.runtime.remove(job_id)
     }
@@ -655,7 +651,7 @@ impl WorkspaceService {
         self.start_project_processing_inner(project_id, request)
     }
 
-    pub fn processing_request(
+    fn processing_request(
         &self,
         project_id: &ProjectId,
         asr_model: ModelRef,
@@ -684,22 +680,8 @@ impl WorkspaceService {
         })
     }
 
-    pub fn start_project_processing_with_request(
-        &self,
-        project_id: ProjectId,
-        request: ProcessingRequest,
-    ) -> Result<ProjectProcessingJob, contracts::BackendError> {
-        // Until the jobs are running, a documents-root switch waits; after
-        // that it sees them and refuses.
-        let _no_switch = self
-            .documents_root
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.start_project_processing_inner(project_id, request)
-    }
-
-    // Both public admission paths hold documents_root across request reads,
-    // probe and registration; do not acquire the read lock recursively here.
+    // The caller holds documents_root across request reads, probe and
+    // registration; do not acquire the read lock recursively here.
     fn start_project_processing_inner(
         &self,
         project_id: ProjectId,
@@ -809,10 +791,6 @@ impl WorkspaceService {
             asr_events: contexts.asr_events,
             diarization_events: contexts.diarization_events,
         })
-    }
-
-    pub fn discard_processing_job(&self, job: &ProjectProcessingJob) {
-        self.discard_processing_job_ids(job.job_ids());
     }
 
     pub fn discard_processing_job_ids(&self, (asr_job, diarization_job): (JobId, JobId)) {

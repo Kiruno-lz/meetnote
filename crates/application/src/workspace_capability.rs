@@ -39,9 +39,9 @@ pub const MAX_CAPABILITY_RESULT_BYTES: usize = 512 * 1024;
 
 /// Projects Workspace results before they cross the capability boundary.
 ///
-/// The port is shared by Built-in, CLI, and external capability consumers, so
-/// sensitive local locators and secret-bearing error context must be removed
-/// here rather than only while preparing a particular model request.
+/// Every Assistant tool result passes through here, so sensitive local
+/// locators and secret-bearing error context are removed at the port rather
+/// than only while preparing a particular model request.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CapabilityProjectionPolicy;
 
@@ -1656,34 +1656,12 @@ impl WorkspaceCapabilityPort {
     }
 
     pub fn confirm(&self, confirmation_id: &str, request_id: &str) -> CapabilityResponse {
-        CapabilityProjectionPolicy::project_response(self.confirm_inner(
-            confirmation_id,
-            request_id,
-            None,
-        ))
+        CapabilityProjectionPolicy::project_response(
+            self.confirm_inner(confirmation_id, request_id),
+        )
     }
 
-    /// Confirm a pending mutation while applying the request's narrower scope.
-    /// The port's grant remains authoritative; this selector can only reduce it.
-    pub fn confirm_scoped(
-        &self,
-        confirmation_id: &str,
-        request_id: &str,
-        scope: &AgentScopeSelector,
-    ) -> CapabilityResponse {
-        CapabilityProjectionPolicy::project_response(self.confirm_inner(
-            confirmation_id,
-            request_id,
-            Some(scope),
-        ))
-    }
-
-    fn confirm_inner(
-        &self,
-        confirmation_id: &str,
-        request_id: &str,
-        scope: Option<&AgentScopeSelector>,
-    ) -> CapabilityResponse {
+    fn confirm_inner(&self, confirmation_id: &str, request_id: &str) -> CapabilityResponse {
         if !self.granted_controls.contains(CONFIRM_CONTROL) {
             return CapabilityResponse::failure(
                 request_id,
@@ -1712,7 +1690,7 @@ impl WorkspaceCapabilityPort {
                 true,
             )),
             Some(pending) => {
-                if let Err(error) = self.ensure_pending_access_scoped(&pending.batch, scope) {
+                if let Err(error) = self.ensure_pending_access(&pending.batch) {
                     match self.documents.save_pending_agent_mutation(pending) {
                         Ok(()) => Err(error),
                         Err(store_error) => Err(map_store_error(store_error)),
@@ -1745,33 +1723,10 @@ impl WorkspaceCapabilityPort {
     }
 
     pub fn reject(&self, confirmation_id: &str, request_id: &str) -> CapabilityResponse {
-        CapabilityProjectionPolicy::project_response(self.reject_inner(
-            confirmation_id,
-            request_id,
-            None,
-        ))
+        CapabilityProjectionPolicy::project_response(self.reject_inner(confirmation_id, request_id))
     }
 
-    /// Reject a pending mutation while applying the request's narrower scope.
-    pub fn reject_scoped(
-        &self,
-        confirmation_id: &str,
-        request_id: &str,
-        scope: &AgentScopeSelector,
-    ) -> CapabilityResponse {
-        CapabilityProjectionPolicy::project_response(self.reject_inner(
-            confirmation_id,
-            request_id,
-            Some(scope),
-        ))
-    }
-
-    fn reject_inner(
-        &self,
-        confirmation_id: &str,
-        request_id: &str,
-        scope: Option<&AgentScopeSelector>,
-    ) -> CapabilityResponse {
+    fn reject_inner(&self, confirmation_id: &str, request_id: &str) -> CapabilityResponse {
         if !self.granted_controls.contains(REJECT_CONTROL) {
             return CapabilityResponse::failure(
                 request_id,
@@ -1784,7 +1739,7 @@ impl WorkspaceCapabilityPort {
         }
         match self.documents.take_pending_agent_mutation(confirmation_id) {
             Ok(Some(pending)) => {
-                if let Err(error) = self.ensure_pending_access_scoped(&pending.batch, scope) {
+                if let Err(error) = self.ensure_pending_access(&pending.batch) {
                     if let Err(store_error) = self.documents.save_pending_agent_mutation(pending) {
                         return CapabilityResponse::failure(
                             request_id,
@@ -1825,29 +1780,10 @@ impl WorkspaceCapabilityPort {
     }
 
     pub fn undo(&self, undo_token: &str, request_id: &str) -> CapabilityResponse {
-        CapabilityProjectionPolicy::project_response(self.undo_inner(undo_token, request_id, None))
+        CapabilityProjectionPolicy::project_response(self.undo_inner(undo_token, request_id))
     }
 
-    /// Undo a mutation while applying the request's narrower scope.
-    pub fn undo_scoped(
-        &self,
-        undo_token: &str,
-        request_id: &str,
-        scope: &AgentScopeSelector,
-    ) -> CapabilityResponse {
-        CapabilityProjectionPolicy::project_response(self.undo_inner(
-            undo_token,
-            request_id,
-            Some(scope),
-        ))
-    }
-
-    fn undo_inner(
-        &self,
-        undo_token: &str,
-        request_id: &str,
-        scope: Option<&AgentScopeSelector>,
-    ) -> CapabilityResponse {
+    fn undo_inner(&self, undo_token: &str, request_id: &str) -> CapabilityResponse {
         if !self.granted_controls.contains(UNDO_CONTROL) {
             return CapabilityResponse::failure(
                 request_id,
@@ -1864,15 +1800,7 @@ impl WorkspaceCapabilityPort {
         };
         for id in ids {
             let id = DocumentId::new(id);
-            let in_request_scope = scope.map_or(true, |scope| {
-                scope.all_documents
-                    || scope.document_ids.is_empty()
-                    || scope
-                        .document_ids
-                        .iter()
-                        .any(|candidate| candidate == id.as_str())
-            });
-            if !self.access.grants(&id) || !in_request_scope {
+            if !self.access.grants(&id) {
                 return CapabilityResponse::failure(
                     request_id,
                     document_error(
@@ -1910,24 +1838,11 @@ impl WorkspaceCapabilityPort {
         Err(error)
     }
 
-    fn ensure_pending_access_scoped(
-        &self,
-        batch: &DocumentMutationBatch,
-        scope: Option<&AgentScopeSelector>,
-    ) -> Result<(), AgentToolError> {
+    /// Writes that edit an existing document stay within the port's grant;
+    /// newly created documents have no prior revision to authorize.
+    fn ensure_pending_access(&self, batch: &DocumentMutationBatch) -> Result<(), AgentToolError> {
         for write in &batch.writes {
-            let in_request_scope = scope.map_or(true, |scope| {
-                scope.all_documents
-                    || scope.document_ids.is_empty()
-                    || scope
-                        .document_ids
-                        .iter()
-                        .any(|candidate| candidate == write.record.state.id().as_str())
-            });
-            let requires_port_access = scope.is_some() || write.expected_revision.is_some();
-            if requires_port_access
-                && (!self.access.grants(write.record.state.id()) || !in_request_scope)
-            {
+            if write.expected_revision.is_some() && !self.access.grants(write.record.state.id()) {
                 return Err(document_error(
                     AgentErrorCode::DocumentAccessDenied,
                     "pending mutation is outside the current caller grant",
@@ -2022,7 +1937,13 @@ fn format_string_list(values: &[String]) -> String {
 fn decode_arguments<T: DeserializeOwned>(
     arguments: &serde_json::Value,
 ) -> Result<T, AgentToolError> {
-    crate::capabilities::decode_object_arguments(arguments)
+    if !arguments.is_object() {
+        return Err(invalid_arguments(
+            "arguments",
+            "invalid tool arguments: arguments must be a JSON object",
+        ));
+    }
+    serde_json::from_value(arguments.clone())
         .map_err(|error| invalid_arguments("arguments", format!("invalid tool arguments: {error}")))
 }
 
@@ -3231,7 +3152,7 @@ mod tests {
     }
 
     #[test]
-    fn capability_boundary_projects_initial_follow_up_and_cli_wire_outputs() {
+    fn capability_boundary_projects_initial_and_follow_up_outputs() {
         let (gateway, repository) = gateway();
         let mut record = repository
             .read(&DocumentId::new("allowed"))

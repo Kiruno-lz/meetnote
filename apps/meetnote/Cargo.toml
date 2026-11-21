@@ -3,9 +3,6 @@ name = "meetnote"
 version = "0.1.0"
 edition = "2024"
 
-[features]
-host-test-fake-audio = []
-
 [[bin]]
 name = "meetnote"
 path = "src/main.rs"
@@ -23,7 +20,6 @@ domain = { path = "../../crates/domain" }
 futures.workspace = true
 llm = { path = "../../crates/llm" }
 runtime = { path = "../../crates/runtime" }
-serde.workspace = true
 serde_json.workspace = true
 persistence = { path = "../../crates/persistence" }
 models = { path = "../../crates/models" }

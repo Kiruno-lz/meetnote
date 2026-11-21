@@ -3,11 +3,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Version of the Host-to-plugin invocation contract.
+/// Version of the runtime-to-capability invocation contract.
 pub const CAPABILITY_CALL_SCHEMA_VERSION: u32 = 1;
 
-/// Authorization is intentionally service-neutral. Each service only reads the
-/// grant fields it owns and intersects them with the grant installed by Host.
+/// Document scope carried with a call; the capability intersects it with the
+/// grant it was constructed with and never broadens it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilityAuthorization {
@@ -15,14 +15,10 @@ pub struct CapabilityAuthorization {
     pub all_documents: bool,
     #[serde(default)]
     pub document_ids: Vec<String>,
-    #[serde(default)]
-    pub project_ids: Vec<String>,
-    #[serde(default)]
-    pub settings_fields: Vec<String>,
 }
 
-/// One externally visible Host call. The service owns interpretation of
-/// `arguments`; Host only validates routing, version, and the caller grant.
+/// One tool call routed by the Assistant runtime. The capability owns
+/// interpretation of `arguments`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilityCallRequest {
@@ -60,9 +56,9 @@ impl CapabilityCallRequest {
     }
 }
 
-/// Generic Host response. `result` stays a JSON value because each service
+/// Tool call response. `result` stays a JSON value because the capability
 /// owns its result type; the envelope still carries enough information to
-/// correlate and safely route the response back to the caller.
+/// correlate the response with its call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CapabilityCallResponse {
