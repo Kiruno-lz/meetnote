@@ -160,6 +160,7 @@ name = "application"
 version = "0.1.0"
 dependencies = [
  "audio",
+ "base64 0.22.1",
  "contracts",
  "domain",
  "futures",
@@ -168,12 +169,12 @@ dependencies = [
  "models",
  "regex",
  "runtime",
- "schemars",
  "serde",
  "serde_json",
  "settings",
  "sha2",
  "thiserror 2.0.21",
+ "url",
  "uuid",
 ]
 
@@ -2182,8 +2183,12 @@ checksum = "4744e383959f0db86ede514b809b1c53251889093803c05267acc7d4e7030d70"
 name = "llm"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.4.3",
+ "regex",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
  "ureq 2.12.1",
  "url",
@@ -2243,7 +2248,6 @@ dependencies = [
  "rune",
  "rune-kit",
  "runtime",
- "serde",
  "serde_json",
  "settings",
  "tempfile",
@@ -4283,8 +4287,6 @@ version = "0.1.0"
 dependencies = [
  "contracts",
  "fs2",
- "libc",
- "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

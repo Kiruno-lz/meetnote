@@ -33,6 +33,8 @@ hound = "3.5"
 bzip2 = "0.6"
 symphonia = { version = "0.5", default-features = false, features = ["aac", "alac", "flac", "isomp4", "mp3", "pcm", "wav"] }
 sha2 = "=0.11.0"
+base64 = "=0.22.1"
+getrandom = "=0.4.3"
 tar = "0.4"
 ureq = "2.12"
 url = "2"

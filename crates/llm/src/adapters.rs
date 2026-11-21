@@ -21,7 +21,7 @@ impl ProtocolAdapter for OpenAiChatCompletionsAdapter {
     }
 
     fn endpoint_path(&self) -> &'static str {
-        "/v1/chat/completions"
+        "/chat/completions"
     }
 
     fn encode(&self, request: &LlmRequest, model: &str) -> Result<Value, LlmError> {
@@ -183,7 +183,7 @@ impl ProtocolAdapter for AnthropicMessagesAdapter {
     }
 
     fn endpoint_path(&self) -> &'static str {
-        "/v1/messages"
+        "/messages"
     }
 
     fn encode(&self, request: &LlmRequest, model: &str) -> Result<Value, LlmError> {
@@ -346,7 +346,7 @@ impl ProtocolAdapter for OpenAiResponsesAdapter {
     }
 
     fn endpoint_path(&self) -> &'static str {
-        "/v1/responses"
+        "/responses"
     }
 
     fn encode(&self, request: &LlmRequest, model: &str) -> Result<Value, LlmError> {
@@ -773,7 +773,7 @@ mod tests {
         let adapter = OpenAiChatCompletionsAdapter;
         let payload = adapter.encode(&tool_round_request(), "route-a").unwrap();
 
-        assert_eq!(adapter.endpoint_path(), "/v1/chat/completions");
+        assert_eq!(adapter.endpoint_path(), "/chat/completions");
         assert_eq!(payload["stream"], false);
         assert_eq!(payload["messages"][0]["role"], "system");
         assert_eq!(payload["messages"][2]["tool_calls"][0]["id"], "call-1");
@@ -819,7 +819,7 @@ mod tests {
         let adapter = AnthropicMessagesAdapter;
         let payload = adapter.encode(&tool_round_request(), "route-b").unwrap();
 
-        assert_eq!(adapter.endpoint_path(), "/v1/messages");
+        assert_eq!(adapter.endpoint_path(), "/messages");
         assert_eq!(payload["system"], "Use only granted documents.");
         assert_eq!(payload["messages"][2]["content"][0]["type"], "tool_result");
         assert_eq!(payload["messages"][2]["content"][1]["type"], "text");
@@ -850,7 +850,7 @@ mod tests {
         let adapter = OpenAiResponsesAdapter;
         let payload = adapter.encode(&tool_round_request(), "route-c").unwrap();
 
-        assert_eq!(adapter.endpoint_path(), "/v1/responses");
+        assert_eq!(adapter.endpoint_path(), "/responses");
         assert_eq!(payload["store"], false);
         assert_eq!(payload["stream"], false);
         assert!(payload.get("previous_response_id").is_none());
