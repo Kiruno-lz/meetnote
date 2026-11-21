@@ -1,0 +1,22 @@
+[package]
+name = "devices"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+fs2.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSBundle", "NSData", "NSDictionary", "NSError", "NSString", "NSUUID", "NSValue", "NSObject"] }
+objc2-core-bluetooth = { version = "0.3.2", default-features = false, features = ["std", "CBAdvertisementData", "CBAttribute", "CBCentralManager", "CBCentralManagerConstants", "CBCharacteristic", "CBManager", "CBPeer", "CBPeripheral", "CBService", "CBUUID", "dispatch2"] }
+dispatch2 = { version = "0.3.1", default-features = false, features = ["std", "objc2"] }
+
+[dev-dependencies]
+tempfile = "3"

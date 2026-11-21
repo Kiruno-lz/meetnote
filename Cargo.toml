@@ -8,6 +8,7 @@ members = [
     "crates/asr-sherpa-onnx",
     "crates/asr-whisper-rs",
     "crates/contracts",
+    "crates/devices",
     "crates/diarization",
     "crates/diarization-native",
     "crates/diarization-sherpa-onnx",
