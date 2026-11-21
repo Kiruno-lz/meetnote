@@ -16,6 +16,7 @@
 - [架构对齐计划](plan/architecture-alignment.md)：当前架构进度、职责收敛、保留项和最小实施步骤。
 - [工程实施计划](plan/implementation-plan.md)：当前完成度、生产化缺口和验收顺序。
 - [产品瓶颈与改进优先级](plan/product-opportunities.md)：当前代码瓶颈、同类产品功能、本地全文搜索交付与后续验证。
+- [录音设备接入计划](plan/device-ingest-plan.md)：白名单设备目录、蓝牙 GATT 型号/SN/固件校验、有线配对、自动导入与分析，以及实测事实。
 - [Rune UI 计划](plan/ui-plan.md)：Rune 桌面的 route、技术栈、当前状态与测试基线。
 - [Assistant 构建计划](plan/assistant-plan.md)：Workspace、Audio、Settings 的 capability、Host 真实回应、MoonBit 插件与 Codex 经 Host 完成任务。
 - [渐进式 Benchmark 计划](plan/audio-quality-plan.md)：固定测试音频/gold、原子能力到 Agent 的自动门禁与模型比较报告。
@@ -27,5 +28,6 @@
 - [Diarization 三阶段模型与 native backend](reserch/diarization-native-three-stage.md)
 - [语音模型格式与 Rust 后端](reserch/voice-models-and-rust-runtimes.md)
 - [长音频离线分窗与语义子项目](reserch/audio-streaming-and-semantic-splitting.md)
+- [DJI Mic 3 TX 蓝牙识别](reserch/dji-mic3-ble-identification.md)：LE GATT 上的 DUML 协议，型号 `DM303_TX`、SN 与固件的字节来源。
 
 研究文档提供选型与验证依据；当前产品事实以 `architecture/`、`plan/` 和代码为准。

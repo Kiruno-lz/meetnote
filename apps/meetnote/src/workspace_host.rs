@@ -20,6 +20,7 @@ use crate::{Confirm, MeetNote, Route, documents::TreeMove};
 pub(crate) mod assistant;
 pub(crate) mod assistant_connection;
 mod audio;
+pub(crate) mod devices;
 pub(crate) mod diarization_stages;
 pub(crate) mod models;
 pub(crate) mod preferences;
@@ -43,6 +44,7 @@ pub struct WorkspaceHost {
     pub preferences: preferences::PreferenceHost,
     pub assistant: assistant::AssistantHost,
     pub speaker_library: speaker_library::LibraryHost,
+    pub devices: devices::DeviceHost,
 }
 
 struct Search {
@@ -199,6 +201,11 @@ impl WorkspaceHost {
             || self.speaker_library.writing()
     }
 
+    #[cfg(test)]
+    pub fn processing_config_settings(&self) -> PathBuf {
+        self.processing_config.settings_path().to_path_buf()
+    }
+
     pub fn configure_processing(&mut self, settings: Option<PathBuf>, models: Option<PathBuf>) {
         self.processing_config.configure(settings, models);
     }
@@ -243,6 +250,10 @@ impl WorkspaceHost {
             self.search = Some(Search { task, cancellation });
         }
     }
+}
+
+fn devices_discovery() -> ::devices::SystemDiscovery {
+    ::devices::SystemDiscovery
 }
 
 fn prepare_workspace(
@@ -310,6 +321,9 @@ impl MeetNote {
             std::env::var_os("MEETNOTE_MODEL_ROOT").map(PathBuf::from),
         );
         self.workspace_host.processing_config.persist_workspace = true;
+        if !self.sample_mode {
+            self.start_device_host(Arc::new(devices_discovery()));
+        }
         if let Some(root) = std::env::var_os("MEETNOTE_DOCUMENTS_ROOT") {
             self.open_workspace(PathBuf::from(root), false);
         } else if !self.sample_mode {
@@ -642,6 +656,7 @@ impl MeetNote {
             | self.poll_preferences(tx)
             | self.poll_speaker_library(tx)
             | self.poll_live_assistant(tx)
+            | self.poll_devices(tx)
             | changed
     }
 

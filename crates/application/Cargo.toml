@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 audio = { path = "../audio" }
 contracts = { path = "../contracts" }
+devices = { path = "../devices" }
 domain = { path = "../domain" }
 llm = { path = "../llm" }
 models = { path = "../models" }

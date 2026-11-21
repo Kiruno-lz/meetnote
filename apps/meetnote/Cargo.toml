@@ -16,6 +16,7 @@ asr = { path = "../../crates/asr" }
 asr-sherpa-onnx = { path = "../../crates/asr-sherpa-onnx" }
 asr-whisper-rs = { path = "../../crates/asr-whisper-rs" }
 contracts = { path = "../../crates/contracts" }
+devices = { path = "../../crates/devices" }
 diarization = { path = "../../crates/diarization" }
 diarization-native = { path = "../../crates/diarization-native" }
 diarization-sherpa-onnx = { path = "../../crates/diarization-sherpa-onnx" }

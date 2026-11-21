@@ -1,5 +1,6 @@
 mod assistant;
 mod controls;
+mod devices;
 mod documents;
 mod settings;
 mod shell;
@@ -11,6 +12,7 @@ use rune_kit::{ButtonVariant, Dialog};
 use ui_text::Locale;
 
 use controls::action;
+use workspace_host::devices::PairScene;
 use workspace_host::speaker_library::{LibraryChange, LibraryPathChange};
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -18,14 +20,16 @@ enum Route {
     Assistant,
     #[default]
     Documents,
+    Devices,
     Models,
     Settings,
 }
 
 impl Route {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 5] = [
         Self::Assistant,
         Self::Documents,
+        Self::Devices,
         Self::Models,
         Self::Settings,
     ];
@@ -36,6 +40,7 @@ impl Route {
             match self {
                 Self::Assistant => "assistant",
                 Self::Documents => "meetings",
+                Self::Devices => "devices",
                 Self::Models => "models",
                 Self::Settings => "settings",
             },
@@ -46,6 +51,7 @@ impl Route {
         match self {
             Self::Assistant => "nav-assistant",
             Self::Documents => "nav-documents",
+            Self::Devices => "nav-devices",
             Self::Models => "nav-models",
             Self::Settings => "nav-settings",
         }
@@ -68,6 +74,7 @@ enum Confirm {
         into: Option<String>,
     },
     ResetSettings,
+    RemoveDevice(String),
 }
 
 impl Confirm {
@@ -107,6 +114,11 @@ impl Confirm {
                 s.tr("merge_speaker_profiles"),
                 s.tr("merge_speaker_profiles_description"),
                 s.tr("merge"),
+            ),
+            Self::RemoveDevice(_) => (
+                s.tr("device_remove_title"),
+                s.tr("device_remove_description"),
+                s.tr("device_remove"),
             ),
             Self::ResetSettings => (
                 "Reset preview settings?",
@@ -195,6 +207,10 @@ impl MeetNote {
                 target: Some(target),
             }) => self.change_speaker_profiles(LibraryChange::Merge { source, target }, tx),
             Some(Confirm::MergeLibraryProfile { target: None, .. }) => {}
+            Some(Confirm::RemoveDevice(key)) => {
+                self.change_device(workspace_host::devices::RegistryChange::Remove(key), tx);
+                self.notify(self.tr("device_removed"), tx);
+            }
             Some(Confirm::ResetSettings) => {
                 self.settings = settings::Preferences::default();
                 self.notify("Sample settings reset", tx);
@@ -235,6 +251,7 @@ fn view(s: &MeetNote, cx: &mut Cx<MeetNote>) -> El {
         match s.route {
             Route::Documents => documents::page(s, k, &mut overlays),
             Route::Assistant => assistant::page(s, k, &mut overlays),
+            Route::Devices => devices::page(s, k, &mut overlays),
             Route::Models => settings::models_page(s, k),
             Route::Settings => settings::page(s, k, &mut overlays),
         }
@@ -300,7 +317,9 @@ fn view(s: &MeetNote, cx: &mut Cx<MeetNote>) -> El {
                             .variant(
                                 if matches!(
                                     confirm,
-                                    Confirm::RemoveSpeaker | Confirm::DeleteLibraryProfile(_)
+                                    Confirm::RemoveSpeaker
+                                        | Confirm::DeleteLibraryProfile(_)
+                                        | Confirm::RemoveDevice(_)
                                 ) {
                                     ButtonVariant::Danger
                                 } else {
@@ -319,6 +338,9 @@ fn view(s: &MeetNote, cx: &mut Cx<MeetNote>) -> El {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some(::devices::ble::HELPER_ARG) {
+        std::process::exit(::devices::ble::run_helper());
+    }
     if meetnote::desktop::run_command_line() {
         return;
     }
@@ -346,6 +368,36 @@ fn main() {
                 s.show_sample();
                 s.navigate(Route::Assistant);
                 s.assistant.sample_review();
+            }),
+            ("devices", |s| {
+                s.show_sample();
+                s.show_sample_devices(true);
+                s.navigate(Route::Devices);
+            }),
+            ("devices-empty", |s| {
+                s.show_sample();
+                s.navigate(Route::Devices);
+            }),
+            ("add-device", |s| {
+                s.show_sample();
+                s.navigate(Route::Devices);
+                s.workspace_host
+                    .devices
+                    .sample_pairing(PairScene::Reading, s.now);
+            }),
+            ("add-device-verified", |s| {
+                s.show_sample();
+                s.navigate(Route::Devices);
+                s.workspace_host
+                    .devices
+                    .sample_pairing(PairScene::Verified, s.now);
+            }),
+            ("add-device-paired", |s| {
+                s.show_sample();
+                s.navigate(Route::Devices);
+                s.workspace_host
+                    .devices
+                    .sample_pairing(PairScene::Done, s.now);
             }),
             ("models", |s| {
                 s.show_sample();
@@ -1979,7 +2031,7 @@ mod tests {
     fn history_restores_documents_and_discards_forward_entries_on_a_new_route() {
         let mut rt = runtime();
         click(&mut rt, "design");
-        command(&mut rt, '4', false, false);
+        command(&mut rt, '5', false, false);
         assert!(rt.state.route == Route::Settings);
         click(&mut rt, "navigate-back");
         assert_eq!(rt.state.documents.selection().0, "design");
@@ -1987,7 +2039,7 @@ mod tests {
         assert_eq!(rt.state.documents.selection().0, "product");
         click(&mut rt, "navigate-forward");
         assert_eq!(rt.state.documents.selection().0, "design");
-        command(&mut rt, '3', false, false);
+        command(&mut rt, '4', false, false);
         command(&mut rt, ']', false, false);
         assert!(rt.state.route == Route::Models);
     }
@@ -2414,5 +2466,450 @@ mod tests {
         assert_eq!(rt.state.documents.selection().1, "Product sync");
         click(&mut rt, "document-modes/segment3");
         assert!(visible_text(&rt, "Product sync draft"));
+    }
+
+    mod device_flow {
+        use super::*;
+        use crate::devices::card_id;
+        use ::devices::{
+            Advertisement, AttachedDevice, BleEvent, BleScan, BluetoothBlock, BluetoothState,
+            DeviceDiscovery, RegistryStore,
+        };
+        use futures::channel::mpsc::UnboundedSender;
+        use std::sync::{Arc, Mutex};
+
+        /// USB and Bluetooth as a test scripts them.
+        #[derive(Default)]
+        struct FakeDiscovery {
+            attached: Mutex<Vec<AttachedDevice>>,
+            generation: Mutex<u32>,
+            radio: Mutex<Option<UnboundedSender<BleEvent>>>,
+            settings_opened: Mutex<u32>,
+        }
+
+        impl FakeDiscovery {
+            fn plug(&self, devices: Vec<AttachedDevice>) {
+                *self.attached.lock().unwrap() = devices;
+                *self.generation.lock().unwrap() += 1;
+            }
+
+            fn advertise(&self, event: BleEvent) {
+                let radio = self.radio.lock().unwrap();
+                radio
+                    .as_ref()
+                    .expect("scan running")
+                    .unbounded_send(event)
+                    .unwrap();
+            }
+        }
+
+        impl DeviceDiscovery for FakeDiscovery {
+            fn mount_signature(&self) -> Result<String, String> {
+                Ok(self.generation.lock().unwrap().to_string())
+            }
+
+            fn attached(&self) -> Result<Vec<AttachedDevice>, String> {
+                Ok(self.attached.lock().unwrap().clone())
+            }
+
+            fn start_bluetooth(
+                &self,
+                events: UnboundedSender<BleEvent>,
+            ) -> Result<BleScan, BluetoothBlock> {
+                *self.radio.lock().unwrap() = Some(events);
+                Ok(BleScan::new(()))
+            }
+
+            fn open_bluetooth_settings(&self) {
+                *self.settings_opened.lock().unwrap() += 1;
+            }
+        }
+
+        fn hex(text: &str) -> Vec<u8> {
+            (0..text.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+                .collect()
+        }
+
+        fn write_wav(path: &std::path::Path) {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let mut wav = hound::WavWriter::create(
+                path,
+                hound::WavSpec {
+                    channels: 1,
+                    sample_rate: 16_000,
+                    bits_per_sample: 16,
+                    sample_format: hound::SampleFormat::Int,
+                },
+            )
+            .unwrap();
+            for sample in 0..1600i16 {
+                wav.write_sample(sample).unwrap();
+            }
+            wav.finalize().unwrap();
+        }
+
+        /// The registry key of the verified DMT03 and the USB volume it is
+        /// linked through.
+        const MIC_KEY: &str = "sn:9SFXN8N024XU81";
+        const MIC_VOLUME: &str = "vol:645BECBB-3236-3D95-9BAC-7E99F3B01EED";
+        const PERIPHERAL: &str = "3E01A09A-401A-1DEF-0B0A-A25C0C767481";
+
+        fn mic_on_usb(volume: &std::path::Path) -> AttachedDevice {
+            crate::workspace_host::devices::sample_attachment(volume.to_path_buf())
+        }
+
+        /// The transmitter in pairing mode: found, read over GATT, then the
+        /// outcome of verification.
+        fn transmitter_nearby(
+            discovery: &FakeDiscovery,
+            outcome: Result<::devices::verify::VerifiedDevice, String>,
+        ) {
+            discovery.advertise(BleEvent::State(BluetoothState::PoweredOn));
+            discovery.advertise(BleEvent::Seen(Advertisement {
+                peripheral: PERIPHERAL.into(),
+                local_name: Some("DJI Mic 3 TX-a73b42".into()),
+                manufacturer_data: Some(hex("aa08b200008c5823a73b43")),
+                service_uuids: vec!["FFF0".into()],
+                rssi: -48,
+                ..Default::default()
+            }));
+            discovery.advertise(BleEvent::Identifying(PERIPHERAL.into()));
+            discovery.advertise(BleEvent::Identified {
+                peripheral: PERIPHERAL.into(),
+                outcome,
+            });
+        }
+
+        /// One take as the transmitter writes it: original and on-device edit.
+        fn write_take(volume: &std::path::Path, take: &str) {
+            let folder = volume.join(format!("TX_MIC001_{take}"));
+            write_wav(&folder.join(format!("TX00_MIC001_{take}_orig.wav")));
+            write_wav(&folder.join(format!("TX00_MIC001_{take}_edit.wav")));
+        }
+
+        fn workspace_runtime(fixture: &std::path::Path) -> (TestRuntime, Arc<FakeDiscovery>) {
+            let root = fixture.join("documents");
+            std::fs::create_dir(&root).unwrap();
+            let mut rt = runtime();
+            open_test_workspace(&mut rt, &root);
+            let discovery = Arc::new(FakeDiscovery::default());
+            rt.state.start_device_host(discovery.clone());
+            click(&mut rt, "nav-devices");
+            (rt, discovery)
+        }
+
+        fn document_count(rt: &Runtime<MeetNote>) -> usize {
+            let root = rt
+                .state
+                .workspace_host
+                .live
+                .as_ref()
+                .unwrap()
+                .root()
+                .to_path_buf();
+            std::fs::read_dir(root)
+                .unwrap()
+                .flatten()
+                .filter(|entry| entry.path().join("state.json").exists())
+                .count()
+        }
+
+        #[test]
+        fn pairing_verifies_over_bluetooth_links_usb_then_imports_new_recordings() {
+            let fixture = tempfile::tempdir().unwrap();
+            let volume = fixture.path().join("NO NAME");
+            write_take(&volume, "20261120_093012");
+            let (mut rt, discovery) = workspace_runtime(fixture.path());
+            assert!(rt.find("devices-empty").is_some());
+
+            // The transmitter is already plugged in: nothing pairs before
+            // Bluetooth verifies it.
+            discovery.plug(vec![mic_on_usb(&volume)]);
+            until(&mut rt, |rt| rt.find("device-unpaired").is_some());
+            click(&mut rt, "device-add");
+            advance(&mut rt, 20);
+            assert!(rt.find("device-pair-step-0").is_some());
+            assert!(visible_text(&rt, "Searching nearby…"));
+
+            transmitter_nearby(
+                &discovery,
+                Ok(crate::workspace_host::devices::sample_verified()),
+            );
+            until_within(&mut rt, Duration::from_secs(10), |rt| {
+                rt.find("device-pair-finish").is_some()
+            });
+            assert!(visible_text(&rt, "SN  9SFXN8N024XU81"));
+            click(&mut rt, "device-pair-finish");
+
+            until_within(&mut rt, Duration::from_secs(10), |rt| {
+                document_count(rt) == 1 && rt.state.workspace_host.devices.import.is_none()
+            });
+            let settings = rt.state.workspace_host.processing_config_settings();
+            let registry = RegistryStore::beside_settings(&settings).load().unwrap();
+            let paired = registry.device(MIC_KEY).expect("paired by serial number");
+            assert_eq!(paired.usb_links, [MIC_VOLUME]);
+            assert_eq!(paired.identity.mac.as_deref(), Some("8C:58:23:A7:3B:43"));
+            assert_eq!(paired.identity.model_code.as_deref(), Some("DMT03"));
+            assert_eq!(paired.identity.firmware.as_deref(), Some("03.01.00.10"));
+            let ledger: Vec<_> = registry
+                .ledger(MIC_KEY)
+                .map(|file| file.path.clone())
+                .collect();
+            assert_eq!(
+                ledger,
+                ["TX_MIC001_20261120_093012/TX00_MIC001_20261120_093012_orig.wav"],
+                "only the original of the take is imported"
+            );
+            let card = card_id(MIC_KEY);
+            assert!(rt.find(&format!("{card}-serial")).is_some());
+            assert!(visible_text(&rt, "9SFXN8N024XU81"));
+            assert!(visible_text(&rt, "Connected · Up to date"));
+            // No models are installed: automatic analysis reports once and stops.
+            until_within(&mut rt, Duration::from_secs(10), |rt| {
+                rt.state.workspace_host.devices.analysis.is_empty()
+                    && !rt.state.workspace_host.busy()
+            });
+
+            // Unplug and plug back in: nothing new on the device, nothing imported.
+            discovery.plug(Vec::new());
+            until(&mut rt, |rt| visible_text(rt, "Not connected"));
+            discovery.plug(vec![mic_on_usb(&volume)]);
+            until(&mut rt, |rt| visible_text(rt, "Connected · Up to date"));
+            advance(&mut rt, 60);
+            assert_eq!(document_count(&rt), 1);
+        }
+
+        #[test]
+        fn a_paired_device_imports_on_connection_into_its_custom_folder_and_can_be_removed() {
+            let fixture = tempfile::tempdir().unwrap();
+            let volume = fixture.path().join("NO NAME");
+            let custom = fixture.path().join("Interviews");
+            std::fs::create_dir(&custom).unwrap();
+            write_wav(&volume.join("DJI_Audio_001/DJI_01.WAV"));
+            write_wav(&volume.join("DJI_Audio_001/DJI_02.WAV"));
+            std::fs::write(custom.join("DJI_01.WAV"), b"an older file").unwrap();
+            let (mut rt, discovery) = workspace_runtime(fixture.path());
+            let settings = rt.state.workspace_host.processing_config_settings();
+            let store = RegistryStore::beside_settings(&settings);
+            store
+                .update(|registry| {
+                    let mut device = ::devices::PairedDevice::new(
+                        MIC_KEY.into(),
+                        crate::workspace_host::devices::sample_identity(),
+                        1,
+                    );
+                    device.usb_links = vec![MIC_VOLUME.into()];
+                    device.import_dir = Some(custom.clone());
+                    device.auto_process = false;
+                    device.delete_after_import = true;
+                    registry.pair(device);
+                })
+                .unwrap();
+            // Read the registry written above.
+            rt.state.start_device_host(discovery.clone());
+            until(&mut rt, |rt| {
+                !rt.state.workspace_host.devices.registry.devices.is_empty()
+            });
+            let card = card_id(MIC_KEY);
+            assert!(rt.find(&format!("{card}-remove")).is_some());
+
+            discovery.plug(vec![mic_on_usb(&volume)]);
+            until_within(&mut rt, Duration::from_secs(10), |rt| {
+                document_count(rt) == 2
+            });
+            until(&mut rt, |rt| {
+                rt.state.workspace_host.devices.import.is_none()
+            });
+            assert_eq!(
+                std::fs::read(custom.join("DJI_01.WAV")).unwrap(),
+                b"an older file"
+            );
+            assert!(custom.join("DJI_01 (2).WAV").exists());
+            assert!(custom.join("DJI_02.WAV").exists());
+            assert!(
+                !volume.join("DJI_Audio_001/DJI_01.WAV").exists(),
+                "verified sources are deleted"
+            );
+            assert!(rt.state.workspace_host.devices.analysis.is_empty());
+
+            click(&mut rt, &format!("{card}-remove"));
+            click(&mut rt, "dialog-confirm");
+            until(&mut rt, |rt| {
+                RegistryStore::beside_settings(
+                    &rt.state.workspace_host.processing_config_settings(),
+                )
+                .load()
+                .unwrap()
+                .devices
+                .is_empty()
+            });
+            assert!(rt.find(&format!("{card}-remove")).is_none());
+            assert_eq!(
+                document_count(&rt),
+                2,
+                "removing a device keeps its documents"
+            );
+        }
+
+        #[test]
+        fn a_device_that_fails_verification_is_never_paired() {
+            let fixture = tempfile::tempdir().unwrap();
+            let volume = fixture.path().join("NO NAME");
+            write_take(&volume, "20261120_093012");
+            let (mut rt, discovery) = workspace_runtime(fixture.path());
+            click(&mut rt, "device-add");
+            discovery.plug(vec![mic_on_usb(&volume)]);
+            transmitter_nearby(
+                &discovery,
+                Err("unsupported hardware version \"DMT03_TX\"".into()),
+            );
+            until(&mut rt, |rt| visible_text(rt, "Not verified"));
+            advance(&mut rt, 60);
+            assert!(rt.find("device-pair-finish").is_none());
+            assert!(rt.state.workspace_host.devices.registry.devices.is_empty());
+            assert_eq!(document_count(&rt), 0);
+            assert!(visible_text(
+                &rt,
+                "Waiting to verify a device over Bluetooth…"
+            ));
+        }
+
+        /// The transmitter as it often appears: verified from its name-only
+        /// packets before any packet with the address arrives.
+        fn verified_by_name_only(discovery: &FakeDiscovery) {
+            discovery.advertise(BleEvent::State(BluetoothState::PoweredOn));
+            discovery.advertise(BleEvent::Seen(Advertisement {
+                peripheral: PERIPHERAL.into(),
+                local_name: Some("DJI Mic 3 TX-a73b42".into()),
+                rssi: -48,
+                ..Default::default()
+            }));
+            discovery.advertise(BleEvent::Identifying(PERIPHERAL.into()));
+            discovery.advertise(BleEvent::Identified {
+                peripheral: PERIPHERAL.into(),
+                outcome: Ok(crate::workspace_host::devices::sample_verified()),
+            });
+        }
+
+        fn address_packet() -> BleEvent {
+            BleEvent::Seen(Advertisement {
+                peripheral: PERIPHERAL.into(),
+                local_name: Some("BES_BLE".into()),
+                manufacturer_data: Some(hex("aa08b200008c5823a73b43")),
+                rssi: -48,
+                ..Default::default()
+            })
+        }
+
+        fn paired_mac(rt: &Runtime<MeetNote>) -> Option<Option<String>> {
+            rt.state
+                .workspace_host
+                .devices
+                .registry
+                .device(MIC_KEY)
+                .map(|device| device.identity.mac.clone())
+        }
+
+        #[test]
+        fn pairing_waits_for_the_address_that_follows_verification() {
+            let fixture = tempfile::tempdir().unwrap();
+            let volume = fixture.path().join("NO NAME");
+            let (mut rt, discovery) = workspace_runtime(fixture.path());
+            discovery.plug(vec![mic_on_usb(&volume)]);
+            click(&mut rt, "device-add");
+            verified_by_name_only(&discovery);
+            until(&mut rt, |rt| visible_text(rt, "Verified"));
+            advance(&mut rt, 60);
+            assert_eq!(paired_mac(&rt), None, "not paired without the address");
+
+            discovery.advertise(address_packet());
+            until(&mut rt, |rt| rt.find("device-pair-finish").is_some());
+            assert_eq!(paired_mac(&rt), Some(Some("8C:58:23:A7:3B:43".into())));
+        }
+
+        #[test]
+        fn a_device_that_never_sends_its_address_pairs_after_the_grace() {
+            let fixture = tempfile::tempdir().unwrap();
+            let volume = fixture.path().join("NO NAME");
+            let (mut rt, discovery) = workspace_runtime(fixture.path());
+            discovery.plug(vec![mic_on_usb(&volume)]);
+            click(&mut rt, "device-add");
+            verified_by_name_only(&discovery);
+            until(&mut rt, |rt| visible_text(rt, "Verified"));
+            advance(&mut rt, 6 * 60);
+            until(&mut rt, |rt| rt.find("device-pair-finish").is_some());
+            assert_eq!(paired_mac(&rt), Some(None));
+        }
+
+        #[test]
+        fn a_device_paired_without_its_address_gets_it_when_seen_again() {
+            let fixture = tempfile::tempdir().unwrap();
+            let (mut rt, discovery) = workspace_runtime(fixture.path());
+            let mut identity = crate::workspace_host::devices::sample_identity();
+            identity.mac = None;
+            rt.state.workspace_host.devices.change(
+                crate::workspace_host::devices::RegistryChange::Pair(Box::new(
+                    ::devices::PairedDevice::new(MIC_KEY.into(), identity, 1),
+                )),
+            );
+            click(&mut rt, "device-add");
+            transmitter_nearby(
+                &discovery,
+                Ok(crate::workspace_host::devices::sample_verified()),
+            );
+            until(&mut rt, |rt| {
+                paired_mac(rt) == Some(Some("8C:58:23:A7:3B:43".into()))
+            });
+        }
+
+        #[test]
+        fn an_unlisted_dji_device_is_neither_listed_nor_paired() {
+            let fixture = tempfile::tempdir().unwrap();
+            let (mut rt, discovery) = workspace_runtime(fixture.path());
+            click(&mut rt, "device-add");
+            discovery.advertise(BleEvent::State(BluetoothState::PoweredOn));
+            discovery.advertise(BleEvent::Seen(Advertisement {
+                peripheral: "osmo".into(),
+                local_name: Some("DJI Osmo Pocket 3".into()),
+                manufacturer_data: Some(hex("aa08c100001122334455aa")),
+                rssi: -40,
+                ..Default::default()
+            }));
+            until(&mut rt, |rt| visible_text(rt, "Searching nearby…"));
+            advance(&mut rt, 20);
+            assert!(rt.find("device-candidate-0").is_none());
+            assert!(
+                rt.state
+                    .workspace_host
+                    .devices
+                    .pairing
+                    .as_ref()
+                    .is_some_and(|pairing| pairing.candidates.is_empty())
+            );
+        }
+
+        #[test]
+        fn denied_bluetooth_opens_its_settings_once() {
+            let fixture = tempfile::tempdir().unwrap();
+            let (mut rt, discovery) = workspace_runtime(fixture.path());
+            click(&mut rt, "device-add");
+            discovery.advertise(BleEvent::State(BluetoothState::Unauthorized));
+            until(&mut rt, |rt| rt.find("device-bluetooth-settings").is_some());
+            advance(&mut rt, 20);
+            assert_eq!(
+                *discovery.settings_opened.lock().unwrap(),
+                1,
+                "automatically, once"
+            );
+            click(&mut rt, "device-bluetooth-settings");
+            assert_eq!(*discovery.settings_opened.lock().unwrap(), 2);
+
+            // Granted in Settings: the scan reports power and pairing goes on.
+            discovery.advertise(BleEvent::State(BluetoothState::PoweredOn));
+            until(&mut rt, |rt| rt.find("device-bluetooth-settings").is_none());
+            assert!(visible_text(&rt, "Searching nearby…"));
+        }
     }
 }

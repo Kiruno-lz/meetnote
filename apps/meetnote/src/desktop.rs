@@ -132,6 +132,18 @@ pub fn run_command_line() -> bool {
         }
     });
     match args.get(1).map(String::as_str) {
+        Some("devices") => {
+            if args.get(2).map(String::as_str) != Some("probe") {
+                eprintln!("usage: meetnote devices probe [seconds]");
+                std::process::exit(2);
+            }
+            let seconds = args
+                .get(3)
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(15);
+            probe_devices(std::time::Duration::from_secs(seconds));
+            true
+        }
         Some("agent") => {
             let host = Host::open(true).unwrap_or_else(|error| fail_agent_adapter(&error));
             run_agent_cli(
@@ -176,6 +188,114 @@ pub fn run_command_line() -> bool {
             true
         }
         _ => false,
+    }
+}
+
+/// Prints what MeetNote sees of recording devices: every USB device with
+/// the DJI ones and their volumes marked, then each Bluetooth advertisement
+/// for `listen`. Used to calibrate recognition against new hardware.
+fn probe_devices(listen: std::time::Duration) {
+    use devices::{BleEvent, ble::Sightings, ble::Verification};
+    match devices::usb::usb_devices() {
+        Ok(usb) => {
+            println!("usb devices: {}", usb.len());
+            for device in &usb {
+                println!(
+                    "  {:04x}:{:04x} {:?} {:?} serial={:?} bcd={:?} location={:?} disks={:?}",
+                    device.vendor_id,
+                    device.product_id,
+                    device.vendor_name,
+                    device.product_name,
+                    device.serial,
+                    device.bcd_device,
+                    device.location_id,
+                    device.bsd_names
+                );
+            }
+            use devices::DeviceDiscovery;
+            match devices::SystemDiscovery.attached() {
+                Ok(attached) => {
+                    for attached in attached {
+                        println!(
+                            "recognised: key={} identity={:?} volumes={:?}",
+                            attached.key(),
+                            attached.identity,
+                            attached.volumes
+                        );
+                    }
+                }
+                Err(error) => println!("recognition: {error}"),
+            }
+        }
+        Err(error) => println!("usb: {error}"),
+    }
+    let (sender, mut events) = futures::channel::mpsc::unbounded();
+    let _scan = match devices::ble::start_scan(sender) {
+        Ok(scan) => scan,
+        Err(block) => {
+            println!("bluetooth: {block}");
+            return;
+        }
+    };
+    println!("bluetooth: listening for {}s", listen.as_secs());
+    let hex = |bytes: &[u8]| {
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let deadline = std::time::Instant::now() + listen;
+    let mut sightings = Sightings::default();
+    while std::time::Instant::now() < deadline {
+        while let Ok(event) = events.try_recv() {
+            match event {
+                BleEvent::State(state) => println!("bluetooth state: {state:?}"),
+                BleEvent::Seen(advertisement) => {
+                    println!(
+                        "  {} rssi={} name={:?} mfr={} services={:?} data={:?}",
+                        advertisement.peripheral,
+                        advertisement.rssi,
+                        advertisement.local_name,
+                        advertisement
+                            .manufacturer_data
+                            .as_deref()
+                            .map(hex)
+                            .unwrap_or_default(),
+                        advertisement.service_uuids,
+                        advertisement
+                            .service_data
+                            .iter()
+                            .map(|(uuid, data)| format!("{uuid}={}", hex(data)))
+                            .collect::<Vec<_>>()
+                    );
+                    sightings.observe(advertisement);
+                }
+                BleEvent::Identifying(peripheral) => {
+                    println!("identifying {peripheral} over LE GATT");
+                    sightings.verify(&peripheral, Verification::Reading);
+                }
+                BleEvent::Identified {
+                    peripheral,
+                    outcome,
+                } => {
+                    println!("identified {peripheral}: {outcome:?}");
+                    sightings.verify(
+                        &peripheral,
+                        match outcome {
+                            Ok(device) => Verification::Verified(device),
+                            Err(reason) => Verification::Rejected(reason),
+                        },
+                    );
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    for candidate in sightings.candidates() {
+        println!(
+            "candidate: {:?} rssi={} verification={:?}",
+            candidate.identity, candidate.rssi, candidate.verification
+        );
     }
 }
 

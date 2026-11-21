@@ -161,6 +161,7 @@ version = "0.1.0"
 dependencies = [
  "audio",
  "contracts",
+ "devices",
  "domain",
  "futures",
  "hound",
@@ -1005,6 +1006,24 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "devices"
+version = "0.1.0"
+dependencies = [
+ "dispatch2",
+ "fs2",
+ "futures",
+ "objc2 0.6.5",
+ "objc2-core-bluetooth",
+ "objc2-foundation 0.3.2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "uuid",
 ]
 
 [[package]]
@@ -2230,6 +2249,7 @@ dependencies = [
  "asr-whisper-rs",
  "audio",
  "contracts",
+ "devices",
  "diarization",
  "diarization-native",
  "diarization-sherpa-onnx",
@@ -2698,6 +2718,18 @@ checksum = "5a89f2ec274a0cf4a32642b2991e8b351a404d290da87bb6a9a9d8632490bd1c"
 dependencies = [
  "bitflags 2.13.2",
  "objc2 0.6.5",
+]
+
+[[package]]
+name = "objc2-core-bluetooth"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79b30b9eacc37434a61377866f68b27acef9fa5496f25cc9ca8b2549032e0394"
+dependencies = [
+ "bitflags 2.13.2",
+ "dispatch2",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -3263,6 +3295,7 @@ version = "0.1.0"
 dependencies = [
  "application",
  "contracts",
+ "devices",
  "domain",
  "fs2",
  "futures",
@@ -3270,6 +3303,7 @@ dependencies = [
  "runtime",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
