@@ -373,7 +373,7 @@ fn main() {
             ("documents", MeetNote::show_sample),
             ("details", |s| {
                 s.show_sample();
-                s.documents.detail = true;
+                s.documents.mode = documents::Mode::Details;
             }),
             ("original", |s| {
                 s.show_sample();
@@ -1619,7 +1619,7 @@ mod tests {
 
         let mut reopened = runtime();
         open_test_workspace(&mut reopened, &root);
-        click(&mut reopened, "detail-toggle");
+        click(&mut reopened, "document-modes/segment4");
         let detail_value = |key: &str| {
             reopened
                 .elements()
@@ -1637,7 +1637,6 @@ mod tests {
                 .unwrap()
                 > 0
         );
-        assert!(reopened.find("detail-transcript-0").is_some());
         click(&mut reopened, "document-modes/segment1");
         assert!(reopened.find("transcript-0").is_some());
     }
@@ -1974,10 +1973,8 @@ mod tests {
     #[test]
     fn document_routes_and_modal_are_interactive_at_minimum_window_size() {
         let mut rt = runtime();
-        click(&mut rt, "detail-toggle");
-        assert!(rt.find("detail-panel").is_some());
-        click(&mut rt, "detail-close");
-        assert!(rt.find("detail-panel").is_none());
+        click(&mut rt, "document-modes/segment4");
+        assert!(rt.find("document-details").is_some());
         click(&mut rt, "document-modes/segment1");
         assert!(visible_text(&rt, "Original transcript"));
         click(&mut rt, "import-audio");
@@ -2822,12 +2819,12 @@ mod tests {
                 .any(|node| node.key.as_deref() == Some(key) && node.focused)
         };
         for _ in 0..20 {
-            if focused(&rt, "detail-toggle") {
+            if focused(&rt, "process-sample") {
                 break;
             }
             key(&mut rt, Key::Tab);
         }
-        assert!(focused(&rt, "detail-toggle"));
+        assert!(focused(&rt, "process-sample"));
         command(&mut rt, 'f', false, true);
         assert!(
             rt.elements()
@@ -2835,35 +2832,21 @@ mod tests {
                 .any(|node| node.focused && node.path.contains("/workspace-search/"))
         );
         key(&mut rt, Key::Escape);
-        assert!(focused(&rt, "detail-toggle"));
+        assert!(focused(&rt, "process-sample"));
     }
 
     #[test]
-    fn detail_close_returns_keyboard_focus_to_its_trigger() {
+    fn document_details_are_a_reading_mode_beside_summary_and_notes() {
         let mut rt = runtime();
-        rt.set_full_keyboard_access(true);
-        click(&mut rt, "detail-toggle");
-        let close_focused = |rt: &Runtime<MeetNote>| {
-            rt.elements()
-                .iter()
-                .any(|node| node.key.as_deref() == Some("detail-close") && node.focused)
-        };
-        for _ in 0..20 {
-            if close_focused(&rt) {
-                break;
-            }
-            key(&mut rt, Key::Tab);
-        }
-        assert!(close_focused(&rt));
-        key(&mut rt, Key::Text(" ".into()));
-        assert!(rt.find("detail-panel").is_none());
-        assert!(
-            rt.elements()
-                .iter()
-                .any(|node| node.key.as_deref() == Some("detail-toggle")
-                    && node.focused
-                    && node.focus_visible)
-        );
+        assert!(rt.find("detail-toggle").is_none());
+        assert!(rt.find("document-details").is_none());
+        click(&mut rt, "document-modes/segment4");
+        assert!(rt.state.documents.mode == documents::Mode::Details);
+        assert!(rt.find("document-details").is_some());
+        let id = rt.state.documents.selection().0.to_owned();
+        assert!(visible_text(&rt, &id));
+        click(&mut rt, "document-modes/segment0");
+        assert!(rt.find("document-details").is_none());
     }
 
     #[test]

@@ -78,10 +78,17 @@ pub enum Mode {
     Original,
     Notes,
     Edit,
+    Details,
 }
 
 impl Mode {
-    const ALL: [Self; 4] = [Self::Summary, Self::Original, Self::Notes, Self::Edit];
+    const ALL: [Self; 5] = [
+        Self::Summary,
+        Self::Original,
+        Self::Notes,
+        Self::Edit,
+        Self::Details,
+    ];
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -304,7 +311,6 @@ pub struct Workspace {
     /// The runtime path of the matched paragraph's text, picked once it lays out.
     match_text: Option<(usize, String)>,
     pub mode: Mode,
-    pub detail: bool,
     speakers: bool,
     processing: Option<(String, f64, Status)>,
     imports: usize,
@@ -323,7 +329,6 @@ impl Default for Workspace {
             transcript_match: None,
             match_text: None,
             mode: Mode::Summary,
-            detail: false,
             speakers: false,
             processing: None,
             imports: 0,
@@ -419,7 +424,6 @@ impl Workspace {
         self.issues_open = false;
         self.clear_search();
         self.mode = Mode::Summary;
-        self.detail = false;
         self.processing = None;
         self.drop_target = None;
     }
@@ -1288,6 +1292,7 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                     s.tr("original"),
                     s.tr("saved_markdown"),
                     s.tr("edit"),
+                    s.tr("details"),
                 ],
                 Mode::ALL.iter().position(|mode| *mode == w.mode),
             )
@@ -1302,17 +1307,6 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             .key("document-modes"),
         )
         .child(el().grow(1.0))
-        .child(action(
-            k,
-            "detail-toggle",
-            if w.detail {
-                s.tr("hide_detail")
-            } else {
-                s.tr("document_details")
-            },
-            ButtonVariant::Outline,
-            |s| s.documents.detail = !s.documents.detail,
-        ))
         .child(if s.workspace_host.live.is_some() {
             let running = s.processing_here();
             Button::new(if running {
@@ -1351,6 +1345,7 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             w.selected == MAIN && s.workspace_host.live.is_none(),
         ),
         Mode::Original => original(s, k),
+        Mode::Details => details::page(s, k),
         Mode::Notes | Mode::Edit => match &document.note_read {
             NoteRead::Pending => col()
                 .padding(24.0)
@@ -1372,7 +1367,6 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             NoteRead::Ready => edit(s, k, overlays),
         },
     };
-    let detail = w.detail;
     let header = col()
         .w_full()
         .gap(13.0)
@@ -1449,13 +1443,11 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
     } else {
         header
     };
-    // The header and the reading share one column, so they stay aligned
-    // while the details panel takes the full height beside them.
-    let main = col()
-        .grow(1.0)
-        .min_w(0.0)
-        .min_h(0.0)
+    col()
+        .key("documents-page")
+        .w_full()
         .h_full()
+        .min_h(0.0)
         .child(workspace_issues(w, k))
         .child(page_center(header))
         .child(Divider::horizontal().build(k))
@@ -1463,19 +1455,7 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             k,
             "document-scroll",
             page_center(reading),
-        )));
-    let page = row()
-        .key("documents-page")
-        .w_full()
-        .h_full()
-        .min_h(0.0)
-        .child(main);
-    if detail {
-        page.child(Divider::vertical().build(k))
-            .child(details::panel(s, k))
-    } else {
-        page
-    }
+        )))
 }
 
 fn workspace_issues(w: &Workspace, k: &Kit) -> El {
