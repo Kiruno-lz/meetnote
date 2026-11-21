@@ -262,6 +262,9 @@ pub(crate) struct DeviceHost {
     load: Option<Task<DeviceRegistry>>,
     write: Option<Task<DeviceRegistry>>,
     pending: VecDeque<RegistryChange>,
+    /// Changes the running write is saving: not on disk yet, so a registry
+    /// read before it lands (an import's) still needs them.
+    saving: Vec<RegistryChange>,
     watcher: Option<UsbWatcher>,
     usb: Option<UnboundedReceiver<UsbUpdate>>,
     pub attached: Vec<AttachedDevice>,
@@ -526,6 +529,7 @@ impl DeviceHost {
             && let Some(result) = WorkspaceHost::poll(write, waker, tx)
         {
             self.write = None;
+            self.saving.clear();
             changed = true;
             let mut registry = result?;
             for change in &self.pending {
@@ -539,6 +543,7 @@ impl DeviceHost {
             && !self.pending.is_empty()
         {
             let changes: Vec<_> = self.pending.drain(..).collect();
+            self.saving.clone_from(&changes);
             self.write = Some(Box::pin(runtime::spawn_blocking(move || {
                 store
                     .update(|registry| {
@@ -754,7 +759,7 @@ impl MeetNote {
         host.devices.import = None;
         match result {
             Ok((report, mut registry)) => {
-                for change in &host.devices.pending {
+                for change in host.devices.saving.iter().chain(&host.devices.pending) {
                     change.apply(&mut registry);
                 }
                 let auto_process = registry
