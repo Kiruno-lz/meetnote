@@ -15,7 +15,9 @@ notify.workspace = true
 fs2.workspace = true
 
 [dev-dependencies]
+devices = { path = "../devices" }
 runtime = { path = "../runtime" }
+tempfile = "3"
 
 [[bench]]
 name = "document_scan"

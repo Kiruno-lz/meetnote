@@ -20,6 +20,7 @@ mod audio_source;
 mod backend_worker;
 mod capabilities;
 pub mod desktop_assistant;
+pub mod device_import;
 
 mod document_commands;
 mod document_issues;

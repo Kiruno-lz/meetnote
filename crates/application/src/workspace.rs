@@ -1085,15 +1085,59 @@ impl DocumentService {
     /// Creates the document for an external audio path. Capture a frozen
     /// service before queueing the import to retain its chosen workspace.
     pub fn import_audio(&self, audio_path: impl Into<String>) -> Result<DocumentState, String> {
-        let audio_path = audio_path.into();
-        let path = Path::new(&audio_path);
-        let title = path
+        let id = ProjectId::new(format!("project-{}", unique_suffix()));
+        self.create_audio_document(id, audio_path.into())
+    }
+
+    /// Creates a document whose audio is kept inside its own package under
+    /// `root`, the directory this service's repository stores packages in.
+    /// `staged` is a complete, verified copy on the same filesystem; it is
+    /// renamed into the package only after the package exists, so the
+    /// scanner never sees a package directory without its state.
+    pub fn import_packaged_audio(
+        &self,
+        root: &Path,
+        staged: &Path,
+        file_name: &str,
+    ) -> Result<DocumentState, String> {
+        let reserved = ["state.json", "document.md"];
+        if file_name.is_empty()
+            || file_name.starts_with('.')
+            || file_name.contains(['/', '\\'])
+            || reserved.contains(&file_name)
+        {
+            return Err(format!(
+                "{file_name:?} cannot be stored in a document package"
+            ));
+        }
+        let id = ProjectId::new(format!("project-{}", unique_suffix()));
+        let audio = root.join(id.as_str()).join(file_name);
+        let audio_path = audio
+            .to_str()
+            .ok_or("The workspace path is not valid Unicode")?
+            .to_owned();
+        let document = self.create_audio_document(id, audio_path)?;
+        fs::rename(staged, &audio).map_err(|error| {
+            format!(
+                "Document {} was created, but its audio could not be moved into {}: {error}",
+                document.id().as_str(),
+                audio.display()
+            )
+        })?;
+        Ok(document)
+    }
+
+    fn create_audio_document(
+        &self,
+        id: ProjectId,
+        audio_path: String,
+    ) -> Result<DocumentState, String> {
+        let title = Path::new(&audio_path)
             .file_stem()
             .and_then(|value| value.to_str())
             .filter(|value| !value.is_empty())
             .unwrap_or("Untitled meeting")
             .to_string();
-        let id = ProjectId::new(format!("project-{}", unique_suffix()));
         let project = DocumentState::new(id, title, audio_path);
         let project = self.save_with_markdown(
             project.clone(),
