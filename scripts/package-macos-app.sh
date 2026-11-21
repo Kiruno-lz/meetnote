@@ -129,6 +129,8 @@ cat > "$STAGED_APP/Contents/Info.plist" <<EOF
   <string>$APP_VERSION</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>MeetNote searches for recording devices in pairing mode, such as the DJI Mic 3, so you can add them.</string>
 </dict>
 </plist>
 EOF

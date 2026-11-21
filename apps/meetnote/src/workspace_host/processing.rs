@@ -61,6 +61,10 @@ impl ProcessingConfig {
         }
     }
 
+    pub(super) fn settings_path(&self) -> &Path {
+        &self.settings
+    }
+
     pub(super) fn model_root(&self) -> &Path {
         &self.models
     }
@@ -173,6 +177,8 @@ pub(super) struct ProcessingRun {
     progress: ProcessingProgress,
     cancellation: CancellationToken,
     completion: Task<DocumentRecord>,
+    /// Started for a device import rather than by the user.
+    automatic: bool,
 }
 
 impl Drop for ProcessingRun {
@@ -182,7 +188,13 @@ impl Drop for ProcessingRun {
 }
 
 impl ProcessingRun {
-    fn start(config: ProcessingConfig, live: LiveWorkspace, id: ProjectId, revision: u64) -> Self {
+    pub(super) fn start(
+        config: ProcessingConfig,
+        live: LiveWorkspace,
+        id: ProjectId,
+        revision: u64,
+        automatic: bool,
+    ) -> Self {
         let cancellation = CancellationToken::new();
         let token = cancellation.clone();
         let (started, progress) = oneshot::channel();
@@ -191,6 +203,7 @@ impl ProcessingRun {
             id,
             progress: ProcessingProgress::Preparing(progress),
             cancellation,
+            automatic,
             completion: Box::pin(runtime::spawn_blocking(move || {
                 process(config, live, document, revision, started, &token)
             })),
@@ -330,6 +343,7 @@ impl MeetNote {
                 live,
                 state.id().clone(),
                 state.revision(),
+                false,
             ));
             tx.wake_after(Duration::ZERO);
         }
@@ -384,6 +398,7 @@ impl MeetNote {
         let Some(result) = WorkspaceHost::poll(&mut run.completion, host.waker.as_ref(), tx) else {
             return progressed;
         };
+        let automatic = run.automatic;
         host.processing = None;
         match result {
             Ok(record) => {
@@ -391,7 +406,14 @@ impl MeetNote {
                 self.refresh_workspace_search();
                 self.notify("Audio processing finished", tx);
             }
-            Err(error) => self.notify(error, tx),
+            Err(error) => {
+                if automatic {
+                    // One failure (missing models, say) would fail every queued
+                    // recording the same way; they stay imported for a manual run.
+                    self.workspace_host.devices.analysis.clear();
+                }
+                self.notify(error, tx);
+            }
         }
         true
     }

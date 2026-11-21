@@ -216,8 +216,9 @@ impl Route {
         match self {
             Route::Assistant => "1",
             Route::Documents => "2",
-            Route::Models => "3",
-            Route::Settings => "4",
+            Route::Devices => "3",
+            Route::Models => "4",
+            Route::Settings => "5",
         }
     }
 }
@@ -246,6 +247,7 @@ fn rail(s: &MeetNote, k: &Kit) -> El {
             let icon = match route {
                 Route::Assistant => &glyphs::SPARKLE,
                 Route::Documents => &glyphs::FOLDER,
+                Route::Devices => &crate::devices::DEVICE_GLYPH,
                 Route::Models => &glyphs::FILE_CODE,
                 Route::Settings => &glyphs::KEYBOARD,
             };
