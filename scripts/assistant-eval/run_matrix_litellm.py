@@ -23,12 +23,13 @@ from pathlib import Path
 from typing import Any
 
 
+from eval_settings import load_provider
+
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = ROOT / "data/settings/settings.json"
 MATRIX_SCRIPT = ROOT / "scripts/assistant-eval/run_matrix.py"
 RUNNER_SCRIPT = ROOT / "scripts/assistant-eval/runner.py"
 DEFAULT_OUTPUT = ROOT / "eval-data/assistant/runs-deepseek-chat"
-DEFAULT_WRITEBACK = ROOT / "eval-data/assistant/writeback-deepseek-chat"
 PROTOCOLS = ("openaiChatCompletions", "anthropicMessages", "openaiResponses")
 CASES = (
     "ask_direct",
@@ -50,23 +51,8 @@ def free_port() -> int:
         return int(server.getsockname()[1])
 
 
-def load_connection() -> tuple[str, str, str]:
-    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
-    connection = next(
-        item
-        for item in settings["assistant"]["connections"]
-        if item.get("id") == "local-litellm"
-    )
-    base_url = connection.get("baseUrl")
-    model = connection.get("model")
-    api_key = connection.get("apiKey")
-    if not isinstance(base_url, str) or not base_url.startswith("https://"):
-        raise RuntimeError("local-litellm connection must use an HTTPS upstream")
-    if not isinstance(model, str) or not model:
-        raise RuntimeError("local-litellm connection has no model")
-    if not isinstance(api_key, str) or not api_key:
-        raise RuntimeError("local-litellm connection has no API key")
-    return base_url.rstrip("/"), model, api_key
+def load_connection(provider: str | None = None) -> tuple[str, str, str]:
+    return load_provider(SETTINGS, provider)
 
 
 def wait_for_port(port: int, process: subprocess.Popen[bytes]) -> None:
@@ -109,8 +95,6 @@ def run_matrix(
     port: int,
     model: str,
     output_dir: Path,
-    writeback_cli: str | None,
-    writeback_root: Path | None,
 ) -> tuple[int, dict[str, Any]]:
     endpoint = f"http://127.0.0.1:{port}/v1"
     environment = dict(os.environ)
@@ -136,10 +120,6 @@ def run_matrix(
         str(output_dir),
         "--require-ready",
     ]
-    if writeback_cli:
-        command.extend(["--writeback-cli", writeback_cli])
-    if writeback_root:
-        command.extend(["--writeback-package-root", str(writeback_root)])
     completed = subprocess.run(
         command,
         cwd=ROOT,
@@ -183,12 +163,11 @@ def self_check(output_dir: Path, report: dict[str, Any], secret: str) -> dict[st
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    upstream, configured_model, secret = load_connection()
+    upstream, configured_model, secret = load_connection(args.provider)
     model = args.model or configured_model
     provider_model = args.provider_model or f"deepseek/{model}"
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    writeback_root = args.writeback_root.resolve() if args.writeback_root else None
     port = free_port()
     temporary_root = ROOT / "eval-data/assistant"
     temporary_root.mkdir(parents=True, exist_ok=True)
@@ -211,8 +190,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             port=port,
             model=model,
             output_dir=output_dir,
-            writeback_cli=args.writeback_cli,
-            writeback_root=writeback_root,
         )
         check = self_check(output_dir, report, secret)
         result = {
@@ -246,8 +223,7 @@ def main() -> int:
     parser.add_argument("--model", default="deepseek-chat")
     parser.add_argument("--provider-model", default="deepseek/deepseek-chat")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--writeback-cli")
-    parser.add_argument("--writeback-root", type=Path, default=DEFAULT_WRITEBACK)
+    parser.add_argument("--provider", help="Provider id in settings.json (defaults to assistant.model.provider)")
     args = parser.parse_args()
     if not Path(args.binary).is_file():
         raise SystemExit("LiteLLM executable is missing")

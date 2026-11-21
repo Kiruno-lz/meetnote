@@ -21,6 +21,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from eval_settings import load_provider
 
 ROOT = Path(__file__).resolve().parents[2]
 SETTINGS = ROOT / "data/settings/settings.json"
@@ -32,23 +33,8 @@ def free_port() -> int:
         return int(server.getsockname()[1])
 
 
-def load_connection() -> tuple[str, str, str]:
-    settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
-    connection = next(
-        item
-        for item in settings["assistant"]["connections"]
-        if item.get("id") == "local-litellm"
-    )
-    api_key = connection.get("apiKey")
-    base_url = connection.get("baseUrl")
-    model = connection.get("model")
-    if not isinstance(api_key, str) or not api_key:
-        raise RuntimeError("local-litellm connection has no API key")
-    if not isinstance(base_url, str) or not base_url.startswith("https://"):
-        raise RuntimeError("local-litellm connection must use an HTTPS upstream")
-    if not isinstance(model, str) or not model:
-        raise RuntimeError("local-litellm connection has no model")
-    return base_url.rstrip("/"), model, api_key
+def load_connection(provider: str | None = None) -> tuple[str, str, str]:
+    return load_provider(SETTINGS, provider)
 
 
 def request_json(url: str, payload: dict[str, Any], headers: dict[str, str]) -> tuple[int, dict[str, Any]]:
@@ -159,8 +145,10 @@ def run_runner(protocol: str, port: int, model: str, api_key: str) -> dict[str, 
     }
 
 
-def smoke(binary: str, provider_model: str | None, model_override: str | None) -> dict[str, Any]:
-    upstream, configured_model, api_key = load_connection()
+def smoke(
+    binary: str, provider_model: str | None, model_override: str | None, provider: str | None = None
+) -> dict[str, Any]:
+    upstream, configured_model, api_key = load_connection(provider)
     model = model_override or configured_model
     port = free_port()
     work_root = ROOT / "eval-data/assistant"
@@ -261,12 +249,13 @@ def main() -> int:
         "--model",
         help="Override the configured upstream model for this smoke only",
     )
+    parser.add_argument("--provider", help="Provider id (defaults to assistant.model.provider)")
     args = parser.parse_args()
     if not Path(args.binary).is_file():
         raise SystemExit("LiteLLM executable is missing")
     print(
         json.dumps(
-            smoke(args.binary, args.provider_model, args.model),
+            smoke(args.binary, args.provider_model, args.model, args.provider),
             ensure_ascii=False,
             sort_keys=True,
         )
