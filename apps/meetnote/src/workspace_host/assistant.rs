@@ -16,6 +16,7 @@ use meetnote::assistant_service::DesktopAssistantService;
 use rune::{TextEdit, Tx};
 use settings::{AssistantSettings, SettingsError, SettingsService};
 
+use super::preferences::{Autosave, Finish, SaveStatus, Step};
 use super::{LiveWorkspace, Task, WorkspaceHost, processing::ProcessingConfig};
 use crate::MeetNote;
 
@@ -25,6 +26,7 @@ pub(crate) struct AssistantHost {
     pub prompt: TextEdit,
     pub settings: AssistantSettings,
     pub behaviour: BehaviourDraft,
+    autosave: Autosave<AssistantSettings>,
     task: Option<Task<Reply>>,
     progress: Option<UnboundedReceiver<AssistantProgress>>,
 }
@@ -61,8 +63,9 @@ impl BehaviourDraft {
         }
     }
 
-    /// `settings` with the form's values, or which field is not a number.
-    fn apply(&self, settings: &AssistantSettings) -> Result<AssistantSettings, String> {
+    /// `settings` with the form's values, or the ui-text label of the field
+    /// that is not a number.
+    fn apply(&self, settings: &AssistantSettings) -> Result<AssistantSettings, &'static str> {
         Ok(AssistantSettings {
             enabled: self.enabled,
             write_mode: if self.confirm_writes {
@@ -70,19 +73,15 @@ impl BehaviourDraft {
             } else {
                 AgentWriteMode::Automatic
             },
-            max_tool_rounds: number(&self.tool_rounds, "maximum tool rounds")?,
-            max_validation_retries: number(&self.validation_retries, "maximum validation retries")?,
+            max_tool_rounds: number(&self.tool_rounds, "assistant_max_rounds")?,
+            max_validation_retries: number(&self.validation_retries, "assistant_max_retries")?,
             ..settings.clone()
         })
     }
 }
 
-fn number<T: FromStr>(value: &TextEdit, field: &str) -> Result<T, String> {
-    value
-        .text
-        .trim()
-        .parse()
-        .map_err(|_| format!("Enter a valid number for {field}"))
+fn number<T: FromStr>(value: &TextEdit, field: &'static str) -> Result<T, &'static str> {
+    value.text.trim().parse().map_err(|_| field)
 }
 
 #[derive(Clone, Copy)]
@@ -96,6 +95,14 @@ impl AssistantHost {
         self.task.is_some()
     }
 
+    pub fn saving(&self) -> bool {
+        self.autosave.saving()
+    }
+
+    pub fn status(&self) -> &SaveStatus {
+        &self.autosave.status
+    }
+
     pub fn awaiting_review(&self) -> bool {
         matches!(
             self.controller.pending,
@@ -106,6 +113,7 @@ impl AssistantHost {
     pub(super) fn reset_workspace(&mut self, settings: AssistantSettings) {
         self.controller.forget_workspace();
         self.behaviour = BehaviourDraft::new(&settings);
+        self.autosave.reset();
         self.settings = settings;
         self.prompt.clear();
     }
@@ -161,21 +169,31 @@ fn now_ms() -> u64 {
 }
 
 impl MeetNote {
-    /// Saves the behaviour form unless the Assistant settings changed since
-    /// they were loaded.
-    pub(crate) fn save_assistant_behaviour(&mut self, tx: &mut Tx) {
-        if self.workspace_host.busy() {
-            return;
+    /// Saves the behaviour form once its edits settle, unless the Assistant
+    /// settings changed since they were loaded.
+    pub(super) fn autosave_assistant_behaviour(&mut self, tx: &mut Tx) -> bool {
+        if self.workspace_host.live.is_none() {
+            return false;
         }
+        let locale = self.locale();
+        let blocked = self.workspace_host.busy();
         let config = self.workspace_host.processing_config.clone();
         let host = &mut self.workspace_host.assistant;
         let expected = host.settings.clone();
-        let updated = match host.behaviour.apply(&expected) {
-            Ok(updated) => updated,
-            Err(message) => {
-                self.notify(message, tx);
-                return;
+        let form = host.behaviour.apply(&expected).map_err(|field| {
+            ui_text::message(locale, "invalid_number", ui_text::text(locale, field))
+        });
+        let updated = match host.autosave.tick(form, &expected, tx.clock(), blocked) {
+            Step::Idle => return false,
+            Step::WaitUntil(due) => {
+                tx.wake_at(due);
+                return false;
             }
+            Step::Invalid(message) => {
+                self.notify(message, tx);
+                return true;
+            }
+            Step::Save(updated) => updated,
         };
         host.start(tx, move || {
             Reply::Saved((|| {
@@ -193,6 +211,7 @@ impl MeetNote {
                 Ok(saved.assistant)
             })())
         });
+        true
     }
 
     pub(crate) fn run_live_assistant(&mut self, tx: &mut Tx) {
@@ -331,11 +350,21 @@ impl MeetNote {
                     controller.mutation_undo_failed(&id, &mutation, error)
                 }
                 Ok(Reply::Saved(Ok(settings))) => {
-                    host.behaviour = BehaviourDraft::new(&settings);
+                    if host.autosave.finish(Ok(&settings)) == Finish::Replace {
+                        host.behaviour = BehaviourDraft::new(&settings);
+                    }
                     host.settings = settings;
-                    notice = Some("Assistant settings saved".to_owned());
+                    // Edits made during the save are due now.
+                    tx.wake_after(Duration::ZERO);
                 }
-                Ok(Reply::Saved(Err(error))) => notice = Some(error.to_string()),
+                Ok(Reply::Saved(Err(error))) => {
+                    host.autosave.finish(Err(error.to_string()));
+                    notice = Some(error.to_string());
+                }
+                Err(message) if host.autosave.saving() => {
+                    host.autosave.finish(Err(message.clone()));
+                    notice = Some(message);
+                }
                 Err(message) => {
                     controller.task =
                         AssistantTaskState::Failed(AssistantUiError::unavailable(message))

@@ -6,8 +6,9 @@ use ui_text::Locale;
 
 use super::section;
 use crate::MeetNote;
-use crate::controls::{field, select};
+use crate::controls::{caption, field, select};
 use crate::workspace_host::diarization_stages::StageDraft;
+use crate::workspace_host::preferences::SaveStatus;
 
 const THEMES: [ThemePreference; 3] = [
     ThemePreference::System,
@@ -96,7 +97,7 @@ pub(super) fn appearance(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                 },
             ),
         ));
-    if s.workspace_host.preferences.busy() {
+    if s.workspace_host.preferences.reloading() {
         form.inert()
     } else {
         form
@@ -167,9 +168,21 @@ pub(super) fn audio(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                     .unwrap()
                     .expected_speakers
             })
-            .build(k),
+            .build(k)
+            .key("live-expected-speakers"),
     );
-    if host.busy() { form.inert() } else { form }
+    if host.reloading() { form.inert() } else { form }
+}
+
+/// The autosave status of a settings form, or `None` before its first save.
+pub(super) fn save_status(s: &MeetNote, k: &Kit, status: &SaveStatus, key: &str) -> Option<El> {
+    let text = match status {
+        SaveStatus::Idle => return None,
+        SaveStatus::Saving => s.tr("settings_autosave_saving"),
+        SaveStatus::Saved => s.tr("settings_autosave_saved"),
+        SaveStatus::Failed(_) => s.tr("settings_autosave_failed"),
+    };
+    Some(caption(k, text).key(key))
 }
 
 pub(super) fn actions(s: &MeetNote, k: &Kit) -> El {
@@ -178,13 +191,13 @@ pub(super) fn actions(s: &MeetNote, k: &Kit) -> El {
         .py(10.0)
         .gap(8.0)
         .flex_wrap()
-        .child(
-            Button::new(s.tr("save_settings"))
-                .disabled(s.workspace_host.busy())
-                .on_press_tx(MeetNote::save_live_preferences)
-                .build(k)
-                .key("save-live-settings"),
-        )
+        .items_center()
+        .children(save_status(
+            s,
+            k,
+            s.workspace_host.preferences.status(),
+            "live-settings-status",
+        ))
         .child(
             Button::new(s.tr("reload_settings"))
                 .variant(ButtonVariant::Outline)

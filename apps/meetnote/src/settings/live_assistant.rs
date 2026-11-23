@@ -1,5 +1,5 @@
 use rune::{El, TextEdit};
-use rune_kit::{Button, Kit, Switch, TextField};
+use rune_kit::{Kit, Switch, TextField};
 
 use super::section;
 use crate::MeetNote;
@@ -9,7 +9,8 @@ use crate::workspace_host::assistant::BehaviourDraft;
 /// on the Providers page.
 pub(super) fn page(s: &MeetNote, k: &Kit) -> El {
     let draft = &s.workspace_host.assistant.behaviour;
-    let busy = s.workspace_host.busy();
+    // An autosave keeps the form editable so typing keeps its focus.
+    let busy = s.workspace_host.busy() && !s.workspace_host.autosaving();
     let form = section(
         k,
         s.tr("assistant_settings"),
@@ -50,13 +51,12 @@ pub(super) fn page(s: &MeetNote, k: &Kit) -> El {
         &draft.validation_retries,
         |draft| &mut draft.validation_retries,
     ))
-    .child(
-        Button::new(s.tr("save_settings"))
-            .disabled(busy)
-            .on_press_tx(MeetNote::save_assistant_behaviour)
-            .build(k)
-            .key("save-assistant-settings"),
-    );
+    .children(super::live_preferences::save_status(
+        s,
+        k,
+        s.workspace_host.assistant.status(),
+        "assistant-settings-status",
+    ));
     if busy { form.inert() } else { form }
 }
 

@@ -202,6 +202,11 @@ impl WorkspaceHost {
             || self.speaker_library.writing()
     }
 
+    /// Whether a settings form is saving itself; its form stays editable.
+    pub fn autosaving(&self) -> bool {
+        self.preferences.saving() || self.assistant.saving()
+    }
+
     #[cfg(test)]
     pub fn processing_config_settings(&self) -> PathBuf {
         self.processing_config.settings_path().to_path_buf()
@@ -667,15 +672,16 @@ impl MeetNote {
             // Poll the queued task on the next frame so the background executor can wake it.
             tx.wake_after(std::time::Duration::ZERO);
         }
-        self.poll_processing(tx)
+        let polled = self.poll_processing(tx)
             | self.poll_audio(tx)
             | self.poll_models(tx)
             | self.poll_preferences(tx)
             | self.poll_speaker_library(tx)
             | self.poll_live_assistant(tx)
             | self.poll_devices(tx)
-            | self.poll_providers(tx)
-            | changed
+            | self.poll_providers(tx);
+        // After every task above settled, so a save they held is not missed.
+        self.autosave_preferences(tx) | self.autosave_assistant_behaviour(tx) | polled | changed
     }
 
     fn poll_workspace_watch(&mut self, tx: &mut Tx) -> bool {

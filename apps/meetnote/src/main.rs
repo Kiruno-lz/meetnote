@@ -790,10 +790,11 @@ mod tests {
         rt.update(|_, tx| tx.scroll_into_view("assistant-confirm-each"));
         advance(&mut rt, 30);
         click(&mut rt, "assistant-confirm-each");
-        rt.update(|_, tx| tx.scroll_into_view("save-assistant-settings"));
-        advance(&mut rt, 30);
-        click(&mut rt, "save-assistant-settings");
-        until(&mut rt, |rt| visible_text(rt, "Assistant settings saved"));
+        until(&mut rt, |rt| {
+            let host = &rt.state.workspace_host.assistant;
+            host.settings.write_mode == contracts::AgentWriteMode::ConfirmEach && !host.saving()
+        });
+        assert!(visible_text(&rt, rt.state.tr("settings_autosave_saved")));
         let saved = JsonSettingsRepository::open(&settings_path).load().unwrap();
         assert_eq!(saved.assistant.max_tool_rounds, 6);
         assert_eq!(saved.assistant.max_validation_retries, 2);
@@ -1075,10 +1076,10 @@ mod tests {
         let mut external = repository.load().unwrap();
         external.expected_speakers = Some(3);
         repository.save(&external).unwrap();
-        rt.update(|_, tx| tx.scroll_into_view("save-live-settings"));
-        advance(&mut rt, 30);
-        click(&mut rt, "save-live-settings");
-        until(&mut rt, |rt| visible_text(rt, "Settings saved"));
+        until(&mut rt, |rt| {
+            visible_text(rt, rt.state.tr("settings_autosave_saved"))
+                && !rt.state.workspace_host.busy()
+        });
         let saved = repository.load().unwrap();
         assert_eq!(saved.appearance.material, MaterialPreference::Opaque);
         assert_eq!(saved.expected_speakers, Some(3));
@@ -1093,6 +1094,57 @@ mod tests {
             root
         );
         assert!(reopened.find("workspace-glass").is_none());
+    }
+
+    #[test]
+    fn file_workspace_autosaves_preferences_without_a_save_button() {
+        use ::settings::{JsonSettingsRepository, SettingsRepository};
+
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("documents");
+        let config = fixture.path().join("settings.json");
+        std::fs::create_dir(&root).unwrap();
+        let mut rt = runtime();
+        rt.configure_processing(Some(config.clone()), None);
+        open_test_workspace(&mut rt, &root);
+        click(&mut rt, "nav-settings");
+        click(&mut rt, "category-audio");
+        assert!(rt.find("save-live-settings").is_none());
+        let field = "live-expected-speakers/wrapper/input";
+        rt.update(|_, tx| tx.scroll_into_view(field));
+        advance(&mut rt, 30);
+        click(&mut rt, field);
+        key(&mut rt, Key::Text("4".into()));
+        let repository = JsonSettingsRepository::open(&config);
+        until(&mut rt, |rt| {
+            visible_text(rt, rt.state.tr("settings_autosave_saved"))
+                && !rt.state.workspace_host.busy()
+        });
+        assert_eq!(repository.load().unwrap().expected_speakers, Some(4));
+        assert_eq!(rt.state.toasts.messages().count(), 0, "autosave is quiet");
+
+        // The field keeps its focus across the save, so typing continues.
+        key(&mut rt, Key::Text("2".into()));
+        until(&mut rt, |rt| {
+            repository.load().unwrap().expected_speakers == Some(42)
+                && !rt.state.workspace_host.busy()
+        });
+
+        // Invalid values are reported once and never saved.
+        command(&mut rt, 'a', false, false);
+        key(&mut rt, Key::Text("0".into()));
+        advance(&mut rt, 180);
+        let invalid = ui_text::text(rt.state.locale(), "speaker_count_invalid");
+        assert_eq!(
+            rt.state
+                .toasts
+                .messages()
+                .filter(|message| *message == invalid)
+                .count(),
+            1
+        );
+        assert!(visible_text(&rt, rt.state.tr("settings_autosave_failed")));
+        assert_eq!(repository.load().unwrap().expected_speakers, Some(42));
     }
 
     #[test]
@@ -1130,12 +1182,13 @@ mod tests {
         click(&mut rt, "nav-assistant");
         assert!(visible_text(&rt, "就工作区文档提问"));
         click(&mut rt, "nav-settings");
+        assert!(visible_text(&rt, "外观、工作区与处理偏好。"));
+        assert!(visible_text(&rt, "打开工作区文件夹"));
         click(&mut rt, "category-speaker-library");
         until(&mut rt, |rt| visible_text(rt, "声纹库中还没有说话人档案"));
         click(&mut rt, "category-appearance");
         click(&mut rt, "live-ui-language-trigger");
         click(&mut rt, "option1");
-        click(&mut rt, "save-live-settings");
         until(&mut rt, |rt| nav_label(rt).as_deref() == Some("Settings"));
         assert_eq!(repository.load().unwrap().ui_locale, "en-US");
 
@@ -1379,10 +1432,10 @@ mod tests {
         advance(&mut rt, 30);
         click(&mut rt, trigger);
         click(&mut rt, "option1");
-        rt.update(|_, tx| tx.scroll_into_view("save-live-settings"));
-        advance(&mut rt, 30);
-        click(&mut rt, "save-live-settings");
-        until(&mut rt, |rt| visible_text(rt, "Settings saved"));
+        until(&mut rt, |rt| {
+            visible_text(rt, rt.state.tr("settings_autosave_saved"))
+                && !rt.state.workspace_host.busy()
+        });
         let mut saved = repository.load().unwrap();
         let stage = saved.diarization_stages.segmentation_model.take().unwrap();
         assert_eq!(stage.model_id, "pyannote-segmentation-3.0");
@@ -1398,7 +1451,9 @@ mod tests {
         saved.diarization_model.as_mut().unwrap().model_id = "speakrs-community-1-coreml".into();
         repository.save(&saved).unwrap();
         click(&mut rt, "reload-live-settings");
-        until(&mut rt, |rt| visible_text(rt, "Settings reloaded"));
+        until(&mut rt, |rt| {
+            visible_text(rt, rt.state.tr("settings_reloaded"))
+        });
         assert!(rt.find(trigger).is_none());
     }
 
@@ -1583,10 +1638,10 @@ mod tests {
             click(&mut rt, &trigger);
             click(&mut rt, "option1");
         }
-        rt.update(|_, tx| tx.scroll_into_view("save-live-settings"));
-        advance(&mut rt, 30);
-        click(&mut rt, "save-live-settings");
-        until(&mut rt, |rt| visible_text(rt, "Settings saved"));
+        until(&mut rt, |rt| {
+            visible_text(rt, rt.state.tr("settings_autosave_saved"))
+                && !rt.state.workspace_host.busy()
+        });
         let stages = JsonSettingsRepository::open(&settings_path)
             .load()
             .unwrap()
