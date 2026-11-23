@@ -265,6 +265,9 @@ pub(crate) struct DeviceHost {
     /// Changes the running write is saving: not on disk yet, so a registry
     /// read before it lands (an import's) still needs them.
     saving: Vec<RegistryChange>,
+    /// Changes whose write landed while the import ran: its read back may
+    /// predate them. Reapplying one already on disk changes nothing.
+    landed: Vec<RegistryChange>,
     watcher: Option<UsbWatcher>,
     usb: Option<UnboundedReceiver<UsbUpdate>>,
     pub attached: Vec<AttachedDevice>,
@@ -328,6 +331,7 @@ impl DeviceHost {
             self.advanced.remove(key);
             if self.import.as_ref().is_some_and(|run| &run.key == key) {
                 self.import = None;
+                self.landed.clear();
             }
         }
         if self.store.is_some() {
@@ -511,6 +515,31 @@ impl DeviceHost {
         }
     }
 
+    /// The running write saved `registry`.
+    fn write_landed(&mut self, mut registry: DeviceRegistry) {
+        if self.import.is_some() {
+            self.landed.append(&mut self.saving);
+        } else {
+            self.saving.clear();
+        }
+        for change in &self.pending {
+            change.apply(&mut registry);
+        }
+        self.registry = registry;
+    }
+
+    /// The running import ended; `registry` is what it read back after.
+    fn import_finished(&mut self, registry: Option<DeviceRegistry>) {
+        self.import = None;
+        let landed = std::mem::take(&mut self.landed);
+        if let Some(mut registry) = registry {
+            for change in landed.iter().chain(&self.saving).chain(&self.pending) {
+                change.apply(&mut registry);
+            }
+            self.registry = registry;
+        }
+    }
+
     fn poll_registry(&mut self, waker: Option<&Waker>, tx: &mut Tx) -> Result<bool, String> {
         let mut changed = false;
         if let Some(load) = &mut self.load
@@ -529,13 +558,14 @@ impl DeviceHost {
             && let Some(result) = WorkspaceHost::poll(write, waker, tx)
         {
             self.write = None;
-            self.saving.clear();
             changed = true;
-            let mut registry = result?;
-            for change in &self.pending {
-                change.apply(&mut registry);
+            match result {
+                Ok(registry) => self.write_landed(registry),
+                Err(error) => {
+                    self.saving.clear();
+                    return Err(error);
+                }
             }
-            self.registry = registry;
         }
         if self.load.is_none()
             && self.write.is_none()
@@ -756,16 +786,18 @@ impl MeetNote {
             return changed;
         };
         let key = run.key.clone();
-        host.devices.import = None;
+        let (result, registry) = match result {
+            Ok((report, registry)) => (Ok(report), Some(registry)),
+            Err(error) => (Err(error), None),
+        };
+        host.devices.import_finished(registry);
         match result {
-            Ok((report, mut registry)) => {
-                for change in host.devices.saving.iter().chain(&host.devices.pending) {
-                    change.apply(&mut registry);
-                }
-                let auto_process = registry
+            Ok(report) => {
+                let auto_process = host
+                    .devices
+                    .registry
                     .device(&key)
                     .is_some_and(|device| device.auto_process);
-                host.devices.registry = registry;
                 if auto_process {
                     host.devices.analysis.extend(
                         report
@@ -1029,5 +1061,29 @@ mod tests {
             Duration::from_millis(1_000),
         );
         assert_eq!(run.speed(), Some(5_000_000.0));
+    }
+
+    #[test]
+    fn import_read_before_a_write_landed_keeps_that_write() {
+        let mut device = PairedDevice::new("sn:A".into(), devices::DeviceIdentity::default(), 0);
+        device.usb_links = vec!["vol:A".into()];
+        let mut host = DeviceHost::default();
+        // The import reads the registry while pairing is still being saved.
+        let read_by_import = host.registry.clone();
+        host.saving = vec![RegistryChange::Pair(Box::new(device.clone()))];
+        host.import = Some(run());
+        // The write lands and is polled before the import result.
+        let mut saved = DeviceRegistry::default();
+        saved.pair(device);
+        host.write_landed(saved);
+        host.import_finished(Some(read_by_import));
+        assert_eq!(
+            host.registry.linked("vol:A").map(|d| d.key.as_str()),
+            Some("sn:A")
+        );
+        // The next import reads after that write, so nothing is replayed.
+        host.import = Some(run());
+        host.import_finished(Some(DeviceRegistry::default()));
+        assert!(host.registry.devices.is_empty());
     }
 }
