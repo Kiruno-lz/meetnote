@@ -131,7 +131,7 @@ pub fn region(s: &MeetNote, k: &Kit) -> Option<El> {
     let mut region = el()
         .key("toast-region")
         .role("region")
-        .label("Notifications")
+        .label(s.tr("notifications"))
         .on_hover_change(|s: &mut MeetNote, inside, tx| {
             let wake = s.toasts.hover(inside, s.now);
             schedule(wake, tx);

@@ -84,18 +84,24 @@ pub(super) fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                     .child(title(k, s.tr("assistant_review_changes"), 18.0))
                     .child(caption(
                         k,
-                        format!("Documents · {}", review.affected_document_ids.join(", ")),
+                        format!(
+                            "{} · {}",
+                            s.tr("assistant_review_documents"),
+                            review.affected_document_ids.join(", ")
+                        ),
                     ));
                 for diff in &review.field_diffs {
                     body = body.child(label(
                         k,
                         format!(
-                            "{} · {}\nBefore: {}\nAfter: {}",
+                            "{} · {}\n{}: {}\n{}: {}",
                             diff.document_id,
                             diff.field,
+                            s.tr("assistant_review_before"),
                             diff.before
                                 .as_deref()
                                 .unwrap_or(s.tr("assistant_empty_value")),
+                            s.tr("assistant_review_after"),
                             diff.after
                                 .as_deref()
                                 .unwrap_or(s.tr("assistant_empty_value")),
@@ -106,10 +112,18 @@ pub(super) fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                     body = body.child(label(
                         k,
                         format!(
-                            "{} · Parent {} → {} · Order {} → {}",
+                            "{} · {} {} → {} · {} {} → {}",
                             change.document_id,
-                            change.previous_parent_id.as_deref().unwrap_or("Root"),
-                            change.new_parent_id.as_deref().unwrap_or("Root"),
+                            s.tr("assistant_review_parent"),
+                            change
+                                .previous_parent_id
+                                .as_deref()
+                                .unwrap_or(s.tr("assistant_review_root")),
+                            change
+                                .new_parent_id
+                                .as_deref()
+                                .unwrap_or(s.tr("assistant_review_root")),
+                            s.tr("assistant_review_order"),
                             change
                                 .previous_sibling_order
                                 .map_or_else(|| "—".into(), |value| value.to_string()),
@@ -124,7 +138,10 @@ pub(super) fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                         k,
                         format!(
                             "{} · {} → {}",
-                            range.document_id.as_deref().unwrap_or("Source"),
+                            range
+                                .document_id
+                                .as_deref()
+                                .unwrap_or(s.tr("assistant_review_source")),
                             range.start_segment_id,
                             range.end_segment_id,
                         ),
@@ -134,7 +151,8 @@ pub(super) fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                     body = body.child(caption(
                         k,
                         format!(
-                            "Uncovered segments · {}",
+                            "{} · {}",
+                            s.tr("assistant_uncovered_segments"),
                             review.uncovered_segment_ids.join(", ")
                         ),
                     ));

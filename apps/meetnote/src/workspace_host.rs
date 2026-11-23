@@ -343,7 +343,7 @@ impl MeetNote {
             return;
         }
         if self.documents.has_unsaved_edits() {
-            self.notify("Save your document edits before switching workspaces", tx);
+            self.notify(self.tr("workspace_switch_unsaved"), tx);
             return;
         }
         tx.open_folder(
@@ -361,7 +361,7 @@ impl MeetNote {
                     s.open_workspace(path, s.workspace_host.processing_config.persist_workspace);
                     tx.wake_after(std::time::Duration::ZERO);
                 }
-                Ok(Some(_)) => s.notify("The workspace is busy or has unsaved edits", tx),
+                Ok(Some(_)) => s.notify(s.tr("workspace_busy_or_unsaved"), tx),
                 Ok(_) => {}
                 Err(error) => s.notify(error.to_string(), tx),
             },
@@ -470,7 +470,7 @@ impl MeetNote {
         tx: &mut Tx,
     ) {
         if self.workspace_host.busy() {
-            self.notify("The workspace is busy", tx);
+            self.notify(self.tr("workspace_busy"), tx);
             return;
         }
         if let Some(live) = self.workspace_host.live.clone() {
@@ -530,7 +530,14 @@ impl MeetNote {
                         refresh_due: None,
                     }),
                     Err(error) => {
-                        self.notify(format!("Workspace monitoring could not start: {error}"), tx);
+                        self.notify(
+                            ui_text::message(
+                                self.locale(),
+                                "workspace_watch_failed",
+                                &error.to_string(),
+                            ),
+                            tx,
+                        );
                         None
                     }
                 };
@@ -546,7 +553,7 @@ impl MeetNote {
                 self.workspace_host.cancel_search();
                 self.documents.insert_imported(record);
                 self.select_document(&id);
-                self.notify("Recording imported", tx);
+                self.notify(self.tr("recording_import_finished"), tx);
             }
             Some(Ok(Answer::Read(id, result))) => {
                 if let Err(error) = &result {
@@ -558,7 +565,7 @@ impl MeetNote {
                 Ok(record) => {
                     self.documents.finish_save(record, &patch);
                     self.refresh_workspace_search();
-                    self.notify("Document saved", tx);
+                    self.notify(self.tr("document_save_done"), tx);
                 }
                 Err(error) => {
                     if matches!(
@@ -608,7 +615,7 @@ impl MeetNote {
                 match result {
                     Ok(()) => {
                         self.recheck_audio(tx);
-                        self.notify("Recording reconnected", tx);
+                        self.notify(self.tr("recording_relinked"), tx);
                     }
                     Err(error) => self.notify(error, tx),
                 }
@@ -623,12 +630,14 @@ impl MeetNote {
                         .finish_speaker_correction(record, &correction);
                     self.refresh_workspace_search();
                     match correction {
-                        SpeakerCorrection::Label { .. } => self.notify("Speaker name saved", tx),
+                        SpeakerCorrection::Label { .. } => {
+                            self.notify(self.tr("speaker_name_saved"), tx)
+                        }
                         SpeakerCorrection::Merge { into, .. } => {
                             if self.documents.selection().0 == id.as_str() {
                                 tx.focus(format!("speaker-name-{into}"), tx.focus_visible());
                             }
-                            self.notify("Speakers merged", tx);
+                            self.notify(self.tr("speaker_merge_done"), tx);
                         }
                     }
                 }
@@ -677,10 +686,7 @@ impl MeetNote {
         };
         if !watch.poll(host.waker.as_ref(), tx) {
             host.watch = None;
-            self.notify(
-                "Workspace monitoring stopped. Reopen the workspace to resume.",
-                tx,
-            );
+            self.notify(self.tr("workspace_watch_stopped"), tx);
             return true;
         }
         if let Some(due) = watch.refresh_due {

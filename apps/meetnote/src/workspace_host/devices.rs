@@ -835,6 +835,7 @@ impl MeetNote {
     }
 
     fn start_device_analysis(&mut self, tx: &mut Tx) {
+        let locale = self.locale();
         let host = &mut self.workspace_host;
         if host.processing.is_some() || host.task.is_some() {
             return;
@@ -851,6 +852,7 @@ impl MeetNote {
             id,
             revision,
             true,
+            locale,
         ));
         tx.wake_after(Duration::ZERO);
     }

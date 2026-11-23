@@ -179,7 +179,7 @@ impl Document {
             .source
             .audio_end_ms
             .map(|end| timestamp(end.saturating_sub(state.source.audio_start_ms)))
-            .unwrap_or_else(|| "Unknown duration".into());
+            .unwrap_or_default();
         let status = if state.processing.latest.is_some()
             || !state.results.transcript.is_empty()
             || !state.results.speaker_segments.is_empty()
@@ -271,13 +271,15 @@ enum SearchSource {
 }
 
 impl SearchSource {
-    fn label(self) -> String {
+    fn label(self, s: &MeetNote) -> String {
         match self {
-            Self::Title => "Title".into(),
-            Self::Tag => "Tag".into(),
-            Self::Summary => "Summary".into(),
-            Self::Transcript(_, time) => format!("Transcript · {}", timestamp(time)),
-            Self::Notes => "Saved notes".into(),
+            Self::Title => s.tr("search_title").into(),
+            Self::Tag => s.tr("search_tag").into(),
+            Self::Summary => s.tr("search_summary").into(),
+            Self::Transcript(_, time) => {
+                format!("{} · {}", s.tr("search_transcript"), timestamp(time))
+            }
+            Self::Notes => s.tr("saved_notes_heading").into(),
         }
     }
 }
@@ -1038,7 +1040,7 @@ impl MeetNote {
     fn move_document(&mut self, source: &str, movement: TreeMove, tx: &mut Tx) {
         if self.workspace_host.live.is_some() {
             if self.workspace_host.busy() {
-                self.notify("The workspace is busy", tx);
+                self.notify(self.tr("workspace_busy"), tx);
                 return;
             }
             if let TreeMove::Reparent(parent) = &movement
@@ -1248,7 +1250,7 @@ fn search_results(s: &MeetNote, k: &Kit, search: &SearchResults) -> El {
                         .build(k)
                         .key(format!("search-result-{id}")),
                 )
-                .child(eyebrow(k, source.label()).px(8.0))
+                .child(eyebrow(k, source.label(s)).px(8.0))
                 .child(caption(k, &hit.excerpt).max_lines(3).px(8.0)),
         );
     }
@@ -1398,7 +1400,11 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                     format!(
                         "{}   ·   {}",
                         document.state.audio_path(),
-                        document.duration
+                        if document.duration.is_empty() {
+                            s.tr("duration_unknown")
+                        } else {
+                            &document.duration
+                        }
                     ),
                 )),
         )
@@ -1413,18 +1419,19 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                 .child(caption(k, label))
                 .child(
                     row().w_full().gap(12.0).children(
-                        [("Transcription", asr), ("Speaker diarization", diarization)]
-                            .into_iter()
-                            .map(|(stage, fraction)| {
-                                col()
-                                    .grow(1.0)
-                                    .min_w(0.0)
-                                    .gap(3.0)
-                                    .child(caption(k, stage))
-                                    .child(
-                                        Progress::new(fraction).label(stage).show_value().build(k),
-                                    )
-                            }),
+                        [
+                            (s.tr("processing_transcription"), asr),
+                            (s.tr("processing_diarization"), diarization),
+                        ]
+                        .into_iter()
+                        .map(|(stage, fraction)| {
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(3.0)
+                                .child(caption(k, stage))
+                                .child(Progress::new(fraction).label(stage).show_value().build(k))
+                        }),
                     ),
                 ),
         )
@@ -1730,11 +1737,15 @@ fn original(s: &MeetNote, k: &Kit) -> El {
         ))
         .children((!document.speaker_drafts.is_empty()).then(|| {
             Collapsible::new(
-                format!("Speakers · {}", document.speaker_drafts.len()),
+                ui_text::message(
+                    s.locale(),
+                    "speakers_summary",
+                    &document.speaker_drafts.len().to_string(),
+                ),
                 s.documents.speakers,
             )
             .on_toggle(|s: &mut MeetNote| s.documents.speakers = !s.documents.speakers)
-            .child(speakers::controls(document, k, s.workspace_host.busy()))
+            .child(speakers::controls(s, document, k))
             .build(k)
             .key("speakers")
         }));

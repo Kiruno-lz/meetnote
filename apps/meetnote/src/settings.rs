@@ -148,31 +148,27 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             ))
             .child(caption(k, "Sample content is in English."))
     };
-    let workspace = section(
-        k,
-        "Workspace",
-        "Open the folder that holds your MeetNote documents.",
-    )
-    .child(caption(
-        k,
-        s.workspace_host.live.as_ref().map_or_else(
-            || "Sample workspace".into(),
-            |live| live.root().display().to_string(),
-        ),
-    ))
-    .child(
-        Button::new("Open workspace folder")
-            .disabled(s.workspace_host.busy())
-            .on_press_tx(MeetNote::choose_workspace)
-            .build(k)
-            .key("documents-folder"),
-    )
-    .children((!live).then(|| {
-        TextField::new("Speaker Library", &prefs.library)
-            .on_edit(|s: &mut MeetNote| &mut s.settings.library)
-            .build(k)
-            .key("speaker-library")
-    }));
+    let workspace = section(k, s.tr("workspace"), s.tr("workspace_description"))
+        .child(caption(
+            k,
+            s.workspace_host.live.as_ref().map_or_else(
+                || "Sample workspace".into(),
+                |live| live.root().display().to_string(),
+            ),
+        ))
+        .child(
+            Button::new(s.tr("workspace_open"))
+                .disabled(s.workspace_host.busy())
+                .on_press_tx(MeetNote::choose_workspace)
+                .build(k)
+                .key("documents-folder"),
+        )
+        .children((!live).then(|| {
+            TextField::new("Speaker Library", &prefs.library)
+                .on_edit(|s: &mut MeetNote| &mut s.settings.library)
+                .build(k)
+                .key("speaker-library")
+        }));
     let processing = if live {
         live_preferences::audio(s, k, overlays)
     } else {
@@ -316,7 +312,7 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
         .child(page_header(
             k,
             s.tr("settings"),
-            "Appearance, workspace and processing preferences.",
+            s.tr("settings_description"),
         ))
         .children(
             SECTIONS

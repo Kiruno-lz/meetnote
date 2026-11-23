@@ -85,7 +85,10 @@ fn model(s: &MeetNote, k: &Kit, entry: &ModelAvailability, selected: Option<&str
         ),
     ));
     if let Some(revision) = &entry_model.revision {
-        details = details.child(caption(k, format!("Revision {revision}")));
+        details = details.child(caption(
+            k,
+            ui_text::message(s.locale(), "model_revision", revision),
+        ));
     }
     details = details.child(
         caption(
@@ -198,7 +201,7 @@ fn model(s: &MeetNote, k: &Kit, entry: &ModelAvailability, selected: Option<&str
             controls = controls.child(button(
                 k,
                 format!("model-{id}-select-{backend}"),
-                format!("Use with {backend}"),
+                ui_text::message(s.locale(), "model_use_with", backend),
                 disabled || selected == Some(backend.as_str()),
                 ModelAction::Select {
                     id: id.clone(),
@@ -232,10 +235,14 @@ fn model(s: &MeetNote, k: &Kit, entry: &ModelAvailability, selected: Option<&str
                 .child(title(k, id, 16.0).grow(1.0))
                 .child(Badge::new(status).build(k))
                 .children(selected.map(|backend| {
-                    Badge::new(format!("Selected · {backend}"))
-                        .variant(BadgeVariant::Accent)
-                        .build(k)
-                        .key(key("selected"))
+                    Badge::new(ui_text::message(
+                        s.locale(),
+                        "model_selected_backend",
+                        backend,
+                    ))
+                    .variant(BadgeVariant::Accent)
+                    .build(k)
+                    .key(key("selected"))
                 })),
         )
         .child(

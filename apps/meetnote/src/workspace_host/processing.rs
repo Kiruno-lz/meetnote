@@ -18,10 +18,10 @@ use settings::{
     AppSettings, CredentialStore, JsonSettingsRepository, SettingsRepository, SettingsService,
 };
 
+use ui_text::Locale;
+
 use super::{LiveWorkspace, Task, WorkspaceHost};
 use crate::MeetNote;
-
-const CANCELLED: &str = "Audio processing cancelled";
 
 #[derive(Clone)]
 pub(super) struct ProcessingConfig {
@@ -206,6 +206,7 @@ impl ProcessingRun {
         id: ProjectId,
         revision: u64,
         automatic: bool,
+        locale: Locale,
     ) -> Self {
         let cancellation = CancellationToken::new();
         let token = cancellation.clone();
@@ -217,7 +218,7 @@ impl ProcessingRun {
             cancellation,
             automatic,
             completion: Box::pin(runtime::spawn_blocking(move || {
-                process(config, live, document, revision, started, &token)
+                process(config, live, document, revision, started, &token, locale)
             })),
         }
     }
@@ -247,6 +248,7 @@ fn installed_model(
     label: &str,
     backend: &str,
     preferred: Option<&ModelRef>,
+    locale: Locale,
 ) -> Result<ModelRef, String> {
     let model = models
         .configured_model_ref(task, backend, preferred)
@@ -258,7 +260,12 @@ fn installed_model(
             entry.model.id == model.model_id && entry.install_state == ModelInstallState::Installed
         })
     {
-        return Err(format!("Install {label} for {backend} before processing"));
+        return Err(ui_text::message_pair(
+            locale,
+            "processing_model_missing",
+            ui_text::text(locale, label),
+            backend,
+        ));
     }
     Ok(model)
 }
@@ -270,9 +277,11 @@ fn process(
     revision: u64,
     started: oneshot::Sender<StageEvents>,
     cancellation: &CancellationToken,
+    locale: Locale,
 ) -> Result<DocumentRecord, String> {
+    let cancelled = || ui_text::text(locale, "processing_cancelled").to_owned();
     if cancellation.is_cancelled() {
-        return Err(CANCELLED.into());
+        return Err(cancelled());
     }
     let settings = config.settings()?;
     let audio = config.audio(&settings)?;
@@ -280,26 +289,28 @@ fn process(
     let asr = installed_model(
         models,
         "asr",
-        "an ASR model",
+        "processing_need_asr_model",
         settings.asr_backend_id.as_deref().unwrap_or("whisper-rs"),
         settings.asr_model.as_ref(),
+        locale,
     )?;
     let diarization = installed_model(
         models,
         "diarization",
-        "a diarization model",
+        "processing_need_diarization_model",
         settings
             .diarization_backend_id
             .as_deref()
             .unwrap_or("diarization-native"),
         settings.diarization_model.as_ref(),
+        locale,
     )?;
     let document = live.read(&id)?;
     if document.state.revision() != revision {
-        return Err("The document changed before audio processing started".into());
+        return Err(ui_text::text(locale, "processing_document_changed").into());
     }
     if cancellation.is_cancelled() {
-        return Err(CANCELLED.into());
+        return Err(cancelled());
     }
     let workspace = WorkspaceService::with_options(
         audio.backends.processing(config.jobs.clone()),
@@ -325,7 +336,7 @@ fn process(
     let result = futures::executor::block_on(job.future);
     workspace.discard_processing_job_ids(job_ids);
     result.map_err(|error| match error.code {
-        BackendErrorCode::Cancelled => CANCELLED.into(),
+        BackendErrorCode::Cancelled => cancelled(),
         _ => error.message,
     })?;
     live.read(&id)
@@ -346,7 +357,7 @@ impl MeetNote {
             return;
         }
         if self.documents.has_unsaved_edits() {
-            self.notify("Save document edits before processing audio", tx);
+            self.notify(self.tr("process_unsaved"), tx);
             return;
         }
         if let Some(live) = self.workspace_host.live.clone() {
@@ -356,6 +367,7 @@ impl MeetNote {
                 state.id().clone(),
                 state.revision(),
                 false,
+                self.locale(),
             ));
             tx.wake_after(Duration::ZERO);
         }
@@ -386,18 +398,20 @@ impl MeetNote {
             .as_ref()
             .filter(|_| self.processing_here())?;
         if run.cancellation.is_cancelled() {
-            return Some(("Cancelling audio processing…", [None, None]));
+            return Some((self.tr("processing_cancelling"), [None, None]));
         }
         match &run.progress {
-            ProcessingProgress::Preparing(_) => Some(("Preparing audio models…", [None, None])),
+            ProcessingProgress::Preparing(_) => {
+                Some((self.tr("processing_preparing_models"), [None, None]))
+            }
             ProcessingProgress::Running(stages) => Some((
-                "Processing audio",
+                self.tr("processing_audio"),
                 [
                     progress_fraction(stages.asr.progress),
                     progress_fraction(stages.diarization.progress),
                 ],
             )),
-            ProcessingProgress::Finishing => Some(("Finishing audio processing…", [None, None])),
+            ProcessingProgress::Finishing => Some((self.tr("processing_finishing"), [None, None])),
         }
     }
 
@@ -416,7 +430,7 @@ impl MeetNote {
             Ok(record) => {
                 self.documents.observe_record(record);
                 self.refresh_workspace_search();
-                self.notify("Audio processing finished", tx);
+                self.notify(self.tr("processing_finished"), tx);
             }
             Err(error) => {
                 if automatic {
