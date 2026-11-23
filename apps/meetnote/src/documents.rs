@@ -23,7 +23,7 @@ use rune_kit::{
 
 use crate::MeetNote;
 use crate::controls::{
-    action, caption, card, dot, eyebrow, icon_action, label, scroll, select, title,
+    action, caption, card, dot, eyebrow, icon_action, label, page_center, scroll, select, title,
 };
 
 const MAIN: &str = "product";
@@ -78,10 +78,17 @@ pub enum Mode {
     Original,
     Notes,
     Edit,
+    Details,
 }
 
 impl Mode {
-    const ALL: [Self; 4] = [Self::Summary, Self::Original, Self::Notes, Self::Edit];
+    const ALL: [Self; 5] = [
+        Self::Summary,
+        Self::Original,
+        Self::Notes,
+        Self::Edit,
+        Self::Details,
+    ];
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -172,7 +179,7 @@ impl Document {
             .source
             .audio_end_ms
             .map(|end| timestamp(end.saturating_sub(state.source.audio_start_ms)))
-            .unwrap_or_else(|| "Unknown duration".into());
+            .unwrap_or_default();
         let status = if state.processing.latest.is_some()
             || !state.results.transcript.is_empty()
             || !state.results.speaker_segments.is_empty()
@@ -264,13 +271,15 @@ enum SearchSource {
 }
 
 impl SearchSource {
-    fn label(self) -> String {
+    fn label(self, s: &MeetNote) -> String {
         match self {
-            Self::Title => "Title".into(),
-            Self::Tag => "Tag".into(),
-            Self::Summary => "Summary".into(),
-            Self::Transcript(_, time) => format!("Transcript · {}", timestamp(time)),
-            Self::Notes => "Saved notes".into(),
+            Self::Title => s.tr("search_title").into(),
+            Self::Tag => s.tr("search_tag").into(),
+            Self::Summary => s.tr("search_summary").into(),
+            Self::Transcript(_, time) => {
+                format!("{} · {}", s.tr("search_transcript"), timestamp(time))
+            }
+            Self::Notes => s.tr("saved_notes_heading").into(),
         }
     }
 }
@@ -304,7 +313,6 @@ pub struct Workspace {
     /// The runtime path of the matched paragraph's text, picked once it lays out.
     match_text: Option<(usize, String)>,
     pub mode: Mode,
-    pub detail: bool,
     speakers: bool,
     processing: Option<(String, f64, Status)>,
     imports: usize,
@@ -323,7 +331,6 @@ impl Default for Workspace {
             transcript_match: None,
             match_text: None,
             mode: Mode::Summary,
-            detail: false,
             speakers: false,
             processing: None,
             imports: 0,
@@ -419,7 +426,6 @@ impl Workspace {
         self.issues_open = false;
         self.clear_search();
         self.mode = Mode::Summary;
-        self.detail = false;
         self.processing = None;
         self.drop_target = None;
     }
@@ -1034,7 +1040,7 @@ impl MeetNote {
     fn move_document(&mut self, source: &str, movement: TreeMove, tx: &mut Tx) {
         if self.workspace_host.live.is_some() {
             if self.workspace_host.busy() {
-                self.notify("The workspace is busy", tx);
+                self.notify(self.tr("workspace_busy"), tx);
                 return;
             }
             if let TreeMove::Reparent(parent) = &movement
@@ -1244,7 +1250,7 @@ fn search_results(s: &MeetNote, k: &Kit, search: &SearchResults) -> El {
                         .build(k)
                         .key(format!("search-result-{id}")),
                 )
-                .child(eyebrow(k, source.label()).px(8.0))
+                .child(eyebrow(k, source.label(s)).px(8.0))
                 .child(caption(k, &hit.excerpt).max_lines(3).px(8.0)),
         );
     }
@@ -1288,6 +1294,7 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                     s.tr("original"),
                     s.tr("saved_markdown"),
                     s.tr("edit"),
+                    s.tr("details"),
                 ],
                 Mode::ALL.iter().position(|mode| *mode == w.mode),
             )
@@ -1302,17 +1309,6 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             .key("document-modes"),
         )
         .child(el().grow(1.0))
-        .child(action(
-            k,
-            "detail-toggle",
-            if w.detail {
-                s.tr("hide_detail")
-            } else {
-                s.tr("document_details")
-            },
-            ButtonVariant::Outline,
-            |s| s.documents.detail = !s.documents.detail,
-        ))
         .child(if s.workspace_host.live.is_some() {
             let running = s.processing_here();
             Button::new(if running {
@@ -1351,6 +1347,7 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             w.selected == MAIN && s.workspace_host.live.is_none(),
         ),
         Mode::Original => original(s, k),
+        Mode::Details => details::page(s, k),
         Mode::Notes | Mode::Edit => match &document.note_read {
             NoteRead::Pending => col()
                 .padding(24.0)
@@ -1372,26 +1369,12 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
             NoteRead::Ready => edit(s, k, overlays),
         },
     };
-    let body = row().grow(1.0).min_h(0.0).w_full().child(
-        col()
-            .grow(1.0)
-            .min_w(0.0)
-            .min_h(0.0)
-            .child(scroll(k, "document-scroll", reading)),
-    );
-    let body = if w.detail {
-        body.child(Divider::vertical().build(k))
-            .child(details::panel(s, k))
-    } else {
-        body
-    };
     let header = col()
         .w_full()
         .gap(13.0)
         .px(24.0)
         .pt(21.0)
         .pb(14.0)
-        .child(eyebrow(k, s.tr("documents_workspace")))
         .child(title(k, document.title(), 31.0).key("document-title"))
         .child(
             row()
@@ -1417,7 +1400,11 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                     format!(
                         "{}   ·   {}",
                         document.state.audio_path(),
-                        document.duration
+                        if document.duration.is_empty() {
+                            s.tr("duration_unknown")
+                        } else {
+                            &document.duration
+                        }
                     ),
                 )),
         )
@@ -1432,18 +1419,19 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
                 .child(caption(k, label))
                 .child(
                     row().w_full().gap(12.0).children(
-                        [("Transcription", asr), ("Speaker diarization", diarization)]
-                            .into_iter()
-                            .map(|(stage, fraction)| {
-                                col()
-                                    .grow(1.0)
-                                    .min_w(0.0)
-                                    .gap(3.0)
-                                    .child(caption(k, stage))
-                                    .child(
-                                        Progress::new(fraction).label(stage).show_value().build(k),
-                                    )
-                            }),
+                        [
+                            (s.tr("processing_transcription"), asr),
+                            (s.tr("processing_diarization"), diarization),
+                        ]
+                        .into_iter()
+                        .map(|(stage, fraction)| {
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(3.0)
+                                .child(caption(k, stage))
+                                .child(Progress::new(fraction).label(stage).show_value().build(k))
+                        }),
                     ),
                 ),
         )
@@ -1468,9 +1456,13 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
         .h_full()
         .min_h(0.0)
         .child(workspace_issues(w, k))
-        .child(header)
+        .child(page_center(header))
         .child(Divider::horizontal().build(k))
-        .child(body)
+        .child(col().grow(1.0).min_h(0.0).w_full().child(scroll(
+            k,
+            "document-scroll",
+            page_center(reading),
+        )))
 }
 
 fn workspace_issues(w: &Workspace, k: &Kit) -> El {
@@ -1745,11 +1737,15 @@ fn original(s: &MeetNote, k: &Kit) -> El {
         ))
         .children((!document.speaker_drafts.is_empty()).then(|| {
             Collapsible::new(
-                format!("Speakers · {}", document.speaker_drafts.len()),
+                ui_text::message(
+                    s.locale(),
+                    "speakers_summary",
+                    &document.speaker_drafts.len().to_string(),
+                ),
                 s.documents.speakers,
             )
             .on_toggle(|s: &mut MeetNote| s.documents.speakers = !s.documents.speakers)
-            .child(speakers::controls(document, k, s.workspace_host.busy()))
+            .child(speakers::controls(s, document, k))
             .build(k)
             .key("speakers")
         }));

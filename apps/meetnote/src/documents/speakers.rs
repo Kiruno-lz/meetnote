@@ -80,7 +80,7 @@ impl MeetNote {
             if edit.text != saved {
                 edit.replace_text(saved);
             }
-            self.notify("Speaker name saved", tx);
+            self.notify(self.tr("speaker_name_saved"), tx);
         }
     }
 
@@ -115,15 +115,15 @@ impl MeetNote {
         if doc.state.apply_speaker_correction(&correction).is_ok() {
             doc.sync_speaker_drafts();
             tx.focus(format!("speaker-name-{into}"), tx.focus_visible());
-            self.notify("Speakers merged", tx);
+            self.notify(self.tr("speaker_merge_done"), tx);
         }
     }
 
     pub fn speaker_merge_choices(&self, doc: &str, from: &str, into: Option<&str>, k: &Kit) -> El {
         let Some(document) = self.documents.tree.get(doc) else {
-            return caption(k, "The document is no longer available.");
+            return caption(k, self.tr("document_unavailable"));
         };
-        let mut choices = RadioGroup::new().label("Keep this speaker");
+        let mut choices = RadioGroup::new().label(self.tr("speaker_merge_keep"));
         for id in document
             .speaker_drafts
             .keys()
@@ -144,7 +144,8 @@ impl MeetNote {
     }
 }
 
-pub(super) fn controls(document: &Document, k: &Kit, busy: bool) -> El {
+pub(super) fn controls(s: &MeetNote, document: &Document, k: &Kit) -> El {
+    let busy = s.workspace_host.busy();
     card(k).children(document.speaker_drafts.iter().map(|(id, draft)| {
         let edit_id = id.clone();
         let rename_id = id.clone();
@@ -157,7 +158,7 @@ pub(super) fn controls(document: &Document, k: &Kit, busy: bool) -> El {
                 .flex_wrap()
                 .child(
                     TextInput::new(draft)
-                        .label(format!("Display name for {id}"))
+                        .label(ui_text::message(s.locale(), "speaker_name_for", id))
                         .width(None)
                         .on_edit(move |s: &mut MeetNote| {
                             s.documents
@@ -173,14 +174,14 @@ pub(super) fn controls(document: &Document, k: &Kit, busy: bool) -> El {
                         .min_w(100.0),
                 )
                 .child(
-                    Button::new("Save name")
+                    Button::new(s.tr("speaker_save_name"))
                         .disabled(busy)
                         .on_press_tx(move |s: &mut MeetNote, tx| s.rename_speaker(&save_id, tx))
                         .build(k)
                         .key(format!("speaker-save-{id}")),
                 )
                 .child(
-                    Button::new("Merge")
+                    Button::new(s.tr("merge"))
                         .variant(ButtonVariant::Outline)
                         .disabled(busy || document.speaker_drafts.len() < 2)
                         .on_press(move |s: &mut MeetNote| {

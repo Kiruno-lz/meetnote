@@ -1,14 +1,15 @@
 use domain::{DocumentState, ModelProvenance, ProvenanceGap, document_result_statistics};
 use rune::{El, col, row};
-use rune_kit::{Divider, Kit, glyphs};
+use rune_kit::Kit;
 use ui_text::Locale;
 
 use crate::MeetNote;
-use crate::controls::{caption, icon_action, label, scroll, title};
+use crate::controls::{caption, card, label, title};
 
-use super::{audio_source_status, timestamp, transcript_lines, workflow_label};
+use super::{audio_source_status, timestamp, workflow_label};
 
-pub(super) fn panel(s: &MeetNote, k: &Kit) -> El {
+/// The details reading mode: one card per fact group, laid out like the summary.
+pub(super) fn page(s: &MeetNote, k: &Kit) -> El {
     let state = &s.documents.current().state;
     let parent = state.hierarchy.parent_id.as_ref().map_or_else(
         || s.tr("detail_root").to_owned(),
@@ -45,27 +46,13 @@ pub(super) fn panel(s: &MeetNote, k: &Kit) -> El {
             ),
         ));
     }
-    let body = col()
+    col()
+        .key("document-details")
+        .role("region")
+        .label(s.tr("document_details"))
         .w_full()
-        .padding(16.0)
         .gap(16.0)
-        .child(
-            row()
-                .items_center()
-                .justify_between()
-                .child(title(k, s.tr("document_details"), 18.0))
-                .child(icon_action(
-                    k,
-                    "detail-close",
-                    &glyphs::CLOSE,
-                    s.tr("hide_detail"),
-                    |s, tx| {
-                        s.documents.detail = false;
-                        tx.return_focus("detail-toggle", tx.focus_visible());
-                    },
-                )),
-        )
-        .child(Divider::horizontal().build(k))
+        .padding(24.0)
         .child(section(
             s,
             k,
@@ -100,47 +87,6 @@ pub(super) fn panel(s: &MeetNote, k: &Kit) -> El {
         ))
         .child(processing(s, k, state))
         .child(statistics(s, k, state))
-        .child(transcript(s, k));
-    col()
-        .key("detail-panel")
-        .role("region")
-        .label(s.tr("document_details"))
-        .w(235.0)
-        .min_w(235.0)
-        .h_full()
-        .fill(k.c.layer_01)
-        .child(scroll(k, "detail-scroll", body))
-}
-
-fn transcript(s: &MeetNote, k: &Kit) -> El {
-    let document = s.documents.current();
-    let mut lines = transcript_lines(document).peekable();
-    let body = col()
-        .gap(8.0)
-        .child(title(k, s.tr("detail_transcript"), 14.0));
-    if lines.peek().is_none() {
-        return body.child(caption(k, s.tr("transcript_empty")));
-    }
-    body.children(lines.enumerate().map(|(index, (start, speaker, text))| {
-        col()
-            .gap(3.0)
-            .key(format!("detail-transcript-{index}"))
-            .child(
-                row()
-                    .gap(8.0)
-                    .flex_wrap()
-                    .child(caption(k, timestamp(start)))
-                    .child(caption(
-                        k,
-                        if speaker.is_empty() {
-                            s.tr("unattributed_speech")
-                        } else {
-                            speaker
-                        },
-                    )),
-            )
-            .child(label(k, text).selectable(true))
-    }))
 }
 
 fn processing(s: &MeetNote, k: &Kit, state: &DocumentState) -> El {
@@ -268,17 +214,24 @@ fn section(
     heading: &str,
     rows: impl IntoIterator<Item = (&'static str, String)>,
 ) -> El {
-    col()
-        .gap(9.0)
-        .child(title(k, s.tr(heading), 14.0))
+    card(k)
+        .child(title(k, s.tr(heading), 18.0))
         .children(rows.into_iter().map(|(key, value)| fact(s, k, key, value)))
 }
 
 fn fact(s: &MeetNote, k: &Kit, key: &str, value: String) -> El {
-    col()
-        .gap(2.0)
-        .child(caption(k, s.tr(key)))
-        .child(label(k, value).selectable(true).key(key))
+    row()
+        .w_full()
+        .items_center()
+        .gap(16.0)
+        .child(caption(k, s.tr(key)).w(168.0).min_w(168.0))
+        .child(
+            label(k, value)
+                .selectable(true)
+                .grow(1.0)
+                .min_w(0.0)
+                .key(key),
+        )
 }
 
 fn model_label(model: &ModelProvenance) -> String {

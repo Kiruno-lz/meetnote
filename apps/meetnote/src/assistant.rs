@@ -5,7 +5,9 @@ use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, Kit, Markdown, Progress, TextInput, glyphs,
 };
 
-use crate::controls::{action, caption, card, eyebrow, label, page_header, scroll, select, title};
+use crate::controls::{
+    action, caption, card, eyebrow, label, page_center, page_header, scroll, select, title,
+};
 use crate::{Confirm, MeetNote};
 
 mod live;
@@ -133,7 +135,6 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
         .child(
             page_header(
                 k,
-                "ASSISTANT  /  WORKSPACE",
                 "Assistant",
                 "Ask about a document or review a proposed change.",
             )
@@ -223,8 +224,8 @@ pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(scroll(k, "assistant-scroll", transcript))
-        .child(col().px(24.0).py(14.0).child(composer))
+        .child(scroll(k, "assistant-scroll", page_center(transcript)))
+        .child(page_center(col().px(24.0).py(14.0).child(composer)))
 }
 
 fn response(s: &MeetNote, k: &Kit) -> El {

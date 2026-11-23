@@ -64,7 +64,7 @@ impl MeetNote {
             return;
         }
         if self.documents.has_unsaved_edits() {
-            self.notify("Save document edits before reconnecting the recording", tx);
+            self.notify(self.tr("relink_unsaved"), tx);
             return;
         }
         let (Some(live), Some(state)) = (
@@ -76,7 +76,7 @@ impl MeetNote {
         let source = Source::from_state(self.workspace_host.generation, state);
         tx.open_file(
             FileDialogOptions {
-                title: "Reconnect source audio".into(),
+                title: self.tr("relink_audio").into(),
                 directory: Path::new(&source.path).parent().map(Path::to_path_buf),
                 ..Default::default()
             },
@@ -104,9 +104,7 @@ impl MeetNote {
                     });
                     tx.wake_after(Duration::ZERO);
                 }
-                Ok(Some(_)) => {
-                    s.notify("The selected document changed or the workspace is busy", tx)
-                }
+                Ok(Some(_)) => s.notify(s.tr("relink_target_changed"), tx),
                 Ok(None) => {}
                 Err(error) => s.notify(error.to_string(), tx),
             },

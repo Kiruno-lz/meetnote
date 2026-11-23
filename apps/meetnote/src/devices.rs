@@ -9,7 +9,7 @@ use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Dialog, Kit, Progress, Spinner, Switch,
 };
 
-use crate::controls::{caption, eyebrow, scroll, title};
+use crate::controls::{caption, page_header, scroll, title};
 use crate::workspace_host::devices::{PairStep, Radio, RegistryChange};
 use crate::{Confirm, MeetNote};
 
@@ -111,12 +111,7 @@ static POP: [Beat; 4] = [
 
 pub fn page(s: &MeetNote, k: &Kit, overlays: &mut Vec<El>) -> El {
     let host = &s.workspace_host.devices;
-    let header = col()
-        .w_full()
-        .gap(7.0)
-        .child(eyebrow(k, s.tr("devices_eyebrow")))
-        .child(title(k, s.tr("devices"), 30.0))
-        .child(caption(k, s.tr("devices_description")));
+    let header = page_header(k, s.tr("devices"), s.tr("devices_description"));
     let mut body = col()
         .key("devices-body")
         .w_full()

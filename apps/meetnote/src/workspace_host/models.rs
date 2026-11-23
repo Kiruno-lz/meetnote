@@ -76,6 +76,7 @@ enum Reply {
 }
 
 enum Change {
+    /// A `ui_text` key.
     Notice(&'static str),
     Selection(Option<Box<StageDraft>>),
 }
@@ -93,19 +94,19 @@ pub(crate) enum ModelAction {
 impl ModelAction {
     fn run(self, manager: &ModelManager, config: &ProcessingConfig) -> Result<Change, String> {
         match self {
-            Self::Download(id) => manager.start(&id).map(|_| "Model download started"),
-            Self::Pause(id) => manager.pause(id).map(|_| "Model download paused"),
-            Self::Resume(id) => manager.resume(id).map(|_| "Model download resumed"),
-            Self::Cancel(id) => manager.cancel(id).map(|_| "Model cancellation requested"),
+            Self::Download(id) => manager.start(&id).map(|_| "model_download_started"),
+            Self::Pause(id) => manager.pause(id).map(|_| "model_download_paused"),
+            Self::Resume(id) => manager.resume(id).map(|_| "model_download_resumed"),
+            Self::Cancel(id) => manager.cancel(id).map(|_| "model_cancel_requested"),
             Self::Probe(id) => {
                 let task = manager.reprobe(&id).map_err(|error| error.to_string())?;
                 let record = futures::executor::block_on(task.finished)
                     .map_err(|_| "The model probe stopped before reporting a result".to_owned())?
                     .map_err(|error| error.to_string())?;
                 return Ok(Change::Notice(if record.passed() {
-                    "Model probe passed"
+                    "model_probe_passed"
                 } else {
-                    "Model probe failed"
+                    "model_probe_failed"
                 }));
             }
             Self::Select { id, backend } => {
@@ -240,18 +241,18 @@ impl MeetNote {
                 Ok(Reply::Changed(result)) => {
                     host.models.refresh = true;
                     match result {
-                        Ok(Change::Notice(message)) => self.notify(message, tx),
+                        Ok(Change::Notice(key)) => self.notify(self.tr(key), tx),
                         Ok(Change::Selection(stages)) => {
                             let replaced = match (stages, &mut host.preferences.draft) {
                                 (Some(stages), Some(draft)) => draft.replace_stages(*stages),
                                 _ => false,
                             };
                             self.notify(
-                                if replaced {
-                                    "Model selection saved. Stage edits were cleared."
+                                self.tr(if replaced {
+                                    "model_selection_saved_stages_cleared"
                                 } else {
-                                    "Model selection saved"
-                                },
+                                    "model_selection_saved"
+                                }),
                                 tx,
                             );
                         }
